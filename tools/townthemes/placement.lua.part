@@ -1,0 +1,729 @@
+
+--------------------------------------------------------------------------------
+-- Placement
+--------------------------------------------------------------------------------
+
+local Themes = TownThemes.Themes
+
+-- A line under the town's name, set on the town as its TownTagline attribute for anything that
+-- shows the name (the HUD's entering banner, the minimap).
+TownThemes.Taglines = {
+	["Six Seven Square"] = "The clocks stopped at 6:07.",
+	["Speedrun Springs"] = "Any% starts here.",
+	["Sahur Junction"] = "Next train: 3:30 AM.",
+	["Rotville"] = "Smell you later.",
+	["Bonkington"] = "Helmets strongly advised.",
+	["Aura Farms"] = "Aura, grown fresh daily.",
+	["Sigma Station"] = "Always on time. Always.",
+	["NPC Nook"] = "Population: background.",
+	["Delulu Downs"] = "You've already won.",
+	["Lag Lagoon"] = "Reconnecting...",
+	["Oof Oasis"] = "Mind your step.",
+	["Mewing Meadows"] = "Hold the pose.",
+	["Brainrot Borough"] = "Our greatest resource.",
+	["Grass Toucher's Rest"] = "Phones in the locker, please.",
+	["Lil Tralala"] = "Very small. Very musical.",
+	["Crumbly Creek"] = "Mind the crumbs.",
+	["Rizz Ridge"] = "W rizz only.",
+	["Noob Hollow"] = "Welcome, new player!",
+}
+
+-- The yaw that turns a frame's -Z (a piece's front) to face along `direction`.
+local function yawFacing(direction)
+	return math.atan2(-direction.X, -direction.Z)
+end
+
+-- A point in a turned rectangle's own coordinates, in the world (as CFrame.Angles(0, yaw, 0)).
+local function toWorld(center, yaw, localX, localZ)
+	local c, s = math.cos(yaw), math.sin(yaw)
+	return center.X + localX * c + localZ * s, center.Z - localX * s + localZ * c
+end
+
+local function flatDistance(a, b)
+	local dx, dz = a.X - b.X, a.Z - b.Z
+	return math.sqrt(dx * dx + dz * dz)
+end
+
+-- Whether a turned rectangle is clear in `space`. A big circle in the middle first (most sites
+-- fail there, and fast), then a grid of small circles over the whole thing. The cells are three
+-- studs, so the circles reach at most about two studs past the rectangle's edge: tight enough
+-- that a site can sit just behind a pavement without the check tripping over the street's claim.
+local function rectFree(space, center, yaw, halfX, halfZ)
+	if not space:IsFree(center.X, center.Z, math.min(halfX, halfZ) * 0.9) then
+		return false
+	end
+	local columns = math.max(1, math.ceil(halfX * 2 / 3))
+	local rows = math.max(1, math.ceil(halfZ * 2 / 3))
+	local cellX, cellZ = halfX * 2 / columns, halfZ * 2 / rows
+	local radius = math.sqrt(cellX * cellX + cellZ * cellZ) / 2
+	for column = 1, columns do
+		for row = 1, rows do
+			local x, z = toWorld(center, yaw, -halfX + (column - 0.5) * cellX, -halfZ + (row - 0.5) * cellZ)
+			if not space:IsFree(x, z, radius) then
+				return false
+			end
+		end
+	end
+	return true
+end
+
+local SAMPLES = {
+	{ 0, 0 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+	{ 0.5, 0.5 }, { -0.5, 0.5 }, { 0.5, -0.5 }, { -0.5, -0.5 },
+}
+
+-- Solid ground to build on. MapGenerator.GroundHeightAt returns the solid height and, where water
+-- covers that point, the water's surface (claude-79's contract, 2026-09-17); a miss returns nil.
+-- Nothing themed goes in water or over a hole, so both are nil here: no ground, no site.
+local function solidGround(groundAt, x, z)
+	local height, water = groundAt(x, z)
+	if height == nil or water ~= nil then
+		return nil
+	end
+	return height
+end
+
+-- The lowest and highest ground over a turned rectangle, or nil where there's no ground to find.
+local function groundRange(groundAt, center, yaw, halfX, halfZ)
+	local low, high = math.huge, -math.huge
+	for _, sample in ipairs(SAMPLES) do
+		local x, z = toWorld(center, yaw, sample[1] * halfX, sample[2] * halfZ)
+		local height = solidGround(groundAt, x, z)
+		if not height then
+			return nil
+		end
+		low, high = math.min(low, height), math.max(high, height)
+	end
+	return low, high
+end
+
+-- The same over a grid a terrain voxel apart, edges included: slower, so only for a site that the
+-- quick 13-point look already thinks is flat. A bump between the quick samples would otherwise leave
+-- a corner hanging or a wall sunk.
+local GRID_STEP = 4
+
+local function groundRangeFine(groundAt, center, yaw, halfX, halfZ)
+	local low, high = math.huge, -math.huge
+	local nx, nz = math.max(1, math.ceil(halfX * 2 / GRID_STEP)), math.max(1, math.ceil(halfZ * 2 / GRID_STEP))
+	for i = 0, nx do
+		for j = 0, nz do
+			local x, z = toWorld(center, yaw, -halfX + halfX * 2 * i / nx, -halfZ + halfZ * 2 * j / nz)
+			local height = solidGround(groundAt, x, z)
+			if not height then
+				return nil
+			end
+			low, high = math.min(low, height), math.max(high, height)
+		end
+	end
+	return low, high
+end
+
+-- A town's streets, read back from the asphalt it laid: one Asphalt part per street, as long as
+-- the street was drawn, with its local -Z running from the street's start to its end.
+local function streetsOf(town)
+	local streets = {}
+	for _, child in ipairs(town:GetChildren()) do
+		if child:IsA("BasePart") and child.Name == "Asphalt" and child.Size.Z >= 30 then
+			local look = child.CFrame.LookVector
+			local direction = Vector3.new(look.X, 0, look.Z)
+			if direction.Magnitude > 0.5 then
+				direction = direction.Unit
+				local mid = Vector3.new(child.Position.X, 0, child.Position.Z)
+				local length = child.Size.Z
+				table.insert(streets, {
+					a = mid - direction * (length / 2),
+					dir = direction,
+					length = length,
+					width = child.Size.X,
+				})
+			end
+		end
+	end
+	return streets
+end
+
+-- The terrain under a site is repainted in the set piece's own ground (cobbles, sand, lawn),
+-- the same way towns repaint under their streets: the top four studs of the solid ground, whose
+-- top sits the surface lift under the surface, so the ground stays exactly where it was. Only on
+-- ground at the town's own level, which is dead flat; anywhere else a repaint could shift it.
+local PAINT_CENTRE = -2 - MapTerrain.SurfaceLift
+
+-- Terrain materials whose surface lands exactly where it's filled, to ±0.006 (claude-79's full table,
+-- 2026-09-17). The rest move it: Rock, Basalt, Ice, Slate and CrackedLava are rough; Pavement snaps to
+-- whole studs, Concrete to even ones, Cobblestone to a finer grid, and Brick and WoodPlanks drop to
+-- the voxel boundary below; and all of those disturb the smooth ground beside them for 2-4 studs.
+-- So a set piece that wants one of them is painted in a smooth stand-in, and one with no stand-in
+-- isn't painted at all.
+local SMOOTH_GROUND = {
+	[Enum.Material.Asphalt] = true,
+	[Enum.Material.Glacier] = true,
+	[Enum.Material.Grass] = true,
+	[Enum.Material.Ground] = true,
+	[Enum.Material.LeafyGrass] = true,
+	[Enum.Material.Limestone] = true,
+	[Enum.Material.Mud] = true,
+	[Enum.Material.Salt] = true,
+	[Enum.Material.Sand] = true,
+	[Enum.Material.Sandstone] = true,
+	[Enum.Material.Snow] = true,
+}
+local GROUND_STAND_IN = {
+	[Enum.Material.Pavement] = Enum.Material.Asphalt,
+	[Enum.Material.Concrete] = Enum.Material.Asphalt,
+	-- Pale stone paving for a town square, where cobbles would step.
+	[Enum.Material.Cobblestone] = Enum.Material.Limestone,
+	-- A fairground's trodden earth.
+	[Enum.Material.WoodPlanks] = Enum.Material.Ground,
+	[Enum.Material.Brick] = Enum.Material.Sandstone,
+}
+
+local function smoothGround(material)
+	if material and SMOOTH_GROUND[material] then
+		return material
+	end
+	return material and GROUND_STAND_IN[material] or nil
+end
+TownThemes.SmoothGround = smoothGround
+
+local function paintSite(at, yaw, sizeX, sizeZ, material)
+	workspace.Terrain:FillBlock(CFrame.new(at.X, PAINT_CENTRE, at.Z) * CFrame.Angles(0, yaw, 0), Vector3.new(sizeX, 4, sizeZ), material)
+end
+
+-- Oliver's rule (2026-09-17): a structure stands on a flat floor, never with a corner hanging over a
+-- slope or its base swallowed by one. So a set piece either finds ground that's already flat to
+-- FLAT_ENOUGH under its whole footprint, or asks the terrain for a pad (MapTerrain.FlattenPad, the
+-- one place terrain is cut for structures: roads always win and a refused pad returns nil). A site
+-- that varies by up to STREET_PAD_TOLERANCE in town, or RING_PAD_TOLERANCE round the edge, is worth
+-- asking for. This module never cuts terrain.
+--
+-- The hook runs after the pad API lands, so pads are always there in the game. Without them (a test
+-- tree, or a pad API that's been pulled) a site may vary by up to UNPADDED_FLAT_ENOUGH, with the base
+-- set UNPADDED_BASE of the way up from the lowest ground: an edge hangs at most 0.45 studs and is
+-- sunk at most 1.26, inside footing_probe's FLOAT (1.0) and BURY (1.5), rather than a town losing its
+-- set piece (RotRidge's flattest lots measure 1.50 to 1.56 over the footprint and its margin, so at
+-- 1.5 none of its five towns had one).
+local FLAT_ENOUGH = 0.3
+local UNPADDED_FLAT_ENOUGH, UNPADDED_BASE = 1.8, 0.3
+local STREET_PAD_TOLERANCE, RING_PAD_TOLERANCE = 2.0, 3.5
+local PAD_MARGIN = 1
+
+local function canPad()
+	return type(MapTerrain.FlattenPad) == "function"
+end
+
+-- A flat floor under a set piece: the rectangle `sizeX` by `sizeZ` round `site` (its Y the level
+-- wanted, its rotation the set piece's), topped with `material`. The pad API's contract (claude-79):
+-- the floor height as a number, or nil and a reason. Returns the same (an error counts as a refusal).
+local function requestPad(site, sizeX, sizeZ, material)
+	if not canPad() then
+		return nil, "no pad API"
+	end
+	local ok, level, reason = pcall(MapTerrain.FlattenPad, site, Vector3.new(sizeX, 0, sizeZ), { margin = PAD_MARGIN, material = material })
+	if not ok then
+		return nil, "error: " .. tostring(level)
+	end
+	if type(level) ~= "number" then
+		return nil, tostring(reason)
+	end
+	return level
+end
+
+-- Where a set piece `width` x `depth` goes: the free lot nearest the square with a street in front
+-- of it, or failing that a spot round the edge of town facing the square. Lots are tried a little
+-- out of order (the jitter), so the same town doesn't always put its set piece in the same place.
+-- A lot may run past the end of its street (open ground there is fine; anything that isn't is
+-- claimed). `ctx.siteDiag` counts what happened, for the build check.
+local function findSite(ctx, width, depth, material)
+	local diag = { candidates = 0, blocked = 0, sloped = 0, flattest = math.huge, padsAsked = 0, padsRefused = 0 }
+	ctx.siteDiag = diag
+	local candidates = {}
+	for _, street in ipairs(ctx.streets) do
+		for _, side in ipairs({ 1, -1 }) do
+			local outward = Vector3.new(-street.dir.Z, 0, street.dir.X) * side
+			local offset = street.width / 2 + SIDEWALK + VERGE + 1.5 + depth / 2
+			local along = width / 2 + 4
+			while along <= street.length do
+				local at = street.a + street.dir * along + outward * offset
+				table.insert(candidates, {
+					at = at,
+					front = -outward,
+					score = flatDistance(at, ctx.center) + ctx.rng:NextNumber(0, 30),
+					padTolerance = STREET_PAD_TOLERANCE,
+					street = true,
+				})
+				along += 5
+			end
+		end
+	end
+	local ring = ctx.spread + math.max(width, depth) / 2 + 26
+	for band = 0, 4 do
+		local distance = ring + band * 16
+		local start = ctx.rng:NextNumber(0, math.pi * 2)
+		for step = 0, 35 do
+			local angle = start + step / 36 * math.pi * 2
+			local at = Vector3.new(ctx.center.X + math.cos(angle) * distance, 0, ctx.center.Z + math.sin(angle) * distance)
+			local toward = Vector3.new(ctx.center.X - at.X, 0, ctx.center.Z - at.Z).Unit
+			table.insert(candidates, {
+				at = at,
+				front = toward,
+				score = 100000 + distance + ctx.rng:NextNumber(0, 30),
+				padTolerance = RING_PAD_TOLERANCE,
+				street = false,
+			})
+		end
+	end
+	table.sort(candidates, function(first, second)
+		return first.score < second.score
+	end)
+
+	-- In order of preference: a street lot that's already flat; a street lot on a pad (a town's
+	-- set piece belongs in the town, and on rocky maps the lots are rarely dead flat); a spot round
+	-- the edge that's flat; one on a pad. Within each, nearest the square first.
+	--
+	-- Once the pad API exists every set piece asks it for its floor, flat or not, so the terrain's
+	-- footprint registry knows it's there (and paints its ground). A refusal is the terrain saying no
+	-- (a road, a neighbour's pad) and the next site along is tried.
+	local padding = canPad()
+	local flatEnough = padding and FLAT_ENOUGH or UNPADDED_FLAT_ENOUGH
+	local halfX, halfZ = width / 2 + PAD_MARGIN, depth / 2 + PAD_MARGIN
+	local function settle(found)
+		if not padding then
+			found.level = found.low + (found.high - found.low) * UNPADDED_BASE
+			return found
+		end
+		diag.padsAsked += 1
+		local site = CFrame.new(found.candidate.at.X, (found.low + found.high) / 2, found.candidate.at.Z) * CFrame.Angles(0, found.yaw, 0)
+		local floor, reason = requestPad(site, width, depth, material)
+		if not floor then
+			diag.padsRefused += 1
+			diag.lastRefusal = reason
+			return nil
+		end
+		found.padded = true
+		found.low, found.high, found.level = floor, floor, floor
+		return found
+	end
+	local function settleFirst(list)
+		for _, found in ipairs(list) do
+			local settled = settle(found)
+			if settled then
+				return settled
+			end
+		end
+		return nil
+	end
+
+	local flatRings, padStreets, padRings = {}, {}, {}
+	for _, candidate in ipairs(candidates) do
+		-- The ring sorts after every street lot, nearest first, so a few flat spots on it are plenty.
+		if #flatRings >= 3 then
+			break
+		end
+		diag.candidates += 1
+		local yaw = yawFacing(candidate.front)
+		if rectFree(ctx.space, candidate.at, yaw, halfX, halfZ) then
+			local low, high = groundRange(ctx.groundAt, candidate.at, yaw, halfX, halfZ)
+			if low and high - low <= math.max(flatEnough, padding and candidate.padTolerance or 0) then
+				low, high = groundRangeFine(ctx.groundAt, candidate.at, yaw, halfX, halfZ)
+			end
+			if low then
+				local range = high - low
+				diag.flattest = math.min(diag.flattest, range)
+				local found = { candidate = candidate, yaw = yaw, low = low, high = high }
+				if range <= flatEnough then
+					if candidate.street then
+						local settled = settle(found)
+						if settled then
+							return settled
+						end
+					else
+						table.insert(flatRings, found)
+					end
+				else
+					diag.sloped += 1
+					local list = candidate.street and padStreets or padRings
+					if padding and range <= candidate.padTolerance and #list < 6 then
+						table.insert(list, found)
+					end
+				end
+			end
+		else
+			diag.blocked += 1
+		end
+	end
+	return settleFirst(padStreets) or settleFirst(flatRings) or settleFirst(padRings)
+end
+
+-- Footing attributes (project convention, read by tools/footing_probe.lua): the world Y of a
+-- structure's floor and its footprint, measured round its pivot, which goes at the footprint centre.
+-- Containers of structures (Theme, Props, Flags) are marked FootingGroup so the probe measures
+-- what's inside them rather than one box round a whole town's worth.
+local function footing(model, frame, base, sizeX, sizeZ)
+	model.WorldPivot = CFrame.new(frame.Position.X, base, frame.Position.Z) * frame.Rotation
+	model:SetAttribute("FootingBase", base)
+	model:SetAttribute("FootingSize", Vector3.new(sizeX, 0, sizeZ))
+end
+
+local function placeSetPiece(ctx, theme, parent)
+	local piece = theme.setPiece
+	local material = smoothGround(piece.ground)
+	local found = findSite(ctx, piece.width, piece.depth, material)
+	local diag = ctx.siteDiag
+	parent:SetAttribute("SiteCandidates", diag.candidates)
+	parent:SetAttribute("SiteBlocked", diag.blocked)
+	parent:SetAttribute("SiteSloped", diag.sloped)
+	parent:SetAttribute("SiteFlattest", diag.flattest < math.huge and math.floor(diag.flattest * 100) / 100 or -1)
+	parent:SetAttribute("SitePadsAsked", diag.padsAsked)
+	parent:SetAttribute("SitePadsRefused", diag.padsRefused)
+	parent:SetAttribute("SiteLastRefusal", diag.lastRefusal)
+	if not found then
+		return nil
+	end
+	local candidate, yaw, level = found.candidate, found.yaw, found.level
+	local site = CFrame.new(candidate.at.X, level, candidate.at.Z) * CFrame.Angles(0, yaw, 0)
+	ctx.space:AddRect(candidate.at.X, candidate.at.Z, piece.width / 2 + PAD_MARGIN, piece.depth / 2 + PAD_MARGIN, yaw)
+	if found.padded then
+		task.wait()
+	elseif material and ctx.paint and math.abs(ctx.level) < 0.3 and math.abs(found.low - ctx.level) < 0.3 and math.abs(found.high - ctx.level) < 0.3 then
+		-- (PAINT_CENTRE is only right for ground whose surface is at 0, which is where towns are laid.)
+		-- No pad API yet: a flat lot at the town's own level is repainted in place (the ground doesn't
+		-- move). A street lot's paint runs on to the pavement, so no strip of grass is left between.
+		local reach = candidate.street and VERGE + 1.5 or 0
+		local shift = CFrame.Angles(0, yaw, 0) * Vector3.new(0, 0, -reach / 2)
+		paintSite(site.Position + shift, yaw, piece.width, piece.depth + reach, material)
+	end
+	local kit, model = Kit.new(parent, site, ctx.rng):model(piece.id)
+	local built, err = pcall(piece.build, kit, ctx)
+	if not built then
+		-- Half a set piece is worse than none; the pad and claim stay (the ground is flat and taken).
+		model:Destroy()
+		error(err, 0)
+	end
+	model:SetAttribute("SetPiece", piece.name)
+	model:SetAttribute("OnStreet", candidate.street)
+	model:SetAttribute("Padded", found.padded == true)
+	-- The lot itself, for audits: its centre on the ground with -Z toward the street, and its size.
+	model:SetAttribute("Site", site)
+	model:SetAttribute("SiteSize", Vector3.new(piece.width, 0, piece.depth))
+	-- For footing_probe (project convention): the floor's height and footprint round the pivot.
+	footing(model, site, level, piece.width, piece.depth)
+	return model
+end
+
+-- The town's banner on a pole at each corner of the square, hung facing the square's middle.
+local function buildFlag(k, flag)
+	k:post("FlagFooting", 0.5, 1.6, Vector3.new(0, -0.1, 0), C.concrete, Enum.Material.Concrete)
+	k:post("FlagPole", 15.6, 0.5, Vector3.new(0, 0.4, 0), flag.pole or C.iron, Enum.Material.Metal)
+	k:ball("FlagFinial", 0.9, CFrame.new(0, 16.3, 0), flag.trim or C.gold, Enum.Material.Metal)
+	for _, y in ipairs({ 6.2, 13.6 }) do
+		decor(k:cyl("FlagRod", 3.8, 0.24, CFrame.new(0, y, -0.55), flag.trim or C.gold, Enum.Material.Metal))
+		k:trim("FlagBracket", Vector3.new(0.2, 0.2, 0.55), CFrame.new(0, y, -0.25), flag.pole or C.iron, Enum.Material.Metal)
+	end
+	local banner = k:trim("FlagBanner", Vector3.new(3.4, 7.2, 0.14), CFrame.new(0, 9.9, -0.55), flag.color, Enum.Material.Fabric)
+	k:trim("FlagFringe", Vector3.new(3.4, 0.35, 0.2), CFrame.new(0, 6.0, -0.55), flag.trim or C.gold, Enum.Material.Fabric)
+	for _, face in ipairs({ Enum.NormalId.Front, Enum.NormalId.Back }) do
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = face
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 40
+		gui.LightInfluence = 0.4
+		gui.MaxDistance = 220
+		local emblem = Instance.new("TextLabel")
+		emblem.BackgroundTransparency = 1
+		emblem.Size = UDim2.fromScale(0.9, 0.62)
+		emblem.Position = UDim2.fromScale(0.05, 0.06)
+		emblem.Font = flag.font or Enum.Font.FredokaOne
+		emblem.Text = flag.emblem
+		emblem.TextColor3 = flag.text or C.white
+		emblem.TextScaled = true
+		emblem.TextStrokeTransparency = 0.7
+		emblem.Parent = gui
+		local name = Instance.new("TextLabel")
+		name.BackgroundTransparency = 1
+		name.Size = UDim2.fromScale(0.9, 0.24)
+		name.Position = UDim2.fromScale(0.05, 0.7)
+		name.Font = Enum.Font.GothamBold
+		name.Text = flag.caption
+		name.TextColor3 = flag.text or C.white
+		name.TextScaled = true
+		name.Parent = gui
+		gui.Parent = banner
+	end
+end
+
+local function placeFlags(ctx, theme, parent)
+	local kit, group = Kit.new(parent, CFrame.identity, ctx.rng):model("Flags")
+	group:SetAttribute("FootingGroup", true)
+	local placed = 0
+	for _, corner in ipairs({ { 1, 1 }, { -1, 1 }, { -1, -1 }, { 1, -1 } }) do
+		local x, z = ctx.center.X + corner[1] * FLAG_CORNER, ctx.center.Z + corner[2] * FLAG_CORNER
+		if ctx.space:IsFree(x, z, 1.2) then
+			local height = solidGround(ctx.groundAt, x, z)
+			if height and math.abs(height - ctx.level) < 0.6 then
+				ctx.space:AddCircle(x, z, 1.2)
+				local inward = Vector3.new(-corner[1], 0, -corner[2]).Unit
+				local frame = CFrame.new(x, height, z) * CFrame.Angles(0, yawFacing(inward), 0)
+				local flagKit, flagModel = Kit.new(kit.parent, frame, ctx.rng):model("Flag")
+				buildFlag(flagKit, theme.flag)
+				footing(flagModel, frame, height, 1.6, 1.6)
+				placed += 1
+			end
+		end
+	end
+	-- An empty FootingGroup reads as a mis-tagged structure to footing_probe, so none is left behind.
+	if placed == 0 then
+		group:Destroy()
+	end
+	return placed
+end
+
+-- Small themed props on the verges behind the pavements, facing the street, kept well apart. Each
+-- stands at the lowest ground under it, so nothing hangs; the rest is sunk by at most this much.
+local PROP_SPACING = 18
+local PROP_FLAT_ENOUGH = 0.4
+
+local function placeProps(ctx, theme, parent)
+	local kinds = theme.props or {}
+	if #kinds == 0 or #ctx.streets == 0 then
+		return 0
+	end
+	local kit, group = Kit.new(parent, CFrame.identity, ctx.rng):model("Props")
+	group:SetAttribute("FootingGroup", true)
+
+	local totalLength = 0
+	for _, street in ipairs(ctx.streets) do
+		totalLength += street.length
+	end
+	local function pickStreet()
+		local roll = ctx.rng:NextNumber(0, totalLength)
+		for _, street in ipairs(ctx.streets) do
+			roll -= street.length
+			if roll <= 0 then
+				return street
+			end
+		end
+		return ctx.streets[#ctx.streets]
+	end
+
+	-- Every kind at least once before any repeats, in a shuffled order.
+	local order = {}
+	for index = 1, #kinds do
+		order[index] = index
+	end
+	for index = #order, 2, -1 do
+		local swap = ctx.rng:NextInteger(1, index)
+		order[index], order[swap] = order[swap], order[index]
+	end
+
+	local count = theme.propCount or { 7, 10 }
+	local wanted = ctx.rng:NextInteger(count[1], count[2])
+	local spots = {}
+	for index = 1, wanted do
+		local kind = kinds[order[(index - 1) % #order + 1]]
+		for _ = 1, 30 do
+			local street = pickStreet()
+			local margin = 8 + kind.radius
+			if street.length > margin * 2 then
+				local outward = Vector3.new(-street.dir.Z, 0, street.dir.X) * (ctx.rng:NextInteger(0, 1) == 0 and 1 or -1)
+				local along = ctx.rng:NextNumber(margin, street.length - margin)
+				local at = street.a + street.dir * along + outward * (street.width / 2 + SIDEWALK + VERGE + kind.radius)
+				local apart = true
+				for _, other in ipairs(spots) do
+					if flatDistance(at, other) < PROP_SPACING then
+						apart = false
+						break
+					end
+				end
+				if apart and ctx.space:IsFree(at.X, at.Z, kind.radius) then
+					-- Props never get pads: they only go where the verge is already flat under them.
+					local low, high = groundRangeFine(ctx.groundAt, at, 0, kind.radius, kind.radius)
+					if low and high - low <= PROP_FLAT_ENOUGH then
+						ctx.space:AddCircle(at.X, at.Z, kind.radius)
+						table.insert(spots, at)
+						local frame = CFrame.new(at.X, low, at.Z) * CFrame.Angles(0, yawFacing(-outward), 0)
+						local propKit, propModel = Kit.new(kit.parent, frame, ctx.rng):model(kind.id)
+						local built, err = pcall(kind.build, propKit, ctx)
+						if built then
+							footing(propModel, frame, low, kind.radius * 2, kind.radius * 2)
+						else
+							propModel:Destroy()
+							warn(string.format("[TownThemes] %s prop %s failed: %s", theme.id, kind.id, tostring(err)))
+						end
+						break
+					end
+				end
+			end
+		end
+	end
+	if #spots == 0 then
+		group:Destroy()
+	end
+	return #spots
+end
+
+local function countParts(root)
+	local count = 0
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function themeTown(town, theme, space, groundAt, preset, rng)
+	-- An attribute, so it comes from the map build rather than a client, but it goes through
+	-- SafeValue like every other Vector3: a NaN or an absurd coordinate would put a whole theme
+	-- somewhere it can never be found (project rule, enforced by verify.py).
+	local center = town:GetAttribute("TownCenter")
+	if not SafeValue.Vector3(center) then
+		return nil
+	end
+	local spread = town:GetAttribute("TownSpread") or ((town:GetAttribute("TownRadius") or 150) - 40)
+	-- No solid ground at the town's own centre means something is very wrong: leave the town alone.
+	local level = solidGround(groundAt, center.X, center.Z)
+	if not level then
+		warn(string.format("[TownThemes] %s: no ground under the town centre", theme.id))
+		return nil
+	end
+	local ctx = {
+		town = town,
+		center = Vector3.new(center.X, level, center.Z),
+		level = level,
+		spread = spread,
+		streets = streetsOf(town),
+		space = space,
+		groundAt = groundAt,
+		rng = rng,
+		preset = preset,
+		paint = true,
+	}
+
+	-- Wall clock, for the 15 s per-map build budget: os.clock() is CPU time in Roblox and this
+	-- function yields, so it would under-read by exactly the part that matters.
+	local started = DateTime.now().UnixTimestampMillis
+
+	local model = Instance.new("Model")
+	model.Name = "Theme"
+	model:SetAttribute("Theme", theme.id)
+	model:SetAttribute("FootingGroup", true)
+	model.Parent = town
+
+	-- Each part of the theme on its own: a broken prop builder mustn't take down a set piece that's
+	-- already standing on its pad (which would leave a bare pad and a claim with nothing on it).
+	local function attempt(what, fn)
+		local ok, result = pcall(fn)
+		if not ok then
+			warn(string.format("[TownThemes] %s %s failed: %s", theme.id, what, tostring(result)))
+			model:SetAttribute("Failed", ((model:GetAttribute("Failed") or "") .. " " .. what))
+			return nil
+		end
+		return result
+	end
+	ctx.setPiece = attempt("set piece", function()
+		return placeSetPiece(ctx, theme, model)
+	end)
+	-- No yield here: a whole town's theme is ~40 ms of work and Build yields once per town; the
+	-- second yield was ~16 ms of the 40 (measured, SahurSprings 101), and the padded path yields for
+	-- its terrain write on its own.
+	ctx.flags = attempt("flags", function()
+		return placeFlags(ctx, theme, model)
+	end) or 0
+	ctx.props = attempt("props", function()
+		return placeProps(ctx, theme, model)
+	end) or 0
+	if #model:GetChildren() == 0 then
+		-- Nothing found room: keep the container for its site diagnostics, but not as a footing group.
+		model:SetAttribute("FootingGroup", nil)
+	end
+	local parts = countParts(model)
+	model:SetAttribute("ThemeParts", parts)
+	local millis = DateTime.now().UnixTimestampMillis - started
+	model:SetAttribute("ThemeMillis", millis)
+	local tagline = TownThemes.Taglines[theme.name]
+	if tagline then
+		town:SetAttribute("TownTagline", tagline)
+	end
+	return {
+		setPiece = ctx.setPiece and ctx.setPiece.Name or nil,
+		onStreet = ctx.setPiece and ctx.setPiece:GetAttribute("OnStreet") or nil,
+		flags = ctx.flags,
+		props = ctx.props,
+		parts = parts,
+		millis = millis,
+	}
+end
+
+function TownThemes.Build(map, space, groundHeightAt, preset)
+	-- The one roll this takes from the global generator; everything after is its own.
+	local rng = Random.new(math.random(1, 2147483646))
+	local result = { parts = 0, millis = 0, towns = {} }
+	for _, town in ipairs(map:GetChildren()) do
+		local name = town:IsA("Model") and town:GetAttribute("TownName")
+		local theme = name and Themes[name]
+		if theme then
+			local info = themeTown(town, theme, space, groundHeightAt, preset, rng)
+			if info then
+				result.towns[name] = info
+				result.parts += info.parts
+				result.millis += info.millis
+			end
+			task.wait()
+		end
+	end
+	return result
+end
+
+-- For the gallery and the build check only: every theme in a row along X from `origin`, `spacing`
+-- apart, each on flat ground at origin.Y -- its set piece facing -Z, a flag in front to one side,
+-- and one of each of its props in a line in front of that. Returns one entry per theme with where
+-- each piece went, so a gallery can aim a camera at them.
+function TownThemes.BuildAll(parent, origin, spacing, names)
+	spacing = spacing or 90
+	local rng = Random.new(67)
+	local entries = {}
+	for index, name in ipairs(names or TownThemes.Order) do
+		local theme = Themes[name]
+		if theme then
+			local base = origin + Vector3.new((index - 1) * spacing, 0, 0)
+			local model = Instance.new("Model")
+			model.Name = "Theme"
+			model:SetAttribute("TownName", name)
+			model:SetAttribute("Theme", theme.id)
+			model.Parent = parent
+			local ctx = { rng = rng, paint = false, level = origin.Y, groundAt = function()
+				return origin.Y
+			end, space = MapSpace.new() }
+			local piece = theme.setPiece
+			-- Each piece on its own pcall, so one broken builder doesn't hide the rest.
+			local function attempt(what, fn)
+				local ok, err = pcall(fn)
+				if not ok then
+					warn(string.format("[TownThemes] %s %s failed: %s", theme.id, what, tostring(err)))
+				end
+			end
+			attempt(piece.id, function()
+				piece.build((Kit.new(model, CFrame.new(base), rng):model(piece.id)), ctx)
+			end)
+			local flagAt = base + Vector3.new(-piece.width / 2 + 2, 0, -piece.depth / 2 - 6)
+			attempt("flag", function()
+				buildFlag((Kit.new(model, CFrame.new(flagAt), rng):model("Flag")), theme.flag)
+			end)
+			local props = {}
+			local x = base.X - piece.width / 2
+			for _, kind in ipairs(theme.props or {}) do
+				x += kind.radius
+				local at = Vector3.new(x, origin.Y, base.Z - piece.depth / 2 - 16 - kind.radius)
+				attempt(kind.id, function()
+					kind.build((Kit.new(model, CFrame.new(at), rng):model(kind.id)), ctx)
+				end)
+				table.insert(props, { id = kind.id, at = at, radius = kind.radius })
+				x += kind.radius + 3
+			end
+			table.insert(entries, { name = name, model = model, base = base, width = piece.width, depth = piece.depth, flagAt = flagAt, props = props })
+		end
+	end
+	return entries
+end
+
+return TownThemes

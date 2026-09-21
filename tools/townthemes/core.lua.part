@@ -1,0 +1,516 @@
+-- Town themes: set dressing that makes each town look like its name.
+--
+-- The eighteen town names (MapDecor's TOWN_NAMES) used to be labels on identical towns: the same
+-- square, lamps, benches and parked cars, with only the welcome sign different. Every name now has
+-- a theme here, and a themed town gets three things:
+--
+--   a set piece   one big signature build on a free lot facing a street (or round the edge of
+--                 town, facing the square, when no lot is big enough): Six Seven Square's clock
+--                 tower stopped at 6:07, Sahur Junction's signal box and steam engine
+--   flags         its banner on a pole at each corner of the square
+--   street props  a handful of small themed pieces on the verges behind the pavements
+--
+--   TownThemes.Build(map, space, groundHeightAt, preset)   themes every town under `map`
+--   TownThemes.BuildAll(parent, origin, spacing, names)   every set piece and prop in rows (or just
+--                                                         `names`), for the galleries and the probe
+--   TownThemes.Themes                                     town name -> theme
+--
+-- MapGenerator calls Build once, after everything else on the map has claimed its ground and before
+-- the map's z-fight pass. It takes ONE roll from the global generator to seed its own Random, so
+-- adding or changing a theme never moves a single roll anywhere else on the map. Towns are found
+-- by their TownName attribute; streets by their Asphalt parts. Everything placed claims its
+-- footprint in the map's MapSpace, and keeps off the pavements, so nothing is built through a
+-- building, a lamp, a road or another prop.
+--
+-- Everything is primitive parts. Pieces that could matter in a fight (tanks, hedges, the engine,
+-- stages) are solid cover. Thin detail (rails, ropes, hands, leaves, text boards) neither collides
+-- nor stops a bullet. None of it is loot: themes add no chest or pickup spots.
+--
+-- Part names never reuse DestructibleService's table (Wall, Floor, Roof, Crate...), so nothing here
+-- can be shot apart by accident. Anything meant to hang in the air carries IntentionalFloat = true,
+-- so the floating-parts audit can skip it.
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local SafeValue = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("SafeValue"))
+local MapSpace = require(script.Parent:WaitForChild("MapSpace"))
+local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
+local MovementService = require(script.Parent:WaitForChild("MovementService"))
+
+local TownThemes = {}
+
+-- Speedrun Springs' coil springs throw players into the air (Oliver's call, 2026-09-17). Off turns
+-- them back into scenery without touching anything else.
+TownThemes.EnableSpringLaunch = true
+-- How hard a spring throws: straight up, plus a nudge the way the spring faces.
+TownThemes.SpringUp = 92
+TownThemes.SpringForward = 12
+
+-- The town layout this works round (MapGenerator's constants): the pavement beyond each street's
+-- asphalt, and the square's half-width.
+local SIDEWALK = 5
+local PLAZA_HALF = 25
+-- The gap kept between a pavement's outer edge and anything themed.
+local VERGE = 1.5
+-- The flag poles stand just outside the square's corners: clear of its claim, the streets'
+-- pavements and the first building on each side.
+local FLAG_CORNER = PLAZA_HALF + 0.8
+
+--------------------------------------------------------------------------------
+-- Colours
+--------------------------------------------------------------------------------
+
+local C = {
+	white = Color3.fromRGB(240, 238, 232),
+	cream = Color3.fromRGB(236, 226, 200),
+	black = Color3.fromRGB(28, 28, 32),
+	charcoal = Color3.fromRGB(48, 48, 54),
+	iron = Color3.fromRGB(58, 60, 68),
+	steel = Color3.fromRGB(160, 164, 172),
+	silver = Color3.fromRGB(196, 200, 206),
+	brass = Color3.fromRGB(196, 150, 66),
+	gold = Color3.fromRGB(255, 196, 64),
+	red = Color3.fromRGB(206, 48, 44),
+	crimson = Color3.fromRGB(150, 30, 36),
+	orange = Color3.fromRGB(240, 140, 40),
+	yellow = Color3.fromRGB(250, 210, 50),
+	green = Color3.fromRGB(70, 150, 70),
+	hedge = Color3.fromRGB(58, 112, 52),
+	leaf = Color3.fromRGB(84, 140, 62),
+	blue = Color3.fromRGB(60, 120, 210),
+	sky = Color3.fromRGB(120, 200, 240),
+	purple = Color3.fromRGB(150, 90, 220),
+	pink = Color3.fromRGB(255, 130, 190),
+	wood = Color3.fromRGB(140, 100, 62),
+	darkWood = Color3.fromRGB(96, 70, 46),
+	stone = Color3.fromRGB(176, 168, 150),
+	oldStone = Color3.fromRGB(132, 126, 112),
+	brick = Color3.fromRGB(156, 92, 70),
+	concrete = Color3.fromRGB(150, 148, 142),
+	rust = Color3.fromRGB(128, 78, 48),
+	signBack = Color3.fromRGB(30, 30, 36),
+}
+TownThemes.Colors = C
+
+--------------------------------------------------------------------------------
+-- Building kit
+--------------------------------------------------------------------------------
+
+-- A kit builds into one parent in one local frame: every CFrame a builder passes is relative to
+-- `frame`, so a set piece is written once in its own coordinates (-Z toward the street) and lands
+-- wherever it's placed.
+local Kit = {}
+Kit.__index = Kit
+
+function Kit.new(parent, frame, rng)
+	return setmetatable({ parent = parent, frame = frame, rng = rng }, Kit)
+end
+
+-- The same kit, moved: `localFrame` becomes the new origin.
+function Kit:at(localFrame)
+	return Kit.new(self.parent, self.frame * localFrame, self.rng)
+end
+
+-- The same kit, building under another parent (a spinning hub, a sub-model).
+function Kit:into(parent)
+	return Kit.new(parent, self.frame, self.rng)
+end
+
+function Kit:model(name)
+	local model = Instance.new("Model")
+	model.Name = name
+	model.Parent = self.parent
+	return self:into(model), model
+end
+
+local function newPart(className, parent, name, size, cframe, color, material, shape)
+	local part = Instance.new(className)
+	part.Name = name
+	if shape then
+		part.Shape = shape
+	end
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = material or Enum.Material.SmoothPlastic
+	part.Anchored = true
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Parent = parent
+	return part
+end
+
+-- Decoration: never collides, never stops a bullet, never fires Touched.
+local function decor(part)
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	return part
+end
+TownThemes.Decor = decor
+
+-- Meant to hang in the air, so the floating-parts audit leaves it alone.
+local function floating(part)
+	part:SetAttribute("IntentionalFloat", true)
+	return part
+end
+
+-- Two facts about text that renders taught (2026-09-17): seen from its front (-Z), a model's +X is
+-- the viewer's LEFT, so glyphs and ordered things laid along +X come out mirrored; and a label on a
+-- part's Top face has its "up" along the part's own -X. A flat tile turned by READ_FROM_FRONT reads
+-- the right way up to someone standing on its -Z side. (Round 3 renders, zoomed: with the opposite
+-- turn every top-face label -- lane numbers, hopscotch, WASD -- read upside down from the street.)
+local READ_FROM_FRONT = CFrame.Angles(0, math.pi / 2, 0)
+TownThemes.ReadFromFront = READ_FROM_FRONT
+
+function Kit:box(name, size, cf, color, material)
+	return newPart("Part", self.parent, name, size, self.frame * cf, color, material)
+end
+
+function Kit:trim(name, size, cf, color, material)
+	return decor(self:box(name, size, cf, color, material))
+end
+
+function Kit:ball(name, diameter, cf, color, material)
+	return newPart("Part", self.parent, name, Vector3.new(diameter, diameter, diameter), self.frame * cf, color, material, Enum.PartType.Ball)
+end
+
+-- A cylinder whose axis is `cf`'s X axis.
+function Kit:cyl(name, length, diameter, cf, color, material)
+	return newPart("Part", self.parent, name, Vector3.new(length, diameter, diameter), self.frame * cf, color, material, Enum.PartType.Cylinder)
+end
+
+-- An upright cylinder standing on `base` (a local Vector3).
+function Kit:post(name, height, diameter, base, color, material)
+	return self:cyl(name, height, diameter, CFrame.new(base + Vector3.new(0, height / 2, 0)) * CFrame.Angles(0, 0, math.pi / 2), color, material)
+end
+
+-- A flat round disc centred on `center`, facing up.
+function Kit:disc(name, thickness, diameter, center, color, material)
+	return self:cyl(name, thickness, diameter, CFrame.new(center) * CFrame.Angles(0, 0, math.pi / 2), color, material)
+end
+
+-- A cylinder from one local point to another.
+function Kit:rod(name, from, to, diameter, color, material)
+	local length = (to - from).Magnitude
+	return self:cyl(name, length, diameter, CFrame.lookAt(from:Lerp(to, 0.5), to) * CFrame.Angles(0, math.pi / 2, 0), color, material)
+end
+
+-- A square-section bar from one local point to another.
+function Kit:bar(name, from, to, thickness, color, material)
+	local length = (to - from).Magnitude
+	return self:box(name, Vector3.new(thickness, thickness, length), CFrame.lookAt(from:Lerp(to, 0.5), to), color, material)
+end
+
+-- WedgePart: full height along its +Z end, sloping down to nothing at its -Z end.
+function Kit:wedge(name, size, cf, color, material)
+	return newPart("WedgePart", self.parent, name, size, self.frame * cf, color, material)
+end
+
+-- A climbable truss standing on `base`, `height` tall (rounded to a multiple of two).
+function Kit:truss(name, height, base, color)
+	local truss = Instance.new("TrussPart")
+	truss.Name = name
+	local snapped = math.max(2, math.ceil(height / 2) * 2)
+	truss.Size = Vector3.new(2, snapped, 2)
+	truss.CFrame = self.frame * CFrame.new(base + Vector3.new(0, snapped / 2, 0))
+	truss.Color = color or C.iron
+	truss.Material = Enum.Material.Metal
+	truss.Anchored = true
+	truss.Parent = self.parent
+	return truss
+end
+
+-- Text on a part's faces (Front by default, which is the part's -Z face).
+function Kit.label(part, text, textColor, background, faces, font)
+	for _, face in ipairs(faces or { Enum.NormalId.Front }) do
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = face
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 30
+		gui.LightInfluence = background and 0 or 0.3
+		gui.MaxDistance = 260
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundColor3 = background or Color3.new()
+		label.BackgroundTransparency = background and 0 or 1
+		label.BorderSizePixel = 0
+		label.Font = font or Enum.Font.FredokaOne
+		label.Text = text
+		label.TextColor3 = textColor
+		label.TextScaled = true
+		label.TextStrokeTransparency = 0.6
+		label.Parent = gui
+
+		gui.Parent = part
+	end
+	return part
+end
+
+function Kit.light(part, color, range, brightness)
+	local light = Instance.new("PointLight")
+	light.Color = color
+	light.Range = range
+	light.Brightness = brightness
+	light.Parent = part
+	return light
+end
+
+-- Client-side motion (AmbientClient): turning about the part's own Y axis (parts under it turn
+-- with it), bobbing up and down, cycling colour, or swinging about its X or Y axis.
+function Kit.spin(part, degreesPerSecond)
+	part:SetAttribute("SpinSpeed", degreesPerSecond)
+	CollectionService:AddTag(part, "AmbientSpin")
+	return part
+end
+
+function Kit.bob(part, height, speed, phase)
+	part:SetAttribute("BobHeight", height)
+	part:SetAttribute("BobSpeed", speed)
+	part:SetAttribute("BobPhase", phase or 0)
+	CollectionService:AddTag(part, "AmbientBob")
+	return part
+end
+
+function Kit.pulse(part, speed, phase)
+	part:SetAttribute("PulseSpeed", speed)
+	part:SetAttribute("PulsePhase", phase or 0)
+	CollectionService:AddTag(part, "AmbientPulse")
+	return part
+end
+
+function Kit.sway(part, axis, angle, speed, phase)
+	part:SetAttribute("SwayAxis", axis)
+	part:SetAttribute("SwayAngle", angle)
+	part:SetAttribute("SwaySpeed", speed)
+	part:SetAttribute("SwayPhase", phase or 0)
+	CollectionService:AddTag(part, "AmbientSway")
+	return part
+end
+
+-- An invisible anchor for a group that moves together (a wheel, a spinner, a rocking horse). It
+-- carries no collision and is hidden, so it never shows or fights anything.
+function Kit:hub(name, cf)
+	local hub = decor(self:box(name, Vector3.new(0.2, 0.2, 0.2), cf, C.black))
+	hub.Transparency = 1
+	return hub
+end
+
+function Kit.emitter(part, spec)
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Color = ColorSequence.new(spec.color or Color3.new(1, 1, 1), spec.color2 or spec.color or Color3.new(1, 1, 1))
+	emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, spec.size or 1), NumberSequenceKeypoint.new(1, spec.size2 or spec.size or 1) })
+	emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, spec.transparency or 0.4), NumberSequenceKeypoint.new(1, 1) })
+	emitter.Lifetime = NumberRange.new(spec.lifetime or 2, (spec.lifetime or 2) * 1.5)
+	emitter.Rate = spec.rate or 4
+	emitter.Speed = NumberRange.new(spec.speed or 1, (spec.speed or 1) * 1.6)
+	emitter.SpreadAngle = Vector2.new(spec.spread or 20, spec.spread or 20)
+	emitter.LightEmission = spec.lightEmission or 0
+	emitter.Acceleration = spec.acceleration or Vector3.zero
+	emitter.Parent = part
+	return emitter
+end
+
+TownThemes.Kit = Kit
+TownThemes.Floating = floating
+
+--------------------------------------------------------------------------------
+-- Shared pieces
+--------------------------------------------------------------------------------
+
+local Pieces = {}
+TownThemes.Pieces = Pieces
+
+-- A sign board on one or two posts: `width` x `height` board with its bottom edge `lift` above the
+-- ground, reading toward -Z. Returns the board.
+function Pieces.board(k, text, width, height, lift, textColor, background, posts, frameColor)
+	local postColor = frameColor or C.darkWood
+	local board = k:box("SignBoard", Vector3.new(width, height, 0.4), CFrame.new(0, lift + height / 2, 0), background or C.signBack, Enum.Material.SmoothPlastic)
+	Kit.label(board, text, textColor or C.gold, background or C.signBack, { Enum.NormalId.Front, Enum.NormalId.Back })
+	if posts ~= 0 then
+		local spread = (posts == 1) and { 0 } or { -width / 2 + 0.5, width / 2 - 0.5 }
+		for _, x in ipairs(spread) do
+			-- Behind the board rather than through it, so the text is never crossed by a post.
+			k:box("SignPost", Vector3.new(0.5, lift + height, 0.5), CFrame.new(x, (lift + height) / 2, 0.45), postColor, Enum.Material.Wood)
+		end
+	end
+	return board
+end
+
+-- A little brass plaque on a short stand, leaning back toward whoever reads it.
+function Pieces.plaque(k, text, width)
+	width = width or 4
+	k:box("PlaqueStand", Vector3.new(0.5, 2.6, 0.5), CFrame.new(0, 1.3, 0.2), C.iron, Enum.Material.Metal)
+	local plate = k:box("Plaque", Vector3.new(width, 1.6, 0.25), CFrame.new(0, 2.9, 0) * CFrame.Angles(math.rad(-25), 0, 0), C.brass, Enum.Material.Metal)
+	Kit.label(plate, text, C.black, nil, { Enum.NormalId.Front })
+	return plate
+end
+
+-- A lamp post with a lantern head, `height` tall, lit warm.
+function Pieces.lantern(k, height, color)
+	k:post("LanternPost", height, 0.5, Vector3.zero, C.iron, Enum.Material.Metal)
+	k:trim("LanternArm", Vector3.new(0.3, 0.3, 1.6), CFrame.new(0, height - 0.4, -0.7), C.iron, Enum.Material.Metal)
+	local lamp = k:trim("LanternGlass", Vector3.new(0.9, 1.2, 0.9), CFrame.new(0, height - 1.3, -1.4), color or Color3.fromRGB(255, 214, 140), Enum.Material.Neon)
+	k:trim("LanternCap", Vector3.new(1.2, 0.3, 1.2), CFrame.new(0, height - 0.55, -1.4), C.iron, Enum.Material.Metal)
+	Kit.light(lamp, color or Color3.fromRGB(255, 214, 140), 16, 1.2)
+	return lamp
+end
+
+-- A simple bench facing -Z.
+function Pieces.bench(k, color)
+	local wood = color or C.wood
+	k:box("BenchSeat", Vector3.new(5, 0.4, 1.8), CFrame.new(0, 1.9, 0), wood, Enum.Material.WoodPlanks)
+	k:box("BenchBack", Vector3.new(5, 1.6, 0.35), CFrame.new(0, 3.0, 0.8), wood, Enum.Material.WoodPlanks)
+	for _, x in ipairs({ -2.1, 2.1 }) do
+		k:box("BenchLeg", Vector3.new(0.35, 1.7, 1.6), CFrame.new(x, 0.85, 0.05), C.iron, Enum.Material.Metal)
+	end
+end
+
+-- A clock face on the -Z side of `k`'s frame, whose origin sits on the surface it hangs on. The
+-- hands read `hours`:`minutes` to someone standing in front of it.
+--
+-- The layers step out from the wall by fixed amounts, whatever the clock's size: rim to -0.15, dial
+-- to -0.25, ticks to -0.33, hour hand to -0.42, minute hand to -0.5, cap to -0.6. Scaling the depths
+-- with the diameter put a small clock's ticks within a few hundredths of the dial's face, close
+-- enough for the z-fight pass to call every one of them flush.
+function Pieces.clockFace(k, hours, minutes, diameter)
+	local s = diameter / 6
+	local function toward(theta)
+		-- Seen from the front, clockwise from twelve runs toward local -X.
+		return Vector3.new(-math.sin(theta), math.cos(theta), 0)
+	end
+	local function layer(from, to)
+		return to - from, (from + to) / 2
+	end
+	local rimDepth, rimZ = layer(0.15, -0.15)
+	k:cyl("ClockRim", math.abs(rimDepth), diameter + 0.8 * s, CFrame.new(0, 0, rimZ) * CFrame.Angles(0, math.pi / 2, 0), C.iron, Enum.Material.Metal)
+	decor(k:cyl("ClockDial", 0.2, diameter, CFrame.new(0, 0, -0.15) * CFrame.Angles(0, math.pi / 2, 0), Color3.fromRGB(246, 242, 228), Enum.Material.SmoothPlastic))
+	for index = 0, 11 do
+		local theta = math.rad(index * 30)
+		local length = (index % 3 == 0 and 0.8 or 0.45) * s
+		local radius = diameter / 2 - 0.35 * s - length / 2
+		k:trim("ClockTick", Vector3.new(math.max(0.12, 0.22 * s), length, 0.13), CFrame.new(toward(theta) * radius + Vector3.new(0, 0, -0.265)) * CFrame.Angles(0, 0, theta),
+			C.black, Enum.Material.SmoothPlastic)
+	end
+	local hourTheta = math.rad(((hours % 12) + minutes / 60) * 30)
+	local minuteTheta = math.rad(minutes * 6)
+	local hourLength, minuteLength = diameter * 0.26, diameter * 0.38
+	-- The hands' tails and the cap are sized so that at a right angle (3:00, 6:00...) no end of one
+	-- lines up with a side of another.
+	local hourTail, minuteTail = 0.3 * s + 0.05, 0.4 * s
+	local capSize = math.max(0.45, 0.7 * s)
+	k:trim("ClockHourHand", Vector3.new(math.max(0.16, 0.38 * s), hourLength, 0.14),
+		CFrame.new(toward(hourTheta) * (hourLength / 2 - hourTail) + Vector3.new(0, 0, -0.35)) * CFrame.Angles(0, 0, hourTheta), C.black, Enum.Material.Metal)
+	k:trim("ClockMinuteHand", Vector3.new(math.max(0.12, 0.24 * s), minuteLength, 0.14),
+		CFrame.new(toward(minuteTheta) * (minuteLength / 2 - minuteTail) + Vector3.new(0, 0, -0.43)) * CFrame.Angles(0, 0, minuteTheta), C.black, Enum.Material.Metal)
+	k:trim("ClockCap", Vector3.new(capSize, capSize, 0.15), CFrame.new(0, 0, -0.525), C.brass, Enum.Material.Metal)
+end
+
+-- What a spring does to whoever lands on it: nothing for bots (a bot thrown onto a ledge it can't
+-- path down from is a stuck bot), and at most one throw every 1.5 seconds per player per spring.
+-- Returns the velocity it applied, so a probe can call it without any physics running.
+local SPRING_COOLDOWN = 1.5
+TownThemes.SpringCooldown = SPRING_COOLDOWN
+
+-- Who a spring will throw. A probe swaps this out to test the throw without a real player.
+function TownThemes.CanLaunch(character)
+	return Players:GetPlayerFromCharacter(character) ~= nil
+end
+
+-- When each character last left each spring, server-side only. STRONG keys on both levels: a weak
+-- table with Instance keys loses live entries whenever the collector runs, and this one guards the
+-- launch cooldown, so losing an entry would let a player be thrown again immediately (claude-4a's
+-- audit, 2026-09-17; the same mistake DestructibleService's `damaged` table documents). The trigger's
+-- entry goes when the trigger does, and entries older than the cooldown are dropped as we go, so the
+-- table never holds more than the players standing on springs right now.
+-- (It used to be a LastLaunch_<Name> attribute per player on the trigger, which replicated every
+-- throw to every client and never went away either.)
+local lastLaunch = {}
+
+local function launchTimes(trigger)
+	local times = lastLaunch[trigger]
+	if not times then
+		times = {}
+		lastLaunch[trigger] = times
+		trigger.Destroying:Connect(function()
+			lastLaunch[trigger] = nil
+		end)
+	end
+	return times
+end
+
+-- The launch kind MovementClient applies: "pad" plays the launch whoosh and sends a running player
+-- the way they're running (a standing one along the spring). With no kind it played the item
+-- pickup sound, which is wrong for a spring.
+TownThemes.SpringLaunchKind = "pad"
+
+function TownThemes.SpringLaunch(trigger, character, now)
+	if not TownThemes.EnableSpringLaunch or not trigger.Parent then
+		return nil
+	end
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 or not TownThemes.CanLaunch(character) then
+		return nil
+	end
+	local times = launchTimes(trigger)
+	now = now or os.clock()
+	local last = times[character]
+	if last and now - last < SPRING_COOLDOWN then
+		return nil
+	end
+	times[character] = now
+	-- Anyone whose cooldown has run out is forgotten: the entry can't matter again.
+	for other, when in pairs(times) do
+		if other ~= character and now - when > SPRING_COOLDOWN then
+			times[other] = nil
+		end
+	end
+	local forward = trigger:GetAttribute("LaunchForward") or Vector3.zero
+	local velocity = Vector3.new(0, TownThemes.SpringUp, 0) + forward * TownThemes.SpringForward
+	MovementService.Launch(character, velocity, TownThemes.SpringLaunchKind)
+	return velocity
+end
+
+-- What the trigger's Touched does with whatever touched it: the character that part belongs to (a
+-- foot, or an accessory's handle under an Accessory, whose nearest Model ancestor is the character).
+function TownThemes.SpringTouched(trigger, hit, now)
+	local character = hit and hit:FindFirstAncestorOfClass("Model")
+	return TownThemes.SpringLaunch(trigger, character, now)
+end
+
+-- A launch trigger: an invisible touch plate over a spring's top. Whoever steps on it is thrown
+-- up, and a little along `forward` (a local flat direction). See TownThemes.SpringLaunch.
+function Pieces.springTrigger(k, cf, size, forward)
+	local trigger = decor(k:box("SpringTrigger", size, cf, C.white))
+	trigger.Transparency = 1
+	trigger.CanTouch = true
+	local world = k.frame:VectorToWorldSpace(forward or Vector3.zero)
+	world = Vector3.new(world.X, 0, world.Z)
+	trigger:SetAttribute("LaunchForward", world.Magnitude > 0.01 and world.Unit or Vector3.zero)
+	trigger.Touched:Connect(function(hit)
+		TownThemes.SpringTouched(trigger, hit)
+	end)
+	return trigger
+end
+
+--------------------------------------------------------------------------------
+-- Themes
+--------------------------------------------------------------------------------
+
+-- Town name -> theme. Each theme is
+--   { name, id, flag = { emblem, caption, color, text, trim },
+--     setPiece = { id, name, width, depth, ground (terrain material or nil), build(kit, ctx) },
+--     props = { { id, radius, build(kit, ctx) }, ... }, propCount = { min, max } (optional) }
+-- A set piece builds inside width x depth round its kit's origin, front toward -Z; a prop inside
+-- its radius. Neither may reach past that: it's exactly the ground they claim.
+TownThemes.Themes = {}
+TownThemes.Order = {}
+
+local function defineTheme(theme)
+	TownThemes.Themes[theme.name] = theme
+	table.insert(TownThemes.Order, theme.name)
+	return theme
+end

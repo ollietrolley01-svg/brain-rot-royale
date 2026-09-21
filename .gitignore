@@ -1,0 +1,26 @@
+# The place file is BUILT from the source in this repo by build_place.py.
+# It is 4 MB of generated XML that changes on every build, so it is not tracked:
+#   python build_place.py .
+BrainRotRoyale.rbxlx
+
+# Studio's own scratch copies of the place, written by the test harness.
+BRR_RunTest.rbxlx
+BRR_Gallery.rbxlx
+
+# Harness lock and queue state (machine-local, meaningless to anyone else).
+.studio_lock*
+.studio_queue/
+tools/.studio_lock*
+
+# Backups and scratch left by the tabs while they work.
+*.orig
+*.bak
+*.pre_*
+backup/
+backups/
+scratch/
+scratchpad/
+
+# Renders and probe output.
+*.png
+*.log

@@ -1,0 +1,530 @@
+
+--------------------------------------------------------------------------------
+-- Sigma Station: the maglev to Grindset Central, always on time
+--------------------------------------------------------------------------------
+
+do
+	local PLATFORM = Color3.fromRGB(206, 206, 210)
+	local GUIDEWAY = Color3.fromRGB(70, 72, 80)
+	local PURPLE = Color3.fromRGB(120, 70, 230)
+	local CYAN = Color3.fromRGB(90, 230, 255)
+	local TRAIN_WHITE = Color3.fromRGB(236, 238, 242)
+	local AMBER = Color3.fromRGB(255, 176, 60)
+	local GLASS = Color3.fromRGB(150, 190, 210)
+
+	-- The shuttle, hovering half a stud over its guideway. Every part of it is meant to float.
+	local function shuttle(k)
+		local parts = {}
+		local function keep(part)
+			table.insert(parts, part)
+			return part
+		end
+		-- Body 1.9 to 7.1 high, its platform side at z = 6.9; livery layered off that face.
+		keep(k:box("ShuttleBody", Vector3.new(24, 5.2, 4.2), CFrame.new(-2, 4.5, 9), TRAIN_WHITE, Enum.Material.SmoothPlastic))
+		keep(k:wedge("ShuttleNose", Vector3.new(4.2, 5.2, 5.5), CFrame.new(12.75, 4.5, 9) * CFrame.Angles(0, -math.pi / 2, 0), TRAIN_WHITE, Enum.Material.SmoothPlastic))
+		keep(k:wedge("ShuttleNose", Vector3.new(4.2, 5.2, 5.5), CFrame.new(-16.75, 4.5, 9) * CFrame.Angles(0, math.pi / 2, 0), TRAIN_WHITE, Enum.Material.SmoothPlastic))
+		-- Windscreens laid along each nose's slope, a hair proud of it.
+		local slope = Vector3.new(5.5, -5.2, 0).Unit
+		for _, side in ipairs({ 1, -1 }) do
+			local along = Vector3.new(slope.X * side, slope.Y, 0)
+			local normal = Vector3.new(-slope.Y * side, slope.X, 0)
+			local tip = Vector3.new(side > 0 and 10 or -14, 7.1, 9)
+			local at = tip + along * 2.2 + normal * 0.06
+			keep(decor(k:box("ShuttleWindscreen", Vector3.new(3.0, 0.1, 3.6), CFrame.fromMatrix(at, along, normal), Color3.fromRGB(30, 40, 60), Enum.Material.Glass)))
+		end
+		keep(k:trim("ShuttleStripe", Vector3.new(24, 0.8, 0.1), CFrame.new(-2, 3.2, 6.85), PURPLE, Enum.Material.SmoothPlastic))
+		keep(k:trim("ShuttleWindows", Vector3.new(21, 1.6, 0.1), CFrame.new(-2, 5.5, 6.85), Color3.fromRGB(30, 40, 60), Enum.Material.Glass))
+		for _, x in ipairs({ -9.2, -7.6, 0.4, 2.0 }) do
+			keep(k:trim("ShuttleDoorLine", Vector3.new(0.15, 4.2, 0.1), CFrame.new(x, 4.3, 6.74), Color3.fromRGB(150, 154, 164), Enum.Material.SmoothPlastic))
+		end
+		local logo = keep(k:trim("ShuttleLogo", Vector3.new(2.6, 2.6, 0.1), CFrame.new(6.8, 4.4, 6.78), PURPLE, Enum.Material.SmoothPlastic))
+		Kit.label(logo, "Σ", C.white, PURPLE, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+		local glow = keep(k:trim("ShuttleUnderglow", Vector3.new(22, 0.2, 2.8), CFrame.new(-2, 1.7, 9), CYAN, Enum.Material.Neon))
+		Kit.light(glow, CYAN, 16, 1.2)
+		for _, part in ipairs(parts) do
+			floating(part)
+		end
+	end
+
+	local function sleekBench(k)
+		k:box("SleekSeat", Vector3.new(5, 0.35, 1.5), CFrame.new(0, 1.75, 0), Color3.fromRGB(46, 48, 58), Enum.Material.SmoothPlastic)
+		k:trim("SleekBack", Vector3.new(5, 1.3, 0.25), CFrame.new(0, 2.7, 0.7) * CFrame.Angles(math.rad(-10), 0, 0), Color3.fromRGB(46, 48, 58), Enum.Material.SmoothPlastic)
+		for _, x in ipairs({ -2, 2 }) do
+			k:box("SleekLeg", Vector3.new(0.3, 1.575, 1.2), CFrame.new(x, 0.7875, 0), C.silver, Enum.Material.Metal)
+		end
+	end
+
+	local function gates(k)
+		for _, x in ipairs({ -2.9, 0, 2.9 }) do
+			k:box("TicketGate", Vector3.new(0.6, 2.6, 2.2), CFrame.new(x, 1.3, 0), Color3.fromRGB(46, 48, 58), Enum.Material.SmoothPlastic)
+			local arrow = k:trim("GateLight", Vector3.new(0.5, 0.12, 1.6), CFrame.new(x, 2.66, 0), Color3.fromRGB(80, 255, 140), Enum.Material.Neon)
+			arrow.Transparency = 0.1
+		end
+		for _, x in ipairs({ -2.05, -0.85, 0.85, 2.05 }) do
+			local flap = k:trim("GateFlap", Vector3.new(1.1, 1.0, 0.1), CFrame.new(x, 1.8, 0), GLASS, Enum.Material.Glass)
+			flap.Transparency = 0.5
+		end
+	end
+
+	local function canopy(k)
+		for _, x in ipairs({ -15, -5, 5, 15 }) do
+			k:post("CanopyColumn", 9.0, 0.6, Vector3.new(x, 1.4, 4.4), C.silver, Enum.Material.Metal)
+			decor(k:rod("CanopyStrut", Vector3.new(x, 7.2, 4.4), Vector3.new(x, 10.0, -3.3), 0.3, C.silver, Enum.Material.Metal))
+		end
+		local roof = k:trim("CanopyGlass", Vector3.new(36, 0.3, 9), CFrame.new(0, 10.35, 0.8), GLASS, Enum.Material.Glass)
+		roof.Transparency = 0.55
+		-- The beams hang wholly under the glass (10.2..10.5) and inside its edges (-3.7..5.3), clear of
+		-- every face of it by more than the z-fight pass's tolerance: tops at 10.13, sides at -3.55/-3.05
+		-- and 4.45/4.95. The strip light hangs clear under the beam in turn. Designed apart rather than
+		-- nudged apart, because a pass that nudges them does it again on every build.
+		for _, z in ipairs({ -3.3, 4.7 }) do
+			k:trim("CanopyBeam", Vector3.new(36.4, 0.5, 0.5), CFrame.new(0, 9.88, z), C.silver, Enum.Material.Metal)
+			k:trim("CanopyLight", Vector3.new(34, 0.12, 0.3), CFrame.new(0, 9.50, z), Color3.fromRGB(230, 240, 255), Enum.Material.Neon)
+		end
+		for _, x in ipairs({ -5, 5 }) do
+			k:trim("BoardHanger", Vector3.new(0.15, 1.3, 0.15), CFrame.new(x, 9.55, 0.8), C.silver, Enum.Material.Metal)
+		end
+		local board = k:trim("DepartureBoard", Vector3.new(12, 1.8, 0.4), CFrame.new(0, 8.0, 0.8), C.black, Enum.Material.SmoothPlastic)
+		Kit.label(board, "SIGMA EXPRESS  →  GRINDSET CENTRAL\nON TIME (ALWAYS)", AMBER, C.black, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.RobotoMono)
+		Kit.light(board, AMBER, 10, 0.6)
+	end
+
+	local function totem(k)
+		k:box("StationTotem", Vector3.new(2.4, 12, 1.2), CFrame.new(0, 5.8, 0), Color3.fromRGB(40, 42, 52), Enum.Material.SmoothPlastic)
+		for _, x in ipairs({ -1.3, 1.3 }) do
+			k:trim("TotemEdge", Vector3.new(0.2, 11.6, 0.2), CFrame.new(x, 5.8, -0.5), PURPLE, Enum.Material.Neon)
+		end
+		local logo = k:box("TotemLogo", Vector3.new(4.6, 4.6, 0.5), CFrame.new(0, 13.6, 0), PURPLE, Enum.Material.SmoothPlastic)
+		Kit.label(logo, "Σ", C.white, PURPLE, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBlack)
+		Kit.light(logo, PURPLE, 16, 1)
+		local name = k:trim("TotemName", Vector3.new(2.0, 3.4, 0.1), CFrame.new(0, 8.4, -0.65), Color3.fromRGB(40, 42, 52), Enum.Material.SmoothPlastic)
+		Kit.label(name, "SIGMA\nSTATION", C.white, Color3.fromRGB(40, 42, 52), { Enum.NormalId.Front }, Enum.Font.GothamBold)
+	end
+
+	defineTheme({
+		name = "Sigma Station",
+		id = "SigmaStation",
+		flag = { emblem = "Σ", caption = "SIGMA STATION", color = Color3.fromRGB(40, 42, 52), text = C.white, trim = PURPLE, font = Enum.Font.GothamBlack },
+		setPiece = {
+			id = "MaglevPlatform",
+			name = "Sigma Station",
+			width = 40,
+			depth = 26,
+			ground = Enum.Material.Concrete,
+			build = function(k)
+				k:box("StationPlatform", Vector3.new(38, 2.0, 8), CFrame.new(0, 0.6, 1), PLATFORM, Enum.Material.Concrete)
+				k:trim("PlatformEdge", Vector3.new(37.8, 0.14, 0.7), CFrame.new(0, 1.63, 4.5), Color3.fromRGB(250, 210, 50), Enum.Material.SmoothPlastic)
+				for _, x in ipairs({ -12, 12 }) do
+					k:box("PlatformStep", Vector3.new(6, 1.0, 1.2), CFrame.new(x, 0.3, -3.6), PLATFORM, Enum.Material.Concrete)
+					gates(k:at(CFrame.new(x, 1.6, -1.6)))
+				end
+				k:box("Guideway", Vector3.new(40, 1.6, 3.4), CFrame.new(0, 0.6, 9), GUIDEWAY, Enum.Material.Concrete)
+				for _, z in ipairs({ 8.0, 10.0 }) do
+					k:trim("GuidewayRail", Vector3.new(40, 0.12, 0.25), CFrame.new(0, 1.46, z), CYAN, Enum.Material.Neon)
+				end
+				shuttle(k)
+				canopy(k)
+				for _, x in ipairs({ -5, 5 }) do
+					sleekBench(k:at(CFrame.new(x, 1.6, 2.4)))
+				end
+				totem(k:at(CFrame.new(-17.2, 0, -10.2)))
+			end,
+		},
+		props = {
+			{
+				id = "WayfindingPylon",
+				radius = 1.4,
+				build = function(k)
+					k:box("Pylon", Vector3.new(1.6, 7, 0.8), CFrame.new(0, 3.3, 0), Color3.fromRGB(40, 42, 52), Enum.Material.SmoothPlastic)
+					-- A tenth proud of the post on each side: at 0.05 the two faces were inside the z-fight pass's
+					-- tolerance and it pulled them apart on every build.
+					k:trim("PylonCap", Vector3.new(1.8, 0.5, 1.0), CFrame.new(0, 6.9, 0), PURPLE, Enum.Material.Neon)
+					local panel = k:trim("PylonPanel", Vector3.new(1.4, 3.2, 0.1), CFrame.new(0, 4.4, -0.45), Color3.fromRGB(40, 42, 52), Enum.Material.SmoothPlastic)
+					Kit.label(panel, "PLATFORM\nΣ\n→", C.white, Color3.fromRGB(40, 42, 52), { Enum.NormalId.Front }, Enum.Font.GothamBold)
+				end,
+			},
+			{ id = "SleekBench", radius = 2.7, build = sleekBench },
+			{
+				id = "TicketKiosk",
+				radius = 1.6,
+				build = function(k)
+					k:box("Kiosk", Vector3.new(1.8, 5, 1.4), CFrame.new(0, 2.3, 0), Color3.fromRGB(46, 48, 58), Enum.Material.SmoothPlastic)
+					local screen = k:trim("KioskScreen", Vector3.new(1.5, 1.3, 0.12), CFrame.new(0, 3.6, -0.75) * CFrame.Angles(math.rad(-12), 0, 0), CYAN, Enum.Material.Neon)
+					Kit.label(screen, "BUY\nGRIND PASS", C.black, nil, { Enum.NormalId.Front }, Enum.Font.GothamBold)
+					k:trim("KioskSlot", Vector3.new(0.8, 0.12, 0.12), CFrame.new(0, 2.4, -0.76), C.black, Enum.Material.SmoothPlastic)
+					k:trim("KioskTop", Vector3.new(1.9, 0.3, 1.5), CFrame.new(0, 4.95, 0), PURPLE, Enum.Material.Neon)
+				end,
+			},
+			{
+				id = "MindTheGrind",
+				radius = 1.6,
+				build = function(k)
+					for _, side in ipairs({ -1, 1 }) do
+						local board = k:box("GrindSign", Vector3.new(side < 0 and 2 or 1.8, 2.8, 0.15), CFrame.new(0, 1.35, side * 0.45) * CFrame.Angles(math.rad(side * 16), 0, 0),
+							Color3.fromRGB(250, 210, 50), Enum.Material.SmoothPlastic)
+						Kit.label(board, "MIND THE GRIND", C.black, nil, { side < 0 and Enum.NormalId.Front or Enum.NormalId.Back }, Enum.Font.GothamBlack)
+					end
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- NPC Nook: where the background characters wait for someone to talk to them
+--------------------------------------------------------------------------------
+
+do
+	local NPC_GREY = Color3.fromRGB(150, 160, 176)
+	local NPC_DARK = Color3.fromRGB(118, 126, 140)
+	local PEDESTAL = Color3.fromRGB(70, 74, 84)
+	local QUEST_YELLOW = Color3.fromRGB(255, 214, 40)
+
+	-- A mannequin: a blank grey figure, stiff as a board, NPC printed on its chest, standing on a
+	-- plinth. It is not a character in any sense the game knows: no Humanoid, no collision, invisible
+	-- to raycasts, so it can't stop a bullet or draw a bot's aim, and from any distance it reads as a
+	-- statue on a stand rather than a player. `pose`: stride (legs swing, radians), reach (arms
+	-- forward), spread (arms out), sit (legs straight forward), bare (no plinth), lift (height of its
+	-- feet).
+	local function mannequin(k, pose)
+		pose = pose or {}
+		local y0 = pose.lift or 0.5
+		if not pose.bare then
+			k:post("NpcPlinth", 0.6, 2.0, Vector3.new(0, -0.1, 0), PEDESTAL, Enum.Material.Metal)
+		end
+		local hip = y0 + 2.3
+		for _, side in ipairs({ -1, 1 }) do
+			local swing = pose.sit and (math.pi / 2) or side * (pose.stride or 0)
+			k:trim("NpcLeg", Vector3.new(0.8, 2.3, 0.8), CFrame.new(side * 0.5, hip, 0) * CFrame.Angles(swing, 0, 0) * CFrame.new(0, -1.15, 0), NPC_DARK, Enum.Material.SmoothPlastic)
+		end
+		k:trim("NpcTorso", Vector3.new(2.0, 2.3, 1.0), CFrame.new(0, hip + 1.15, 0), NPC_GREY, Enum.Material.SmoothPlastic)
+		local tag = k:trim("NpcTag", Vector3.new(1.2, 0.5, 0.1), CFrame.new(0, hip + 1.6, -0.55), C.white, Enum.Material.SmoothPlastic)
+		Kit.label(tag, "NPC", C.black, C.white, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+		for _, side in ipairs({ -1, 1 }) do
+			local reach = -(pose.reach or 0) - side * (pose.stride or 0) * 0.6
+			k:trim("NpcArm", Vector3.new(0.7, 2.2, 0.7), CFrame.new(side * 1.35, hip + 2.2, 0) * CFrame.Angles(reach, 0, side * (pose.spread or 0)) * CFrame.new(0, -1.1, 0),
+				NPC_DARK, Enum.Material.SmoothPlastic)
+		end
+		k:trim("NpcHead", Vector3.new(1.2, 1.2, 1.2), CFrame.new(0, hip + 2.95, 0), NPC_GREY, Enum.Material.SmoothPlastic)
+		return hip + 3.55
+	end
+
+	-- A speech bubble hanging in the air: a white board and a tail pointing down at the speaker.
+	local function bubble(k, text, width)
+		local board = floating(k:trim("SpeechBubble", Vector3.new(width, 1.5, 0.2), CFrame.identity, C.white, Enum.Material.SmoothPlastic))
+		Kit.label(board, text, C.black, C.white, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBold)
+		floating(decor(k:wedge("SpeechTail", Vector3.new(0.2, 0.7, 0.7), CFrame.new(-width * 0.2, -1.1, 0) * CFrame.Angles(0, math.pi / 2, math.pi), C.white, Enum.Material.SmoothPlastic)))
+	end
+
+	-- The floating quest marker: a bar and a dot, bobbing together.
+	local function questMark(k, size, phase)
+		local bar = floating(k:trim("QuestMark", Vector3.new(size, size * 3.2, size), CFrame.new(0, size * 2.2, 0), QUEST_YELLOW, Enum.Material.Neon))
+		local dot = floating(k:trim("QuestMark", Vector3.new(size, size, size), CFrame.new(0, 0, 0), QUEST_YELLOW, Enum.Material.Neon))
+		for _, part in ipairs({ bar, dot }) do
+			Kit.bob(part, size * 0.45, 1.6, phase or 0)
+		end
+		Kit.light(bar, QUEST_YELLOW, 14, 1)
+	end
+
+	local function kiosk(k)
+		k:box("KioskCounter", Vector3.new(8, 3.2, 2.2), CFrame.new(0, 1.4, -1), Color3.fromRGB(150, 110, 70), Enum.Material.WoodPlanks)
+		k:box("KioskBack", Vector3.new(8, 7.8, 0.5), CFrame.new(0, 3.7, 2.2), Color3.fromRGB(236, 226, 200), Enum.Material.WoodPlanks)
+		for _, x in ipairs({ -3.65, 3.65 }) do
+			k:box("KioskSide", Vector3.new(0.5, 7.3, 4.0), CFrame.new(x, 3.55, 0.2), Color3.fromRGB(236, 226, 200), Enum.Material.WoodPlanks)
+		end
+		k:box("KioskRoof", Vector3.new(9, 0.4, 5.4), CFrame.new(0, 7.8, 0.2), Color3.fromRGB(120, 80, 50), Enum.Material.WoodPlanks)
+		for index = 0, 4 do
+			k:trim("KioskAwning", Vector3.new(1.7, 0.2, 2.4), CFrame.new(-3.6 + index * 1.8, 7.25, -3.5) * CFrame.Angles(math.rad(-18), 0, 0),
+				index % 2 == 0 and QUEST_YELLOW or C.white, Enum.Material.Fabric)
+		end
+		k:box("QuestBoard", Vector3.new(6, 3.4, 0.2), CFrame.new(0, 5.2, 1.85), Color3.fromRGB(160, 120, 80), Enum.Material.Wood)
+		for index, text in ipairs({ "SLAY 10 RATS", "FETCH 1 STICK", "TALK TO BOB" }) do
+			local note = k:trim("QuestNote", Vector3.new(1.7, 1.3, 0.06), CFrame.new(-2 + (index - 1) * 2, 5.1 + (index % 2) * 0.4, 1.72) * CFrame.Angles(0, 0, math.rad(-4 + index * 3)),
+				Color3.fromRGB(244, 234, 200), Enum.Material.SmoothPlastic)
+			Kit.label(note, text, C.black, nil, { Enum.NormalId.Front }, Enum.Font.PermanentMarker)
+		end
+		local sign = k:trim("KioskSign", Vector3.new(6, 1.2, 0.2), CFrame.new(0, 8.6, -2.35), C.signBack, Enum.Material.SmoothPlastic)
+		Kit.label(sign, "QUESTS", QUEST_YELLOW, C.signBack, { Enum.NormalId.Front, Enum.NormalId.Back })
+		mannequin(k:at(CFrame.new(0, 0, 0.9)), { bare = true, lift = 0, spread = 0.5 })
+		questMark(k:at(CFrame.new(0, 10.6, 0)), 1.3, 0)
+	end
+
+	defineTheme({
+		name = "NPC Nook",
+		id = "NpcNook",
+		flag = { emblem = "!", caption = "NPC NOOK", color = Color3.fromRGB(60, 66, 80), text = QUEST_YELLOW, trim = QUEST_YELLOW, font = Enum.Font.GothamBlack },
+		setPiece = {
+			id = "QuestQueue",
+			name = "The Quest Queue",
+			width = 34,
+			depth = 28,
+			ground = Enum.Material.Pavement,
+			build = function(k)
+				kiosk(k:at(CFrame.new(0, 0, 8.5)))
+				-- The queue: six of them, all facing the counter, all waiting.
+				local queue = { { -1, 4.4 }, { -1.5, 1.6 }, { -2.2, -1.2 }, { -3, -4.0 }, { -3.8, -6.8 }, { -4.6, -9.6 } }
+				for index, spot in ipairs(queue) do
+					mannequin(k:at(CFrame.new(spot[1], 0, spot[2]) * CFrame.Angles(0, math.pi, 0)), { stride = index == 6 and 0.25 or 0 })
+				end
+				local posts = { 1, 3, 5, 6 }
+				for _, side in ipairs({ -1, 1 }) do
+					local previous = nil
+					for _, index in ipairs(posts) do
+						local spot = queue[index]
+						local at = Vector3.new(spot[1] + side * 2.3, 0, spot[2])
+						k:post("QueuePost", 3, 0.3, at, C.brass, Enum.Material.Metal)
+						decor(k:ball("QueuePostTop", 0.5, CFrame.new(at + Vector3.new(0, 3.1, 0)), C.brass, Enum.Material.Metal))
+						if previous then
+							decor(k:rod("QueueRope", previous + Vector3.new(0, 2.6, 0), at + Vector3.new(0, 2.6, 0), 0.22, Color3.fromRGB(170, 30, 50), Enum.Material.Fabric))
+						end
+						previous = at
+					end
+				end
+				-- One stuck walking into a wall, and the wall is winning.
+				k:box("StuckWall", Vector3.new(6, 5, 1), CFrame.new(11, 2.3, -3.5), Color3.fromRGB(160, 96, 74), Enum.Material.Brick)
+				mannequin(k:at(CFrame.new(11, 0, -5.6) * CFrame.Angles(0, math.pi, 0)), { stride = 0.4, reach = 0.2 })
+				local stuck = Pieces.board(k:at(CFrame.new(15.2, 0, -8.4)), "PATHFINDING...", 3.4, 1.2, 3, C.white, Color3.fromRGB(60, 66, 80), 1, C.iron)
+				stuck.Name = "PathfindingSign"
+				-- Two of them making small talk, forever.
+				local top = mannequin(k:at(CFrame.new(11, 0, 6) * CFrame.Angles(0, math.pi, 0)), {})
+				mannequin(k:at(CFrame.new(11, 0, 9.4)), { spread = 0.15 })
+				bubble(k:at(CFrame.new(11, top + 1.6, 5.4)), "Nice weather today.", 4.2)
+				bubble(k:at(CFrame.new(11, top + 3.6, 9.8)), "It sure is.", 3.2)
+				-- And one on a bench, taking a break from standing still.
+				local bench = k:at(CFrame.new(-12, 0, 3.5))
+				Pieces.bench(bench, Color3.fromRGB(150, 110, 70))
+				mannequin(bench:at(CFrame.new(0, 0, 0.05)), { bare = true, lift = -0.05, sit = true })
+				bubble(bench:at(CFrame.new(0, 8.4, 0)), "...", 1.8)
+				local welcome = Pieces.board(k:at(CFrame.new(-10.5, 0, -11.8)), "NPC NOOK\nPOPULATION: BACKGROUND", 8, 2.4, 2.2, QUEST_YELLOW, Color3.fromRGB(60, 66, 80), 2, C.iron)
+				welcome.Name = "WelcomeBoard"
+			end,
+		},
+		props = {
+			{
+				id = "IdleNpc",
+				radius = 2.1,
+				build = function(k)
+					local top = mannequin(k, { spread = k.rng:NextNumber(0, 0.2) })
+					bubble(k:at(CFrame.new(0.3, top + 1.4, 0)), "...", 1.6)
+				end,
+			},
+			{
+				id = "WallStareNpc",
+				radius = 3.1,
+				build = function(k)
+					k:box("StareWall", Vector3.new(4, 4.4, 0.8), CFrame.new(0, 2.0, 1.4), Color3.fromRGB(160, 96, 74), Enum.Material.Brick)
+					mannequin(k:at(CFrame.new(0, 0, -0.4) * CFrame.Angles(0, math.pi, 0)), { stride = 0.3 })
+				end,
+			},
+			{
+				id = "QuestBoard",
+				radius = 2.2,
+				build = function(k)
+					for _, x in ipairs({ -1.7, 1.7 }) do
+						k:box("NoticePost", Vector3.new(0.35, 4.6, 0.35), CFrame.new(x, 2.1, 0.3), C.darkWood, Enum.Material.Wood)
+					end
+					k:box("NoticeBoard", Vector3.new(3.8, 2.4, 0.25), CFrame.new(0, 3.0, 0), Color3.fromRGB(160, 120, 80), Enum.Material.Wood)
+					for index, text in ipairs({ "LOST: 1 SOCK", "HELP WANTED: ANYONE" }) do
+						local note = k:trim("QuestNote", Vector3.new(1.5, 1.2, 0.06), CFrame.new(-0.85 + (index - 1) * 1.7, 3.0, -0.155) * CFrame.Angles(0, 0, math.rad(index * 5 - 7)),
+							Color3.fromRGB(244, 234, 200), Enum.Material.SmoothPlastic)
+						Kit.label(note, text, C.black, nil, { Enum.NormalId.Front }, Enum.Font.PermanentMarker)
+					end
+					questMark(k:at(CFrame.new(0, 6.0, 0)), 0.6, k.rng:NextNumber(0, 6))
+				end,
+			},
+			{
+				id = "DialogueSign",
+				radius = 2.2,
+				build = function(k)
+					local lines = { "I'm just standing here.", "Have you heard? Nothing happened.", "Press E to talk. (Don't.)", "Lovely day for a loop.", "Welcome, traveller!" }
+					k:post("DialoguePost", 4.2, 0.3, Vector3.zero, C.iron, Enum.Material.Metal)
+					local board = k:box("DialogueBubble", Vector3.new(4, 1.8, 0.25), CFrame.new(0, 5.1, 0), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(board, lines[k.rng:NextInteger(1, #lines)], C.black, C.white, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBold)
+					decor(k:wedge("DialogueTail", Vector3.new(0.25, 0.7, 0.8), CFrame.new(0.6, 3.85, 0) * CFrame.Angles(0, math.pi / 2, math.pi), C.white, Enum.Material.SmoothPlastic))
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Delulu Downs: the racecourse where you've already won
+--------------------------------------------------------------------------------
+
+do
+	local PINK = Color3.fromRGB(255, 182, 214)
+	local LILAC = Color3.fromRGB(200, 170, 255)
+	local MINT = Color3.fromRGB(170, 240, 210)
+	local BABY_BLUE = Color3.fromRGB(170, 210, 255)
+	local PASTELS = { PINK, LILAC, MINT, BABY_BLUE }
+	local RAIL_WHITE = Color3.fromRGB(250, 248, 244)
+
+	-- A rocking horse that rocks, facing its kit's -Z. The hub sits on the ground under the rockers,
+	-- so the whole horse tips about the point the rockers roll on.
+	local function rockingHorse(k, color, mane, number, phase)
+		local hub = k:hub("HorseHub", CFrame.new(0, 0.2, 0))
+		local h = k:into(hub)
+		for _, x in ipairs({ -0.75, 0.75 }) do
+			h:trim("HorseRocker", Vector3.new(0.3, 0.35, 5.4), CFrame.new(x, 0.35, 0), C.brass, Enum.Material.Metal)
+			h:trim("RockerCurl", Vector3.new(0.16, 0.35, 1.0), CFrame.new(x, 0.62, -3.05) * CFrame.Angles(0.6, 0, 0), C.brass, Enum.Material.Metal)
+			h:trim("RockerCurl", Vector3.new(0.16, 0.35, 1.0), CFrame.new(x, 0.62, 3.05) * CFrame.Angles(-0.6, 0, 0), C.brass, Enum.Material.Metal)
+			for _, z in ipairs({ -1.5, 1.5 }) do
+				decor(h:rod("HorseLeg", Vector3.new(x * 0.73, 0.5, z), Vector3.new(x * 0.66, 2.5, z * 0.87), 0.35, color, Enum.Material.SmoothPlastic))
+			end
+		end
+		h:trim("HorseBody", Vector3.new(1.5, 1.4, 3.2), CFrame.new(0, 3.0, 0), color, Enum.Material.SmoothPlastic)
+		h:trim("HorseNeck", Vector3.new(0.8, 1.8, 0.9), CFrame.new(0, 4.0, -1.5) * CFrame.Angles(-0.35, 0, 0), color, Enum.Material.SmoothPlastic)
+		h:trim("HorseHead", Vector3.new(1.0, 0.95, 1.9), CFrame.new(0, 5.0, -2.35) * CFrame.Angles(0.15, 0, 0), color, Enum.Material.SmoothPlastic)
+		h:trim("HorseMane", Vector3.new(0.3, 1.4, 0.35), CFrame.new(0, 4.3, -1.02) * CFrame.Angles(-0.35, 0, 0), mane, Enum.Material.Fabric)
+		h:trim("HorseTail", Vector3.new(0.35, 1.5, 0.35), CFrame.new(0, 3.0, 1.95) * CFrame.Angles(0.6, 0, 0), mane, Enum.Material.Fabric)
+		h:trim("HorseSaddle", Vector3.new(1.56, 0.2, 1.3), CFrame.new(0, 3.8, 0.1), C.gold, Enum.Material.Foil)
+		local cloth = h:trim("HorseCloth", Vector3.new(1.64, 0.9, 1.4), CFrame.new(0, 3.15, 0.1), C.white, Enum.Material.Fabric)
+		Kit.label(cloth, tostring(number), C.black, nil, { Enum.NormalId.Left, Enum.NormalId.Right }, Enum.Font.GothamBlack)
+		for _, x in ipairs({ -0.46, 0.46 }) do
+			h:ball("HorseEye", 0.2, CFrame.new(x, 5.15, -2.75), C.black, Enum.Material.SmoothPlastic)
+		end
+		for _, child in ipairs(hub:GetChildren()) do
+			if child:IsA("BasePart") then
+				decor(child)
+			end
+		end
+		Kit.sway(hub, "X", 9, 2.4, phase)
+	end
+
+	local function heartBalloon(k, at, color, phase)
+		local parts = {
+			k:ball("BalloonLobe", 1.3, CFrame.new(at + Vector3.new(-0.42, 0.25, 0)), color, Enum.Material.SmoothPlastic),
+			k:ball("BalloonLobe", 1.3, CFrame.new(at + Vector3.new(0.42, 0.25, 0)), color, Enum.Material.SmoothPlastic),
+			k:box("BalloonPoint", Vector3.new(1.15, 1.15, 0.9), CFrame.new(at + Vector3.new(0, -0.3, 0)) * CFrame.Angles(0, 0, math.pi / 4), color, Enum.Material.SmoothPlastic),
+		}
+		for _, part in ipairs(parts) do
+			floating(decor(part))
+			Kit.bob(part, 0.4, 1.1, phase)
+		end
+	end
+
+	-- A few balloons on strings from one weight on the ground.
+	local function balloonBunch(k, count, height)
+		k:box("BalloonWeight", Vector3.new(0.8, 0.6, 0.8), CFrame.new(0, 0.3, 0), C.gold, Enum.Material.Metal)
+		for index = 1, count do
+			local angle = index * math.pi * 2 / count
+			local at = Vector3.new(math.cos(angle) * 1.1, height + (index % 2) * 1.2, math.sin(angle) * 1.1)
+			decor(k:rod("BalloonString", Vector3.new(0, 0.6, 0), at - Vector3.new(0, 1.4, 0), 0.06, C.white, Enum.Material.Fabric))
+			heartBalloon(k, at, index % 2 == 0 and PINK or Color3.fromRGB(255, 120, 170), index)
+		end
+	end
+
+	local function cloud(k, height, scale)
+		k:post("CloudPole", height, 0.35 * scale, Vector3.zero, RAIL_WHITE, Enum.Material.SmoothPlastic)
+		local puffs = { { 0, 0, 0, 3.4 }, { 1.7, 0.3, 0.4, 2.6 }, { -1.6, 0.2, -0.3, 2.8 }, { 0.6, 1.1, -0.5, 2.4 }, { -0.7, 0.9, 0.8, 2.2 }, { 2.6, -0.2, -0.2, 1.8 } }
+		for index, puff in ipairs(puffs) do
+			decor(k:ball("CloudPuff", puff[4] * scale, CFrame.new(Vector3.new(puff[1], height + 1 + puff[2], puff[3]) * Vector3.new(scale, 1, scale)),
+				PASTELS[(index - 1) % 2 + 1], Enum.Material.SmoothPlastic))
+		end
+	end
+
+	defineTheme({
+		name = "Delulu Downs",
+		id = "DeluluDowns",
+		flag = { emblem = "#1", caption = "DELULU DOWNS", color = Color3.fromRGB(150, 80, 190), text = PINK, trim = C.white },
+		setPiece = {
+			id = "DreamRacecourse",
+			name = "The Dream Racecourse",
+			width = 40,
+			depth = 30,
+			ground = Enum.Material.LeafyGrass,
+			build = function(k)
+				-- The home straight, railed both sides.
+				for _, z in ipairs({ -3, 7 }) do
+					for index = 0, 6 do
+						k:post("RailPost", 3.3, 0.35, Vector3.new(-18 + index * 6, -0.3, z), RAIL_WHITE, Enum.Material.SmoothPlastic)
+					end
+					k:trim("RailTop", Vector3.new(36.4, 0.3, 0.3), CFrame.new(0, 3.0, z), RAIL_WHITE, Enum.Material.SmoothPlastic)
+				end
+				-- Three rocking horses neck and neck, all of them winning.
+				local runners = { { -8, PINK, LILAC }, { 0, MINT, BABY_BLUE }, { 8, BABY_BLUE, PINK } }
+				for index, runner in ipairs(runners) do
+					rockingHorse(k:at(CFrame.new(runner[1], 0, 2) * CFrame.Angles(0, -math.pi / 2, 0)), runner[2], runner[3], index, index * 0.8)
+				end
+				-- The finish post.
+				local finish = k:at(CFrame.new(15.5, 0, -4))
+				finish:post("FinishPole", 9, 0.4, Vector3.zero, RAIL_WHITE, Enum.Material.SmoothPlastic)
+				decor(finish:cyl("FinishRing", 0.2, 3.3, CFrame.new(0, 9.6, -0.2) * CFrame.Angles(0, math.pi / 2, 0), Color3.fromRGB(230, 60, 90), Enum.Material.SmoothPlastic))
+				local disc = decor(finish:cyl("FinishDisc", 0.2, 2.9, CFrame.new(0, 9.6, -0.36) * CFrame.Angles(0, math.pi / 2, 0), C.white, Enum.Material.SmoothPlastic))
+				Kit.label(disc, "FINISH", Color3.fromRGB(230, 60, 90), nil, { Enum.NormalId.Right }, Enum.Font.GothamBlack)
+				-- The Dream Stand.
+				local stand = k:at(CFrame.new(-12, 0, 11.2))
+				for tier, spec in ipairs({ { -2.2, PINK }, { 0, C.white }, { 2.2, LILAC } }) do
+					local height = tier + 0.2
+					stand:box("StandTier", Vector3.new(11, height, 2.2), CFrame.new(0, -0.2 + height / 2, spec[1]), spec[2], Enum.Material.WoodPlanks)
+				end
+				for _, x in ipairs({ -5.6, 5.6 }) do
+					for _, z in ipairs({ -3.2, 3.2 }) do
+						stand:post("StandPost", 8, 0.35, Vector3.new(x, 0, z), RAIL_WHITE, Enum.Material.SmoothPlastic)
+					end
+				end
+				for index = 0, 4 do
+					stand:trim("StandCanopy", Vector3.new(2.3, 0.2, 7.2), CFrame.new(-4.6 + index * 2.3, 8.1, 0) * CFrame.Angles(math.rad(-6), 0, 0),
+						index % 2 == 0 and PINK or C.white, Enum.Material.Fabric)
+				end
+				local standSign = stand:trim("StandSign", Vector3.new(6, 1.1, 0.2), CFrame.new(0, 7.1, -3.45), C.white, Enum.Material.SmoothPlastic)
+				Kit.label(standSign, "DREAM STAND", Color3.fromRGB(200, 80, 150), nil, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+				-- The winners' podium, with nobody on it and everybody on it.
+				local podium = k:at(CFrame.new(12, 0, -10.4))
+				-- Second on the viewer's left (+X), third on the right.
+				for _, block in ipairs({ { 0, 3.0, "1", C.gold }, { 3.1, 2.1, "2", C.silver }, { -3.1, 1.5, "3", Color3.fromRGB(205, 130, 70) } }) do
+					local part = podium:box("PodiumBlock", Vector3.new(3, block[2] + 0.2, 3), CFrame.new(block[1], (block[2] - 0.2) / 2, 0), block[4], Enum.Material.SmoothPlastic)
+					Kit.label(part, block[3], C.white, nil, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+				end
+				podium:box("TrophyBase", Vector3.new(1.4, 0.6, 1.4), CFrame.new(0, 3.3, 0), C.black, Enum.Material.Marble)
+				decor(podium:post("TrophyStem", 0.8, 0.35, Vector3.new(0, 3.6, 0), C.gold, Enum.Material.Foil))
+				decor(podium:ball("TrophyCup", 1.4, CFrame.new(0, 4.9, 0), C.gold, Enum.Material.Foil))
+				local claim = Pieces.board(podium:at(CFrame.new(0, 0, 2.8)), "WINNER (IN MY HEAD)", 8.6, 1.6, 5.6, Color3.fromRGB(120, 60, 160), PINK, 2, RAIL_WHITE)
+				claim.Name = "WinnerBoard"
+				-- Clouds, balloons and the odds.
+				cloud(k:at(CFrame.new(-16.5, 0, -8.5)), 10, 1)
+				cloud(k:at(CFrame.new(1, 0, 12.5)), 11.5, 1.1)
+				cloud(k:at(CFrame.new(16.4, 0, 9.4)), 9.5, 0.9)
+				balloonBunch(k:at(CFrame.new(17.4, 0, -6.2)), 3, 9)
+				balloonBunch(k:at(CFrame.new(-5.2, 0, 8.6)), 2, 10)
+				local odds = Pieces.board(k:at(CFrame.new(-11.5, 0, -12.2)), "DELULU DOWNS\nODDS: ALWAYS IN YOUR FAVOUR", 9, 2.6, 2.4, Color3.fromRGB(120, 60, 160), C.white, 2, PINK)
+				odds.Name = "OddsBoard"
+			end,
+		},
+		props = {
+			{
+				id = "HeartBalloons",
+				radius = 2.3,
+				build = function(k)
+					balloonBunch(k, 3, 7)
+				end,
+			},
+			{
+				id = "ManifestingBoard",
+				radius = 2.6,
+				build = function(k)
+					local board = Pieces.board(k, "MANIFESTING...", 4.6, 2, 2.6, Color3.fromRGB(120, 60, 160), PINK, 2, RAIL_WHITE)
+					board.Name = "ManifestingBoard"
+					Kit.emitter(board, { color = Color3.fromRGB(255, 220, 250), size = 0.3, size2 = 0.05, transparency = 0.1, lifetime = 1.6, rate = 5, speed = 1,
+						spread = 70, lightEmission = 1, acceleration = Vector3.new(0, 1, 0) })
+				end,
+			},
+			{
+				id = "CloudPole",
+				radius = 2.7,
+				build = function(k)
+					cloud(k, 7.5, 0.75)
+				end,
+			},
+			{
+				id = "RockingHorse",
+				radius = 3.7,
+				build = function(k)
+					-- Its underside just clear of the ground (the map's z-fight pass had to lift it off the terrain).
+					k:trim("HorseMat", Vector3.new(3.4, 0.14, 6.6), CFrame.new(0, 0.13, 0), MINT, Enum.Material.Fabric)
+					rockingHorse(k, PASTELS[k.rng:NextInteger(1, #PASTELS)], PINK, k.rng:NextInteger(1, 9), k.rng:NextNumber(0, 6))
+				end,
+			},
+		},
+	})
+end

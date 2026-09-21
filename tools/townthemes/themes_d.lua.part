@@ -1,0 +1,563 @@
+
+-- A palm: a leaning trunk of segments, a crown of fronds and a couple of coconuts. `lean` is a
+-- flat local direction. Shared by the two waterside towns.
+function Pieces.palm(k, height, lean)
+	local trunk = Color3.fromRGB(150, 116, 78)
+	lean = (lean and lean.Magnitude > 0.05) and lean.Unit or Vector3.new(1, 0, 0)
+	local segments = math.max(3, math.floor(height / 3.2))
+	local point = Vector3.new(0, -1.2, 0)
+	for segment = 1, segments do
+		local rise = (segment == 1) and (height / segments + 1.2) or height / segments
+		local nextPoint = point + Vector3.new(0, rise, 0) + lean * (0.3 * segment)
+		k:rod("PalmTrunk", point, nextPoint + (nextPoint - point).Unit * 0.25, 1.4 - segment * 0.06, trunk, Enum.Material.Wood)
+		point = nextPoint
+	end
+	-- Fronds scale with the tree, so a crown stays about half its height across.
+	local frond = math.clamp(height * 0.55, 4, 7)
+	for index = 1, 7 do
+		local yaw = index / 7 * math.pi * 2
+		k:trim("PalmFrond", Vector3.new(2.0, 0.25, frond), CFrame.new(point) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(-24), 0, 0) * CFrame.new(0, 0, -frond / 2 + 0.3),
+			Color3.fromRGB(62, 136, 62), Enum.Material.Grass)
+	end
+	for _, offset in ipairs({ Vector3.new(0.7, -0.8, 0.4), Vector3.new(-0.6, -0.9, -0.3) }) do
+		decor(k:ball("Coconut", 1.1, CFrame.new(point + offset), Color3.fromRGB(96, 66, 40), Enum.Material.Wood))
+	end
+	return point
+end
+
+-- A pool built from parts: a floor you stand on, a sheet of glass water you wade through at
+-- ankle height, and whatever rim the caller puts round it.
+function Pieces.pool(k, diameter, waterColor)
+	k:disc("PoolFloor", 0.3, diameter, Vector3.new(0, 0.15, 0), waterColor:Lerp(Color3.new(0, 0, 0), 0.45), Enum.Material.Sand)
+	local water = decor(k:disc("PoolWater", 0.45, diameter - 0.4, Vector3.new(0, 0.88, 0), waterColor, Enum.Material.Glass))
+	water.Transparency = 0.3
+	return water
+end
+
+--------------------------------------------------------------------------------
+-- Lag Lagoon: a lagoon where the frames stopped arriving
+--------------------------------------------------------------------------------
+
+do
+	local WATER = Color3.fromRGB(70, 200, 220)
+	local MAGENTA = Color3.fromRGB(255, 0, 220)
+	local ROCK = Color3.fromRGB(176, 164, 140)
+	local HULL = Color3.fromRGB(236, 120, 60)
+
+	-- A cube textured like a missing texture: eight smaller cubes in a checkerboard, on a hub that
+	-- spins it in the air.
+	local function glitchCube(k, at, size, spin)
+		local tilt = CFrame.Angles(k.rng:NextNumber(-0.6, 0.6), k.rng:NextNumber(0, math.pi), k.rng:NextNumber(-0.6, 0.6))
+		local hub = floating(k:hub("GlitchHub", CFrame.new(at) * tilt))
+		local cube = k:into(hub):at(CFrame.new(at) * tilt)
+		local half = size / 4
+		for _, x in ipairs({ -1, 1 }) do
+			for _, y in ipairs({ -1, 1 }) do
+				for _, z in ipairs({ -1, 1 }) do
+					local dark = (x * y * z) > 0
+					floating(cube:trim("GlitchCube", Vector3.new(size / 2, size / 2, size / 2), CFrame.new(x * half, y * half, z * half), dark and C.black or MAGENTA,
+						dark and Enum.Material.SmoothPlastic or Enum.Material.Neon))
+				end
+			end
+		end
+		Kit.spin(hub, spin)
+		return hub
+	end
+
+	-- A little motorboat, in its kit's own frame (bow toward -Z). Returns its parts.
+	local function boat(k, transparency, scale)
+		local s = scale or 1
+		local parts = {
+			k:trim("BoatHull", Vector3.new(3, 1.2, 5) * s, CFrame.new(0, 0, 0.5 * s), HULL, Enum.Material.SmoothPlastic),
+			k:wedge("BoatBow", Vector3.new(3, 1.2, 2) * s, CFrame.new(0, 0, -3 * s), HULL, Enum.Material.SmoothPlastic),
+			k:trim("BoatStripe", Vector3.new(3.1, 0.3, 4.9) * s, CFrame.new(0, 0.2 * s, 0.5 * s), C.white, Enum.Material.SmoothPlastic),
+			-- Sunk a little into the hull, so its underside isn't the hull's top.
+			k:trim("BoatSeat", Vector3.new(2.6, 0.3, 1) * s, CFrame.new(0, 0.7 * s, 0.8 * s), C.white, Enum.Material.SmoothPlastic),
+			k:trim("BoatMotor", Vector3.new(0.9, 1.6, 0.9) * s, CFrame.new(0, 0.6 * s, 3.4 * s), C.charcoal, Enum.Material.Metal),
+			k:trim("BoatWindscreen", Vector3.new(2.6, 1.0, 0.12) * s, CFrame.new(0, 1.05 * s, -1.2 * s) * CFrame.Angles(math.rad(-25), 0, 0), Color3.fromRGB(150, 210, 240), Enum.Material.Glass),
+			k:trim("BoatWheel", Vector3.new(0.7, 0.7, 0.12) * s, CFrame.new(0.5 * s, 1.0 * s, -0.4 * s) * CFrame.Angles(math.rad(-30), 0, 0), C.charcoal, Enum.Material.Metal),
+		}
+		for _, part in ipairs(parts) do
+			floating(decor(part))
+			part.Transparency = transparency
+			if transparency > 0 then
+				part.CastShadow = false
+			end
+		end
+		return parts
+	end
+
+	local function spinnerRing(k, radius, dots, dotSize)
+		-- The hub's Y axis points out of the board toward -Z, so the ring turns in the board's plane.
+		local hub = k:hub("SpinnerHub", CFrame.Angles(-math.pi / 2, 0, 0))
+		local ring = k:into(hub)
+		for index = 0, dots - 1 do
+			local angle = index / dots * math.pi * 2
+			local dot = ring:ball("SpinnerDot", dotSize, CFrame.new(math.cos(angle) * radius, math.sin(angle) * radius, 0), C.white, Enum.Material.Neon)
+			decor(dot).Transparency = index / dots * 0.85
+		end
+		Kit.spin(hub, -220)
+		return hub
+	end
+
+	defineTheme({
+		name = "Lag Lagoon",
+		id = "LagLagoon",
+		flag = { emblem = "999ms", caption = "LAG LAGOON", color = Color3.fromRGB(30, 110, 130), text = MAGENTA, trim = C.white, font = Enum.Font.RobotoMono },
+		setPiece = {
+			id = "FrozenLagoon",
+			name = "The Frozen Lagoon",
+			-- 40 x 32 so the leaping boat's last skipped frame stays on the ground it claims.
+			width = 40,
+			depth = 32,
+			ground = Enum.Material.Sand,
+			build = function(k)
+				local lagoon = k:at(CFrame.new(-5, 0, 3))
+				Pieces.pool(lagoon, 18, WATER)
+				-- A rim of rocks, open at the front for the jetty.
+				for index = 0, 15 do
+					if index ~= 12 then
+						local tall = index % 2 == 1
+						lagoon:box("LagoonRim", Vector3.new(3.8, tall and 1.5 or 1.4, 1.0), CFrame.Angles(0, index * math.pi / 8 + math.pi / 2, 0) * CFrame.new(0, 0.5, -9.3),
+							ROCK, Enum.Material.Sandstone)
+					end
+				end
+				for _, x in ipairs({ -1.2, 1.2 }) do
+					for _, z in ipairs({ -11.4, -7.8 }) do
+						lagoon:post("JettyPost", 1.5, 0.35, Vector3.new(x, -0.2, z), C.darkWood, Enum.Material.Wood)
+					end
+				end
+				lagoon:box("Jetty", Vector3.new(3, 0.3, 6.6), CFrame.new(0, 1.45, -9.3), C.wood, Enum.Material.WoodPlanks)
+				-- A crate that can't decide where it is.
+				lagoon:box("LagCrate", Vector3.new(1.6, 1.6, 1.6), CFrame.new(0, 2.4, -10.8), C.wood, Enum.Material.WoodPlanks)
+				for step, fade in ipairs({ 0.6, 0.82 }) do
+					local ghost = lagoon:trim("LagCrateGhost", Vector3.new(1.6, 1.6, 1.6), CFrame.new(step * 0.7, 2.4 + step * 0.1, -10.8 + step * 0.45), C.wood, Enum.Material.WoodPlanks)
+					ghost.Transparency = fade
+					ghost.CastShadow = false
+				end
+
+				-- The boat, frozen mid-jump, with the frames it skipped trailing behind it.
+				-- Broadside to the street, nose up, so from the street you see a boat's whole profile
+				-- leaping across the lagoon with its skipped frames strung out behind.
+				local path = CFrame.new(0, 7.5, 2) * CFrame.Angles(0, math.rad(-75), 0) * CFrame.Angles(math.rad(20), 0, math.rad(6))
+				boat(lagoon:at(path), 0, 1.7)
+				for step, fade in ipairs({ 0.45, 0.66, 0.84 }) do
+					-- Each skipped frame drifts a little sideways too, so no two copies share a side.
+					-- 0.6 down a frame: at 0.55, two frames apart one ghost's stripe underside sat 0.005 off
+					-- another's hull underside.
+					boat(lagoon:at(path * CFrame.new(0.25 * step, -0.6 * step, 3.2 * step)), fade, 1.7)
+				end
+				-- The splash it left, which also stopped.
+				for index = 0, 7 do
+					local angle = index / 8 * math.pi * 2
+					local drop = floating(decor(lagoon:ball("FrozenSplash", 0.5 + (index % 3) * 0.2,
+						CFrame.new(math.cos(angle) * 1.9, 1.5 + (index % 2) * 0.9, 5 + math.sin(angle) * 1.9), Color3.fromRGB(220, 250, 255), Enum.Material.Neon)))
+					drop.Transparency = 0.2
+				end
+				floating(decor(lagoon:ball("FrozenSplash", 1.3, CFrame.new(0, 2.3, 5), Color3.fromRGB(220, 250, 255), Enum.Material.Neon))).Transparency = 0.3
+
+				glitchCube(k, Vector3.new(9, 7.5, -3), 1.8, 60)
+				glitchCube(k, Vector3.new(14.5, 11, 5), 2.2, -45)
+				glitchCube(k, Vector3.new(-16, 9, -9), 1.6, 80)
+				glitchCube(k, Vector3.new(3, 13, 12), 2.0, 35)
+
+				-- The buffering board.
+				local board = k:at(CFrame.new(13.5, 0, 11))
+				for _, x in ipairs({ -3.2, 3.2 }) do
+					board:box("BufferPost", Vector3.new(0.5, 9.6, 0.5), CFrame.new(x, 4.6, 0.5), C.charcoal, Enum.Material.Metal)
+				end
+				local panel = board:box("BufferBoard", Vector3.new(7.4, 5.4, 0.4), CFrame.new(0, 6.9, 0), C.black, Enum.Material.SmoothPlastic)
+				local caption = board:trim("BufferCaption", Vector3.new(6.6, 1.2, 0.1), CFrame.new(0, 4.9, -0.25), C.black, Enum.Material.SmoothPlastic)
+				Kit.label(caption, "BUFFERING...", C.white, C.black, { Enum.NormalId.Front }, Enum.Font.RobotoMono)
+				spinnerRing(board:at(CFrame.new(0, 7.6, -0.45)), 1.4, 8, 0.6)
+				Kit.light(panel, C.white, 10, 0.4)
+
+				local ping = Pieces.board(k:at(CFrame.new(-13.5, 0, -12.4)), "PING: 999ms", 6, 1.8, 2.4, Color3.fromRGB(255, 70, 70), C.black, 2, C.iron)
+				ping.Name = "PingBoard"
+				-- A banner strung between two poles.
+				for _, x in ipairs({ -18.4, -8.6 }) do
+					k:post("BannerPole", 8.6, 0.4, Vector3.new(x, 0, 13.8), C.white, Enum.Material.Metal)
+				end
+				local banner = k:trim("ReconnectBanner", Vector3.new(9.4, 1.5, 0.1), CFrame.new(-13.5, 7.4, 13.8), C.white, Enum.Material.Fabric)
+				Kit.label(banner, "RECONNECTING...", Color3.fromRGB(30, 110, 130), nil, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.RobotoMono)
+				Pieces.palm(k:at(CFrame.new(15.5, 0, 2)), 12, Vector3.new(-0.6, 0, 1))
+				Pieces.palm(k:at(CFrame.new(-15.5, 0, 9.5)), 10, Vector3.new(0.4, 0, -1))
+			end,
+		},
+		props = {
+			{
+				id = "GlitchPost",
+				radius = 1.6,
+				build = function(k)
+					k:post("GlitchPost", 3.6, 0.35, Vector3.zero, C.charcoal, Enum.Material.Metal)
+					glitchCube(k, Vector3.new(0, 5.4, 0), 1.8, 70)
+				end,
+			},
+			{
+				id = "LoadingSign",
+				radius = 1.8,
+				build = function(k)
+					k:post("LoadingPost", 5, 0.35, Vector3.new(0, 0, 0.35), C.charcoal, Enum.Material.Metal)
+					k:box("LoadingBoard", Vector3.new(3.2, 3.4, 0.3), CFrame.new(0, 5.6, 0), C.black, Enum.Material.SmoothPlastic)
+					local text = k:trim("LoadingText", Vector3.new(3.0, 0.8, 0.1), CFrame.new(0, 4.4, -0.2), C.black, Enum.Material.SmoothPlastic)
+					Kit.label(text, "LOADING...", C.white, C.black, { Enum.NormalId.Front }, Enum.Font.RobotoMono)
+					spinnerRing(k:at(CFrame.new(0, 6.3, -0.33)), 0.8, 8, 0.36)
+				end,
+			},
+			{
+				id = "PingSign",
+				radius = 1.6,
+				build = function(k)
+					local values = { "PING 999", "PING 420", "PING 67", "FPS: 3" }
+					local board = Pieces.board(k, values[k.rng:NextInteger(1, #values)], 2.8, 1.2, 3.4, Color3.fromRGB(255, 70, 70), C.black, 1, C.iron)
+					board.Name = "PingSign"
+				end,
+			},
+			{
+				id = "LaggyBench",
+				radius = 4.0,
+				build = function(k)
+					Pieces.bench(k, C.wood)
+					for step, fade in ipairs({ 0.62, 0.84 }) do
+						local ghost = k:at(CFrame.new(step * 0.55, step * 0.1, step * 0.35))
+						for _, part in ipairs({
+							ghost:trim("BenchGhost", Vector3.new(5, 0.4, 1.8), CFrame.new(0, 1.9, 0), C.wood, Enum.Material.WoodPlanks),
+							ghost:trim("BenchGhost", Vector3.new(5, 1.6, 0.35), CFrame.new(0, 3.0, 0.8), C.wood, Enum.Material.WoodPlanks),
+						}) do
+							part.Transparency = fade
+							part.CastShadow = false
+						end
+					end
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Oof Oasis: the prettiest place in the desert to fall over
+--------------------------------------------------------------------------------
+
+do
+	local WATER = Color3.fromRGB(60, 170, 230)
+	local SANDSTONE = Color3.fromRGB(206, 154, 96)
+	local CANVAS = Color3.fromRGB(240, 210, 156)
+	local AID_GREEN = Color3.fromRGB(60, 200, 90)
+	local BANANA = Color3.fromRGB(250, 220, 70)
+	local CLAY = Color3.fromRGB(190, 110, 70)
+
+	-- Block letters seven units tall, as bars: { x, y, width, height } of each bar's centre and size,
+	-- scaled by `scale`. Seen from the front a kit's +X is the viewer's left, so an F's upright is on
+	-- +X and its arms reach toward -X. Bars butt against each other rather than overlapping, and the
+	-- whole letter is sunk 0.3.
+	local LETTERS = {
+		O = { { -2.2, 3.5, 1.6, 7 }, { 2.2, 3.5, 1.6, 7 }, { 0, 6.2, 2.8, 1.6 }, { 0, 0.8, 2.8, 1.6 } },
+		F = { { 2.2, 3.5, 1.6, 7 }, { -0.8, 6.2, 4.4, 1.6 }, { -0.3, 3.6, 3.4, 1.4 } },
+	}
+	local function blockLetter(k, letter, depth, scale)
+		for _, bar in ipairs(LETTERS[letter]) do
+			k:box("OofLetter", Vector3.new(bar[3] * scale, bar[4] * scale, depth), CFrame.new(bar[1] * scale, bar[2] * scale - 0.3, 0), SANDSTONE, Enum.Material.Sandstone)
+		end
+	end
+
+	local function bananaPeel(k)
+		-- Three flaps splayed out, each a step higher than the last where they cross in the middle.
+		for index = 0, 2 do
+			k:trim("BananaPeel", Vector3.new(0.35, 0.12, 1.1), CFrame.new(0, 0.08 + index * 0.05, 0) * CFrame.Angles(0, index * 2.1 + 0.4, 0) * CFrame.new(0, 0, -0.45), BANANA, Enum.Material.SmoothPlastic)
+		end
+		decor(k:ball("BananaStem", 0.35, CFrame.new(0, 0.14, 0), Color3.fromRGB(120, 96, 40), Enum.Material.SmoothPlastic))
+	end
+
+	local function wetFloorSign(k, text)
+		for _, side in ipairs({ -1, 1 }) do
+			local board = k:box("WetFloorSign", Vector3.new(side < 0 and 1.6 or 1.4, 2.4, 0.12), CFrame.new(0, 1.15, side * 0.38) * CFrame.Angles(math.rad(side * 16), 0, 0), BANANA, Enum.Material.SmoothPlastic)
+			Kit.label(board, text, C.black, nil, { side < 0 and Enum.NormalId.Front or Enum.NormalId.Back }, Enum.Font.GothamBlack)
+		end
+	end
+
+	local function clayPots(k)
+		for index, pot in ipairs({ { 0, 0, 1.8 }, { 1.6, 0.5, 1.4 }, { -1.3, 0.8, 1.2 } }) do
+			local size = pot[3]
+			k:ball("ClayPot", size, CFrame.new(pot[1], size * 0.45, pot[2]), CLAY:Lerp(C.black, index * 0.06), Enum.Material.Sandstone)
+			decor(k:post("ClayPotNeck", size * 0.35, size * 0.45, Vector3.new(pot[1], size * 0.85, pot[2]), CLAY, Enum.Material.Sandstone))
+		end
+	end
+
+	local function aidTent(k)
+		-- An A-frame of canvas with its ridge running back from the front.
+		for _, side in ipairs({ -1, 1 }) do
+			local panel = k:trim("TentCanvas", Vector3.new(0.2, 6.4, side < 0 and 8 or 7.9), CFrame.new(side * 1.84, 2.58, 0) * CFrame.Angles(0, 0, math.rad(35 * side)), CANVAS, Enum.Material.Fabric)
+			panel.CastShadow = true
+		end
+		for _, z in ipairs({ -4.0, 3.8 }) do
+			k:post("TentPole", 5.3, 0.3, Vector3.new(0, 0, z), C.darkWood, Enum.Material.Wood)
+		end
+		k:trim("TentRidge", Vector3.new(0.3, 0.3, 8.4), CFrame.new(0, 5.25, 0), C.darkWood, Enum.Material.Wood)
+		k:box("TentCot", Vector3.new(1.8, 0.4, 4), CFrame.new(-0.5, 1.2, 0.6), Color3.fromRGB(90, 120, 90), Enum.Material.Fabric)
+		for _, z in ipairs({ -1.6, 2.8 }) do
+			k:box("CotLeg", Vector3.new(1.6, 1.0, 0.25), CFrame.new(-0.5, 0.5, z), C.darkWood, Enum.Material.Wood)
+		end
+		decor(k:box("CotPillow", Vector3.new(1.4, 0.35, 0.9), CFrame.new(-0.5, 1.55, 2.2), C.white, Enum.Material.Fabric))
+		local sign = k:at(CFrame.new(3.6, 0, -4.4))
+		local board = Pieces.board(sign, "FIRST AID\n(for oofs)", 2.8, 1.8, 2.2, C.black, C.white, 1, C.darkWood)
+		board.Name = "AidSign"
+		local cross = k:at(CFrame.new(0, 3.1, -4.2))
+		cross:box("AidPlate", Vector3.new(2.4, 2.4, 0.15), CFrame.identity, C.white, Enum.Material.SmoothPlastic)
+		cross:trim("AidCross", Vector3.new(1.8, 0.55, 0.1), CFrame.new(0, 0, -0.12), AID_GREEN, Enum.Material.Neon)
+		cross:trim("AidCross", Vector3.new(0.55, 1.8, 0.14), CFrame.new(0, 0, -0.19), AID_GREEN, Enum.Material.Neon)
+	end
+
+	defineTheme({
+		name = "Oof Oasis",
+		id = "OofOasis",
+		flag = { emblem = "OOF", caption = "OOF OASIS", color = Color3.fromRGB(40, 150, 190), text = C.white, trim = SANDSTONE },
+		setPiece = {
+			id = "Oasis",
+			name = "The Oof Oasis",
+			width = 38,
+			depth = 32,
+			ground = Enum.Material.Sand,
+			build = function(k)
+				local pool = k:at(CFrame.new(-3, 0, 2))
+				Pieces.pool(pool, 16, WATER)
+				for index = 0, 11 do
+					local angle = index / 12 * math.pi * 2 + 0.15
+					local size = 2.2 + (index % 3) * 0.5
+					pool:ball("OasisBoulder", size, CFrame.new(math.cos(angle) * 8.6, size * 0.2, math.sin(angle) * 8.6), SANDSTONE:Lerp(C.black, (index % 4) * 0.05), Enum.Material.Sandstone)
+				end
+				-- Two palms out to the sides and two at the front corners: the back of the pool is left
+				-- clear, because palms there stood right in front of the letters from the street.
+				for index, angle in ipairs({ 0, math.pi, -0.9, 4.0 }) do
+					local at = Vector3.new(math.cos(angle) * 11, 0, math.sin(angle) * 11)
+					Pieces.palm(pool:at(CFrame.new(at)), 10 + index, Vector3.new(at.X, 0, at.Z))
+				end
+				local plaque = Pieces.plaque(pool:at(CFrame.new(-4.2, 0, -10.6)), "NO RUNNING\n(YOU WILL OOF)", 3.6)
+				plaque.Name = "PoolPlaque"
+				-- The letters at the back, the F having clearly tripped.
+				local letters = k:at(CFrame.new(-1.5, 0, 13.6))
+				-- O, O, F from the viewer's left (+X) to right, the F having clearly tripped.
+				-- Half again as big as they were, and spaced to match: from the street they were reading as
+				-- sandstone ruins rather than letters.
+				blockLetter(letters:at(CFrame.new(10.5, 0, 0) * CFrame.Angles(0, math.rad(4), 0)), "O", 2.2, 1.6)
+				blockLetter(letters:at(CFrame.new(0.4, 0, 0) * CFrame.Angles(0, math.rad(-3), 0)), "O", 2.2, 1.6)
+				blockLetter(letters:at(CFrame.new(-9.7, 0, 0) * CFrame.Angles(0, math.rad(-6), math.rad(9))), "F", 2.2, 1.6)
+				aidTent(k:at(CFrame.new(13, 0, -3)))
+				for index, spot in ipairs({ { -9.5, -9.8 }, { -7.6, -11.2 }, { -11, -12.4 } }) do
+					bananaPeel(k:at(CFrame.new(spot[1], 0, spot[2]) * CFrame.Angles(0, index, 0)))
+				end
+				wetFloorSign(k:at(CFrame.new(-14.8, 0, -10.8)), "CAUTION\nSLIPPERY")
+				clayPots(k:at(CFrame.new(14.5, 0, 9)))
+			end,
+		},
+		props = {
+			{
+				id = "BananaHazard",
+				radius = 2.0,
+				build = function(k)
+					bananaPeel(k:at(CFrame.new(-0.6, 0, -0.9)))
+					wetFloorSign(k:at(CFrame.new(0.7, 0, 0.6)), "OOF\nZONE")
+				end,
+			},
+			{ id = "ClayPots", radius = 2.4, build = clayPots },
+			{
+				id = "OofWarning",
+				radius = 1.8,
+				build = function(k)
+					k:post("WarningPost", 3.8, 0.3, Vector3.new(0, 0, 0.2), C.steel, Enum.Material.Metal)
+					local sign = k:at(CFrame.new(0, 5.2, 0))
+					sign:box("WarningDiamond", Vector3.new(2.4, 2.4, 0.15), CFrame.Angles(0, 0, math.pi / 4), BANANA, Enum.Material.SmoothPlastic)
+					local text = sign:trim("WarningText", Vector3.new(2.6, 1.0, 0.1), CFrame.new(0, 0, -0.13), BANANA, Enum.Material.SmoothPlastic)
+					Kit.label(text, "OOF AHEAD", C.black, nil, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+				end,
+			},
+			{
+				id = "OasisPalm",
+				radius = 4.4,
+				build = function(k)
+					k:ball("PalmMound", 2.6, CFrame.new(0, 0.2, 0), SANDSTONE, Enum.Material.Sand)
+					Pieces.palm(k, 9 + k.rng:NextNumber(0, 3), Vector3.new(k.rng:NextNumber(-1, 1), 0, k.rng:NextNumber(-1, 1)))
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Mewing Meadows: a wildflower meadow round a monument to one perfect jawline
+--------------------------------------------------------------------------------
+
+do
+	local MARBLE = Color3.fromRGB(232, 228, 220)
+	local HEDGE = Color3.fromRGB(62, 120, 58)
+	local FLOWERS = { Color3.fromRGB(255, 150, 190), Color3.fromRGB(255, 230, 90), Color3.fromRGB(190, 150, 255), Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 160, 80) }
+
+	local function flower(k, at, color, height)
+		decor(k:post("FlowerStem", height, 0.14, at, Color3.fromRGB(80, 150, 70), Enum.Material.SmoothPlastic))
+		decor(k:ball("FlowerHead", 0.75 + height * 0.12, CFrame.new(at + Vector3.new(0, height + 0.15, 0)), color, Enum.Material.SmoothPlastic))
+	end
+
+	-- The Great Jawline, in profile, facing +X: the street sees the side of the face, and the jaw
+	-- is the part that was carved with the most care.
+	local function jawline(k)
+		local s = 1.35
+		local function box(name, size, x, y, z, rz)
+			return k:box(name, size * s, CFrame.new(x * s, y * s, z * s) * CFrame.Angles(0, 0, math.rad(rz or 0)), MARBLE, Enum.Material.Marble)
+		end
+		box("JawNeck", Vector3.new(2.6, 3, 2.6), -0.4, 1.5, 0)
+		box("JawCranium", Vector3.new(4.6, 4.2, 4.2), -0.6, 6.4, 0)
+		k:ball("JawSkull", 4.6 * s, CFrame.new(-1.6 * s, 6.8 * s, 0), MARBLE, Enum.Material.Marble)
+		box("JawFace", Vector3.new(1.2, 4, 3.6), 1.9, 5.9, 0)
+		box("JawBrow", Vector3.new(1.2, 0.8, 3.8), 2.3, 7.4, 0)
+		k:wedge("JawNose", Vector3.new(1.1 * s, 1.8 * s, 1.5 * s), CFrame.new(3.1 * s, 6.3 * s, 0) * CFrame.Angles(0, -math.pi / 2, 0), MARBLE, Enum.Material.Marble)
+		box("JawLips", Vector3.new(0.6, 0.35, 1.6), 2.55, 4.9, 0)
+		-- The jaw: a long block angled down to a chin like a chisel.
+		box("TheJaw", Vector3.new(4.6, 1.6, 4.0), 0.9, 4.2, 0, -25)
+		local chin = box("TheChin", Vector3.new(1.6, 1.8, 2.6), 2.7, 3.4, 0, -10)
+		-- The jaw's lower edges picked out in gold, both sides, so the line reads from across the street.
+		for _, z in ipairs({ -2.05, 2.05 }) do
+			local edge = k:trim("JawlineGold", Vector3.new(4.7 * s, 0.2 * s, 0.2 * s), CFrame.new(0.9 * s, 4.2 * s, 0) * CFrame.Angles(0, 0, math.rad(-25)) * CFrame.new(0, -0.8 * s, z * s),
+				C.gold, Enum.Material.Neon)
+			edge.Transparency = 0.1
+		end
+		for _, z in ipairs({ -1, 1 }) do
+			k:trim("JawEye", Vector3.new(0.3, 0.5, 0.8) * s, CFrame.new(2.55 * s, 6.7 * s, z * 1.1 * s), Color3.fromRGB(150, 146, 140), Enum.Material.Marble)
+			k:trim("JawEar", Vector3.new(0.5, 1.6, 1.0) * s, CFrame.new(-1.2 * s, 6.0 * s, z * 2.35 * s), MARBLE, Enum.Material.Marble)
+		end
+		Kit.emitter(chin, { color = Color3.fromRGB(255, 250, 220), size = 0.5, size2 = 0.05, transparency = 0, lifetime = 1.2, rate = 4, speed = 0.6, spread = 90, lightEmission = 1 })
+	end
+
+	local function catTopiary(k, scale)
+		local s = scale or 1
+		k:box("CatPlanter", Vector3.new(4.4, 1.2, 4.4) * s, CFrame.new(0, 0.4 * s, 0), Color3.fromRGB(170, 110, 84), Enum.Material.Brick)
+		k:ball("CatBody", 4 * s, CFrame.new(0, 2.8 * s, 0.4 * s), HEDGE, Enum.Material.LeafyGrass)
+		k:ball("CatChest", 3 * s, CFrame.new(0, 3.9 * s, -0.9 * s), HEDGE, Enum.Material.LeafyGrass)
+		k:ball("CatHead", 2.8 * s, CFrame.new(0, 6.0 * s, -1.2 * s), HEDGE, Enum.Material.LeafyGrass)
+		-- Pointed ears, each two wedges back to back leaning out a little (round ones made bears).
+		for _, side in ipairs({ -1, 1 }) do
+			local ear = CFrame.new(side * 0.8 * s, 7.55 * s, -1.2 * s) * CFrame.Angles(0, 0, -side * 0.28)
+			k:wedge("CatEar", Vector3.new(0.5, 1.8, 0.6) * s, ear * CFrame.new(-0.3 * s, 0, 0) * CFrame.Angles(0, math.pi / 2, 0), HEDGE, Enum.Material.LeafyGrass)
+			k:wedge("CatEar", Vector3.new(0.5, 1.8, 0.6) * s, ear * CFrame.new(0.3 * s, 0, 0) * CFrame.Angles(0, -math.pi / 2, 0), HEDGE, Enum.Material.LeafyGrass)
+		end
+		-- A jaw you could cut glass with.
+		k:trim("CatJaw", Vector3.new(1.6, 1.0, 1.0) * s, CFrame.new(0, 5.0 * s, -2.1 * s) * CFrame.Angles(math.pi / 4, 0, 0), HEDGE:Lerp(C.black, 0.1), Enum.Material.LeafyGrass)
+		for index, spot in ipairs({ { 1.6, 2.0, 2.2 }, { 2.1, 3.2, 2.6 }, { 2.0, 4.4, 2.3 } }) do
+			decor(k:ball("CatTail", (1.1 - index * 0.12) * s, CFrame.new(spot[1] * s, spot[2] * s, spot[3] * s), HEDGE, Enum.Material.LeafyGrass))
+		end
+	end
+
+	local function beehive(k)
+		k:box("HiveStand", Vector3.new(2.4, 1.2, 2.4), CFrame.new(0, 0.4, 0), C.darkWood, Enum.Material.Wood)
+		for layer = 0, 2 do
+			k:box("HiveBox", Vector3.new(2.2, 1.0, 2.2), CFrame.new(0, 1.5 + layer * 1.0, 0), layer % 2 == 0 and C.white or Color3.fromRGB(250, 236, 180), Enum.Material.WoodPlanks)
+		end
+		k:box("HiveRoof", Vector3.new(2.6, 0.35, 2.6), CFrame.new(0, 4.175, 0), Color3.fromRGB(120, 100, 80), Enum.Material.WoodPlanks)
+		for index = 1, 3 do
+			local bee = floating(decor(k:ball("Bee", 0.35, CFrame.new(k.rng:NextNumber(-1.4, 1.4), 3 + k.rng:NextNumber(0, 2), k.rng:NextNumber(-1.8, -1)), Color3.fromRGB(250, 200, 40), Enum.Material.SmoothPlastic)))
+			Kit.bob(bee, 0.5, 3 + index, index)
+		end
+	end
+
+	local function butterfly(k, at, color, phase)
+		for _, side in ipairs({ -1, 1 }) do
+			local wing = floating(k:trim("ButterflyWing", Vector3.new(0.8, 0.06, 0.65), CFrame.new(at + Vector3.new(side * 0.36, 0, 0)) * CFrame.Angles(0, 0, math.rad(side * 30)), color, Enum.Material.SmoothPlastic))
+			Kit.bob(wing, 0.6, 1.7, phase)
+		end
+	end
+
+	defineTheme({
+		name = "Mewing Meadows",
+		id = "MewingMeadows",
+		flag = { emblem = "SHH...", caption = "MEWING MEADOWS", color = Color3.fromRGB(88, 150, 90), text = C.white, trim = Color3.fromRGB(255, 190, 220) },
+		setPiece = {
+			id = "JawlineMeadow",
+			name = "The Great Jawline",
+			width = 36,
+			depth = 30,
+			ground = Enum.Material.LeafyGrass,
+			build = function(k)
+				local monument = k:at(CFrame.new(0, 0, 7))
+				monument:box("JawPlinth", Vector3.new(10, 1.2, 8), CFrame.new(0, 0.4, 0), MARBLE:Lerp(C.black, 0.12), Enum.Material.Marble)
+				monument:box("JawPlinth", Vector3.new(8, 1.2, 6), CFrame.new(0, 1.6, 0), MARBLE:Lerp(C.black, 0.06), Enum.Material.Marble)
+				jawline(monument:at(CFrame.new(-0.4, 2.2, 0)))
+				local plaque = monument:trim("JawPlaque", Vector3.new(6, 0.9, 0.15), CFrame.new(0, 0.5, -4.08), C.brass, Enum.Material.Metal)
+				Kit.label(plaque, "THE GREAT JAWLINE  •  HOLD THE POSE", C.black)
+				catTopiary(k:at(CFrame.new(-11.5, 0, 6)), 1)
+				catTopiary(k:at(CFrame.new(11.5, 0, 6)), 1)
+
+				-- The mirror, for checking progress.
+				local mirror = k:at(CFrame.new(11, 0, -9) * CFrame.Angles(0, math.rad(-20), 0))
+				for _, x in ipairs({ -0.9, 0.9 }) do
+					mirror:box("MirrorLeg", Vector3.new(0.25, 2.2, 0.25), CFrame.new(x, 1.1, 0.3), C.gold, Enum.Material.Foil)
+				end
+				mirror:box("MirrorFrame", Vector3.new(2.6, 4.2, 0.3), CFrame.new(0, 4.3, 0), C.gold, Enum.Material.Foil)
+				local glass = mirror:trim("MirrorGlass", Vector3.new(2.2, 3.8, 0.1), CFrame.new(0, 4.3, -0.2), Color3.fromRGB(210, 225, 235), Enum.Material.Glass)
+				glass.Reflectance = 0.55
+				local mirrorSign = mirror:trim("MirrorSign", Vector3.new(2.6, 0.7, 0.1), CFrame.new(0, 6.8, -0.1), C.white, Enum.Material.SmoothPlastic)
+				Kit.label(mirrorSign, "LOOKSMAX MIRROR", C.black, nil, { Enum.NormalId.Front }, Enum.Font.GothamBold)
+
+				beehive(k:at(CFrame.new(-13, 0, -8.5)))
+				beehive(k:at(CFrame.new(-16, 0, -5.4)))
+				local hush = Pieces.board(k:at(CFrame.new(-5, 0, -12.6)), "SHH... MEWING IN PROGRESS", 7, 1.6, 2.4, C.white, Color3.fromRGB(88, 150, 90), 2, C.darkWood)
+				hush.Name = "HushSign"
+				for _, x in ipairs({ -12.5, 12.5 }) do
+					k:box("MeadowHedge", Vector3.new(10, 1.6, 1.2), CFrame.new(x, 0.6, -14.2), HEDGE, Enum.Material.LeafyGrass)
+				end
+
+				-- Wildflowers everywhere the monument, the cats and the rest aren't.
+				local clear = {
+					{ 0, 7, 6.5 }, { -11.5, 6, 3.4 }, { 11.5, 6, 3.4 }, { 11, -9, 2.2 }, { -13, -8.5, 2 }, { -16, -5.4, 2 }, { -5, -12.6, 4.2 },
+				}
+				local placed = 0
+				for _ = 1, 120 do
+					if placed >= 44 then
+						break
+					end
+					local x, z = k.rng:NextNumber(-17, 17), k.rng:NextNumber(-13, 14)
+					local free = math.abs(x) > 6.5 or z < -3
+					for _, spot in ipairs(clear) do
+						if (Vector2.new(x - spot[1], z - spot[2])).Magnitude < spot[3] then
+							free = false
+							break
+						end
+					end
+					if free and z > -13.4 then
+						placed += 1
+						flower(k, Vector3.new(x, 0, z), FLOWERS[k.rng:NextInteger(1, #FLOWERS)], k.rng:NextNumber(0.8, 1.8))
+					end
+				end
+				for index, spot in ipairs({ Vector3.new(-6, 4, -6), Vector3.new(6.5, 5.5, -2), Vector3.new(-8, 6, 12), Vector3.new(16, 4.5, -2) }) do
+					butterfly(k, spot, FLOWERS[index], index * 1.3)
+				end
+			end,
+		},
+		props = {
+			{
+				id = "FlowerBed",
+				radius = 2.6,
+				build = function(k)
+					k:box("FlowerBedBox", Vector3.new(4.4, 0.9, 2.4), CFrame.new(0, 0.35, 0), C.darkWood, Enum.Material.WoodPlanks)
+					k:trim("FlowerBedSoil", Vector3.new(4.0, 0.12, 2.0), CFrame.new(0, 0.84, 0), Color3.fromRGB(80, 58, 40), Enum.Material.Ground)
+					for index = 0, 7 do
+						flower(k, Vector3.new(-1.6 + (index % 4) * 1.05, 0.9, -0.5 + (index > 3 and 1 or 0)), FLOWERS[index % #FLOWERS + 1], 0.9 + (index % 3) * 0.3)
+					end
+				end,
+			},
+			{
+				id = "HushSign",
+				radius = 1.8,
+				build = function(k)
+					local board = Pieces.board(k, "SHH...\nMEWING", 2.8, 1.8, 2.6, C.white, Color3.fromRGB(88, 150, 90), 1, C.darkWood)
+					board.Name = "HushSign"
+				end,
+			},
+			{
+				id = "CatTopiary",
+				radius = 2.3,
+				build = function(k)
+					catTopiary(k, 0.7)
+				end,
+			},
+			{ id = "Beehive", radius = 1.9, build = beehive },
+		},
+	})
+end

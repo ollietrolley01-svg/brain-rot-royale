@@ -1,0 +1,705 @@
+
+--------------------------------------------------------------------------------
+-- Six Seven Square: the town clock stopped at 6:07 and never started again
+--------------------------------------------------------------------------------
+
+do
+	local BRICK = Color3.fromRGB(150, 88, 66)
+	local STONE = Color3.fromRGB(214, 204, 184)
+	local COPPER = Color3.fromRGB(88, 152, 130)
+	local HEDGE = Color3.fromRGB(60, 118, 58)
+
+	-- Digits drawn three pixels wide and five tall, top row first.
+	local DIGITS = {
+		["6"] = { "###", "#..", "###", "#.#", "###" },
+		["7"] = { "###", "..#", "..#", "..#", "..#" },
+	}
+
+	-- A hedge cut into a digit, standing on a brick planter. Each row is laid as runs of hedge, and
+	-- a run repeated down consecutive rows becomes one tall block, so a 7 is two parts.
+	local function hedgeDigit(k, digit, pixel)
+		local rows = DIGITS[digit]
+		k:box("DigitPlanter", Vector3.new(pixel * 3 + 1.2, 1.6, pixel + 1.2), CFrame.new(0, 0.4, 0), BRICK, Enum.Material.Brick)
+		local runs = {}
+		for row, pattern in ipairs(rows) do
+			local column = 1
+			while column <= 3 do
+				if string.sub(pattern, column, column) == "#" then
+					local finish = column
+					while finish < 3 and string.sub(pattern, finish + 1, finish + 1) == "#" do
+						finish += 1
+					end
+					table.insert(runs, { top = row, bottom = row, from = column, to = finish })
+					column = finish + 1
+				else
+					column += 1
+				end
+			end
+		end
+		-- Merge a run into the one above it when they cover the same columns.
+		local merged = {}
+		for _, run in ipairs(runs) do
+			local joined = false
+			for _, other in ipairs(merged) do
+				if other.from == run.from and other.to == run.to and other.bottom == run.top - 1 then
+					other.bottom = run.bottom
+					joined = true
+					break
+				end
+			end
+			if not joined then
+				table.insert(merged, run)
+			end
+		end
+		for _, run in ipairs(merged) do
+			local width = (run.to - run.from + 1) * pixel
+			local height = (run.bottom - run.top + 1) * pixel
+			-- Seen from the front a kit's +X is the viewer's LEFT, so column 1 goes on +X.
+			local x = (2 - (run.from + run.to) / 2) * pixel
+			local y = 1.2 + (5 - (run.top + run.bottom) / 2 + 0.5) * pixel
+			k:box("HedgeDigit", Vector3.new(width, height, pixel), CFrame.new(x, y, 0), HEDGE, Enum.Material.LeafyGrass)
+		end
+	end
+
+	local function clockTower(k)
+		local tower = k:at(CFrame.new(0, 0, 5.5))
+		-- Sunk a stud into the ground, so it meets the ground wherever it stands.
+		tower:box("TowerPlinth", Vector3.new(10.4, 2.2, 10.4), CFrame.new(0, 0.1, 0), STONE, Enum.Material.Limestone)
+		tower:box("TowerShaft", Vector3.new(8, 24, 8), CFrame.new(0, 13.2, 0), BRICK, Enum.Material.Brick)
+		for _, sx in ipairs({ -1, 1 }) do
+			for _, sz in ipairs({ -1, 1 }) do
+				tower:box("TowerQuoin", Vector3.new(1.1, 23.8, 1.1), CFrame.new(sx * 4, 13.2, sz * 4), STONE, Enum.Material.Limestone)
+			end
+		end
+		for _, y in ipairs({ 9, 17 }) do
+			tower:trim("TowerBand", Vector3.new(8.8, 0.7, 8.8), CFrame.new(0, y, 0), STONE, Enum.Material.Limestone)
+		end
+		-- Slit windows up every side, and the door and its plaque on the front.
+		for side = 0, 3 do
+			local face = tower:at(CFrame.Angles(0, side * math.pi / 2, 0))
+			for _, y in ipairs({ 13, 21 }) do
+				face:trim("TowerWindow", Vector3.new(1.2, 2.6, 0.2), CFrame.new(0, y, -4.1), Color3.fromRGB(40, 44, 56), Enum.Material.Glass)
+			end
+		end
+		tower:box("TowerDoor", Vector3.new(3.2, 5.6, 0.3), CFrame.new(0, 4.0, -4.15), C.darkWood, Enum.Material.WoodPlanks)
+		tower:trim("TowerDoorHead", Vector3.new(4.2, 0.8, 0.4), CFrame.new(0, 7.2, -4.2), STONE, Enum.Material.Limestone)
+		local plaque = tower:trim("TowerPlaque", Vector3.new(5.4, 1.4, 0.25), CFrame.new(0, 10.9, -4.125), C.brass, Enum.Material.Metal)
+		Kit.label(plaque, "SIX SEVEN SQUARE  •  EST. 6:07", C.black)
+
+		-- The clock stage, a clock on every side, all stopped at the same minute.
+		tower:trim("TowerCornice", Vector3.new(10.2, 0.6, 10.2), CFrame.new(0, 25.2, 0), STONE, Enum.Material.Limestone)
+		tower:box("ClockStage", Vector3.new(9.6, 7.2, 9.6), CFrame.new(0, 28.8, 0), STONE, Enum.Material.Limestone)
+		tower:trim("TowerCornice", Vector3.new(10.2, 0.6, 10.2), CFrame.new(0, 32.4, 0), STONE, Enum.Material.Limestone)
+		for side = 0, 3 do
+			Pieces.clockFace(tower:at(CFrame.new(0, 28.8, 0) * CFrame.Angles(0, side * math.pi / 2, 0) * CFrame.new(0, 0, -4.8)), 6, 7, 5.6)
+		end
+
+		-- The belfry: four piers, a beam, and a bell that still swings.
+		for _, sx in ipairs({ -1, 1 }) do
+			for _, sz in ipairs({ -1, 1 }) do
+				tower:box("BelfryPier", Vector3.new(1.4, 7, 1.4), CFrame.new(sx * 3.9, 36.2, sz * 3.9), STONE, Enum.Material.Limestone)
+			end
+		end
+		tower:trim("BellBeam", Vector3.new(8.4, 0.6, 0.6), CFrame.new(0, 39.1, 0), C.darkWood, Enum.Material.Wood)
+		local hub = tower:hub("BellHub", CFrame.new(0, 38.6, 0))
+		local bell = tower:into(hub)
+		bell:trim("BellYoke", Vector3.new(1.4, 0.5, 0.5), CFrame.new(0, 38.35, 0), C.darkWood, Enum.Material.Wood)
+		decor(bell:ball("BellCrown", 2.6, CFrame.new(0, 36.9, 0), C.brass, Enum.Material.Metal))
+		decor(bell:cyl("BellSkirt", 1.2, 3.2, CFrame.new(0, 35.7, 0) * CFrame.Angles(0, 0, math.pi / 2), C.brass, Enum.Material.Metal))
+		decor(bell:cyl("BellLip", 0.3, 3.5, CFrame.new(0, 35.05, 0) * CFrame.Angles(0, 0, math.pi / 2), C.brass, Enum.Material.Metal))
+		decor(bell:ball("BellClapper", 0.7, CFrame.new(0, 34.6, 0), C.iron, Enum.Material.Metal))
+		Kit.sway(hub, "X", 14, 1.1, 0)
+
+		-- A stepped copper cap, a spire, and a weathervane that reads 67 whichever way it turns.
+		tower:box("BelfryTop", Vector3.new(10.2, 0.8, 10.2), CFrame.new(0, 40.1, 0), STONE, Enum.Material.Limestone)
+		local y = 40.5
+		for _, size in ipairs({ 9, 6.6, 4.2, 1.8 }) do
+			tower:box("TowerCap", Vector3.new(size, 1.6, size), CFrame.new(0, y + 0.8, 0), COPPER, Enum.Material.CorrodedMetal)
+			y += 1.6
+		end
+		tower:post("TowerSpire", 5, 0.4, Vector3.new(0, y, 0), C.iron, Enum.Material.Metal)
+		tower:ball("TowerFinial", 0.9, CFrame.new(0, y + 5.3, 0), C.gold, Enum.Material.Metal)
+		local vaneHub = tower:hub("VaneHub", CFrame.new(0, y + 3.6, 0))
+		local vane = tower:into(vaneHub)
+		local plate = vane:trim("VanePlate", Vector3.new(2.6, 1.1, 0.12), CFrame.new(0.9, y + 3.6, 0), C.gold, Enum.Material.Metal)
+		Kit.label(plate, "67", C.black, nil, { Enum.NormalId.Front, Enum.NormalId.Back })
+		vane:trim("VaneArrow", Vector3.new(1.4, 0.2, 0.2), CFrame.new(-1.1, y + 3.6, 0), C.gold, Enum.Material.Metal)
+		Kit.sway(vaneHub, "Y", 35, 0.35, 1.2)
+	end
+
+	-- Hopscotch chalked on the cobbles: 6, 7, 6-7, then 67 to finish.
+	local function hopscotch(k)
+		-- Left to right as you walk in from the street, which is +X to -X in the kit.
+		local tiles = {
+			{ x = 0, z = -12.5, text = "6" },
+			{ x = 0, z = -9.3, text = "7" },
+			{ x = 1.6, z = -6.1, text = "6" },
+			{ x = -1.6, z = -6.1, text = "7" },
+			{ x = 0, z = -2.9, text = "67" },
+		}
+		for _, tile in ipairs(tiles) do
+			-- Turned so its Top-face label reads the right way up walking in from the street.
+			local square = k:trim("HopscotchTile", Vector3.new(3, 0.14, 3), CFrame.new(tile.x, 0.09, tile.z) * READ_FROM_FRONT,
+				Color3.fromRGB(232, 228, 214), Enum.Material.Concrete)
+			Kit.label(square, tile.text, Color3.fromRGB(60, 90, 170), nil, { Enum.NormalId.Top })
+		end
+	end
+
+	defineTheme({
+		name = "Six Seven Square",
+		id = "SixSevenSquare",
+		flag = { emblem = "6:07", caption = "SIX SEVEN SQUARE", color = Color3.fromRGB(36, 64, 120), text = C.white, trim = C.gold },
+		setPiece = {
+			id = "ClockTower",
+			name = "The 6:07 Clock",
+			width = 32,
+			depth = 30,
+			ground = Enum.Material.Cobblestone,
+			build = function(k)
+				clockTower(k)
+				hedgeDigit(k:at(CFrame.new(10, 0, -4)), "6", 2)
+				hedgeDigit(k:at(CFrame.new(-10, 0, -4)), "7", 2)
+				hopscotch(k)
+				for _, x in ipairs({ -6.5, 6.5 }) do
+					Pieces.lantern(k:at(CFrame.new(x, 0, 1.5)), 8)
+				end
+			end,
+		},
+		props = {
+			{
+				id = "SpeedLimit67",
+				radius = 1.4,
+				build = function(k)
+					k:post("SignPole", 7.6, 0.3, Vector3.zero, C.steel, Enum.Material.Metal)
+					local disc = decor(k:cyl("SpeedSign", 0.2, 2.8, CFrame.new(0, 6.4, -0.25) * CFrame.Angles(0, math.pi / 2, 0), C.white, Enum.Material.SmoothPlastic))
+					decor(k:cyl("SpeedSignRing", 0.14, 3.2, CFrame.new(0, 6.4, -0.12) * CFrame.Angles(0, math.pi / 2, 0), C.red, Enum.Material.SmoothPlastic))
+					Kit.label(disc, "67", C.black, nil, { Enum.NormalId.Right })
+					local plate = k:trim("SpeedSignPlate", Vector3.new(2.2, 0.8, 0.12), CFrame.new(0, 4.4, -0.22), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(plate, "SPEED LIMIT", C.black)
+				end,
+			},
+			{
+				id = "NumberBollards",
+				radius = 2.6,
+				build = function(k)
+					for index, x in ipairs({ 1.6, -1.6 }) do
+						k:post("Bollard", 2.8, 1.1, Vector3.new(x, 0, 0), C.charcoal, Enum.Material.Metal)
+						local cap = k:box("BollardCap", Vector3.new(1.3, 1.3, 1.3), CFrame.new(x, 3.45, 0), index == 1 and C.yellow or C.orange, Enum.Material.SmoothPlastic)
+						Kit.label(cap, index == 1 and "6" or "7", C.black, nil, { Enum.NormalId.Front, Enum.NormalId.Back })
+					end
+				end,
+			},
+			{
+				id = "Hopscotch67",
+				radius = 3.2,
+				build = function(k)
+					for index, tile in ipairs({ { 0, -1.5, "6" }, { 0, 1.5, "7" } }) do
+						local square = k:trim("HopscotchTile", Vector3.new(2.8, 0.14, 2.8), CFrame.new(tile[1], 0.09, tile[2]) * READ_FROM_FRONT,
+							Color3.fromRGB(232, 228, 214), Enum.Material.Concrete)
+						Kit.label(square, tile[3], index == 1 and Color3.fromRGB(200, 60, 90) or Color3.fromRGB(60, 90, 170), nil, { Enum.NormalId.Top })
+					end
+				end,
+			},
+			{
+				id = "StoppedClock",
+				radius = 1.6,
+				build = function(k)
+					k:post("ClockPost", 8, 0.5, Vector3.zero, Color3.fromRGB(34, 60, 48), Enum.Material.Metal)
+					k:box("ClockCase", Vector3.new(2.8, 2.8, 0.9), CFrame.new(0, 9.2, 0), Color3.fromRGB(34, 60, 48), Enum.Material.Metal)
+					Pieces.clockFace(k:at(CFrame.new(0, 9.2, -0.45)), 6, 7, 2.2)
+					Pieces.clockFace(k:at(CFrame.new(0, 9.2, 0.45) * CFrame.Angles(0, math.pi, 0)), 6, 7, 2.2)
+					k:ball("ClockFinial", 0.6, CFrame.new(0, 10.9, 0), C.gold, Enum.Material.Metal)
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Speedrun Springs: a start gantry, split times and a sequence break
+--------------------------------------------------------------------------------
+
+do
+	local TRACK = Color3.fromRGB(178, 62, 50)
+	local TIMER_GREEN = Color3.fromRGB(80, 255, 120)
+
+	-- A coil spring about five studs across: a base plate, a dark core, a real helix of steel wound
+	-- two and a half turns round it, and a lime pad on top that bounces. The trigger above the pad
+	-- does the throwing (see Pieces.springTrigger).
+	local function spring(k, forward)
+		k:post("SpringBase", 0.8, 5, Vector3.new(0, -0.2, 0), C.charcoal, Enum.Material.DiamondPlate)
+		k:post("SpringCore", 3.0, 1.6, Vector3.new(0, 0.6, 0), C.black, Enum.Material.Metal)
+		local turns, segments, radius = 2.5, 20, 1.75
+		local function helix(index)
+			local angle = index / segments * turns * math.pi * 2
+			return Vector3.new(math.cos(angle) * radius, 0.85 + index / segments * 2.55, math.sin(angle) * radius)
+		end
+		for index = 0, segments - 1 do
+			decor(k:rod("SpringCoil", helix(index), helix(index + 1), 0.38, C.silver, Enum.Material.Metal))
+		end
+		-- Turned a quarter about the vertical first, so the label on its top face reads from the street
+		-- (a disc's end-face label has its "up" along the cylinder's own +Y, which the tip-up sends to -X).
+		-- The lime pad bobs on each client, so it's decoration: what a player actually stands on is a
+		-- still, invisible step just inside it (a collidable part that moved on clients only would
+		-- jostle whoever stood on it and put the floor somewhere else on the server).
+		local pad = decor(k:cyl("SpringPad", 0.5, 4.4, CFrame.new(0, 3.85, 0) * CFrame.Angles(0, math.pi / 2, 0) * CFrame.Angles(0, 0, math.pi / 2),
+			Color3.fromRGB(150, 240, 60), Enum.Material.SmoothPlastic))
+		Kit.label(pad, "BOING", C.black, nil, { Enum.NormalId.Right })
+		local step = k:cyl("SpringStep", 0.34, 4.2, CFrame.new(0, 3.83, 0) * CFrame.Angles(0, 0, math.pi / 2), C.white, Enum.Material.SmoothPlastic)
+		step.Transparency = 1
+		step.CanQuery = false
+		Pieces.springTrigger(k, CFrame.new(0, 4.6, 0), Vector3.new(3.6, 1, 3.6), forward)
+		return pad
+	end
+
+	local function gantry(k)
+		for _, x in ipairs({ -6.2, 6.2 }) do
+			k:box("GantryPost", Vector3.new(1, 13.5, 1), CFrame.new(x, 6.25, 0), C.white, Enum.Material.Metal)
+		end
+		k:box("GantryBeam", Vector3.new(13.8, 1.2, 1.2), CFrame.new(0, 13.4, 0), C.white, Enum.Material.Metal)
+		for index = 0, 9 do
+			k:trim("Checker", Vector3.new(1.2, 1.2, 0.1), CFrame.new(-5.4 + index * 1.2, 13.4, -0.66), index % 2 == 0 and C.black or C.white, Enum.Material.SmoothPlastic)
+		end
+		for _, x in ipairs({ -3.5, 3.5 }) do
+			k:trim("TimerHanger", Vector3.new(0.2, 0.7, 0.2), CFrame.new(x, 12.45, -0.25), C.steel, Enum.Material.Metal)
+		end
+		local timer = k:trim("TimerBoard", Vector3.new(9, 2.8, 0.4), CFrame.new(0, 10.7, -0.25), C.black, Enum.Material.SmoothPlastic)
+		Kit.label(timer, "WR  0:06.7", TIMER_GREEN, C.black, { Enum.NormalId.Front }, Enum.Font.RobotoMono)
+		Kit.label(timer, "PB  --:--.-", TIMER_GREEN, C.black, { Enum.NormalId.Back }, Enum.Font.RobotoMono)
+		Kit.light(timer, TIMER_GREEN, 14, 0.8)
+	end
+
+	local function track(k)
+		-- Surface 0 to 0.3; lane lines to 0.40, the start line to 0.48 and the lane numbers 0.1 to 0.45,
+		-- every top and bottom at least a tenth apart.
+		k:trim("Track", Vector3.new(10, 0.3, 27), CFrame.new(0, 0.15, 0), TRACK, Enum.Material.Rubber)
+		for _, x in ipairs({ -4.7, -1.6, 1.6, 4.7 }) do
+			k:trim("LaneLine", Vector3.new(0.25, 0.32, 26.8), CFrame.new(x, 0.24, 0), C.white, Enum.Material.SmoothPlastic)
+		end
+		k:trim("StartLine", Vector3.new(9.8, 0.33, 0.6), CFrame.new(0, 0.315, -8.6), C.white, Enum.Material.SmoothPlastic)
+		for lane = 1, 3 do
+			local tile = k:trim("LaneNumber", Vector3.new(2.2, 0.35, 1.6), CFrame.new(3.15 - (lane - 1) * 3.15, 0.275, -10.6) * READ_FROM_FRONT,
+				TRACK, Enum.Material.Rubber)
+			Kit.label(tile, tostring(lane), C.white, nil, { Enum.NormalId.Top })
+		end
+	end
+
+	local function checkpoint(k, text, good)
+		for _, x in ipairs({ -5.6, 5.6 }) do
+			k:box("CheckpointPost", Vector3.new(0.8, 8.4, 0.8), CFrame.new(x, 3.8, 0), C.charcoal, Enum.Material.Metal)
+		end
+		k:box("CheckpointBar", Vector3.new(12.4, 0.7, 0.6), CFrame.new(0, 8.3, 0), C.charcoal, Enum.Material.Metal)
+		local strip = k:trim("CheckpointGlow", Vector3.new(10.4, 0.25, 0.25), CFrame.new(0, 7.8, 0), Color3.fromRGB(90, 220, 255), Enum.Material.Neon)
+		Kit.light(strip, Color3.fromRGB(90, 220, 255), 12, 0.8)
+		local board = k:trim("SplitBoard", Vector3.new(4.4, 1.4, 0.3), CFrame.new(0, 6.6, 0), C.black, Enum.Material.SmoothPlastic)
+		Kit.label(board, text, good and TIMER_GREEN or Color3.fromRGB(255, 90, 80), C.black, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.RobotoMono)
+	end
+
+	-- The ledge only the spring reaches (or the ladder, for the honest): a trophy for the skip.
+	local function ledge(k)
+		local top = 16
+		for _, x in ipairs({ -4.4, 4.4 }) do
+			for _, z in ipairs({ -3, 3 }) do
+				k:box("LedgeLeg", Vector3.new(0.8, top - 0.4, 0.8), CFrame.new(x, (top - 0.8) / 2, z), C.steel, Enum.Material.Metal)
+			end
+		end
+		k:box("LedgeDeck", Vector3.new(10, 0.8, 7.4), CFrame.new(0, top - 0.4, 0), C.charcoal, Enum.Material.DiamondPlate)
+		-- Rails on the back and sides; the front is open to land on.
+		for _, x in ipairs({ -4.8, 4.8 }) do
+			k:trim("LedgeRail", Vector3.new(0.2, 0.2, 7.2), CFrame.new(x, top + 2.4, 0), C.yellow, Enum.Material.Metal)
+			for _, z in ipairs({ -3.5, 0, 3.5 }) do
+				-- Posts thicker than the rail, so their faces never line up with it.
+				k:trim("LedgeRailPost", Vector3.new(0.36, 2.4, 0.36), CFrame.new(x, top + 1.2, z), C.yellow, Enum.Material.Metal)
+			end
+		end
+		-- The back rails sit a tenth lower and stop inside the side rails.
+		for _, x in ipairs({ -3.35, 3.35 }) do
+			k:trim("LedgeRail", Vector3.new(2.9, 0.2, 0.2), CFrame.new(x, top + 2.15, 3.5), C.yellow, Enum.Material.Metal)
+		end
+		-- The trophy.
+		k:box("TrophyBase", Vector3.new(1.6, 0.8, 1.6), CFrame.new(1.5, top + 0.4, 1.4), C.black, Enum.Material.Marble)
+		decor(k:post("TrophyStem", 0.9, 0.35, Vector3.new(1.5, top + 0.8, 1.4), C.gold, Enum.Material.Foil))
+		decor(k:ball("TrophyCup", 1.5, CFrame.new(1.5, top + 2.2, 1.4), C.gold, Enum.Material.Foil))
+		for _, side in ipairs({ -1, 1 }) do
+			k:trim("TrophyHandle", Vector3.new(0.5, 0.9, 0.2), CFrame.new(1.5 + side * 0.95, top + 2.3, 1.4), C.gold, Enum.Material.Foil)
+		end
+		local sign = k:trim("SkipSign", Vector3.new(7.4, 1.5, 0.25), CFrame.new(0, top - 1.6, -3.83), C.black, Enum.Material.SmoothPlastic)
+		Kit.label(sign, "SEQUENCE BREAK!", C.gold, C.black, { Enum.NormalId.Front })
+	end
+
+	defineTheme({
+		name = "Speedrun Springs",
+		id = "SpeedrunSprings",
+		flag = { emblem = "0:06.7", caption = "SPEEDRUN SPRINGS", color = Color3.fromRGB(24, 24, 28), text = Color3.fromRGB(110, 255, 140), trim = Color3.fromRGB(110, 255, 140) },
+		setPiece = {
+			id = "SpeedrunCourse",
+			name = "The Speedrun Course",
+			width = 40,
+			depth = 28,
+			ground = Enum.Material.Pavement,
+			build = function(k)
+				local lane = k:at(CFrame.new(-9, 0, 0))
+				track(lane)
+				gantry(lane:at(CFrame.new(0, 0, -8)))
+				checkpoint(lane:at(CFrame.new(0, 0, 4)), "SPLIT 1  -0.4", true)
+				-- Three springs in a line toward the ledge; the last one is lined up to land you on it.
+				local springs = { Vector3.new(2, 0, -9), Vector3.new(8, 0, -4), Vector3.new(14, 0, 1) }
+				for index, at in ipairs(springs) do
+					local nextAt = springs[index + 1] or Vector3.new(14, 0, 9)
+					local forward = Vector3.new(nextAt.X - at.X, 0, nextAt.Z - at.Z).Unit
+					local pad = spring(k:at(CFrame.new(at)), forward)
+					Kit.bob(pad, 0.35, 5, index)
+				end
+				ledge(k:at(CFrame.new(14, 0, 8.2)))
+				k:truss("LedgeLadder", 16, Vector3.new(14, 0, 12.9), C.steel)
+				local rules = Pieces.board(k:at(CFrame.new(11, 0, -12.2)), "NO WALKING  •  SPRINT ONLY", 7, 1.6, 2.6, C.white, Color3.fromRGB(180, 40, 40), 2, C.iron)
+				rules.Name = "RulesSign"
+			end,
+		},
+		props = {
+			{
+				id = "CheckpointFlag",
+				radius = 3.0,
+				build = function(k)
+					k:post("FlagPost", 7.3, 0.3, Vector3.new(0, -0.3, 0), C.steel, Enum.Material.Metal)
+					for row = 0, 2 do
+						for column = 0, 3 do
+							k:trim("CheckerFlag", Vector3.new(0.7, 0.7, 0.08), CFrame.new(0.5 + column * 0.7, 6.3 - row * 0.7, 0), (row + column) % 2 == 0 and C.black or C.white, Enum.Material.Fabric)
+						end
+					end
+					local pad = k:trim("CheckpointPad", Vector3.new(2.6, 0.12, 2.6), CFrame.new(0, 0.08, -0.2), Color3.fromRGB(90, 220, 255), Enum.Material.Neon)
+					pad.Transparency = 0.3
+				end,
+			},
+			{
+				id = "SplitTimer",
+				radius = 1.6,
+				build = function(k)
+					local times = { "-0.4", "+0.2", "-1.1", "+0.0" }
+					local text = times[k.rng:NextInteger(1, #times)]
+					k:post("TimerPost", 5.4, 0.35, Vector3.zero, C.charcoal, Enum.Material.Metal)
+					local board = k:box("TimerBox", Vector3.new(3.2, 1.6, 0.6), CFrame.new(0, 6.1, 0), C.black, Enum.Material.SmoothPlastic)
+					Kit.label(board, text, string.sub(text, 1, 1) == "-" and TIMER_GREEN or Color3.fromRGB(255, 90, 80), C.black,
+						{ Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.RobotoMono)
+				end,
+			},
+			{
+				id = "SprintSign",
+				radius = 2.4,
+				build = function(k)
+					local sign = Pieces.board(k, "NO WALKING", 4.2, 1.3, 2.4, C.white, Color3.fromRGB(180, 40, 40), 2, C.iron)
+					sign.Name = "SprintSign"
+				end,
+			},
+			{
+				id = "StartBlocks",
+				radius = 2.2,
+				build = function(k)
+					k:trim("BlockRail", Vector3.new(0.5, 0.3, 3.6), CFrame.new(0, 0.15, 0), C.steel, Enum.Material.Metal)
+					for _, side in ipairs({ -1, 1 }) do
+						k:wedge("StartBlock", Vector3.new(1.2, 0.9, 1.1), CFrame.new(side * 0.9, 0.45, side * 0.6), Color3.fromRGB(40, 110, 200), Enum.Material.SmoothPlastic)
+					end
+					local marker = k:trim("LaneMarker", Vector3.new(1.4, 0.8, 0.2), CFrame.new(0, 0.7, -1.9), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(marker, "GO", C.black)
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Sahur Junction: the old steam railway where the 3:30 AM never leaves
+--------------------------------------------------------------------------------
+
+do
+	local ENGINE_GREEN = Color3.fromRGB(34, 88, 58)
+	local WHEEL_RED = Color3.fromRGB(170, 40, 36)
+	local BALLAST = Color3.fromRGB(118, 110, 100)
+	local SLEEPER = Color3.fromRGB(86, 64, 46)
+	local RAIL = Color3.fromRGB(140, 140, 146)
+	local BRICK = Color3.fromRGB(148, 84, 62)
+	local LAMP = Color3.fromRGB(255, 206, 130)
+
+	-- The engine in its own coordinates: +X is its front, Z = 0 the middle of the track, y the
+	-- world height above the site (rail tops are at 1.2).
+	local function engine(k)
+		k:box("EngineFootplate", Vector3.new(21, 0.7, 3.2), CFrame.new(0, 2.55, 0), C.black, Enum.Material.Metal)
+		for _, x in ipairs({ -1.5, 2.3, 6.1 }) do
+			for _, z in ipairs({ -2.05, 2.05 }) do
+				decor(k:cyl("DrivingWheel", 0.5, 3.6, CFrame.new(x, 3.0, z) * CFrame.Angles(0, math.pi / 2, 0), WHEEL_RED, Enum.Material.Metal))
+				decor(k:cyl("WheelHub", 0.8, 0.9, CFrame.new(x, 3.0, z) * CFrame.Angles(0, math.pi / 2, 0), C.brass, Enum.Material.Metal))
+			end
+		end
+		for _, x in ipairs({ 9.6, -9.5, -7.2 }) do
+			for _, z in ipairs({ -1.95, 1.95 }) do
+				decor(k:cyl("SmallWheel", 0.4, 2.2, CFrame.new(x, 2.3, z) * CFrame.Angles(0, math.pi / 2, 0), WHEEL_RED, Enum.Material.Metal))
+			end
+		end
+		k:trim("CouplingRod", Vector3.new(8, 0.3, 0.2), CFrame.new(2.3, 3.0, -2.45), C.steel, Enum.Material.Metal)
+		k:trim("RunningBoard", Vector3.new(10.3, 0.25, 4.8), CFrame.new(2.55, 4.9, 0), C.black, Enum.Material.Metal)
+
+		k:cyl("Boiler", 10.5, 4.2, CFrame.new(2.55, 5.0, 0), ENGINE_GREEN, Enum.Material.SmoothPlastic)
+		for _, x in ipairs({ 0.5, 5.0 }) do
+			decor(k:cyl("BoilerBand", 0.3, 4.35, CFrame.new(x, 5.0, 0), C.brass, Enum.Material.Metal))
+		end
+		k:cyl("Smokebox", 2.5, 4.4, CFrame.new(9.05, 5.0, 0), C.charcoal, Enum.Material.Metal)
+		decor(k:cyl("SmokeboxDoor", 0.2, 3.4, CFrame.new(10.4, 5.0, 0), C.black, Enum.Material.Metal))
+		k:trim("SmokeboxHandle", Vector3.new(0.3, 0.4, 0.4), CFrame.new(10.62, 5.0, 0), C.brass, Enum.Material.Metal)
+		k:post("Chimney", 2.6, 1.4, Vector3.new(9.05, 6.8, 0), C.charcoal, Enum.Material.Metal)
+		local lip = decor(k:cyl("ChimneyLip", 0.45, 1.9, CFrame.new(9.05, 9.3, 0) * CFrame.Angles(0, 0, math.pi / 2), C.charcoal, Enum.Material.Metal))
+		Kit.emitter(lip, { color = Color3.fromRGB(200, 200, 204), color2 = Color3.fromRGB(150, 150, 156), size = 1.2, size2 = 5, transparency = 0.45,
+			lifetime = 3, rate = 3, speed = 3, spread = 12, acceleration = Vector3.new(0.6, 0.4, 0) })
+		decor(k:ball("SteamDome", 2.2, CFrame.new(2.5, 7.0, 0), C.brass, Enum.Material.Metal))
+		decor(k:ball("SandDome", 1.7, CFrame.new(-0.8, 6.8, 0), ENGINE_GREEN, Enum.Material.SmoothPlastic))
+		local headlamp = k:trim("Headlamp", Vector3.new(0.8, 0.8, 0.8), CFrame.new(10.2, 7.5, 0), LAMP, Enum.Material.Neon)
+		Kit.light(headlamp, LAMP, 18, 1.2)
+
+		-- Buffer beam, buffers and the cowcatcher.
+		k:trim("BufferBeam", Vector3.new(0.4, 0.8, 3.6), CFrame.new(10.7, 2.9, 0), C.red, Enum.Material.Metal)
+		for _, z in ipairs({ -1.1, 1.1 }) do
+			decor(k:cyl("Buffer", 0.8, 0.7, CFrame.new(11.1, 3.3, z), C.black, Enum.Material.Metal))
+		end
+		k:wedge("Cowcatcher", Vector3.new(3.2, 1.3, 1.2), CFrame.new(11.5, 1.95, 0) * CFrame.Angles(0, -math.pi / 2, 0), C.charcoal, Enum.Material.Metal)
+
+		-- The cab.
+		k:box("CabLower", Vector3.new(4, 2.6, 3.6), CFrame.new(-4.7, 4.2, 0), ENGINE_GREEN, Enum.Material.SmoothPlastic)
+		k:box("CabFront", Vector3.new(0.3, 3.4, 3.6), CFrame.new(-2.85, 7.2, 0), ENGINE_GREEN, Enum.Material.SmoothPlastic)
+		for _, z in ipairs({ -1.65, 1.65 }) do
+			k:box("CabPillar", Vector3.new(0.3, 3.4, 0.3), CFrame.new(-6.5, 7.2, z), ENGINE_GREEN, Enum.Material.SmoothPlastic)
+		end
+		for _, z in ipairs({ -0.9, 0.9 }) do
+			decor(k:cyl("CabWindow", 0.1, 0.9, CFrame.new(-2.66, 7.9, z), Color3.fromRGB(200, 220, 230), Enum.Material.Glass))
+		end
+		k:box("CabRoof", Vector3.new(5, 0.35, 4.4), CFrame.new(-4.6, 9.075, 0), C.black, Enum.Material.Metal)
+		local plate = k:trim("NamePlate", Vector3.new(2.8, 0.8, 0.1), CFrame.new(-4.7, 4.4, -1.85), C.brass, Enum.Material.Metal)
+		Kit.label(plate, "SAHUR EXPRESS", C.black)
+
+		-- The tender and its coal.
+		k:box("Tender", Vector3.new(3.6, 3.2, 3.4), CFrame.new(-8.7, 4.5, 0), ENGINE_GREEN, Enum.Material.SmoothPlastic)
+		for _, lump in ipairs({ { -8.7, 6.2, -0.6, 2 }, { -9.3, 6.3, 0.7, 1.8 }, { -8.1, 6.1, 0.5, 1.6 } }) do
+			decor(k:ball("Coal", lump[4], CFrame.new(lump[1], lump[2], lump[3]), Color3.fromRGB(26, 26, 28), Enum.Material.Slate))
+		end
+	end
+
+	local function railway(k)
+		k:box("Ballast", Vector3.new(40, 0.6, 6), CFrame.new(0, 0.1, 6), BALLAST, Enum.Material.Pebble)
+		for index = 0, 14 do
+			k:trim("Sleeper", Vector3.new(1.2, 0.3, 5), CFrame.new(-18.2 + index * 2.6, 0.55, 6), SLEEPER, Enum.Material.Wood)
+		end
+		for _, z in ipairs({ 4.2, 7.8 }) do
+			k:trim("Rail", Vector3.new(40, 0.5, 0.35), CFrame.new(0, 0.95, z), RAIL, Enum.Material.Metal)
+		end
+		-- Buffer stop at the end of the siding.
+		for _, z in ipairs({ 4.5, 7.5 }) do
+			k:box("BufferStopPost", Vector3.new(0.6, 3, 0.6), CFrame.new(19.2, 1.9, z), C.charcoal, Enum.Material.Metal)
+		end
+		k:box("BufferStopBeam", Vector3.new(0.8, 1, 4.4), CFrame.new(18.7, 2.6, 6), C.red, Enum.Material.Metal)
+		for _, z in ipairs({ 4.9, 7.1 }) do
+			k:trim("BufferStopHead", Vector3.new(0.5, 0.8, 0.8), CFrame.new(18.05, 2.6, z), C.white, Enum.Material.SmoothPlastic)
+		end
+	end
+
+	local function platform(k)
+		k:box("Platform", Vector3.new(24, 1.8, 4), CFrame.new(-6, 0.5, 0.5), Color3.fromRGB(170, 162, 148), Enum.Material.Concrete)
+		-- Set into the platform (top 1.4) rather than level with it: at 1.43 the coping's top stood at
+		-- 1.50 and the pass pulled it 0.22 clear on every build.
+		k:trim("PlatformEdge", Vector3.new(23.9, 0.14, 0.7), CFrame.new(-6, 1.39, 2.05), C.yellow, Enum.Material.SmoothPlastic)
+		for _, x in ipairs({ -9, 1 }) do
+			k:box("PlatformStep", Vector3.new(5, 0.7, 1.2), CFrame.new(x, 0.35, -2.1), Color3.fromRGB(170, 162, 148), Enum.Material.Concrete)
+		end
+
+		-- The wake-up drum: at three in the morning it's the loudest thing for miles.
+		local drum = k:at(CFrame.new(-15, 0, 0.5))
+		for _, x in ipairs({ -2.7, 2.7 }) do
+			drum:box("DrumStandPost", Vector3.new(0.4, 2.6, 0.4), CFrame.new(x, 2.7, 0), C.darkWood, Enum.Material.Wood)
+			decor(drum:ball("DrumStandKnob", 0.6, CFrame.new(x, 4.1, 0), C.brass, Enum.Material.Metal))
+		end
+		drum:box("DrumCradle", Vector3.new(5.5, 0.5, 1.2), CFrame.new(0, 1.95, 0), C.darkWood, Enum.Material.Wood)
+		local turned = CFrame.Angles(0, math.pi / 2, 0)
+		drum:cyl("DrumBody", 3, 4.6, CFrame.new(0, 4.3, 0) * turned, Color3.fromRGB(190, 40, 40), Enum.Material.SmoothPlastic)
+		for _, z in ipairs({ -1.25, 1.25 }) do
+			decor(drum:cyl("DrumHoop", 0.35, 4.9, CFrame.new(0, 4.3, z) * turned, C.gold, Enum.Material.Metal))
+		end
+		local head = decor(drum:cyl("DrumHead", 0.1, 4.3, CFrame.new(0, 4.3, -1.57) * turned, C.cream, Enum.Material.Fabric))
+		Kit.label(head, "WAKE UP!", Color3.fromRGB(160, 30, 30), nil, { Enum.NormalId.Right })
+		for _, spec in ipairs({ { 3.2, -0.8, 2.1, 0.2 }, { 3.6, -0.4, 2.5, 0.6 } }) do
+			local foot = Vector3.new(spec[1], 1.4, spec[2])
+			local top = Vector3.new(spec[3], 5.2, spec[4])
+			decor(drum:rod("Drumstick", foot, top, 0.3, C.wood, Enum.Material.Wood))
+			decor(drum:ball("DrumstickTip", 0.6, CFrame.new(top), C.cream, Enum.Material.Fabric))
+		end
+		local plaque = drum:trim("DrumPlaque", Vector3.new(4, 0.9, 0.12), CFrame.new(0, 0.75, -2.06), C.brass, Enum.Material.Metal)
+		Kit.label(plaque, "WAKE-UP DRUM  •  3:00 AM", C.black)
+
+		-- Stood a tenth into the platform, so its foot isn't level with the edge coping's, and BEHIND the
+		-- coping strip (z 1.7-2.4) rather than through it: at z 2.0 the post rose through the strip and its
+		-- foot (1.30) sat 0.02 under the strip's underside (1.32), a flush pair on every build.
+		Pieces.lantern(k:at(CFrame.new(-11, 1.3, 1.1)), 7.1, LAMP)
+
+		-- The station's name board, and under it the train that never comes. Up high on tall posts, so
+		-- from the street the engine is seen under them rather than hidden behind them.
+		local boardKit = k:at(CFrame.new(-5, 1.4, 1.95))
+		local nameBoard = boardKit:box("StationBoard", Vector3.new(9, 1.8, 0.3), CFrame.new(0, 8.0, 0), C.white, Enum.Material.SmoothPlastic)
+		Kit.label(nameBoard, "SAHUR JUNCTION", C.black, C.white, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBlack)
+		local times = boardKit:box("TimetableBoard", Vector3.new(8.4, 0.9, 0.25), CFrame.new(0, 6.45, 0), C.signBack, Enum.Material.SmoothPlastic)
+		Kit.label(times, "NEXT TRAIN: 3:30 AM", LAMP, C.signBack, { Enum.NormalId.Front })
+		for _, x in ipairs({ -4, 4 }) do
+			-- The posts stand inside the coping strip's depth (world z 1.7-2.4), so every face has to clear
+			-- four planes by 0.07: the strip's two faces, and the backs of the two boards (0.125 and 0.15).
+			-- At z 0.32 the posts' backs were 0.02 inside the strip's back face. At z 0.20 (faces 0.05 and
+			-- 0.35): 0.075 and 0.10 behind the boards' backs, 0.15 and 0.10 inside the strip's faces.
+			boardKit:box("StationBoardPost", Vector3.new(0.3, 8.8, 0.3), CFrame.new(x, 4.2, 0.20), C.charcoal, Enum.Material.Metal)
+		end
+		Pieces.bench(k:at(CFrame.new(-5, 1.4, -0.1)), C.darkWood)
+
+		-- A luggage trolley piled with somebody's cases.
+		local trolley = k:at(CFrame.new(1.5, 1.4, 0.3))
+		trolley:box("TrolleyBed", Vector3.new(3, 0.25, 1.8), CFrame.new(0, 0.8, 0), C.darkWood, Enum.Material.WoodPlanks)
+		for _, x in ipairs({ -1.1, 1.1 }) do
+			decor(trolley:cyl("TrolleyWheel", 0.3, 0.9, CFrame.new(x, 0.45, 0) * turned, C.black, Enum.Material.Rubber))
+		end
+		trolley:trim("TrolleyHandle", Vector3.new(0.2, 1.8, 1.8), CFrame.new(-1.6, 1.8, 0), C.charcoal, Enum.Material.Metal)
+		-- Stacked: each case's bottom on the one below's top (the bed's top is 0.925 up).
+		for index, case in ipairs({ { 0.2, 1.25, 2.2, 0.65, Color3.fromRGB(120, 60, 40) }, { 0.1, 1.875, 1.8, 0.6, Color3.fromRGB(60, 90, 130) },
+			{ 0.3, 2.45, 1.5, 0.55, Color3.fromRGB(170, 140, 70) } }) do
+			trolley:box("Suitcase", Vector3.new(case[3], case[4], 1.2), CFrame.new(case[1], case[2], 0) * CFrame.Angles(0, index * 0.12, 0), case[5], Enum.Material.Leather)
+		end
+
+		-- The station clock at the platform's end, stopped at sahur.
+		local clock = k:at(CFrame.new(4.6, 1.4, 0.5))
+		clock:post("StationClockPost", 6.2, 0.35, Vector3.zero, C.charcoal, Enum.Material.Metal)
+		clock:box("StationClockCase", Vector3.new(2.6, 2.6, 0.8), CFrame.new(0, 7.5, 0), C.charcoal, Enum.Material.Metal)
+		Pieces.clockFace(clock:at(CFrame.new(0, 7.5, -0.4)), 3, 0, 2.1)
+		Pieces.clockFace(clock:at(CFrame.new(0, 7.5, 0.4) * CFrame.Angles(0, math.pi, 0)), 3, 0, 2.1)
+	end
+
+	local function signalBox(k)
+		k:box("SignalBoxBase", Vector3.new(8, 7.4, 5.2), CFrame.new(0, 3.3, 0), BRICK, Enum.Material.Brick)
+		k:trim("SignalBoxDoor", Vector3.new(1.8, 3.4, 0.2), CFrame.new(-2, 1.7, -2.7), C.darkWood, Enum.Material.WoodPlanks)
+		k:trim("SignalBoxWindow", Vector3.new(2, 1.6, 0.2), CFrame.new(1.8, 3.6, -2.7), Color3.fromRGB(40, 44, 56), Enum.Material.Glass)
+		k:box("SignalBoxFloor", Vector3.new(8.6, 0.5, 5.8), CFrame.new(0, 7.25, 0), C.darkWood, Enum.Material.WoodPlanks)
+		for _, x in ipairs({ -3.95, 3.95 }) do
+			for _, z in ipairs({ -2.55, 2.55 }) do
+				k:box("SignalBoxPost", Vector3.new(0.5, 5.4, 0.5), CFrame.new(x, 10.2, z), C.cream, Enum.Material.Wood)
+			end
+		end
+		-- Panels under the windows all round, then glass, then the roof.
+		for side = 0, 3 do
+			local along = side % 2 == 0
+			local span = along and 7.4 or 4.6
+			local offset = along and 2.55 or 3.95
+			local face = k:at(CFrame.Angles(0, side * math.pi / 2, 0) * CFrame.new(0, 0, -offset))
+			face:box("SignalBoxPanel", Vector3.new(span, 1.3, 0.25), CFrame.new(0, 8.15, 0), C.cream, Enum.Material.WoodPlanks)
+			local glass = face:trim("SignalBoxGlass", Vector3.new(span, 3.6, 0.12), CFrame.new(0, 10.6, 0), Color3.fromRGB(170, 200, 220), Enum.Material.Glass)
+			glass.Transparency = 0.55
+		end
+		k:box("SignalBoxEave", Vector3.new(9.4, 0.4, 6.6), CFrame.new(0, 13.1, 0), C.charcoal, Enum.Material.Slate)
+		k:wedge("SignalBoxRoof", Vector3.new(9.4, 1.8, 3.3), CFrame.new(0, 14.2, -1.65), C.charcoal, Enum.Material.Slate)
+		k:wedge("SignalBoxRoof", Vector3.new(9.4, 1.8, 3.3), CFrame.new(0, 14.2, 1.65) * CFrame.Angles(0, math.pi, 0), C.charcoal, Enum.Material.Slate)
+		k:trim("SignalBoxRidge", Vector3.new(9.6, 0.3, 0.6), CFrame.new(0, 15.2, 0), C.black, Enum.Material.Metal)
+		local name = k:trim("SignalBoxName", Vector3.new(5, 0.9, 0.12), CFrame.new(0, 8.2, -2.74), C.white, Enum.Material.SmoothPlastic)
+		Kit.label(name, "SAHUR JCT", C.black, C.white)
+		-- The lever frame, through the glass.
+		local colors = { C.red, C.red, C.yellow, C.blue, C.black, C.red }
+		for index, color in ipairs(colors) do
+			k:trim("SignalLever", Vector3.new(0.25, 2, 0.25), CFrame.new(-2.5 + (index - 1), 8.5, 1.2) * CFrame.Angles(index % 2 == 0 and 0.35 or -0.2, 0, 0), color, Enum.Material.Metal)
+		end
+		k:truss("SignalBoxLadder", 8, Vector3.new(-5, 0, 0), C.charcoal)
+	end
+
+	-- A semaphore signal: a tall post, its arm dropped to "clear", the lamp and a ladder up the side.
+	-- `side` is which way the arm reaches (1 is +X), so it can always point in over the site.
+	local function semaphore(k, side)
+		k:post("SemaphorePost", 17, 0.6, Vector3.zero, C.white, Enum.Material.Metal)
+		k:ball("SemaphoreFinial", 0.9, CFrame.new(0, 17.3, 0), C.charcoal, Enum.Material.Metal)
+		local arm = k:at(CFrame.new(side * 0.3, 15, -0.5) * CFrame.Angles(0, 0, math.rad(-40 * side)))
+		arm:trim("SemaphoreArm", Vector3.new(3.8, 0.6, 0.15), CFrame.new(side * 1.9, 0, 0), C.red, Enum.Material.SmoothPlastic)
+		arm:trim("SemaphoreStripe", Vector3.new(0.35, 0.72, 0.3), CFrame.new(side * 3.1, 0, 0), C.white, Enum.Material.SmoothPlastic)
+		local lens = k:trim("SemaphoreLamp", Vector3.new(0.6, 0.6, 0.3), CFrame.new(0, 14.2, -0.55), Color3.fromRGB(80, 255, 120), Enum.Material.Neon)
+		Kit.light(lens, Color3.fromRGB(80, 255, 120), 10, 0.8)
+		for _, y in ipairs({ 3, 6, 9, 12 }) do
+			k:trim("SemaphoreRung", Vector3.new(0.9, 0.12, 0.12), CFrame.new(0, y, 0.45), C.charcoal, Enum.Material.Metal)
+		end
+	end
+
+	defineTheme({
+		name = "Sahur Junction",
+		id = "SahurJunction",
+		flag = { emblem = "3:00", caption = "SAHUR JUNCTION", color = Color3.fromRGB(34, 88, 58), text = C.cream, trim = C.brass },
+		setPiece = {
+			id = "SignalBoxYard",
+			name = "Sahur Junction Station",
+			width = 40,
+			depth = 30,
+			ground = Enum.Material.Ground,
+			build = function(k)
+				railway(k)
+				engine(k:at(CFrame.new(-6, 0, 6)))
+				platform(k)
+				signalBox(k:at(CFrame.new(13, 0, 12.2)))
+				semaphore(k:at(CFrame.new(-19, 0, 11)), 1)
+				semaphore(k:at(CFrame.new(19, 0, 0.8)), -1)
+			end,
+		},
+		props = {
+			{
+				id = "RailwayLantern",
+				radius = 1.8,
+				build = function(k)
+					Pieces.lantern(k, 7.5, LAMP)
+				end,
+			},
+			{
+				id = "LuggageCart",
+				radius = 2.4,
+				build = function(k)
+					k:box("CartBed", Vector3.new(3.2, 0.3, 2), CFrame.new(0, 1.1, 0), C.darkWood, Enum.Material.WoodPlanks)
+					for _, x in ipairs({ -1.2, 1.2 }) do
+						decor(k:cyl("CartWheel", 0.3, 1.2, CFrame.new(x, 0.6, 0) * CFrame.Angles(0, math.pi / 2, 0), C.black, Enum.Material.Rubber))
+					end
+					k:box("CartCase", Vector3.new(2.2, 1, 1.4), CFrame.new(0.1, 1.75, 0), Color3.fromRGB(120, 60, 40), Enum.Material.Leather)
+					k:box("CartCase", Vector3.new(1.4, 0.8, 1.1), CFrame.new(-0.2, 2.65, 0) * CFrame.Angles(0, 0.3, 0), Color3.fromRGB(60, 90, 130), Enum.Material.Leather)
+					k:trim("CartHandle", Vector3.new(0.2, 1.6, 1.8), CFrame.new(-1.7, 2, 0), C.charcoal, Enum.Material.Metal)
+				end,
+			},
+			{
+				id = "WakeUpDrum",
+				radius = 1.8,
+				build = function(k)
+					k:box("MiniDrumStand", Vector3.new(0.5, 1.4, 0.5), CFrame.new(0, 0.7, 0), C.darkWood, Enum.Material.Wood)
+					local turned = CFrame.Angles(0, 0, math.pi / 2)
+					k:cyl("MiniDrum", 1.8, 2.6, CFrame.new(0, 2.3, 0) * turned, Color3.fromRGB(190, 40, 40), Enum.Material.SmoothPlastic)
+					decor(k:cyl("MiniDrumHead", 0.1, 2.4, CFrame.new(0, 3.24, 0) * turned, C.cream, Enum.Material.Fabric))
+					for _, y in ipairs({ 1.5, 3.1 }) do
+						decor(k:cyl("MiniDrumHoop", 0.25, 2.8, CFrame.new(0, y - 0.12, 0) * turned, C.gold, Enum.Material.Metal))
+					end
+					for _, x in ipairs({ -0.5, 0.5 }) do
+						decor(k:rod("MiniDrumstick", Vector3.new(x, 3.3, -0.2), Vector3.new(x * 2.2, 4.4, -0.8), 0.18, C.wood, Enum.Material.Wood))
+					end
+				end,
+			},
+			{
+				id = "CrossingSign",
+				radius = 2.0,
+				build = function(k)
+					k:post("CrossingPost", 7, 0.35, Vector3.zero, C.white, Enum.Material.Metal)
+					-- The crossed blades are left plain (words on both would cross each other out); the
+					-- name goes on a plate under the lamps.
+					for _, angle in ipairs({ 32, -32 }) do
+						local blade = k:trim("CrossingBlade", Vector3.new(4.2, 0.7, 0.12), CFrame.new(0, 6, -0.3 - (angle > 0 and 0 or 0.2)) * CFrame.Angles(0, 0, math.rad(angle)),
+							C.white, Enum.Material.SmoothPlastic)
+						k:trim("CrossingStripe", Vector3.new(3.8, 0.3, 0.1), CFrame.new(0, 6, -0.3 - (angle > 0 and 0 or 0.2) - 0.1) * CFrame.Angles(0, 0, math.rad(angle)),
+							C.red, Enum.Material.SmoothPlastic)
+					end
+					local plate = k:trim("CrossingPlate", Vector3.new(2.8, 0.8, 0.12), CFrame.new(0, 3.3, -0.3), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(plate, "SAHUR JCT", C.red, nil, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+					k:trim("CrossingLampBar", Vector3.new(2.6, 0.3, 0.2), CFrame.new(0, 4.3, -0.3), C.black, Enum.Material.Metal)
+					for _, x in ipairs({ -1.1, 1.1 }) do
+						local lamp = decor(k:ball("CrossingLamp", 0.7, CFrame.new(x, 4.3, -0.55), C.red, Enum.Material.Neon))
+						Kit.light(lamp, C.red, 6, 0.6)
+					end
+				end,
+			},
+		},
+	})
+end

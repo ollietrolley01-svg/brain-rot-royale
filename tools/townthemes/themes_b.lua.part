@@ -1,0 +1,696 @@
+
+--------------------------------------------------------------------------------
+-- Rotville: the compost works, where everything goes to become worse
+--------------------------------------------------------------------------------
+
+do
+	local RUST = Color3.fromRGB(128, 78, 48)
+	local SLUDGE = Color3.fromRGB(130, 230, 60)
+	local COMPOST = { Color3.fromRGB(120, 88, 56), Color3.fromRGB(138, 104, 64), Color3.fromRGB(104, 90, 54) }
+	local MOULD = Color3.fromRGB(150, 170, 120)
+	local OLD_WOOD = Color3.fromRGB(122, 98, 70)
+
+	-- Flies: specks bobbing round `center`, each at its own pace.
+	local function flies(k, center, count, spread)
+		for index = 1, count do
+			local offset = Vector3.new(k.rng:NextNumber(-spread, spread), k.rng:NextNumber(0, spread * 0.6), k.rng:NextNumber(-spread, spread))
+			local fly = floating(decor(k:ball("Fly", 0.28, CFrame.new(center + offset), C.black, Enum.Material.SmoothPlastic)))
+			Kit.bob(fly, 0.6, 3 + index * 0.37, index)
+		end
+	end
+
+	local function stink(part, rate)
+		Kit.emitter(part, { color = Color3.fromRGB(170, 190, 110), size = 1.2, size2 = 4, transparency = 0.7, lifetime = 3.5, rate = rate or 2,
+			speed = 0.8, spread = 30, acceleration = Vector3.new(0, 0.4, 0) })
+	end
+
+	-- A sludge vat: a rusty tank banded twice, brimming with glowing green, bubbles breaking on top.
+	local function vat(k, diameter, height)
+		k:post("VatTank", height + 0.3, diameter, Vector3.new(0, -0.3, 0), RUST, Enum.Material.CorrodedMetal)
+		for _, t in ipairs({ 0.3, 0.72 }) do
+			decor(k:post("VatBand", 0.45, diameter + 0.3, Vector3.new(0, height * t, 0), C.iron, Enum.Material.Metal))
+		end
+		local sludge = decor(k:disc("Sludge", 0.3, diameter - 0.4, Vector3.new(0, height + 0.05, 0), SLUDGE, Enum.Material.Neon))
+		Kit.light(sludge, SLUDGE, 14, 1.2)
+		stink(sludge, 2)
+		-- A lip of eight segments round the rim, alternate ones a touch taller, so no two tops or
+		-- bottoms line up where the segments overlap at the joins.
+		local radius = diameter / 2 - 0.12
+		-- Short segments run 0 to 0.5 over the rim, tall ones 0.08 to 0.66; the sludge is -0.1 to 0.2.
+		for index = 0, 7 do
+			local tall = index % 2 == 1
+			local size = Vector3.new(diameter * math.pi / 8 + 0.1, tall and 0.58 or 0.5, 0.45)
+			k:trim("VatLip", size, CFrame.Angles(0, index * math.pi / 4, 0) * CFrame.new(0, height + (tall and 0.37 or 0.25), -radius), RUST, Enum.Material.CorrodedMetal)
+		end
+		for index = 1, 3 do
+			local angle = k.rng:NextNumber(0, math.pi * 2)
+			local reach = k.rng:NextNumber(0, diameter / 2 - 1.4)
+			local bubble = floating(decor(k:ball("SludgeBubble", k.rng:NextNumber(0.5, 1.0),
+				CFrame.new(math.cos(angle) * reach, height + 0.35, math.sin(angle) * reach), SLUDGE:Lerp(Color3.new(1, 1, 1), 0.25), Enum.Material.Neon)))
+			bubble.Transparency = 0.2
+			Kit.bob(bubble, 0.35, 1.4 + index * 0.5, index * 2)
+		end
+	end
+
+	local function waterTower(k)
+		local tower = k:at(CFrame.Angles(math.rad(3), 0, math.rad(-4)))
+		for _, sx in ipairs({ -1, 1 }) do
+			for _, sz in ipairs({ -1, 1 }) do
+				tower:box("TowerLeg", Vector3.new(0.8, 14.6, 0.8), CFrame.new(sx * 2.8, 7.0, sz * 2.8), RUST, Enum.Material.CorrodedMetal)
+			end
+		end
+		-- Crossed braces on two faces, one of each pair set back a hair so they don't share a plane.
+		for face = 0, 1 do
+			local side = tower:at(CFrame.Angles(0, face * math.pi / 2, 0))
+			decor(side:bar("TowerBrace", Vector3.new(-2.8, 1.2, -2.8), Vector3.new(2.8, 9.5, -2.8), 0.3, C.iron, Enum.Material.Metal))
+			decor(side:bar("TowerBrace", Vector3.new(2.8, 1.2, -2.95), Vector3.new(-2.8, 9.5, -2.95), 0.3, C.iron, Enum.Material.Metal))
+		end
+		tower:post("TowerTank", 6, 8, Vector3.new(0, 14, 0), Color3.fromRGB(96, 128, 110), Enum.Material.CorrodedMetal)
+		tower:disc("TowerRoof", 0.6, 8.6, Vector3.new(0, 20.3, 0), RUST, Enum.Material.CorrodedMetal)
+		tower:disc("TowerRoofTop", 1.0, 5.4, Vector3.new(0, 21.1, 0), RUST, Enum.Material.CorrodedMetal)
+		tower:ball("TowerFinial", 0.8, CFrame.new(0, 21.9, 0), C.iron, Enum.Material.Metal)
+		local name = tower:trim("TowerName", Vector3.new(4.4, 1.6, 0.25), CFrame.new(0, 17.5, -4.0), Color3.fromRGB(226, 220, 196), Enum.Material.SmoothPlastic)
+		Kit.label(name, "ROTVILLE", Color3.fromRGB(70, 120, 40))
+		for index, length in ipairs({ 1.2, 2.2, 1.6 }) do
+			tower:trim("SlimeDrip", Vector3.new(0.25, length, 0.12), CFrame.new(-1.4 + (index - 1) * 1.4, 16.7 - length / 2, -4.1), SLUDGE, Enum.Material.Neon)
+		end
+	end
+
+	-- The compost bay: three sides of rough planks with gaps between (the back away from the street),
+	-- heaped over the top with dark crumbly compost that spills out of the open front, the day's
+	-- scraps on the surface, a pitchfork left in it and a thermometer reading far too hot.
+	-- (Round 3: a heap of plain balls on open ground read as bread loaves; the slatted bay is what
+	-- says "compost" at a glance.)
+	local COMPOST_DARK = { Color3.fromRGB(84, 60, 40), Color3.fromRGB(98, 70, 46), Color3.fromRGB(70, 52, 36) }
+	local BAY_HALF_X, BAY_HALF_Z = 4, 3
+
+	local function compostHeap(k)
+		for _, x in ipairs({ -BAY_HALF_X, BAY_HALF_X }) do
+			for _, z in ipairs({ -BAY_HALF_Z, BAY_HALF_Z }) do
+				k:box("BayPost", Vector3.new(0.5, 3.9, 0.5), CFrame.new(x, 1.75, z), OLD_WOOD:Lerp(C.black, 0.2), Enum.Material.Wood)
+			end
+		end
+		-- Back planks are a touch taller than side planks, so their tops never share a plane at the corners.
+		for row, y in ipairs({ 0.55, 1.45, 2.35 }) do
+			local shade = OLD_WOOD:Lerp(C.black, (row % 2) * 0.12)
+			k:box("BayPlank", Vector3.new(BAY_HALF_X * 2 + 0.1, 0.7, 0.25), CFrame.new(0, y, BAY_HALF_Z), shade, Enum.Material.WoodPlanks)
+			for _, side in ipairs({ -1, 1 }) do
+				k:box("BayPlank", Vector3.new(0.25, 0.56, BAY_HALF_Z * 2), CFrame.new(side * BAY_HALF_X, y, 0), shade, Enum.Material.WoodPlanks)
+			end
+		end
+
+		-- The heap: highest at the back, slumping forward and out of the open front. Every lump inside
+		-- the bay stays clear of the planks.
+		local lumps = {
+			{ -2.2, 1.5, 1.3, 3.0 }, { 0.2, 1.9, 1.3, 3.2 }, { 2.3, 1.4, 1.2, 2.8 },
+			{ -2.4, 0.9, -0.4, 2.8 }, { -0.4, 1.4, -0.1, 3.4 }, { 1.9, 1.0, -0.3, 3.0 },
+			{ -1.4, 0.4, -2.0, 2.6 }, { 1.0, 0.3, -2.2, 2.4 },
+			{ -0.2, 0.05, -3.5, 2.0 }, { 2.3, 0.0, -3.4, 1.8 }, { -2.5, 0.0, -3.3, 1.6 },
+		}
+		local top
+		for index, lump in ipairs(lumps) do
+			-- Sand's texture keeps the browns warm; Ground's rendered them as grey boulders.
+			local part = k:ball("CompostHeap", lump[4], CFrame.new(lump[1], lump[2], lump[3]), COMPOST_DARK[(index - 1) % #COMPOST_DARK + 1], Enum.Material.Sand)
+			if index == 2 then
+				top = part
+			end
+		end
+		stink(top, 3)
+		-- The surface of the heap straight above (x, z), so scraps sit on it rather than in or over it.
+		local function surface(x, z)
+			local height = 0
+			for _, lump in ipairs(lumps) do
+				local radius = lump[4] / 2
+				local d2 = (x - lump[1]) ^ 2 + (z - lump[3]) ^ 2
+				if d2 < radius * radius then
+					height = math.max(height, lump[2] + math.sqrt(radius * radius - d2))
+				end
+			end
+			return height
+		end
+		local function scrap(name, size, x, z, color, material)
+			local at = CFrame.new(x, surface(x, z) - size.Y * 0.2, z) * CFrame.Angles(0.25, k.rng:NextNumber(0, math.pi * 2), 0.15)
+			decor(k:box(name, size, at, color, material or Enum.Material.SmoothPlastic))
+			return at
+		end
+		-- Clods turned every which way over the smooth lumps: a heap of plain spheres still read as
+		-- loaves in the round-3 renders, and broken-up edges are what make it look dug over.
+		for index, clod in ipairs({
+			{ -1.9, 1.0, 1.9 }, { 0.4, 1.4, 1.6 }, { 2.0, 0.9, 1.5 }, { -2.2, -0.6, 1.5 }, { -0.7, 0.4, 2.1 },
+			{ 1.5, 0.2, 1.7 }, { -1.5, -2.4, 1.4 }, { 0.8, -2.6, 1.3 }, { 2.4, -1.5, 1.2 }, { -2.7, -1.6, 1.2 },
+		}) do
+			local size = clod[3]
+			decor(k:box("CompostClod", Vector3.new(size, size * 0.6, size * 0.85), CFrame.new(clod[1], surface(clod[1], clod[2]) - size * 0.22, clod[2])
+				* CFrame.Angles(k.rng:NextNumber(-0.5, 0.5), k.rng:NextNumber(0, math.pi * 2), k.rng:NextNumber(-0.4, 0.4)),
+				COMPOST_DARK[(index - 1) % #COMPOST_DARK + 1]:Lerp(C.black, 0.12), Enum.Material.Sand))
+		end
+		for _, spot in ipairs({ { -1.8, 0.6 }, { 0.9, 1.0 }, { 1.6, -1.2 }, { -0.8, -1.8 } }) do
+			scrap("CabbageLeaf", Vector3.new(1.0, 0.1, 0.8), spot[1], spot[2], Color3.fromRGB(110, 160, 70), Enum.Material.Fabric)
+		end
+		for _, spot in ipairs({ { -0.2, 0.2 }, { 2.4, 0.4 } }) do
+			scrap("OrangePeel", Vector3.new(0.9, 0.14, 0.5), spot[1], spot[2], Color3.fromRGB(232, 132, 42))
+		end
+		-- A banana peel with its two flaps splayed off the end (just clear of it, so no faces meet flush).
+		local banana = scrap("BananaPeel", Vector3.new(1.3, 0.14, 0.4), -2.4, -1.2, Color3.fromRGB(214, 190, 70))
+		for _, side in ipairs({ -1, 1 }) do
+			-- One flap a little higher than the other, where their inner ends cross.
+			decor(k:box("BananaFlap", Vector3.new(0.7, 0.1, 0.26), banana * CFrame.new(-1.05, side * 0.03, side * 0.2) * CFrame.Angles(0, side * 0.6, 0),
+				Color3.fromRGB(190, 160, 60), Enum.Material.SmoothPlastic))
+		end
+		for _, spot in ipairs({ { 0.6, -0.6 }, { -1.1, 1.6 }, { 1.2, 1.9 } }) do
+			decor(k:ball("EggShell", 0.42, CFrame.new(spot[1], surface(spot[1], spot[2]) + 0.05, spot[2]), Color3.fromRGB(240, 232, 214), Enum.Material.SmoothPlastic))
+		end
+		decor(k:ball("AppleCore", 0.7, CFrame.new(-0.6, surface(-0.6, 1.4) + 0.2, 1.4), Color3.fromRGB(200, 160, 100), Enum.Material.SmoothPlastic))
+		for _, straw in ipairs({ { 1.2, -1.6, 0.8 }, { -2.0, -0.2, -0.6 }, { 0.3, 1.8, 2.2 } }) do
+			decor(k:box("Straw", Vector3.new(0.2, 0.2, 2.0), CFrame.new(straw[1], surface(straw[1], straw[2]) + 0.05, straw[2]) * CFrame.Angles(0.25, straw[3], 0),
+				Color3.fromRGB(220, 190, 100), Enum.Material.SmoothPlastic))
+		end
+		decor(k:box("FishBone", Vector3.new(1.6, 0.15, 0.15), CFrame.new(2.6, surface(2.6, -2.6) + 0.05, -2.6) * CFrame.Angles(0, 0.3, 0.2),
+			Color3.fromRGB(230, 226, 214), Enum.Material.SmoothPlastic))
+
+		-- A pitchfork left standing in it.
+		local forkBase = Vector3.new(1.2, surface(1.2, 0.4) - 0.6, 0.4)
+		decor(k:rod("PitchforkHandle", forkBase, forkBase + Vector3.new(1.6, 5.0, 1.1), 0.25, C.wood, Enum.Material.Wood))
+		decor(k:trim("PitchforkHead", Vector3.new(1.4, 0.15, 0.15), CFrame.new(forkBase), C.iron, Enum.Material.Metal))
+		-- A compost thermometer pushed into the top, dial to the street, needle past the red.
+		local probeBase = Vector3.new(-1.2, surface(-1.2, -0.6) - 0.8, -0.6)
+		decor(k:rod("ThermometerStem", probeBase, probeBase + Vector3.new(0, 3.2, 0), 0.14, C.iron, Enum.Material.Metal))
+		local dial = decor(k:cyl("ThermometerDial", 0.2, 1.3, CFrame.new(probeBase + Vector3.new(0, 3.5, -0.05)) * CFrame.Angles(0, math.pi / 2, 0), C.cream, Enum.Material.SmoothPlastic))
+		Kit.label(dial, "TOO RIPE", Color3.fromRGB(200, 40, 30), nil, { Enum.NormalId.Right }, Enum.Font.GothamBlack)
+		-- 0.30 thick at z 0.06: at 0.24/0.02 its face sat 0.01 from the dial's, inside the pass's tolerance.
+		decor(k:cyl("ThermometerRim", 0.30, 1.42, CFrame.new(probeBase + Vector3.new(0, 3.5, 0.06)) * CFrame.Angles(0, math.pi / 2, 0), C.iron, Enum.Material.Metal))
+		flies(k, Vector3.new(0, surface(0, 0) + 1.2, 0), 8, 2.6)
+	end
+
+	local function fruitStall(k)
+		k:box("StallCounter", Vector3.new(8, 3, 2.4), CFrame.new(0, 1.3, -1), OLD_WOOD, Enum.Material.WoodPlanks)
+		for _, x in ipairs({ -3.8, 3.8 }) do
+			decor(k:post("StallPost", 6.3, 0.35, Vector3.new(x, 0, -2.0), OLD_WOOD, Enum.Material.Wood))
+			decor(k:post("StallPost", 7.1, 0.35, Vector3.new(x, 0, 1.8), OLD_WOOD, Enum.Material.Wood))
+		end
+		for index = 0, 4 do
+			k:trim("StallAwning", Vector3.new(1.64, 0.25, 4.7), CFrame.new(-3.28 + index * 1.64, 6.6, -0.2) * CFrame.Angles(math.rad(-11.8), 0, 0),
+				index % 2 == 0 and Color3.fromRGB(120, 82, 52) or Color3.fromRGB(118, 140, 78), Enum.Material.Fabric)
+		end
+		local fruitColors = { Color3.fromRGB(110, 90, 50), Color3.fromRGB(170, 130, 60), Color3.fromRGB(90, 60, 90) }
+		for crate = 0, 2 do
+			local x = -2.6 + crate * 2.6
+			k:box("FruitCrate", Vector3.new(2.2, 0.9, 1.8), CFrame.new(x, 3.25, -1), OLD_WOOD:Lerp(C.black, 0.15), Enum.Material.WoodPlanks)
+			for fruit = 0, 2 do
+				local size = k.rng:NextNumber(0.75, 0.95)
+				decor(k:ball("RottenFruit", size, CFrame.new(x - 0.6 + fruit * 0.6, 3.7 + size * 0.3, -1 + (fruit % 2) * 0.3), fruitColors[crate + 1], Enum.Material.SmoothPlastic))
+			end
+			decor(k:ball("Mould", 0.45, CFrame.new(x + 0.2, 4.2, -0.8), MOULD, Enum.Material.Sand))
+		end
+		k:ball("MouldyMelon", 2.6, CFrame.new(5.4, 1.1, -1), Color3.fromRGB(78, 120, 60), Enum.Material.SmoothPlastic)
+		for index, spot in ipairs({ Vector3.new(4.6, 2.0, -1.6), Vector3.new(6.2, 1.8, -1.8), Vector3.new(5.6, 2.3, -0.2) }) do
+			decor(k:ball("Mould", 0.6 + index * 0.1, CFrame.new(spot), MOULD, Enum.Material.Sand))
+		end
+		for _, x in ipairs({ -1.6, 1.6 }) do
+			k:trim("PriceString", Vector3.new(0.08, 0.7, 0.08), CFrame.new(x, 5.75, -2.6), C.black, Enum.Material.Fabric)
+		end
+		local price = k:trim("PriceBoard", Vector3.new(4, 1, 0.2), CFrame.new(0, 4.9, -2.6), C.cream, Enum.Material.WoodPlanks)
+		Kit.label(price, "FRESH-ISH", Color3.fromRGB(90, 120, 40), nil, { Enum.NormalId.Front, Enum.NormalId.Back })
+		-- A chalk board standing out front.
+		for _, side in ipairs({ -1, 1 }) do
+			-- The two boards of an A-frame differ in width, so their edges never share a plane.
+			local board = k:box("ChalkBoard", Vector3.new(side < 0 and 2.4 or 2.2, 3, 0.2), CFrame.new(-6, 1.45, -3.6 + side * 0.4) * CFrame.Angles(math.rad(side * 14), 0, 0),
+				Color3.fromRGB(40, 48, 44), Enum.Material.Slate)
+			if side < 0 then
+				Kit.label(board, "50% MOULD FREE", C.white, nil, { Enum.NormalId.Front }, Enum.Font.PermanentMarker)
+			end
+		end
+	end
+
+	defineTheme({
+		name = "Rotville",
+		id = "Rotville",
+		flag = { emblem = "ROT", caption = "ROTVILLE", color = Color3.fromRGB(78, 96, 42), text = SLUDGE, trim = RUST },
+		setPiece = {
+			id = "CompostWorks",
+			name = "Rotville Compost Works",
+			width = 36,
+			depth = 30,
+			ground = Enum.Material.Mud,
+			build = function(k)
+				vat(k:at(CFrame.new(-11, 0, 6)), 8, 7)
+				vat(k:at(CFrame.new(-1.5, 0, 8)), 9, 8.5)
+				k:truss("VatLadder", 8, Vector3.new(-1.5, 0, 2.5), RUST)
+				decor(k:rod("SludgePipe", Vector3.new(-7.4, 3.2, 6.8), Vector3.new(-5.8, 3.2, 7.4), 0.8, C.iron, Enum.Material.Metal))
+				decor(k:rod("SludgePipe", Vector3.new(3.0, 5, 9.4), Vector3.new(7.9, 5, 10.7), 0.8, C.iron, Enum.Material.Metal))
+				waterTower(k:at(CFrame.new(11, 0, 8)))
+				compostHeap(k:at(CFrame.new(-10, 0, -7)))
+				fruitStall(k:at(CFrame.new(8, 0, -7.6)))
+				for _, spot in ipairs({ { -5.2, -0.8, 2.6 }, { 4.6, 2.4, 3.2 }, { -16, 12.4, 2.4 } }) do
+					local puddle = decor(k:disc("SlimePuddle", 0.22, spot[3], Vector3.new(spot[1], 0.1, spot[2]), SLUDGE, Enum.Material.Neon))
+					puddle.Transparency = 0.15
+				end
+				-- The works' sign, one post sunk further than the other.
+				local sign = k:at(CFrame.new(0, 0, -12.8) * CFrame.Angles(0, 0, math.rad(4)))
+				local board = Pieces.board(sign, "ROTVILLE COMPOST WORKS", 12, 2.2, 3.6, SLUDGE, Color3.fromRGB(46, 40, 30), 2, OLD_WOOD)
+				board.Name = "WorksSign"
+				-- A fence along the back with a warning on it.
+				for index = 0, 6 do
+					k:box("FencePost", Vector3.new(0.4, 5.3, 0.4), CFrame.new(-16 + index * 16 / 3, 2.35, 14.2), RUST, Enum.Material.CorrodedMetal)
+				end
+				for _, y in ipairs({ 1.5, 4.5 }) do
+					k:trim("FenceRail", Vector3.new(32.2, 0.2, 0.2), CFrame.new(0, y, 14.2), RUST, Enum.Material.CorrodedMetal)
+				end
+				local keepOut = k:trim("FenceSign", Vector3.new(4, 1.4, 0.12), CFrame.new(6, 3, 13.9), C.yellow, Enum.Material.SmoothPlastic)
+				Kit.label(keepOut, "DO NOT SNIFF", C.black)
+			end,
+		},
+		props = {
+			{
+				id = "OverflowingBin",
+				radius = 2.3,
+				build = function(k)
+					k:post("BinBody", 3.2, 2.4, Vector3.zero, Color3.fromRGB(54, 80, 58), Enum.Material.Metal)
+					k:disc("BinLid", 0.25, 2.7, Vector3.new(0.9, 3.9, 0.6), Color3.fromRGB(40, 64, 46), Enum.Material.Metal).CFrame *= CFrame.Angles(0, 0, 0.9)
+					local colors = { Color3.fromRGB(110, 104, 96), COMPOST[2], Color3.fromRGB(96, 120, 70), COMPOST[1] }
+					for index, spot in ipairs({ { -0.4, 3.4, -0.2, 1.2 }, { 0.5, 3.5, 0.3, 1.0 }, { 0.0, 3.9, 0.1, 0.9 }, { -0.7, 3.25, 0.7, 0.8 } }) do
+						decor(k:ball("Trash", spot[4], CFrame.new(spot[1], spot[2], spot[3]), colors[index], Enum.Material.Fabric))
+					end
+					flies(k, Vector3.new(0, 4.6, 0), 2, 0.9)
+				end,
+			},
+			{
+				id = "SlimeBarrel",
+				radius = 2.6,
+				build = function(k)
+					k:post("SlimeBarrel", 3.4, 2.4, Vector3.zero, RUST, Enum.Material.CorrodedMetal)
+					for _, y in ipairs({ 0.7, 2.4 }) do
+						decor(k:post("BarrelBand", 0.3, 2.55, Vector3.new(0, y, 0), C.iron, Enum.Material.Metal))
+					end
+					local ooze = decor(k:disc("BarrelOoze", 0.2, 2.1, Vector3.new(0, 3.45, 0), SLUDGE, Enum.Material.Neon))
+					Kit.light(ooze, SLUDGE, 8, 0.8)
+					for index, length in ipairs({ 1.6, 2.4 }) do
+						local angle = -0.4 + index * 0.6
+						k:trim("OozeDrip", Vector3.new(0.3, length, 0.14), CFrame.Angles(0, angle, 0) * CFrame.new(0, 3.3 - length / 2, -1.25), SLUDGE, Enum.Material.Neon)
+					end
+					local puddle = decor(k:disc("SlimePuddle", 0.2, 2.8, Vector3.new(-0.6, 0.17, -1.1), SLUDGE, Enum.Material.Neon))
+					puddle.Transparency = 0.15
+				end,
+			},
+			{
+				id = "MouldyCrates",
+				radius = 2.6,
+				build = function(k)
+					k:box("MouldyCrate", Vector3.new(2.4, 2.4, 2.4), CFrame.new(-0.9, 1.2, 0), OLD_WOOD, Enum.Material.WoodPlanks)
+					k:box("MouldyCrate", Vector3.new(2.2, 2.2, 2.2), CFrame.new(-0.8, 3.5, 0.1) * CFrame.Angles(0, 0.3, 0), OLD_WOOD:Lerp(C.black, 0.1), Enum.Material.WoodPlanks)
+					local stamped = k:box("MouldyCrate", Vector3.new(2, 2, 2), CFrame.new(1.4, 0.93, -0.2) * CFrame.Angles(0, -0.2, 0), OLD_WOOD:Lerp(C.black, 0.2), Enum.Material.WoodPlanks)
+					Kit.label(stamped, "EXPIRED", C.red, nil, { Enum.NormalId.Front })
+					for _, spot in ipairs({ { -2.05, 2.3, -0.8, 0.9 }, { 0.3, 2.5, -0.9, 0.7 }, { -1.6, 4.6, 0.8, 0.8 }, { 2.4, 1.9, 0.6, 0.6 } }) do
+						decor(k:ball("Mould", spot[4], CFrame.new(spot[1], spot[2], spot[3]), MOULD, Enum.Material.Sand))
+					end
+				end,
+			},
+			{
+				id = "RotSign",
+				radius = 1.6,
+				build = function(k)
+					local lines = { "SMELL YOU LATER", "FRESH ROT DAILY", "ALL ROADS LEAD TO ROT", "BEST BEFORE: NEVER" }
+					local sign = k:at(CFrame.Angles(0, 0, math.rad(k.rng:NextNumber(-8, 8))))
+					local board = Pieces.board(sign, lines[k.rng:NextInteger(1, #lines)], 3, 1.4, 3, Color3.fromRGB(70, 120, 40), C.cream, 1, OLD_WOOD)
+					board.Name = "RotSign"
+				end,
+			},
+			{
+				id = "SlimePuddle",
+				radius = 2.2,
+				build = function(k)
+					local puddle = decor(k:disc("SlimePuddle", 0.22, 3.8, Vector3.new(0, 0.1, 0), SLUDGE, Enum.Material.Neon))
+					puddle.Transparency = 0.1
+					Kit.light(puddle, SLUDGE, 8, 0.6)
+					for index = 1, 3 do
+						local bubble = floating(decor(k:ball("SludgeBubble", 0.45 + index * 0.12, CFrame.new(-0.9 + index * 0.6, 0.35, (index % 2) * 0.8 - 0.4), SLUDGE, Enum.Material.Neon)))
+						Kit.bob(bubble, 0.25, 1.8 + index * 0.4, index)
+					end
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Bonkington: the town that settles everything with a very large mallet
+--------------------------------------------------------------------------------
+
+do
+	local FAIR_RED = Color3.fromRGB(200, 50, 46)
+	local FAIR_YELLOW = Color3.fromRGB(250, 204, 60)
+	local FOAM = { Color3.fromRGB(255, 90, 120), Color3.fromRGB(80, 170, 255), Color3.fromRGB(120, 220, 110), Color3.fromRGB(255, 170, 50) }
+
+	-- A mallet whose handle runs from `grip` to `headAt`, with the head's barrel lying along `across`.
+	-- Decoration unless `solid`.
+	local function mallet(k, grip, headAt, across, headLength, headDiameter, color, solid)
+		local handle = k:rod("MalletHandle", grip, headAt, headDiameter * 0.28, C.wood, Enum.Material.Wood)
+		local head = k:cyl("MalletHead", headLength, headDiameter, CFrame.lookAt(headAt, headAt + across) * CFrame.Angles(0, math.pi / 2, 0), color, Enum.Material.SmoothPlastic)
+		for _, side in ipairs({ -1, 1 }) do
+			local capAt = headAt + across.Unit * side * (headLength / 2 + 0.15)
+			decor(k:cyl("MalletCap", 0.3, headDiameter * 0.92, CFrame.lookAt(capAt, capAt + across) * CFrame.Angles(0, math.pi / 2, 0), C.black, Enum.Material.Rubber))
+		end
+		if not solid then
+			decor(handle)
+			decor(head)
+		end
+		return head
+	end
+
+	local function highStriker(k)
+		k:box("StrikerStage", Vector3.new(10, 1.2, 6), CFrame.new(0, 0.3, 0), FAIR_RED, Enum.Material.WoodPlanks)
+		k:trim("StrikerTrim", Vector3.new(10.2, 0.25, 6.2), CFrame.new(0, 0.675, 0), FAIR_YELLOW, Enum.Material.SmoothPlastic)
+		k:box("StrikePad", Vector3.new(3, 0.4, 3), CFrame.new(-1.2, 1.1, -1.2), C.charcoal, Enum.Material.Rubber)
+		decor(k:disc("StrikeTarget", 0.1, 2, Vector3.new(-1.2, 1.35, -1.2), FAIR_RED, Enum.Material.SmoothPlastic))
+
+		k:box("StrikerTower", Vector3.new(4.4, 26, 0.8), CFrame.new(0, 13.9, 2.4), C.white, Enum.Material.WoodPlanks)
+		k:trim("StrikerRail", Vector3.new(0.7, 24, 0.2), CFrame.new(-1.2, 13.4, 1.9), FAIR_RED, Enum.Material.Metal)
+		local marks = { { 6, "WEAK", Color3.fromRGB(110, 200, 90) }, { 11.5, "MEH", Color3.fromRGB(250, 220, 70) }, { 17, "STRONG", Color3.fromRGB(250, 150, 50) }, { 22.5, "BONK!", FAIR_RED } }
+		for _, mark in ipairs(marks) do
+			local board = k:trim("StrikerMark", Vector3.new(2.4, 1.8, 0.12), CFrame.new(0.8, mark[1], 1.94), mark[3], Enum.Material.SmoothPlastic)
+			Kit.label(board, mark[2], C.white)
+		end
+		-- The puck rides the rail up and down forever, never quite ringing the bell.
+		local puck = floating(decor(k:ball("StrikerPuck", 1.1, CFrame.new(-1.2, 12, 1.3), C.charcoal, Enum.Material.Metal)))
+		Kit.bob(puck, 8.5, 1.3, 0)
+		k:trim("BellBracket", Vector3.new(1.4, 0.4, 1), CFrame.new(-1.2, 26.9, 1.6), C.iron, Enum.Material.Metal)
+		decor(k:ball("StrikerBell", 2.2, CFrame.new(-1.2, 25.9, 1.1), C.gold, Enum.Material.Foil))
+		local crown = k:trim("StrikerCrown", Vector3.new(7, 2.2, 0.4), CFrame.new(0, 28.2, 2.4), FAIR_RED, Enum.Material.SmoothPlastic)
+		Kit.label(crown, "TEST YOUR BONK", FAIR_YELLOW, FAIR_RED, { Enum.NormalId.Front, Enum.NormalId.Back })
+		for index = 0, 6 do
+			local bulb = decor(k:ball("CrownBulb", 0.45, CFrame.new(-3 + index, 29.55, 2.4), index % 2 == 0 and FAIR_YELLOW or C.white, Enum.Material.Neon))
+			if index == 3 then
+				Kit.light(bulb, FAIR_YELLOW, 16, 1)
+			end
+		end
+		-- The mallet, propped against the tower for the next contestant.
+		mallet(k, Vector3.new(4.9, 1.0, -0.6), Vector3.new(3.4, 10.4, 1.3), Vector3.new(1, 0.15, 0), 4.6, 2.8, FAIR_RED, false)
+	end
+
+	-- A mallet driven head-first into the ground, the paving cracked in a ring round it.
+	local function plantedMallet(k)
+		decor(k:disc("CraterFloor", 0.2, 5.4, Vector3.new(0, 0.08, 0), Color3.fromRGB(62, 58, 56), Enum.Material.Basalt))
+		for index = 0, 7 do
+			local angle = index * math.pi / 4 + 0.2
+			k:box("CraterShard", Vector3.new(2.8, 0.6, 1.5), CFrame.Angles(0, angle, 0) * CFrame.new(0, 0.25, -3.3) * CFrame.Angles(math.rad(-16), 0, 0),
+				Color3.fromRGB(98, 94, 90), Enum.Material.Slate)
+		end
+		local head = k:cyl("MalletHead", 6, 3.6, CFrame.new(0, 0.9, 0) * CFrame.Angles(0, 0.4, math.rad(8)), FOAM[1], Enum.Material.SmoothPlastic)
+		head.Name = "PlantedMalletHead"
+		decor(k:rod("MalletHandle", Vector3.new(0, 2.2, 0), Vector3.new(-1.4, 13, 1.1), 1.1, C.wood, Enum.Material.Wood))
+		k:ball("MalletGrip", 1.5, CFrame.new(-1.45, 13.1, 1.14), C.black, Enum.Material.Rubber)
+		-- The sound effect, frozen.
+		-- Off to the side of the striker: in front of it, the star covered the strength marks.
+		local burst = k:at(CFrame.new(8.2, 0, -3.2))
+		burst:post("BurstPost", 5, 0.3, Vector3.zero, C.iron, Enum.Material.Metal)
+		burst:trim("BurstStar", Vector3.new(3.4, 3.4, 0.2), CFrame.new(0, 6.4, 0) * CFrame.Angles(0, 0, math.pi / 4), FAIR_YELLOW, Enum.Material.SmoothPlastic)
+		local word = burst:trim("BurstWord", Vector3.new(3.4, 3.4, 0.2), CFrame.new(0, 6.4, -0.22), Color3.fromRGB(255, 140, 50), Enum.Material.SmoothPlastic)
+		Kit.label(word, "BONK!", C.white, nil, { Enum.NormalId.Front, Enum.NormalId.Back })
+	end
+
+	-- Whack-a-rot: six critters popping up and down out of a cabinet.
+	local function whackCabinet(k)
+		k:box("WhackCabinet", Vector3.new(8, 3, 4.4), CFrame.new(0, 1.3, 0), FAIR_RED, Enum.Material.SmoothPlastic)
+		k:trim("WhackTop", Vector3.new(8.2, 0.2, 4.6), CFrame.new(0, 2.9, 0), FAIR_YELLOW, Enum.Material.SmoothPlastic)
+		local index = 0
+		for row = 0, 1 do
+			for column = 0, 2 do
+				index += 1
+				local at = Vector3.new(-2.6 + column * 2.6, 3.02, -1 + row * 2)
+				decor(k:disc("WhackHole", 0.06, 1.5, at + Vector3.new(0, 0.04, 0), C.black, Enum.Material.SmoothPlastic))
+				local color = FOAM[(index - 1) % #FOAM + 1]
+				local critter = floating(decor(k:ball("WhackCritter", 1.2, CFrame.new(at + Vector3.new(0, 0.35, 0)), color, Enum.Material.SmoothPlastic)))
+				Kit.bob(critter, 0.45, 2.6 + index * 0.3, index * 1.3)
+				for _, dx in ipairs({ -0.22, 0.22 }) do
+					local eye = floating(decor(k:ball("WhackEye", 0.22, CFrame.new(at + Vector3.new(dx, 0.55, -0.52)), C.black, Enum.Material.SmoothPlastic)))
+					Kit.bob(eye, 0.45, 2.6 + index * 0.3, index * 1.3)
+				end
+			end
+		end
+		-- Posts behind the board, so they don't cover its first and last letters.
+		for _, x in ipairs({ -3.6, 3.6 }) do
+			k:box("MarqueePost", Vector3.new(0.4, 4.4, 0.4), CFrame.new(x, 5.1, 2.3), C.iron, Enum.Material.Metal)
+		end
+		local marquee = k:trim("WhackMarquee", Vector3.new(8, 1.8, 0.2), CFrame.new(0, 6.6, 2.0), C.signBack, Enum.Material.SmoothPlastic)
+		Kit.label(marquee, "WHACK-A-ROT", FAIR_YELLOW, C.signBack, { Enum.NormalId.Front, Enum.NormalId.Back })
+		mallet(k, Vector3.new(2.6, 3.2, 1.4), Vector3.new(3.4, 3.35, -0.2), Vector3.new(1, 0, 0.1), 1.6, 1.0, FOAM[2], false)
+	end
+
+	local function helmetRack(k)
+		for _, x in ipairs({ -2.6, 2.6 }) do
+			k:box("RackPost", Vector3.new(0.4, 4.4, 0.4), CFrame.new(x, 2.0, 0), C.iron, Enum.Material.Metal)
+		end
+		-- Proud of the posts (tops at 4.2) rather than level with them.
+		k:trim("RackBar", Vector3.new(5.4, 0.3, 0.3), CFrame.new(0, 4.45, 0), C.iron, Enum.Material.Metal)
+		for index = 0, 2 do
+			local color = FOAM[index + 1]
+			decor(k:ball("Helmet", 1.6, CFrame.new(-1.7 + index * 1.7, 3.55, 0), color, Enum.Material.SmoothPlastic))
+			k:trim("HelmetBrim", Vector3.new(1.7, 0.15, 0.7), CFrame.new(-1.7 + index * 1.7, 3.2, -0.75), color, Enum.Material.SmoothPlastic)
+		end
+		local sign = k:trim("HelmetSign", Vector3.new(5.2, 1.4, 0.15), CFrame.new(0, 5.3, 0), FAIR_YELLOW, Enum.Material.SmoothPlastic)
+		Kit.label(sign, "BONK ZONE: HELMETS REQUIRED", C.black, nil, { Enum.NormalId.Front, Enum.NormalId.Back })
+	end
+
+	local function paddedBollard(k)
+		k:post("PaddedBollard", 3, 1.4, Vector3.zero, FAIR_RED, Enum.Material.Fabric)
+		for _, y in ipairs({ 0.8, 2.0 }) do
+			decor(k:post("BollardFoam", 0.5, 1.6, Vector3.new(0, y, 0), FAIR_YELLOW, Enum.Material.Fabric))
+		end
+		k:ball("BollardCushion", 1.5, CFrame.new(0, 3.1, 0), FAIR_YELLOW, Enum.Material.Fabric)
+	end
+
+	defineTheme({
+		name = "Bonkington",
+		id = "Bonkington",
+		flag = { emblem = "BONK", caption = "BONKINGTON", color = FAIR_RED, text = FAIR_YELLOW, trim = FAIR_YELLOW },
+		setPiece = {
+			id = "BonkGrounds",
+			name = "The Bonk Grounds",
+			width = 32,
+			depth = 28,
+			ground = Enum.Material.WoodPlanks,
+			build = function(k)
+				highStriker(k:at(CFrame.new(0, 0, 8)))
+				plantedMallet(k:at(CFrame.new(-8, 0, -5)))
+				whackCabinet(k:at(CFrame.new(9, 0, -5)))
+				helmetRack(k:at(CFrame.new(-11, 0, 10)))
+				for _, x in ipairs({ -4, 0, 4 }) do
+					paddedBollard(k:at(CFrame.new(x, 0, -12.4)))
+				end
+			end,
+		},
+		props = {
+			{ id = "PaddedBollard", radius = 1.0, build = paddedBollard },
+			{
+				id = "BonkZoneSign",
+				radius = 2.4,
+				build = function(k)
+					local board = Pieces.board(k, "BONK ZONE", 4.2, 1.8, 2.4, C.black, FAIR_YELLOW, 2, C.iron)
+					board.Name = "BonkZoneSign"
+				end,
+			},
+			{
+				id = "FoamMalletStand",
+				radius = 1.9,
+				build = function(k)
+					k:post("MalletBucket", 1.8, 1.8, Vector3.zero, C.charcoal, Enum.Material.Metal)
+					for index = 0, 2 do
+						local angle = index * math.pi * 2 / 3
+						local lean = Vector3.new(math.cos(angle) * 0.9, 0, math.sin(angle) * 0.9)
+						local headAt = Vector3.new(0, 4.6, 0) + lean
+						mallet(k, Vector3.new(0, 1.2, 0) + lean * 0.2, headAt, Vector3.new(-lean.Z, 0, lean.X), 1.6, 1.0, FOAM[index + 1], false)
+					end
+				end,
+			},
+			{
+				id = "CushionPile",
+				radius = 2.4,
+				build = function(k)
+					for index = 0, 3 do
+						k:box("Cushion", Vector3.new(3.6 - index * 0.4, 0.9, 2.8 - index * 0.3), CFrame.new(0, 0.45 + index * 0.9, 0) * CFrame.Angles(0, index * 0.35, 0),
+							FOAM[index + 1], Enum.Material.Fabric)
+					end
+					local tag = k:trim("CushionTag", Vector3.new(2.2, 0.8, 0.1), CFrame.new(0, 0.5, -1.46), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(tag, "SOFT LANDING", C.black)
+				end,
+			},
+			{
+				id = "BonkBell",
+				radius = 1.9,
+				build = function(k)
+					k:post("BellPost", 5.4, 0.4, Vector3.zero, C.iron, Enum.Material.Metal)
+					k:trim("BellArm", Vector3.new(0.3, 0.3, 1.4), CFrame.new(0, 5.1, -0.6), C.iron, Enum.Material.Metal)
+					decor(k:ball("HandBell", 1.3, CFrame.new(0, 4.5, -1.2), C.gold, Enum.Material.Foil))
+					local sign = k:trim("BellSign", Vector3.new(2.4, 0.9, 0.12), CFrame.new(0, 2.6, -0.27), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(sign, "RING FOR BONK", FAIR_RED)
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Aura Farms: where aura is grown, harvested and counted
+--------------------------------------------------------------------------------
+
+do
+	local AURA = { Color3.fromRGB(190, 120, 255), Color3.fromRGB(110, 230, 255), Color3.fromRGB(255, 214, 90), Color3.fromRGB(255, 140, 220) }
+	local SOIL = Color3.fromRGB(80, 58, 40)
+	local BED_WOOD = Color3.fromRGB(150, 110, 70)
+	local LILAC = Color3.fromRGB(228, 220, 244)
+
+	local function sparkle(part, color)
+		Kit.emitter(part, { color = color, size = 0.35, size2 = 0.05, transparency = 0.1, lifetime = 1.8, rate = 6, speed = 1.2, spread = 60,
+			lightEmission = 1, acceleration = Vector3.new(0, 1.2, 0) })
+	end
+
+	local function cropBed(k, length, plants, offset)
+		k:box("CropBed", Vector3.new(length, 1.0, 3.2), CFrame.new(0, 0.3, 0), BED_WOOD, Enum.Material.WoodPlanks)
+		local soil = k:trim("CropSoil", Vector3.new(length - 0.6, 0.2, 2.6), CFrame.new(0, 0.85, 0), SOIL, Enum.Material.Ground)
+		sparkle(soil, AURA[offset % #AURA + 1])
+		for index = 0, plants - 1 do
+			local x = -length / 2 + (index + 0.5) * length / plants
+			local height = 1.6 + ((index + offset) % 3) * 0.4
+			local color = AURA[(index + offset) % #AURA + 1]
+			decor(k:post("AuraStem", height, 0.22, Vector3.new(x, 0.9, 0), Color3.fromRGB(80, 150, 70), Enum.Material.SmoothPlastic))
+			k:trim("AuraLeaf", Vector3.new(1.4, 0.1, 0.45), CFrame.new(x, 1.35 + height * 0.3, 0) * CFrame.Angles(0, index * 0.9, 0.25), Color3.fromRGB(90, 170, 80), Enum.Material.SmoothPlastic)
+			local bulb = decor(k:ball("AuraBulb", 1.0, CFrame.new(x, 0.9 + height + 0.35, 0), color, Enum.Material.Neon))
+			if index % 3 == 1 then
+				Kit.light(bulb, color, 8, 0.7)
+			end
+		end
+	end
+
+	local function auraSilo(k)
+		k:post("AuraSilo", 18.3, 8, Vector3.new(0, -0.3, 0), LILAC, Enum.Material.Marble)
+		k:ball("AuraSiloDome", 8, CFrame.new(0, 18, 0), Color3.fromRGB(205, 190, 235), Enum.Material.Marble)
+		for index = 0, 2 do
+			k:trim("AuraSiloWindow", Vector3.new(0.9, 2.6, 0.3), CFrame.new(0, 5 + index * 4.4, -3.95), AURA[index + 1], Enum.Material.Neon)
+		end
+		k:trim("AuraSiloDoor", Vector3.new(2.6, 3.8, 0.3), CFrame.Angles(0, math.rad(-35), 0) * CFrame.new(0, 1.9, -3.95), C.darkWood, Enum.Material.WoodPlanks)
+		-- The halo: twelve glowing segments on a tilted hub that turns.
+		local hub = floating(k:hub("HaloHub", CFrame.new(0, 25.5, 0) * CFrame.Angles(math.rad(8), 0, math.rad(-5))))
+		local halo = k:into(hub):at(CFrame.new(0, 25.5, 0) * CFrame.Angles(math.rad(8), 0, math.rad(-5)))
+		for index = 0, 11 do
+			local segment = floating(halo:trim("HaloSegment", Vector3.new(2.5, 0.4, 0.4), CFrame.Angles(0, index * math.pi / 6, 0) * CFrame.new(0, (index % 2) * 0.08, -4.6),
+				Color3.fromRGB(255, 226, 120), Enum.Material.Neon))
+			if index == 0 then
+				Kit.light(segment, Color3.fromRGB(255, 226, 120), 22, 1.4)
+			end
+		end
+		Kit.spin(hub, 30)
+	end
+
+	local function scoreboard(k)
+		for _, x in ipairs({ -4.4, 4.4 }) do
+			k:box("ScoreboardLeg", Vector3.new(0.6, 9.6, 0.6), CFrame.new(x, 4.5, 0.5), C.iron, Enum.Material.Metal)
+		end
+		local board = k:box("AuraScoreboard", Vector3.new(10, 4, 0.5), CFrame.new(0, 7.5, 0), Color3.fromRGB(46, 28, 70), Enum.Material.SmoothPlastic)
+		Kit.label(board, "AURA HARVESTED TODAY\n+999,999", Color3.fromRGB(255, 214, 90), Color3.fromRGB(46, 28, 70), { Enum.NormalId.Front, Enum.NormalId.Back })
+		Kit.light(board, Color3.fromRGB(190, 120, 255), 14, 1)
+		for index = 0, 8 do
+			decor(k:ball("ScoreBulb", 0.45, CFrame.new(-4.4 + index * 1.1, 9.75, 0), AURA[index % #AURA + 1], Enum.Material.Neon))
+		end
+	end
+
+	local function auraScarecrow(k)
+		k:post("ScarecrowPole", 8.4, 0.5, Vector3.new(0, -0.4, 0), C.darkWood, Enum.Material.Wood)
+		k:trim("ScarecrowArms", Vector3.new(6, 0.4, 0.4), CFrame.new(0, 5.6, 0), C.darkWood, Enum.Material.Wood)
+		k:box("ScarecrowCoat", Vector3.new(2.6, 3, 1.4), CFrame.new(0, 5, 0), Color3.fromRGB(120, 80, 170), Enum.Material.Fabric)
+		decor(k:ball("ScarecrowHead", 1.6, CFrame.new(0, 7.3, 0), Color3.fromRGB(214, 186, 96), Enum.Material.Fabric))
+		decor(k:disc("ScarecrowHatBrim", 0.2, 2.6, Vector3.new(0, 8.0, 0), Color3.fromRGB(70, 50, 30), Enum.Material.Fabric))
+		decor(k:post("ScarecrowHat", 1, 1.4, Vector3.new(0, 8.1, 0), Color3.fromRGB(70, 50, 30), Enum.Material.Fabric))
+		local glow = decor(k:ball("AuraGlow", 6, CFrame.new(0, 5.8, 0), Color3.fromRGB(255, 220, 110), Enum.Material.Neon))
+		glow.Transparency = 0.85
+		glow.CastShadow = false
+		sparkle(glow, Color3.fromRGB(255, 220, 110))
+	end
+
+	local function orbCrate(k)
+		k:box("OrbCrate", Vector3.new(2.4, 1.8, 2.4), CFrame.new(0, 0.9, 0), BED_WOOD, Enum.Material.WoodPlanks)
+		for index = 0, 2 do
+			local orb = decor(k:ball("AuraOrb", 0.95, CFrame.new(-0.6 + index * 0.6, 1.9, (index % 2) * 0.5 - 0.25), AURA[index + 1], Enum.Material.Neon))
+			if index == 1 then
+				Kit.light(orb, AURA[2], 7, 0.6)
+			end
+		end
+	end
+
+	local function auraMeter(k)
+		k:box("MeterBase", Vector3.new(2.6, 1, 2.6), CFrame.new(0, 0.3, 0), C.charcoal, Enum.Material.Metal)
+		local tube = decor(k:post("MeterTube", 9, 1.3, Vector3.new(0, 0.8, 0), C.white, Enum.Material.Glass))
+		tube.Transparency = 0.6
+		local fills = { Color3.fromRGB(110, 230, 255), Color3.fromRGB(190, 120, 255), Color3.fromRGB(255, 214, 90) }
+		for index, color in ipairs(fills) do
+			decor(k:post("MeterFill", 2.7, 0.8, Vector3.new(0, 1.05 + (index - 1) * 2.7, 0), color, Enum.Material.Neon))
+		end
+		decor(k:ball("MeterBulb", 2.1, CFrame.new(0, 1.3, 0), fills[1], Enum.Material.Neon))
+		local label = k:trim("MeterLabel", Vector3.new(3.4, 1.2, 0.15), CFrame.new(0, 10.6, 0), Color3.fromRGB(46, 28, 70), Enum.Material.SmoothPlastic)
+		Kit.label(label, "AURA: MAXED", Color3.fromRGB(255, 214, 90), Color3.fromRGB(46, 28, 70), { Enum.NormalId.Front, Enum.NormalId.Back })
+	end
+
+	defineTheme({
+		name = "Aura Farms",
+		id = "AuraFarms",
+		flag = { emblem = "+1000", caption = "AURA FARMS", color = Color3.fromRGB(70, 40, 110), text = Color3.fromRGB(255, 214, 90), trim = Color3.fromRGB(190, 120, 255) },
+		setPiece = {
+			id = "AuraFields",
+			name = "The Aura Fields",
+			width = 38,
+			depth = 30,
+			ground = Enum.Material.Ground,
+			build = function(k)
+				for index, z in ipairs({ -6.5, -0.5, 5.5 }) do
+					cropBed(k:at(CFrame.new(-5, 0, z)), 22, 7, index)
+				end
+				auraSilo(k:at(CFrame.new(13, 0, 8)))
+				scoreboard(k:at(CFrame.new(-12, 0, 12)))
+				auraScarecrow(k:at(CFrame.new(12, 0, -7)))
+				orbCrate(k:at(CFrame.new(-15, 0, -12)))
+				orbCrate(k:at(CFrame.new(-12.2, 0, -12.4)))
+				local stacked = orbCrate
+				stacked(k:at(CFrame.new(-13.6, 1.8, -12.2) * CFrame.Angles(0, 0.25, 0)))
+				auraMeter(k:at(CFrame.new(3, 0, -12.2)))
+			end,
+		},
+		props = {
+			{ id = "OrbCrate", radius = 1.8, build = orbCrate },
+			{
+				id = "AuraSunflower",
+				radius = 2.1,
+				build = function(k)
+					decor(k:post("SunflowerStem", 6.2, 0.35, Vector3.zero, Color3.fromRGB(80, 150, 70), Enum.Material.SmoothPlastic))
+					k:trim("SunflowerLeaf", Vector3.new(1.8, 0.1, 0.6), CFrame.new(0.6, 2.6, 0) * CFrame.Angles(0, 0, 0.3), Color3.fromRGB(90, 170, 80), Enum.Material.SmoothPlastic)
+					local face = k:at(CFrame.new(0, 6.6, -0.2) * CFrame.Angles(math.rad(-15), 0, 0))
+					local disc = decor(face:cyl("SunflowerFace", 0.4, 1.8, CFrame.Angles(0, math.pi / 2, 0), Color3.fromRGB(90, 60, 40), Enum.Material.Sand))
+					for index = 0, 7 do
+						-- Behind the face, alternate petals a step apart, so neighbours that overlap never
+						-- share a face and none cuts into the face's back.
+						face:trim("SunflowerPetal", Vector3.new(0.7, 1.3, 0.15), CFrame.Angles(0, 0, index * math.pi / 4) * CFrame.new(0, 1.3, 0.3 + (index % 2) * 0.12), AURA[3], Enum.Material.Neon)
+					end
+					Kit.light(disc, AURA[3], 10, 0.8)
+				end,
+			},
+			{
+				id = "AuraSign",
+				radius = 1.4,
+				build = function(k)
+					local board = Pieces.board(k, "AURA +1000", 2.8, 1.2, 3.2, Color3.fromRGB(255, 214, 90), Color3.fromRGB(46, 28, 70), 1, C.iron)
+					board.Name = "AuraSign"
+					sparkle(board, AURA[1])
+				end,
+			},
+			{
+				id = "GlowingHay",
+				radius = 3.1,
+				build = function(k)
+					for _, z in ipairs({ -1.25, 1.25 }) do
+						k:cyl("HayBale", 3.6, 2.5, CFrame.new(0, 1.15, z), Color3.fromRGB(214, 180, 96), Enum.Material.Grass)
+					end
+					local top = k:cyl("HayBale", 3.6, 2.5, CFrame.new(0, 3.3, 0), Color3.fromRGB(224, 190, 106), Enum.Material.Grass)
+					sparkle(top, AURA[3])
+				end,
+			},
+		},
+	})
+end

@@ -1,0 +1,529 @@
+-- Teams, spawn pads, respawning, the spawn loadout, friendly fire and spawn protection.
+--
+-- Shared by Team Deathmatch and King of the Hill. Knows nothing about either one's scoreline.
+--
+-- Nothing in here runs unless a respawn mode is the current mode: GameMode calls Setup at match
+-- start and Teardown at match end, and everything below is inert in between.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local GameModes = require(Shared:WaitForChild("GameModes"))
+local ItemData = require(Shared:WaitForChild("ItemData"))
+local Rarity = require(Shared:WaitForChild("Rarity"))
+local WeaponData = require(Shared:WaitForChild("WeaponData"))
+
+local Combatants = require(script.Parent:WaitForChild("Combatants"))
+local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
+local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
+
+local ModeTeams = {}
+
+--------------------------------------------------------------------------------
+-- The green gun pool
+--------------------------------------------------------------------------------
+
+-- Built at run time from WeaponData.Weapons, never hardcoded: the arsenal packs register
+-- themselves into that table, so the count moves whenever a pack lands. `PoolSize` is printed by
+-- the loadout probe and an empty pool is a hard failure, not a silent empty-handed spawn.
+local greenPool = {}
+
+local function buildGreenPool()
+	table.clear(greenPool)
+	for id, def in pairs(WeaponData.Weapons) do
+		if def.rarity == GameModes.GreenRarity then
+			table.insert(greenPool, { id = id, weight = math.max(def.groundWeight or 0, 1) })
+		end
+	end
+	-- Sorted so the pool is the same order on every server: an unsorted pairs() walk would make
+	-- a seeded roll unreproducible between runs and the probe's distribution meaningless.
+	table.sort(greenPool, function(a, b)
+		return a.id < b.id
+	end)
+	return #greenPool
+end
+
+buildGreenPool()
+
+function ModeTeams.PoolSize()
+	return #greenPool
+end
+
+function ModeTeams.PoolIds()
+	local list = {}
+	for _, entry in ipairs(greenPool) do
+		table.insert(list, entry.id)
+	end
+	return list
+end
+
+-- One green gun, weighted by how common it is on the ground.
+function ModeTeams.RollGreenWeapon()
+	if #greenPool == 0 and buildGreenPool() == 0 then
+		return nil
+	end
+	local total = 0
+	for _, entry in ipairs(greenPool) do
+		total += entry.weight
+	end
+	local roll = math.random() * total
+	local cumulative = 0
+	for _, entry in ipairs(greenPool) do
+		cumulative += entry.weight
+		if roll <= cumulative then
+			return entry.id
+		end
+	end
+	return greenPool[#greenPool].id
+end
+
+--------------------------------------------------------------------------------
+-- State
+--------------------------------------------------------------------------------
+
+local active = false
+local mode = nil
+local arenaCentre = Vector3.zero
+local arenaRadius = 0
+local pads = { {}, {} }
+
+-- token -> 1 or 2
+local teamOf = {}
+-- token -> os.clock() when spawn protection ends
+local protectedUntil = {}
+-- token -> true while dead and waiting to come back
+local downed = {}
+-- Which team the next joiner goes to, so an odd number of late joiners still balances.
+local nextTeam = 1
+
+function ModeTeams.IsActive()
+	return active
+end
+
+function ModeTeams.TeamOf(token)
+	return teamOf[token]
+end
+
+function ModeTeams.IsDowned(token)
+	return downed[token] == true
+end
+
+function ModeTeams.Arena()
+	return arenaCentre, arenaRadius
+end
+
+function ModeTeams.Counts()
+	local counts = { 0, 0 }
+	for _, index in pairs(teamOf) do
+		counts[index] = (counts[index] or 0) + 1
+	end
+	return counts
+end
+
+--------------------------------------------------------------------------------
+-- Ground
+--------------------------------------------------------------------------------
+
+-- The terrain surface at a point, or nil where there is none. Two things here are deliberate and
+-- have both cost this project real bugs: the ray starts at y = 2000 because a ray never reports
+-- terrain it STARTS inside, and IgnoreWater is set explicitly because it defaults to FALSE — a
+-- pad placed on a river surface reads as perfectly good ground otherwise.
+local groundParams = RaycastParams.new()
+groundParams.FilterType = Enum.RaycastFilterType.Include
+groundParams.IgnoreWater = true
+
+local function terrainAt(x, z)
+	groundParams.FilterDescendantsInstances = { workspace.Terrain }
+	local hit = workspace:Raycast(Vector3.new(x, 2000, z), Vector3.new(0, -4000, 0), groundParams)
+	return hit and hit.Position.Y or nil
+end
+
+-- Anything solid standing in the 12 studs above a pad: a building, a wall, a parked car. A bounds
+-- query answers for a part's QUERY SHAPE rather than its silhouette, so this over-reports — which
+-- is the right way round here, because there are far more candidate pads than we need and
+-- refusing a good one costs nothing.
+local occupyParams = OverlapParams.new()
+occupyParams.FilterType = Enum.RaycastFilterType.Exclude
+occupyParams.RespectCanCollide = true
+
+local function blocked(position)
+	occupyParams.FilterDescendantsInstances = { workspace.Terrain }
+	local parts = workspace:GetPartBoundsInBox(CFrame.new(position + Vector3.new(0, 6, 0)), Vector3.new(8, 12, 8), occupyParams)
+	for _, part in ipairs(parts) do
+		if part.CanCollide then
+			return true
+		end
+	end
+	return false
+end
+
+--------------------------------------------------------------------------------
+-- Setup
+--------------------------------------------------------------------------------
+
+local PADS_PER_TEAM = 5
+local BASE_FRACTION = 0.72
+local PAD_SPREAD = 30
+
+-- The arena: a disc centred on town 1. MapGenerator's placeTowns puts town index 1 at distance 0
+-- (plus a +/-40 jitter) on every map and every seed, so it is the one stable anchor there is, and
+-- it is the ground the battle royale's last circle already lands on.
+function ModeTeams.Setup(currentMode, mapInfo)
+	ModeTeams.Teardown()
+	mode = currentMode
+	active = true
+	nextTeam = 1
+
+	local dropSpots = mapInfo and mapInfo.dropSpots
+	arenaCentre = (dropSpots and dropSpots[1]) or Vector3.zero
+	arenaCentre = Vector3.new(arenaCentre.X, 0, arenaCentre.Z)
+	-- Half the map's radius, between 450 and 650. It was 0.30 clamped to 280..380, which Oliver
+	-- found far too small: on SahurSprings (radius 1280) that was 380, one town and its verges for
+	-- up to fifty combatants, 9,000 square studs each. 650 is 2.9x the area, room for the towns on
+	-- the first ring as well as the centre one, with the bases 940 studs apart at BASE_FRACTION.
+	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.50, 450, 650)
+
+	-- Two bases on opposite sides of the centre, on an axis rolled per match so the same map does
+	-- not always play along the same street.
+	local axis = math.random() * math.pi * 2
+	for team = 1, GameModes.TeamCount do
+		local heading = axis + (team - 1) * math.pi
+		local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * BASE_FRACTION)
+		pads[team] = ModeTeams.BuildPads(base, mapInfo)
+	end
+
+	return arenaCentre, arenaRadius, #pads[1], #pads[2]
+end
+
+-- Candidate pads around a base point, each one validated. Public so the spawn probe can call it
+-- against a built map and count what it accepted and refused.
+function ModeTeams.BuildPads(base, mapInfo)
+	local list = {}
+	local river = mapInfo and mapInfo.river
+	for attempt = 1, PADS_PER_TEAM * 12 do
+		if #list >= PADS_PER_TEAM then
+			break
+		end
+		-- The first candidate is the base itself, so a clean base always yields at least one pad.
+		local x, z = base.X, base.Z
+		if attempt > 1 then
+			local angle = math.random() * math.pi * 2
+			local reach = math.sqrt(math.random()) * PAD_SPREAD
+			x, z = base.X + math.cos(angle) * reach, base.Z + math.sin(angle) * reach
+		end
+
+		local refusal = ModeTeams.RefusePad(x, z, river)
+		if not refusal then
+			table.insert(list, Vector3.new(x, terrainAt(x, z) or 0, z))
+		end
+	end
+	return list
+end
+
+-- Why a pad at (x, z) cannot be used, or nil if it can. Split out so the probe can plant a fault
+-- and watch each rule fire.
+function ModeTeams.RefusePad(x, z, river)
+	local flat = Vector3.new(x, 0, z)
+	if (flat - arenaCentre).Magnitude > arenaRadius - 40 then
+		return "outside the arena"
+	end
+	local ground = terrainAt(x, z)
+	-- "No ground where I expect ground" fails here and now rather than spawning someone into the
+	-- void and waiting out a timeout.
+	if not ground then
+		return "no ground"
+	end
+	if MapTerrain.InRiver(river, x, z, 14) then
+		return "in the river"
+	end
+	if blocked(Vector3.new(x, ground, z)) then
+		return "blocked"
+	end
+	return nil
+end
+
+function ModeTeams.Teardown()
+	active = false
+	mode = nil
+	table.clear(teamOf)
+	table.clear(protectedUntil)
+	table.clear(downed)
+	pads = { {}, {} }
+end
+
+--------------------------------------------------------------------------------
+-- Team assignment
+--------------------------------------------------------------------------------
+
+-- Deals a combatant onto the smaller side, dealing alternately when they are level. Returns the
+-- team index.
+function ModeTeams.Assign(token)
+	local existing = teamOf[token]
+	if existing then
+		return existing
+	end
+	local counts = ModeTeams.Counts()
+	local team
+	if counts[1] < counts[2] then
+		team = 1
+	elseif counts[2] < counts[1] then
+		team = 2
+	else
+		team = nextTeam
+		nextTeam = GameModes.OtherTeam(nextTeam) or 1
+	end
+	teamOf[token] = team
+
+	-- On the character too, so nameplates and clients can colour by team without a lookup.
+	local character = Combatants.GetCharacter(token)
+	if character then
+		character:SetAttribute("Team", team)
+	end
+	return team
+end
+
+function ModeTeams.Forget(token)
+	teamOf[token] = nil
+	protectedUntil[token] = nil
+	downed[token] = nil
+end
+
+--------------------------------------------------------------------------------
+-- Friendly fire and spawn protection
+--------------------------------------------------------------------------------
+
+-- Hung off CombatService.DamageVeto, whose signature is
+-- (attackerToken, victimToken, amount, weaponId, headshot). True means the damage does not happen.
+-- The trailing three are unused here and named only so a reader knows they arrive.
+--
+-- Every combat damage path in the game reaches CombatService.DealDamage — guns, thrown coconuts
+-- and rockets (ProjectileService), barrels and mines (HazardService) and companions
+-- (CompanionService). The one exception is the storm, which calls TakeDamage directly, and no
+-- respawn mode runs a storm. So this one function is the whole of friendly fire AND the whole of
+-- spawn protection.
+--
+-- CombatService calls this AFTER its own dead-victim and zero-amount guards, so it is never asked
+-- about a hit that was going nowhere anyway.
+function ModeTeams.DamageVeto(attackerToken, victimToken, _amount, _weaponId, _headshot)
+	if not active or attackerToken == nil or attackerToken == victimToken then
+		-- Your own grenade still hurts you. It is a real cost and removing it would be a free
+		-- panic button.
+		return false
+	end
+
+	local attackerTeam, victimTeam = teamOf[attackerToken], teamOf[victimToken]
+	if attackerTeam and victimTeam and attackerTeam == victimTeam then
+		return true
+	end
+
+	local until_ = protectedUntil[victimToken]
+	if until_ and os.clock() < until_ then
+		return true
+	end
+	return false
+end
+
+-- Bots ask this before picking a target, so a friendly-fire veto makes them hold fire rather than
+-- making them look broken by shooting team-mates who never take damage.
+function ModeTeams.IsHostile(a, b)
+	if not active then
+		return true
+	end
+	local teamA, teamB = teamOf[a], teamOf[b]
+	if teamA and teamB and teamA == teamB then
+		return false
+	end
+	return true
+end
+
+function ModeTeams.IsProtected(token)
+	local until_ = protectedUntil[token]
+	return until_ ~= nil and os.clock() < until_
+end
+
+-- Protection ends the moment you take a swing, not when you move. Called from the fire and throw
+-- paths; safe to call when nothing is protected.
+function ModeTeams.BreakProtection(token)
+	if protectedUntil[token] then
+		protectedUntil[token] = nil
+		local character = Combatants.GetCharacter(token)
+		if character then
+			character:SetAttribute("SpawnProtected", nil)
+		end
+	end
+end
+
+local function grantProtection(token, seconds)
+	if not seconds or seconds <= 0 then
+		return
+	end
+	protectedUntil[token] = os.clock() + seconds
+	local character = Combatants.GetCharacter(token)
+	if character then
+		character:SetAttribute("SpawnProtected", true)
+	end
+	task.delay(seconds, function()
+		local until_ = protectedUntil[token]
+		if until_ and os.clock() >= until_ then
+			ModeTeams.BreakProtection(token)
+		end
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- Picking a pad
+--------------------------------------------------------------------------------
+
+local ENEMY_CLEARANCE = 90
+
+local sightParams = RaycastParams.new()
+sightParams.FilterType = Enum.RaycastFilterType.Exclude
+sightParams.RespectCanCollide = true
+sightParams.IgnoreWater = true
+
+local function enemySees(from, enemyRoot, enemyCharacter)
+	sightParams.FilterDescendantsInstances = { enemyCharacter }
+	local eye = enemyRoot.Position
+	local delta = (from + Vector3.new(0, 3, 0)) - eye
+	local hit = workspace:Raycast(eye, delta, sightParams)
+	return hit == nil
+end
+
+-- The best pad for a team right now: the one furthest from the nearest live enemy, refusing
+-- outright any pad an enemy is close to or can see. Returns the pad and how many were refused,
+-- or nil when every pad is refused — the caller waits a second and asks again rather than
+-- spawning someone in front of a gun.
+function ModeTeams.PickPad(team, extraScore)
+	local list = pads[team]
+	if not list or #list == 0 then
+		return nil, 0
+	end
+
+	local enemies = {}
+	for token, index in pairs(teamOf) do
+		if index ~= team and not downed[token] then
+			local character = Combatants.GetCharacter(token)
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if root and humanoid and humanoid.Health > 0 then
+				table.insert(enemies, { root = root, character = character })
+			end
+		end
+	end
+
+	local best, bestScore, refused = nil, -math.huge, 0
+	-- The least bad of the refused pads, for a caller that must place a body now.
+	local leastBad, leastBadDistance = nil, -math.huge
+	for _, pad in ipairs(list) do
+		local nearest, refuse = math.huge, false
+		for _, enemy in ipairs(enemies) do
+			local distance = (enemy.root.Position - pad).Magnitude
+			nearest = math.min(nearest, distance)
+			-- Too close, or in plain sight from where they stand: either one is a spawn in front
+			-- of an enemy, which is the thing this whole function exists to prevent.
+			if distance < ENEMY_CLEARANCE or enemySees(pad, enemy.root, enemy.character) then
+				refuse = true
+			end
+		end
+		if refuse then
+			refused += 1
+			if nearest > leastBadDistance then
+				leastBad, leastBadDistance = pad, nearest
+			end
+		else
+			local score = nearest == math.huge and 1e6 or nearest
+			if extraScore then
+				score += extraScore(pad)
+			end
+			if score > bestScore then
+				best, bestScore = pad, score
+			end
+		end
+	end
+	return best, refused, leastBad
+end
+
+--------------------------------------------------------------------------------
+-- The loadout
+--------------------------------------------------------------------------------
+
+-- Everything here is WeaponService's existing public API — GiveWeapon and GiveConsumable — so no
+-- other tab's file is touched to hand out a kit. Returns the gun id granted and how many item
+-- stacks landed, for the probe.
+function ModeTeams.GrantLoadout(player)
+	WeaponService.Reset(player)
+
+	local weaponId = ModeTeams.RollGreenWeapon()
+	if weaponId then
+		WeaponService.GiveWeapon(player, weaponId)
+	end
+
+	local stacks = 0
+	for _, entry in ipairs(GameModes.Loadout.items) do
+		local item = ItemData.Get(entry.id)
+		if item then
+			local wanted = math.min(entry.count, item.stack)
+			if WeaponService.GiveConsumable(player, entry.id, wanted) > 0 then
+				stacks += 1
+			end
+		end
+	end
+	return weaponId, stacks
+end
+
+-- What the loadout SHOULD look like, for the probe to check a real one against. Kept here so the
+-- expectation and the granting read from the same list.
+function ModeTeams.ExpectedLoadout()
+	local expected = { weaponRarity = GameModes.GreenRarity, items = {} }
+	for _, entry in ipairs(GameModes.Loadout.items) do
+		local item = ItemData.Get(entry.id)
+		expected.items[entry.id] = {
+			count = item and math.min(entry.count, item.stack) or entry.count,
+			kind = item and item.kind or nil,
+			rarity = item and item.rarity or nil,
+		}
+	end
+	return expected
+end
+
+--------------------------------------------------------------------------------
+-- Spawning
+--------------------------------------------------------------------------------
+
+-- Puts a body on a pad, facing the middle of the arena, and starts its spawn protection. `extra`
+-- is an optional per-pad score (King of the Hill adds nearness to the hill). Returns false when
+-- every pad was refused, which is the caller's cue to wait and try again.
+-- `allowRefused`: when every pad is refused, take the least bad one rather than returning false.
+-- Returns whether a body was placed, and whether the pad it got was a refused one.
+function ModeTeams.PlaceAt(token, character, extra, allowRefused)
+	local team = teamOf[token] or ModeTeams.Assign(token)
+	local pad, _, leastBad = ModeTeams.PickPad(team, extra)
+	local settled = false
+	if not pad and allowRefused and leastBad then
+		pad, settled = leastBad, true
+	end
+	if not pad then
+		return false
+	end
+
+	local position = pad + Vector3.new(0, 4, 0)
+	character:PivotTo(CFrame.lookAt(position, Vector3.new(arenaCentre.X, position.Y, arenaCentre.Z)))
+	character:SetAttribute("Team", team)
+	downed[token] = nil
+	grantProtection(token, mode and mode.spawnProtection or 0)
+	return true, settled
+end
+
+-- Marks a combatant down. The scoreline is the caller's business; this only tracks the body.
+function ModeTeams.MarkDown(token)
+	downed[token] = true
+	ModeTeams.BreakProtection(token)
+end
+
+-- A colour for a rarity, for anything that wants to tint the granted gun the way the rest of the
+-- game does. Here so ModeTeams is the one place a mode asks about the green kit.
+function ModeTeams.GreenColor()
+	return Rarity.Color(GameModes.GreenRarity)
+end
+
+return ModeTeams

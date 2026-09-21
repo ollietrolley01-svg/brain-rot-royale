@@ -1,0 +1,550 @@
+
+--------------------------------------------------------------------------------
+-- Crumbly Creek: the old mill, falling apart one crumb at a time
+--------------------------------------------------------------------------------
+
+do
+	local OLD_STONE = Color3.fromRGB(140, 132, 118)
+	local DARK_STONE = Color3.fromRGB(104, 98, 90)
+	local WATER = Color3.fromRGB(70, 150, 200)
+	local COOKIE = Color3.fromRGB(206, 150, 88)
+	local CHOC = Color3.fromRGB(70, 44, 30)
+	local TIMBER = Color3.fromRGB(110, 80, 52)
+
+	local function rubble(k, count, spread)
+		for index = 1, count do
+			local size = k.rng:NextNumber(0.9, 1.9)
+			-- Every chunk lies at its own angle: the tilts step by index rather than being rolled, so no
+			-- two chunks can come to rest with parallel faces, whatever their sizes. (Varying only the
+			-- heights wasn't enough; the map's z-fight pass still found a pair 0.078 apart.)
+			local tip = 0.14 + index * 0.07
+			k:box("Rubble", Vector3.new(size * 1.3, size * (0.72 + (index % 3) * 0.07), size),
+				CFrame.new(k.rng:NextNumber(-spread, spread), size * 0.25 + index * 0.05, k.rng:NextNumber(-spread, spread))
+					* CFrame.Angles(tip * (index % 2 == 0 and 1 or -1), k.rng:NextNumber(0, 3), tip * 0.6 * (index % 3 == 0 and -1 or 1)),
+				index % 2 == 0 and OLD_STONE or DARK_STONE, Enum.Material.Cobblestone)
+		end
+	end
+
+	-- The mill race: a stone channel along X with water in it, its walls crumbled to uneven heights
+	-- and broken through in one place.
+	local function millRace(k, length)
+		k:box("RaceBed", Vector3.new(length, 0.3, 5), CFrame.new(0, 0.15, 0), DARK_STONE, Enum.Material.Slate)
+		local water = decor(k:box("RaceWater", Vector3.new(length, 0.4, 4.6), CFrame.new(0, 0.75, 0), WATER, Enum.Material.Glass))
+		water.Transparency = 0.35
+		for _, side in ipairs({ -1, 1 }) do
+			local segments = 9
+			local span = length / segments
+			for index = 0, segments - 1 do
+				if not (side < 0 and index == 5) then
+					local height = 1.0 + ((index * 7 + (side > 0 and 3 or 0)) % 5) * 0.2
+					k:box("RaceWall", Vector3.new(span, height + 0.2, 1), CFrame.new(-length / 2 + (index + 0.5) * span, (height - 0.2) / 2, side * 3), OLD_STONE, Enum.Material.Cobblestone)
+				end
+			end
+		end
+		rubble(k:at(CFrame.new(-length / 2 + 5.5 * length / 9, 0, -3.8)), 4, 1.4)
+	end
+
+	-- The wheel turns in the race on an axle into the mill wall: a hub whose Y axis runs along the
+	-- axle, spokes and paddles round it.
+	local function waterWheel(k, diameter)
+		local hub = k:hub("WheelHub", CFrame.Angles(math.pi / 2, 0, 0))
+		local wheel = k:into(hub)
+		for index = 0, 3 do
+			wheel:trim("WheelSpoke", Vector3.new(0.45, diameter - 0.6, 0.45), CFrame.new(0, 0, -0.18 + index * 0.12) * CFrame.Angles(0, 0, index * math.pi / 4), TIMBER, Enum.Material.Wood)
+		end
+		for index = 0, 11 do
+			wheel:trim("WheelPaddle", Vector3.new(0.3, 1.8, 1.9), CFrame.Angles(0, 0, index * math.pi / 6) * CFrame.new(0, diameter / 2 - 0.9, 0), TIMBER:Lerp(C.black, 0.15), Enum.Material.WoodPlanks)
+		end
+		for _, z in ipairs({ -0.95, 0.95 }) do
+			decor(wheel:cyl("WheelBoss", 0.3, 1.8, CFrame.new(0, 0, z) * CFrame.Angles(0, math.pi / 2, 0), C.iron, Enum.Material.Metal))
+		end
+		Kit.spin(hub, -28)
+		local splash = decor(k:box("WheelSplash", Vector3.new(1, 0.2, 1), CFrame.new(0, -diameter / 2 + 0.7, 0), C.white, Enum.Material.SmoothPlastic))
+		splash.Transparency = 1
+		Kit.emitter(splash, { color = Color3.fromRGB(220, 240, 255), size = 0.5, size2 = 0.1, transparency = 0.3, lifetime = 0.8, rate = 12, speed = 4, spread = 45,
+			acceleration = Vector3.new(0, -20, 0) })
+	end
+
+	local function mill(k)
+		k:box("MillBackWall", Vector3.new(12, 10, 1), CFrame.new(0, 4.8, 3.5), OLD_STONE, Enum.Material.Cobblestone)
+		k:box("MillSideWall", Vector3.new(1, 10, 6), CFrame.new(-5.5, 4.8, 0), OLD_STONE, Enum.Material.Cobblestone)
+		k:box("MillSideWall", Vector3.new(1, 4, 6), CFrame.new(5.5, 1.8, 0), OLD_STONE, Enum.Material.Cobblestone)
+		k:box("MillWallRemains", Vector3.new(1, 3, 2.6), CFrame.new(5.5, 5.3, 1.7), DARK_STONE, Enum.Material.Cobblestone)
+		k:box("MillFrontWall", Vector3.new(5, 7, 1), CFrame.new(-3.5, 3.3, -3.5), OLD_STONE, Enum.Material.Cobblestone)
+		k:box("MillFrontWall", Vector3.new(3, 5, 1), CFrame.new(3.5, 2.3, -3.5), DARK_STONE, Enum.Material.Cobblestone)
+		-- What's left of the roof: one slope and the gable under it, the ridge, two rafters hanging.
+		k:box("MillRoofSlope", Vector3.new(6.9, 0.5, 8.4), CFrame.new(-3, 11.4, 0) * CFrame.Angles(0, 0, math.rad(28)), Color3.fromRGB(90, 70, 60), Enum.Material.Slate)
+		k:wedge("MillGable", Vector3.new(1, 3.2, 6), CFrame.new(-3, 11.4, 3.5) * CFrame.Angles(0, math.pi / 2, 0), OLD_STONE, Enum.Material.Cobblestone)
+		decor(k:rod("MillRidge", Vector3.new(0, 13, -3.8), Vector3.new(0, 13, 4), 0.5, TIMBER, Enum.Material.Wood))
+		for _, z in ipairs({ -1.8, 1.6 }) do
+			decor(k:rod("BrokenRafter", Vector3.new(0, 12.9, z), Vector3.new(4.6, 7.4, z + 0.4), 0.4, TIMBER, Enum.Material.Wood))
+		end
+		rubble(k:at(CFrame.new(3, 0, -1)), 5, 1.6)
+		for index, height in ipairs({ 1.1, 0.95, 1.25 }) do
+			k:box("FlourSack", Vector3.new(1.6, height, 1.2), CFrame.new(-3.6 + (index - 1) * 1.7, height / 2 - 0.09 * index, 1.7) * CFrame.Angles(0, index * 0.3, 0),
+				Color3.fromRGB(230, 220, 196), Enum.Material.Fabric)
+		end
+		decor(k:disc("SpiltFlour", 0.1, 3, Vector3.new(0.2, 0.05, -1.6), C.white, Enum.Material.Sand))
+		local sign = k:trim("MillSign", Vector3.new(4.4, 1.2, 0.2), CFrame.new(-3.5, 5.6, -4.1) * CFrame.Angles(0, 0, math.rad(-6)), Color3.fromRGB(196, 168, 118), Enum.Material.WoodPlanks)
+		Kit.label(sign, "CRUMBLY CREEK MILL", Color3.fromRGB(60, 40, 20), nil, { Enum.NormalId.Front }, Enum.Font.Fantasy)
+	end
+
+	-- The millstone that was actually a cookie, broken, and the bit that came off.
+	local function cookie(k, diameter)
+		local face = k:at(CFrame.new(0, diameter / 2 - 0.4, 0) * CFrame.Angles(math.rad(-14), 0, 0))
+		face:cyl("CookieStone", 1.4, diameter, CFrame.Angles(0, math.pi / 2, 0), COOKIE, Enum.Material.Sand)
+		for index = 0, 7 do
+			local angle = index * 2.4
+			local reach = (0.25 + (index % 4) * 0.18) * diameter / 2
+			decor(face:ball("ChocolateChip", 0.55 + (index % 3) * 0.12, CFrame.new(math.cos(angle) * reach, math.sin(angle) * reach, -0.62), CHOC, Enum.Material.SmoothPlastic))
+		end
+		k:box("CookieChunk", Vector3.new(diameter * 0.35, 1.2, diameter * 0.3), CFrame.new(diameter * 0.55, 0.45, -diameter * 0.2) * CFrame.Angles(0.2, 0.7, 0.1), COOKIE, Enum.Material.Sand)
+		for index = 1, 10 do
+			decor(k:ball("Crumb", k.rng:NextNumber(0.25, 0.5), CFrame.new(k.rng:NextNumber(-diameter * 0.6, diameter * 0.7), 0.12, k.rng:NextNumber(-diameter * 0.5, -0.8)), COOKIE, Enum.Material.Sand))
+		end
+	end
+
+	local function brokenBridge(k)
+		for _, z in ipairs({ -3, 3 }) do
+			k:box("BridgePier", Vector3.new(4, 2.7, 1.2), CFrame.new(0, 1.05, z), OLD_STONE, Enum.Material.Cobblestone)
+		end
+		k:box("BridgeDeckStone", Vector3.new(4, 0.6, 3.7), CFrame.new(0, 2.7, -3.15), OLD_STONE, Enum.Material.Cobblestone)
+		k:box("BridgeDeckStone", Vector3.new(4, 0.6, 3.5), CFrame.new(0, 2.7, 3.25), OLD_STONE, Enum.Material.Cobblestone)
+		-- The middle fell in.
+		k:box("FallenDeck", Vector3.new(3.6, 0.6, 1.8), CFrame.new(0.3, 1.1, 0) * CFrame.Angles(0.5, 0.2, 0.3), DARK_STONE, Enum.Material.Cobblestone)
+		for _, z in ipairs({ -1, 1 }) do
+			k:wedge("BridgeRamp", Vector3.new(4, 3.0, 3.2), CFrame.new(0, 1.3, z * 6.6) * CFrame.Angles(0, z > 0 and math.pi or 0, 0), OLD_STONE, Enum.Material.Cobblestone)
+		end
+		k:box("BridgeParapet", Vector3.new(0.6, 1.2, 2.2), CFrame.new(-1.7, 3.6, -4.2), DARK_STONE, Enum.Material.Cobblestone)
+		k:box("BridgeParapet", Vector3.new(0.6, 0.8, 1.6), CFrame.new(1.7, 3.4, 4.3) * CFrame.Angles(0, 0, 0.1), DARK_STONE, Enum.Material.Cobblestone)
+	end
+
+	local function cautionTape(k, width)
+		for _, x in ipairs({ -width / 2, width / 2 }) do
+			k:box("TapePost", Vector3.new(0.5, 3.4, 0.5), CFrame.new(x, 1.5, 0), C.orange, Enum.Material.SmoothPlastic)
+		end
+		for index, y in ipairs({ 1.4, 2.7 }) do
+			local tape = k:trim("CautionTape", Vector3.new(width - 0.5, 0.6, 0.08), CFrame.new(0, y, 0) * CFrame.Angles(0, 0, math.rad(index == 1 and 2 or -3)), Color3.fromRGB(255, 226, 40), Enum.Material.SmoothPlastic)
+			Kit.label(tape, "CAUTION: CRUMBLING", C.black, Color3.fromRGB(255, 226, 40), { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBlack)
+		end
+	end
+
+	local function crumblingPillar(k)
+		k:post("PillarBase", 1.0, 2.4, Vector3.new(0, -0.2, 0), DARK_STONE, Enum.Material.Cobblestone)
+		k:post("CrackedPillar", 5, 1.8, Vector3.new(0, 0.8, 0), OLD_STONE, Enum.Material.Cobblestone)
+		k:post("PillarTop", 1.6, 1.8, Vector3.new(0, 0, 0), OLD_STONE, Enum.Material.Cobblestone).CFrame = k.frame * CFrame.new(0.25, 6.55, 0) * CFrame.Angles(0.15, 0, math.pi / 2 + 0.18)
+		k:box("PillarChunk", Vector3.new(1.2, 0.9, 1.4), CFrame.new(1.4, 0.4, -0.8) * CFrame.Angles(0.3, 0.8, 0.2), OLD_STONE, Enum.Material.Cobblestone)
+	end
+
+	defineTheme({
+		name = "Crumbly Creek",
+		id = "CrumblyCreek",
+		flag = { emblem = "CRUMB", caption = "CRUMBLY CREEK", color = Color3.fromRGB(150, 104, 60), text = C.cream, trim = COOKIE },
+		setPiece = {
+			id = "CrumblingMill",
+			name = "The Crumbling Mill",
+			width = 40,
+			depth = 32,
+			ground = Enum.Material.Ground,
+			build = function(k)
+				millRace(k:at(CFrame.new(0, 0, 4)), 40)
+				mill(k:at(CFrame.new(-8, 0, 11.5)))
+				waterWheel(k:at(CFrame.new(-5, 6.2, 4)), 11)
+				decor(k:rod("WheelAxle", Vector3.new(-5, 6.2, 1.0), Vector3.new(-5, 6.2, 8.2), 0.6, C.iron, Enum.Material.Metal))
+				k:box("AxleBearing", Vector3.new(1, 5.2, 1), CFrame.new(-5, 3.8, 1.0), TIMBER, Enum.Material.Wood)
+				brokenBridge(k:at(CFrame.new(10, 0, 4)))
+				cookie(k:at(CFrame.new(-11, 0, -8.5)), 7)
+				local crumbs = Pieces.board(k:at(CFrame.new(-4, 0, -12.8)), "MIND THE CRUMBS", 5.4, 1.4, 2.4, Color3.fromRGB(60, 40, 20), Color3.fromRGB(236, 206, 150), 2, TIMBER)
+				crumbs.Name = "CrumbsSign"
+				cautionTape(k:at(CFrame.new(14, 0, -9.5)), 6)
+				crumblingPillar(k:at(CFrame.new(17.5, 0, -3)))
+				rubble(k:at(CFrame.new(3.5, 0, -6)), 3, 1.6)
+			end,
+		},
+		props = {
+			{
+				id = "RubblePile",
+				radius = 2.6,
+				build = function(k)
+					rubble(k, 5, 1.2)
+				end,
+			},
+			{
+				id = "CautionTape",
+				radius = 2.9,
+				build = function(k)
+					cautionTape(k, 5)
+				end,
+			},
+			{ id = "CrumblingPillar", radius = 2.5, build = crumblingPillar },
+			{
+				id = "CookieChunk",
+				radius = 3.0,
+				build = function(k)
+					cookie(k, 3.6)
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Rizz Ridge: the high ground, a red carpet and a meter that only reads one way
+--------------------------------------------------------------------------------
+
+do
+	local STONE = Color3.fromRGB(196, 170, 140)
+	local STONE_DARK = Color3.fromRGB(158, 132, 108)
+	local CARPET = Color3.fromRGB(180, 24, 40)
+	local ROSE = Color3.fromRGB(220, 30, 60)
+	local LEAF = Color3.fromRGB(60, 120, 60)
+	local SPOT = Color3.fromRGB(255, 240, 210)
+
+	local function rosePlanter(k, width)
+		k:box("RosePlanter", Vector3.new(width, 1.4, 2), CFrame.new(0, 0.5, 0), STONE_DARK, Enum.Material.Limestone)
+		for index = 0, math.floor(width / 0.9) - 1 do
+			local x = -width / 2 + 0.55 + index * 0.9
+			decor(k:ball("RoseLeaves", 0.9, CFrame.new(x, 1.45, (index % 2) * 0.4 - 0.2), LEAF, Enum.Material.Grass))
+			decor(k:ball("Rose", 0.55, CFrame.new(x + 0.1, 1.95, (index % 2) * 0.4 - 0.3), ROSE, Enum.Material.SmoothPlastic))
+		end
+	end
+
+	local function brassRope(k, from, to)
+		for _, at in ipairs({ from, to }) do
+			-- Posts don't collide: ropes are for show, not for walling bots out of a path.
+			decor(k:post("CarpetPost", 2.8, 0.3, at, C.gold, Enum.Material.Foil))
+			decor(k:ball("CarpetPostTop", 0.5, CFrame.new(at + Vector3.new(0, 2.9, 0)), C.gold, Enum.Material.Foil))
+		end
+		decor(k:rod("CarpetRope", from + Vector3.new(0, 2.4, 0), to + Vector3.new(0, 2.4, 0), 0.22, CARPET, Enum.Material.Fabric))
+	end
+
+	-- A spotlight on a pole, aimed at `target` (local), with a faint beam drawn to it.
+	local function spotlight(k, height, target)
+		k:post("SpotPole", height, 0.5, Vector3.zero, C.charcoal, Enum.Material.Metal)
+		local head = Vector3.new(0, height + 0.6, 0)
+		local lamp = k:box("SpotLamp", Vector3.new(1.4, 1.4, 2.2), CFrame.lookAt(head, target), C.black, Enum.Material.Metal)
+		local light = Instance.new("SpotLight")
+		light.Face = Enum.NormalId.Front
+		light.Angle = 40
+		light.Range = 40
+		light.Brightness = 3
+		light.Color = SPOT
+		light.Parent = lamp
+		k:trim("SpotLens", Vector3.new(1.1, 1.1, 0.1), CFrame.lookAt(head, target) * CFrame.new(0, 0, -1.15), SPOT, Enum.Material.Neon)
+		local beam = decor(k:rod("SpotBeam", head + (target - head).Unit * 1.3, target, 2.2, SPOT, Enum.Material.Neon))
+		beam.Transparency = 0.92
+		beam.CastShadow = false
+	end
+
+	local function rizzMeter(k)
+		k:box("MeterBoard", Vector3.new(7, 4.4, 0.3), CFrame.identity, Color3.fromRGB(30, 26, 34), Enum.Material.SmoothPlastic)
+		local colors = { Color3.fromRGB(90, 200, 90), Color3.fromRGB(180, 220, 70), Color3.fromRGB(250, 210, 60), Color3.fromRGB(250, 140, 50), Color3.fromRGB(240, 50, 60) }
+		-- Layers off the board: labels to -0.25, bands alternately to -0.35 and -0.43, the needle to
+		-- -0.57, so neighbouring bands that overlap never share a face.
+		for index, color in ipairs(colors) do
+			-- Five bands round a half circle, left (none) to right (max).
+			local angle = math.rad(180 - (index - 0.5) * 36)
+			k:trim("MeterBand", Vector3.new(1.6, 0.5, 0.1), CFrame.new(-math.cos(angle) * 2.2, -1.2 + math.sin(angle) * 2.2, index % 2 == 0 and -0.3 or -0.38)
+				* CFrame.Angles(0, 0, -(angle - math.pi / 2)), color, Enum.Material.Neon)
+		end
+		-- Pinned at the red end, which is the viewer's right: the kit's -X, so a positive turn.
+		k:trim("MeterNeedle", Vector3.new(0.2, 2.3, 0.1), CFrame.new(0, -1.2, -0.52) * CFrame.Angles(0, 0, math.rad(72)) * CFrame.new(0, 1.05, 0), C.white, Enum.Material.Neon)
+		decor(k:ball("MeterPivot", 0.5, CFrame.new(0, -1.2, -0.52), C.white, Enum.Material.Metal))
+		local title = k:trim("MeterTitle", Vector3.new(6.4, 0.9, 0.1), CFrame.new(0, 1.6, -0.2), Color3.fromRGB(30, 26, 34), Enum.Material.SmoothPlastic)
+		Kit.label(title, "RIZZ-O-METER", C.white, nil, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+		local reading = k:trim("MeterReading", Vector3.new(2.2, 0.6, 0.1), CFrame.new(-2.2, -1.75, -0.2), Color3.fromRGB(30, 26, 34), Enum.Material.SmoothPlastic)
+		Kit.label(reading, "UNSPOKEN", Color3.fromRGB(240, 50, 60), nil, { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+	end
+
+	defineTheme({
+		name = "Rizz Ridge",
+		id = "RizzRidge",
+		flag = { emblem = "W", caption = "RIZZ RIDGE", color = CARPET, text = C.white, trim = C.gold, font = Enum.Font.GothamBlack },
+		setPiece = {
+			id = "TheRidge",
+			name = "The Ridge",
+			width = 36,
+			depth = 30,
+			ground = Enum.Material.Limestone,
+			build = function(k)
+				-- The terrace: one solid block of stone six studs high, stairs up the front of it.
+				k:box("RidgeTerrace", Vector3.new(26, 6.4, 9), CFrame.new(0, 2.8, 9.5), STONE, Enum.Material.Limestone)
+				-- Nine studs wide, a stud up every 1.2: a bot's path agent is six across, and at six wide
+				-- the stairs only worked when nothing else crowded the foot of them.
+				for step = 1, 6 do
+					local front = -2.2 + (step - 1) * 1.2
+					k:box("RidgeStep", Vector3.new(9, step + 0.4, 1.2), CFrame.new(0, (step - 0.4) / 2, front + 0.6), STONE_DARK, Enum.Material.Limestone)
+				end
+				-- A rim round the top, open where the stairs arrive.
+				for _, spec in ipairs({ { -8.75, 5.4, 8.1, 0.6 }, { 8.75, 5.4, 8.1, 0.6 } }) do
+					k:trim("RidgeRim", Vector3.new(spec[3], 0.4, spec[4]), CFrame.new(spec[1], 6.1, spec[2]), STONE_DARK, Enum.Material.Limestone)
+				end
+				-- Parapets down the sides and along the back: cover, up on the high ground.
+				for _, x in ipairs({ -12.7, 12.7 }) do
+					k:box("RidgeParapet", Vector3.new(0.6, 1.3, 9), CFrame.new(x, 6.65, 9.5), STONE_DARK, Enum.Material.Limestone)
+				end
+				k:box("RidgeParapet", Vector3.new(24.8, 1.3, 0.6), CFrame.new(0, 6.65, 13.7), STONE_DARK, Enum.Material.Limestone)
+				-- The rose arch at the top.
+				local arch = k:at(CFrame.new(0, 6, 11.4))
+				for _, x in ipairs({ -2.2, 2.2 }) do
+					arch:box("ArchPost", Vector3.new(0.4, 5, 0.4), CFrame.new(x, 2.5, 0), C.white, Enum.Material.Metal)
+				end
+				for index = 0, 4 do
+					local angle = math.rad(index * 45)
+					arch:trim("ArchCurve", Vector3.new(1.8, 0.28, 0.28), CFrame.new(math.cos(angle) * 2.2, 5 + math.sin(angle) * 2.2, (index % 2) * 0.08) * CFrame.Angles(0, 0, angle + math.pi / 2), C.white, Enum.Material.Metal)
+				end
+				for index = 0, 13 do
+					local t = index / 13
+					local at
+					if t < 0.3 then
+						at = Vector3.new(-2.2, 1.2 + t / 0.3 * 3.8, 0)
+					elseif t > 0.7 then
+						at = Vector3.new(2.2, 5 - (t - 0.7) / 0.3 * 3.8, 0)
+					else
+						local angle = math.pi - (t - 0.3) / 0.4 * math.pi
+						at = Vector3.new(math.cos(angle) * 2.2, 5 + math.sin(angle) * 2.2, 0)
+					end
+					decor(arch:ball(index % 3 == 0 and "RoseLeaves" or "Rose", index % 3 == 0 and 0.8 or 0.6, CFrame.new(at + Vector3.new(0, 0, -0.35)), index % 3 == 0 and LEAF or ROSE, Enum.Material.SmoothPlastic))
+				end
+				-- The microphone.
+				local mic = k:at(CFrame.new(0, 6, 8.2))
+				decor(mic:disc("MicBase", 0.2, 1.4, Vector3.new(0, 0.1, 0), C.black, Enum.Material.Metal))
+				decor(mic:post("MicStand", 4.1, 0.15, Vector3.new(0, 0.1, 0), C.silver, Enum.Material.Metal))
+				-- String lights along the terrace's front edge, drooping between posts.
+				for index = 0, 11 do
+					local x = -12 + index * (24 / 11)
+					if math.abs(x) > 5.2 then
+						local bulb = decor(k:ball("StringLight", 0.45, CFrame.new(x, 7.9 - math.abs(math.sin(index * 1.3)) * 0.35, 5.4), index % 2 == 0 and C.gold or ROSE, Enum.Material.Neon))
+						bulb.CastShadow = false
+					end
+				end
+				for _, x in ipairs({ -12.0, -4.9, 4.9, 12.0 }) do
+					k:post("LightPost", 2.6, 0.2, Vector3.new(x, 5.8, 5.4), C.charcoal, Enum.Material.Metal)
+				end
+				for _, span in ipairs({ { -12.0, -4.9 }, { 4.9, 12.0 } }) do
+					decor(k:rod("LightWire", Vector3.new(span[1], 8.2, 5.4), Vector3.new(span[2], 8.2, 5.4), 0.06, C.black, Enum.Material.SmoothPlastic))
+				end
+				decor(mic:ball("Microphone", 0.6, CFrame.new(0, 4.4, -0.2), C.charcoal, Enum.Material.Metal))
+				-- Spotlights at the front corners, both on the arch.
+				spotlight(k:at(CFrame.new(-16, 0, -12)), 11, Vector3.new(16, 8, 23.4))
+				spotlight(k:at(CFrame.new(16, 0, -12)), 11, Vector3.new(-16, 8, 23.4))
+				-- The meter and the sign on the terrace face.
+				rizzMeter(k:at(CFrame.new(-8.9, 3, 4.8)))
+				local wSign = k:box("RizzSign", Vector3.new(6, 2.6, 0.3), CFrame.new(9, 3.4, 4.85), Color3.fromRGB(30, 26, 34), Enum.Material.SmoothPlastic)
+				Kit.label(wSign, "W RIZZ ONLY", ROSE, Color3.fromRGB(30, 26, 34), { Enum.NormalId.Front }, Enum.Font.GothamBlack)
+				Kit.light(wSign, ROSE, 12, 1)
+				-- The red carpet up to the stairs, roped both sides, and roses at the foot of it.
+				k:trim("RedCarpet", Vector3.new(4.4, 0.12, 12.2), CFrame.new(0, 0.08, -8.3), CARPET, Enum.Material.Fabric)
+				for _, x in ipairs({ -3.8, 3.8 }) do
+					brassRope(k, Vector3.new(x, 0, -13.4), Vector3.new(x, 0, -9))
+					brassRope(k, Vector3.new(x, 0, -7), Vector3.new(x, 0, -2.8))
+				end
+				rosePlanter(k:at(CFrame.new(-6.5, 0, -12.6)), 5)
+				rosePlanter(k:at(CFrame.new(6.5, 0, -12.6)), 5)
+			end,
+		},
+		props = {
+			{
+				id = "RosePlanter",
+				radius = 2.4,
+				build = function(k)
+					rosePlanter(k, 4)
+				end,
+			},
+			{
+				id = "CarpetRunner",
+				radius = 3.2,
+				build = function(k)
+					k:trim("RedCarpet", Vector3.new(2.4, 0.12, 5.6), CFrame.new(0, 0.08, 0), CARPET, Enum.Material.Fabric)
+					brassRope(k, Vector3.new(-1.8, 0, -2.4), Vector3.new(-1.8, 0, 2.4))
+				end,
+			},
+			{
+				id = "Spotlight",
+				radius = 1.6,
+				build = function(k)
+					spotlight(k, 4.5, Vector3.new(0, 14, -6))
+				end,
+			},
+			{
+				id = "RizzMeterSign",
+				radius = 3.6,
+				build = function(k)
+					for _, x in ipairs({ -3.2, 3.2 }) do
+						k:box("MeterLeg", Vector3.new(0.4, 4.6, 0.4), CFrame.new(x, 2.1, 0.4), C.charcoal, Enum.Material.Metal)
+					end
+					rizzMeter(k:at(CFrame.new(0, 4.4, 0)))
+				end,
+			},
+		},
+	})
+end
+
+--------------------------------------------------------------------------------
+-- Noob Hollow: the tutorial yard nobody asked to do again
+--------------------------------------------------------------------------------
+
+do
+	local TUTORIAL_BLUE = Color3.fromRGB(60, 140, 230)
+	local HINT_YELLOW = Color3.fromRGB(255, 220, 60)
+	local PAD_COLORS = { Color3.fromRGB(90, 200, 110), Color3.fromRGB(250, 200, 60), Color3.fromRGB(240, 100, 80) }
+	local TIPS = { "TIP: DON'T DIE", "HOLD W TO WALK", "PRESS SPACE TO JUMP", "TIP: LOOT IS GOOD", "YOU ARE DOING GREAT", "TIP: THE STORM IS BAD" }
+
+	-- A giant arrow floating over something, pointing down at it, bobbing.
+	local function arrow(k, at, size, phase)
+		local shaft = floating(k:trim("TutorialArrow", Vector3.new(size * 0.8, size * 2.4, size * 0.8), CFrame.new(at + Vector3.new(0, size * 1.6, 0)), HINT_YELLOW, Enum.Material.Neon))
+		local head = floating(k:trim("TutorialArrow", Vector3.new(size * 2, size * 2, size * 0.5), CFrame.new(at) * CFrame.Angles(0, 0, math.pi / 4), HINT_YELLOW, Enum.Material.Neon))
+		for _, part in ipairs({ shaft, head }) do
+			Kit.bob(part, size * 0.5, 2.2, phase)
+		end
+		Kit.light(head, HINT_YELLOW, 12, 0.8)
+	end
+
+	local function hintBoard(k, text, width)
+		local board = Pieces.board(k, text, width or 4, 1.4, 2.6, C.white, TUTORIAL_BLUE, 1, C.iron)
+		board.Name = "HintBoard"
+		return board
+	end
+
+	local function numberPad(k, height, number)
+		-- Turned a quarter about the vertical before it's stood up, so the number on its top reads from
+		-- the street (the label audit found all three reading sideways: a tipped-up cylinder's face
+		-- label points its "up" along the cylinder's +Y, which lands on -X).
+		local tall = height + 0.2
+		local pad = k:cyl("JumpPad", tall, 3, CFrame.new(0, tall / 2 - 0.2, 0) * CFrame.Angles(0, math.pi / 2, 0) * CFrame.Angles(0, 0, math.pi / 2),
+			PAD_COLORS[number], Enum.Material.SmoothPlastic)
+		Kit.label(pad, tostring(number), C.white, nil, { Enum.NormalId.Right }, Enum.Font.GothamBlack)
+		return pad
+	end
+
+	local function trainingBike(k)
+		local turned = CFrame.Angles(0, math.pi / 2, 0)
+		for _, z in ipairs({ -1.3, 1.3 }) do
+			decor(k:cyl("BikeWheel", 0.25, 1.8, CFrame.new(0, 0.9, z) * turned, C.black, Enum.Material.Rubber))
+		end
+		for _, x in ipairs({ -0.7, 0.7 }) do
+			decor(k:cyl("TrainingWheel", 0.2, 0.7, CFrame.new(x, 0.35, 1.5) * turned, C.white, Enum.Material.Rubber))
+			decor(k:rod("TrainingStrut", Vector3.new(x, 0.35, 1.5), Vector3.new(0, 1.0, 1.3), 0.12, C.silver, Enum.Material.Metal))
+		end
+		decor(k:rod("BikeFrame", Vector3.new(0, 0.9, -1.3), Vector3.new(0, 1.6, 0.2), 0.2, TUTORIAL_BLUE, Enum.Material.Metal))
+		decor(k:rod("BikeFrame", Vector3.new(0, 1.6, 0.2), Vector3.new(0, 0.9, 1.3), 0.2, TUTORIAL_BLUE, Enum.Material.Metal))
+		decor(k:rod("BikeFork", Vector3.new(0, 0.9, -1.3), Vector3.new(0, 2.1, -1.0), 0.18, C.silver, Enum.Material.Metal))
+		k:trim("BikeHandlebar", Vector3.new(1.4, 0.15, 0.15), CFrame.new(0, 2.15, -1.0), C.black, Enum.Material.Rubber)
+		k:trim("BikeSeat", Vector3.new(0.5, 0.2, 0.9), CFrame.new(0, 1.8, 0.5), C.black, Enum.Material.Leather)
+	end
+
+	-- Giant keycaps laid out as they are on a keyboard, for someone standing at the street: A on
+	-- their left (+X), D on their right, W beyond S.
+	local function wasdKeys(k)
+		for _, key in ipairs({ { "W", 0, 1.05 }, { "A", 2.1, -1.05 }, { "S", 0, -1.05 }, { "D", -2.1, -1.05 } }) do
+			k:box("KeyBase", Vector3.new(2.0, 0.9, 2.0), CFrame.new(key[2], 0.25, key[3]), Color3.fromRGB(90, 94, 104), Enum.Material.SmoothPlastic)
+			local cap = k:box("KeyCap", Vector3.new(1.6, 0.4, 1.6), CFrame.new(key[2], 0.9, key[3]) * READ_FROM_FRONT, Color3.fromRGB(236, 238, 242), Enum.Material.SmoothPlastic)
+			Kit.label(cap, key[1], C.black, nil, { Enum.NormalId.Top }, Enum.Font.GothamBlack)
+		end
+	end
+
+	defineTheme({
+		name = "Noob Hollow",
+		id = "NoobHollow",
+		flag = { emblem = "LVL 1", caption = "NOOB HOLLOW", color = TUTORIAL_BLUE, text = HINT_YELLOW, trim = C.white },
+		setPiece = {
+			id = "TutorialYard",
+			name = "The Tutorial Yard",
+			width = 40,
+			depth = 30,
+			ground = Enum.Material.Ground,
+			build = function(k)
+				-- The welcome arch at the entrance.
+				for _, x in ipairs({ -6, 6 }) do
+					k:box("WelcomePost", Vector3.new(0.8, 9.2, 0.8), CFrame.new(x, 4.4, -12.5), C.white, Enum.Material.SmoothPlastic)
+				end
+				-- In front of its posts, so they don't cover the first and last letters.
+				local banner = k:box("WelcomeBanner", Vector3.new(13, 2.2, 0.3), CFrame.new(0, 8.1, -13.05), TUTORIAL_BLUE, Enum.Material.SmoothPlastic)
+				Kit.label(banner, "WELCOME, NEW PLAYER!", HINT_YELLOW, TUTORIAL_BLUE, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBlack)
+
+				-- Station one: jump the hurdle.
+				local hurdle = k:at(CFrame.new(-14, 0, -4))
+				for _, x in ipairs({ -1.9, 1.9 }) do
+					hurdle:box("HurdlePost", Vector3.new(0.3, 2.2, 0.3), CFrame.new(x, 0.9, 0), C.white, Enum.Material.SmoothPlastic)
+				end
+				-- Sat proud of the posts' tops rather than level with them.
+				hurdle:box("HurdleBar", Vector3.new(3.9, 0.3, 0.18), CFrame.new(0, 2.05, 0), C.red, Enum.Material.SmoothPlastic)
+				hintBoard(k:at(CFrame.new(-14, 0, -8.5)), "PRESS SPACE TO JUMP", 4.6)
+				arrow(k, Vector3.new(-14, 5, -4), 1, 0)
+
+				-- Station two: three numbered pads, each a jump higher than the last.
+				local pads = { { -8.5, 1.2, 1 }, { -4.6, 4.4, 2 }, { -0.8, 7.8, 3 } }
+				for index, pad in ipairs(pads) do
+					numberPad(k:at(CFrame.new(pad[1], 0, pad[2])), 0.8 + (index - 1) * 1.0, pad[3])
+				end
+				arrow(k, Vector3.new(-8.5, 5.5, 1.2), 1, 1.2)
+
+				-- Station three: the balance beam, off the top pad.
+				local beam = k:at(CFrame.new(5.6, 0, 9.4))
+				beam:box("BalanceBeam", Vector3.new(11.2, 0.8, 1.0), CFrame.new(0, 3.0, 0), Color3.fromRGB(200, 160, 110), Enum.Material.WoodPlanks)
+				for _, x in ipairs({ -4.6, 0, 4.6 }) do
+					beam:box("BeamLeg", Vector3.new(0.6, 2.8, 0.6), CFrame.new(x, 1.2, 0), C.iron, Enum.Material.Metal)
+				end
+				hintBoard(k:at(CFrame.new(5.6, 0, 13.2)), "DON'T LOOK DOWN", 4.4)
+
+				-- The checkpoint at the end.
+				local checkpoint = k:at(CFrame.new(15, 0, 9.4))
+				checkpoint:post("CheckpointPad", 0.5, 4.2, Vector3.new(0, -0.2, 0), Color3.fromRGB(90, 220, 255), Enum.Material.Neon).Transparency = 0.2
+				checkpoint:post("CheckpointPole", 7.5, 0.3, Vector3.new(1.6, 0.3, 1.2), C.white, Enum.Material.Metal)
+				checkpoint:trim("CheckpointFlag", Vector3.new(2.4, 1.5, 0.1), CFrame.new(0.35, 6.9, 1.2), HINT_YELLOW, Enum.Material.Fabric)
+				hintBoard(checkpoint:at(CFrame.new(0, 0, -4)), "CHECKPOINT!", 3.6)
+				arrow(k, Vector3.new(15, 6, 9.4), 1.2, 2.4)
+
+				-- The map everyone ignores.
+				local map = k:at(CFrame.new(-15, 0, 10))
+				for _, x in ipairs({ -2.2, 2.2 }) do
+					map:box("MapLeg", Vector3.new(0.3, 4.4, 0.3), CFrame.new(x, 2, 0.3), C.iron, Enum.Material.Metal)
+				end
+				local board = map:box("MapBoard", Vector3.new(5, 3.4, 0.2), CFrame.new(0, 4.6, 0), Color3.fromRGB(236, 230, 210), Enum.Material.SmoothPlastic)
+				Kit.label(board, "NOOB HOLLOW\n\nYOU ARE HERE ★", C.black, nil, { Enum.NormalId.Front }, Enum.Font.GothamBold)
+				decor(map:ball("YouAreHere", 0.4, CFrame.new(1.35, 3.95, -0.15), C.red, Enum.Material.Neon))
+
+				-- The starter hut and its starter kit.
+				local hut = k:at(CFrame.new(12, 0, -6))
+				hut:box("HutBack", Vector3.new(6.6, 5.4, 0.5), CFrame.new(0, 2.4, 2.75), Color3.fromRGB(170, 130, 90), Enum.Material.WoodPlanks)
+				for _, x in ipairs({ -3.25, 3.25 }) do
+					hut:box("HutSide", Vector3.new(0.5, 5.4, 5), CFrame.new(x, 2.5, 0.25), Color3.fromRGB(160, 120, 84), Enum.Material.WoodPlanks)
+				end
+				hut:box("HutTop", Vector3.new(7.8, 0.4, 6.4), CFrame.new(0, 5.4, 0.2), TUTORIAL_BLUE, Enum.Material.SmoothPlastic)
+				local hutSign = hut:trim("HutSign", Vector3.new(5, 1, 0.2), CFrame.new(0, 6.1, -2.6), C.white, Enum.Material.SmoothPlastic)
+				Kit.label(hutSign, "STARTER HUT", TUTORIAL_BLUE, nil, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBlack)
+				local kit = hut:box("StarterKitBox", Vector3.new(2.6, 1.8, 1.8), CFrame.new(0, 0.9, 1.2), Color3.fromRGB(200, 170, 110), Enum.Material.WoodPlanks)
+				Kit.label(kit, "FREE STARTER KIT\n(EMPTY)", C.black, nil, { Enum.NormalId.Front }, Enum.Font.GothamBold)
+
+				trainingBike(k:at(CFrame.new(3.5, 0, -8.5) * CFrame.Angles(0, 0.9, 0)))
+				hintBoard(k:at(CFrame.new(-6, 0, -10.2)), "HOLD W TO WALK", 4)
+				wasdKeys(k:at(CFrame.new(-15.8, 0, -11.8)))
+				-- A tip hanging in the air, the way tips do.
+				local tip = floating(k:trim("FloatingTip", Vector3.new(5, 1.6, 0.2), CFrame.new(1, 10, 1), C.white, Enum.Material.SmoothPlastic))
+				Kit.label(tip, "TIP: DON'T DIE", TUTORIAL_BLUE, C.white, { Enum.NormalId.Front, Enum.NormalId.Back }, Enum.Font.GothamBlack)
+				Kit.bob(tip, 0.5, 1.2, 0)
+			end,
+		},
+		props = {
+			{
+				id = "HintSign",
+				radius = 2.4,
+				build = function(k)
+					hintBoard(k, TIPS[k.rng:NextInteger(1, #TIPS)], 4.2)
+				end,
+			},
+			{
+				id = "ArrowAtBench",
+				radius = 2.8,
+				build = function(k)
+					Pieces.bench(k, Color3.fromRGB(200, 160, 110))
+					arrow(k, Vector3.new(0, 6.5, 0), 0.8, k.rng:NextNumber(0, 6))
+					local sign = k:trim("BenchLabel", Vector3.new(2.6, 0.7, 0.1), CFrame.new(0, 2.9, -0.92), C.white, Enum.Material.SmoothPlastic)
+					Kit.label(sign, "THIS IS A BENCH", TUTORIAL_BLUE, nil, { Enum.NormalId.Front }, Enum.Font.GothamBold)
+				end,
+			},
+			{ id = "TrainingBike", radius = 2.3, build = trainingBike },
+			{ id = "WasdKeys", radius = 3.8, build = wasdKeys },
+		},
+	})
+end
