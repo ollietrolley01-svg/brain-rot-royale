@@ -138,6 +138,20 @@ local MenuShell = require(script.Parent:WaitForChild("MenuShell"))
 local shell = MenuShell.new({ parent = screenGui, title = "BRAIN ROT ROYALE" })
 local panel = shell.layer
 
+-- THE SHELL HAS TO BE TOLD WHAT SCREEN IT IS ON, and nothing told it (Oliver's #65).
+--
+-- `MenuShell.new` falls back to Vector2.new(1280, 720) when no viewport is passed, and this file
+-- passed none and never called SetViewport afterwards -- the only caller anywhere in the project
+-- was tools/menu_hud_gallery.lua. So the panel was a fixed 1100x619 on every screen in the game,
+-- the fit scale was computed for a screen the player does not have, and `UiKit.form` was asked
+-- about 1280x720 every single time: THE `short` AND `tall` VERSIONS NEVER RAN IN THE GAME AT ALL.
+-- They ran in the gallery, which is why they looked finished.
+--
+-- The watching itself is the shell's (MenuShell:BindViewport) rather than a block here, because
+-- this file is a LocalScript and nothing in the harness can run a LocalScript -- so wiring written
+-- here is wiring no probe can check, which is exactly how its absence went unnoticed.
+shell:BindViewport()
+
 -- The title, the close button and the tab strip are the shell's header and navigation now. The
 -- FitPanel call is gone too: the shell sizes the panel from the viewport and applies PhoneLayout's
 -- own PanelScale itself, so fitting a fixed 760x480 would be fitting a size nothing draws.
@@ -2603,6 +2617,11 @@ local DESTINATION_LOOK = {
 	Brainrots = { glyph = "★", sub = "Your collection" },
 	Trade = { glyph = "⇄", sub = "Swap with players" },
 	Crates = { glyph = "▣", sub = "Open and buy" },
+	-- `Style` had no entry, so the cosmetic-crates tab drew in the rail with an empty icon slot and
+	-- no subtitle -- it was added to TABS after DESTINATION_LOOK was written and nobody noticed,
+	-- because the rail is the one place the omission shows. One line, and the ninth tab stops
+	-- looking like a bug. The #78 revamp replaces this whole list; until then it should be right.
+	Style = { glyph = "✦", sub = "Cosmetic crates" },
 	Cosmetics = { glyph = "◆", sub = "Skins and auras" },
 	Pass = { glyph = "▲", sub = "Brainrot Pass" },
 	Quests = { glyph = "✓", sub = "Daily and weekly" },
@@ -3357,6 +3376,13 @@ end
 
 menuButton.Activated:Connect(toggleMenu)
 shell.onBack = toggleMenu
+-- Oliver's #66. `onBack` alone was not enough: the scrim and Backspace read that field at click
+-- time, but the header's X captured `options.onClose` at CONSTRUCTION -- line 138, before this
+-- function exists -- so it was built with no connection at all. The shell reads both at click time
+-- now and falls back to closing itself, so this line is belt and braces rather than the only thing
+-- holding the X up. It is here so the X does exactly what the scrim, Backspace and the MENU pill
+-- do: stop listening, clear the settings notice, close.
+shell.onClose = toggleMenu
 shell:BindBack("BrrMenuBack")
 
 Settings.Bind("BRR_Menu", "Menu", function(_, inputState)
@@ -3630,8 +3656,22 @@ do
 	end)
 	if not okToggle then
 		warn("[MenuClient] MenuStackToggle didn't load; the menu stack stays as it is: " .. tostring(stackToggle))
-		stackToggle = { SetSummary = function() end, Attention = function() end }
+		stackToggle = { SetSummary = function() end, Attention = function() end, SetHidden = function() end }
 	end
+
+	-- The left stack goes away while the panel is open, and comes back when it closes. Oliver's
+	-- screenshot on 2026-09-21 has the stack tab's chevron drawn on top of the first rail tile: the
+	-- stack is at a fixed screen position, the panel is centred, and on a window narrower than the
+	-- two together they occupy the same pixels. Driven off `panel.Visible` rather than from
+	-- toggleMenu, because the trade-invite path and openTab open the panel directly and would
+	-- otherwise be missed -- the same reason the MenuOpen attribute is driven off it.
+	local function followMenu()
+		if stackToggle.SetHidden then
+			stackToggle:SetHidden(panel.Visible)
+		end
+	end
+	followMenu()
+	panel:GetPropertyChangedSignal("Visible"):Connect(followMenu)
 
 	local seen = nil
 	local function watch(state)

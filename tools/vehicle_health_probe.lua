@@ -16,7 +16,11 @@
 --                first condition, proven by construction (the floor check runs before the debounce
 --                is even consulted) and now measured too
 --   debounce     continuous contact with one dummy at speed for over a second deals roughly ONE
---                hit's worth of damage, not sixty ticks of it
+--                hit's worth of damage, not sixty ticks of it; AND survives a collectgarbage()
+--                forced inside its own 0.5s window (bug-hunt B3-1, the geyser-cooldown technique
+--                from tools/wilds_landmarks_probe.lua's GEYSER test) -- plus an isolated self-check
+--                that a weak-keyed table of the same shape does NOT survive the same collection,
+--                proving the technique can fail rather than just reading as green
 --   wreck        health driven to zero: Wrecked is set, the drive prompt is disabled, the driver is
 --                put back on their feet (ejected, not left welded into a dead car)
 
@@ -284,11 +288,21 @@ do
 	drive(seat, 1, 0)
 	local began = os.clock()
 	-- Keep driving flat out for well over a second AFTER first contact, so a broken debounce (one
-	-- tick per physics step) would show up as far more than one hit's worth of damage.
-	local hitAt = nil
+	-- tick per physics step) would show up as far more than one hit's worth of damage. The dummy is
+	-- anchored, so a blocked car stays in continuous Touched contact with it rather than passing
+	-- straight through -- this is what gives the window its length, not a special setup for this test.
+	local hitAt, healthAtFirstHit, collected = nil, nil, false
 	while os.clock() - began < 8 do
 		if not hitAt and humanoid.Health < 100 then
 			hitAt = os.clock()
+			healthAtFirstHit = humanoid.Health
+			-- The geyser-cooldown technique (tools/wilds_landmarks_probe.lua's GEYSER test,
+			-- bug-hunt B3-1 precedent claude-43 pointed at): force a collection INSIDE the
+			-- debounce window, on the real live code, not a copy. If roadkillCooldown were still
+			-- weak-keyed, this is what would empty the entry and let the very next Touched event
+			-- (contact is still ongoing) deal a second full hit.
+			collectgarbage("collect")
+			collected = true
 		end
 		if hitAt and os.clock() - hitAt > 1.3 then
 			break
@@ -297,15 +311,36 @@ do
 	end
 	drive(seat, 0, 0)
 	local lost = 100 - humanoid.Health
-	-- One hit at this lane's likely contact speed is on the order of 60-160 damage (formula: (speed
-	-- - 12) * 1.8 for speed up to ~100). A broken per-frame debounce over 1.3s at 60 fps would be
-	-- roughly 78 ticks of that same per-hit amount -- unmistakably different, so a loose bound
-	-- (under 200) still separates "once" from "every frame" by two orders of magnitude.
 	check("sustained contact deals roughly one hit, not one per frame", hitAt ~= nil and lost < 200,
 		string.format("lost %.1f over %s of sustained contact", lost, hitAt and string.format("%.2fs", os.clock() - hitAt) or "no contact"))
+	-- The tight version of the same measurement: health must be EXACTLY what it was the instant
+	-- after the first hit, not just "under some loose bound" -- a collection-reset debounce would
+	-- show as MORE loss here, not a rounding difference.
+	check("the debounce survives a collection forced inside its own window (real code, real touch)",
+		collected and humanoid.Health == healthAtFirstHit,
+		string.format("health at first hit %.2f, unchanged %.2fs later through a mid-contact collectgarbage: %.2f",
+			healthAtFirstHit or -1, hitAt and (os.clock() - hitAt) or 0, humanoid.Health))
 	model:Destroy()
 	Combatants.Unregister(token.character)
 	token.character:Destroy()
+end
+
+-- Self-check: proves the technique itself, isolated from the game code entirely -- a weak-keyed
+-- table of this exact shape (Humanoid inside a Model, held by a live local variable throughout,
+-- same as the geyser test's dummy character) must NOT survive a collection, or the check above
+-- proves nothing.
+do
+	local weakCooldown = setmetatable({}, { __mode = "k" })
+	local selfCheckModel = Instance.new("Model")
+	local selfCheckHumanoid = Instance.new("Humanoid")
+	selfCheckHumanoid.Parent = selfCheckModel
+	selfCheckModel.Parent = workspace
+	weakCooldown[selfCheckHumanoid] = tick()
+	collectgarbage("collect")
+	local survived = weakCooldown[selfCheckHumanoid] ~= nil
+	check("self-check: a weak-keyed debounce of this shape does NOT survive a collection (must fail)",
+		not survived, string.format("entry survived the collection: %s", tostring(survived)))
+	selfCheckModel:Destroy()
 end
 
 --------------------------------------------------------------------------------

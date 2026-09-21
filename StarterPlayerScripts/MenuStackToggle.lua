@@ -309,7 +309,7 @@ function MenuStackToggle:SetCollapsed(collapsed, instant, save)
 	local home, away = self:_stackHome(), self:_stackAway()
 
 	if instant then
-		stack.Visible = not collapsed
+		stack.Visible = (not collapsed) and not self.hidden
 		stack.Position = home
 		stack.GroupTransparency = 0
 		tab.Position = tabPosition
@@ -327,7 +327,9 @@ function MenuStackToggle:SetCollapsed(collapsed, instant, save)
 		tab.Position = tabPosition + UDim2.fromOffset(self.phoneTab and 0 or -20, self.phoneTab and -10 or 0)
 		tween(tab, 0.34, { Position = tabPosition, Size = tabSize }, Enum.EasingStyle.Back)
 	else
-		stack.Visible = true
+		-- `and not self.hidden`: expanding the stack while the menu is open must not put it back on
+		-- top of the panel.
+		stack.Visible = not self.hidden
 		stack.Position = away
 		stack.GroupTransparency = 1
 		tween(stack, 0.3, { Position = home, GroupTransparency = 0 })
@@ -338,6 +340,27 @@ function MenuStackToggle:SetCollapsed(collapsed, instant, save)
 end
 
 -- What the collapsed tab shows beside the menu icon: "2/3" for today's quests, or "" for nothing.
+-- Out of the way while the full menu is open.
+--
+-- The stack is drawn at a fixed screen position and the menu panel is centred, so on a window
+-- narrower than the two together the stack is drawn ON the panel -- Oliver's screenshot has this
+-- tab's chevron sitting on top of the BRAINROTS rail tile. It is also redundant there: it exists to
+-- REACH the menu, which is already open. The X, the scrim, Backspace and the menu key all still
+-- close, so nothing is lost by taking it away.
+--
+-- Separate from `collapsed` on purpose. That is the player's own choice and it is remembered in
+-- Settings; this is temporary and must not overwrite it, which is why SetCollapsed's writes are
+-- gated on this flag rather than this sharing them.
+function MenuStackToggle:SetHidden(hidden)
+	hidden = hidden == true
+	if hidden == self.hidden then
+		return
+	end
+	self.hidden = hidden
+	self.tab.Visible = not hidden
+	self.stack.Visible = (not hidden) and not self.collapsed
+end
+
 function MenuStackToggle:SetSummary(text)
 	self.summary.Text = text or ""
 end

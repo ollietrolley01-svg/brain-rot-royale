@@ -34,6 +34,16 @@ local LootService = require(Modules:WaitForChild("LootService"))
 
 StateSync.Push = function() end
 StateSync.Notify = function() end
+-- WeaponService.GiveWeapon calls WeaponService.Push(player) as its LAST step (through the table, not
+-- a captured local -- confirmed by reading it -- so overwriting the table field here really does
+-- redirect the call), and Push's only job is firing `loadoutChanged` at the player. For a stand-in
+-- table (not a real Player) that FireClient throws "Unable to cast value to Object" -- which is what
+-- was ACTUALLY behind the "displaced weapon vanishes" failure below, not LootService: the throw
+-- happens INSIDE GiveWeapon, before it ever returns to AdminService's handler, so the drop-forward
+-- code a few lines later in AdminService.lua never even ran. No slot state is written inside Push
+-- itself (read it end to end: it only builds a client-facing view table), so stubbing it changes
+-- nothing this probe measures.
+WeaponService.Push = function() end
 local saves = 0
 PlayerData.Save = function()
 	saves += 1
@@ -45,14 +55,13 @@ end
 PlayerData.HasStore = function()
 	return true
 end
--- DropSlot's real path builds a full ground pickup (static gun model, pad, rarity ring) and its
--- scatter/snap-to-ground raycasts assume a built map (Terrain, a "Map" folder) that a bare probe
--- scene doesn't have -- a first run threw "Unable to cast value to Object" partway through that
--- machinery. None of that is what THIS probe is proving: it's proving AdminService captures the
--- displaced slot and forwards it, not that LootService can build a pickup with no world around it
--- (that's LootService's own concern). Stub it to just RECORD the call, the same shape as
--- PlayerData.Save above and tools/monetization_probe.lua's established pattern -- `require` caches
--- the module, so this replaces the exact table AdminService's own `modules().Loot` resolves to.
+-- DropSlot's real path builds a full ground pickup (static gun model, pad, rarity ring) in a bare
+-- probe scene with no built map around it. Not what THIS probe is proving -- it's proving
+-- AdminService captures the displaced slot and forwards it, not that LootService can build a pickup
+-- with no world around it (that's LootService's own concern, tested elsewhere). Stub it to just
+-- RECORD the call, the same shape as PlayerData.Save above and monetization_probe.lua's established
+-- pattern -- `require` caches the module, so this replaces the exact table AdminService's own
+-- `modules().Loot` resolves to.
 local dropCalls = {}
 LootService.DropSlot = function(slot, position, from)
 	table.insert(dropCalls, { slot = slot, position = position, from = from })

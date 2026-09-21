@@ -713,7 +713,12 @@ VehicleModels.Models.Rotster = {
 	},
 	build = function(b)
 		local HW = 3.3
-		local r, tw, track = 1.3, 1.05, 2.85
+		-- Oliver: "make the car wheel models more flat" -- width (tw) narrowed from 1.05 to 0.8, a
+		-- ratio of 0.40 to 0.31 (radius r UNCHANGED: the suspension samples the wheel's radius for
+		-- ride height, so touching that would also change how the car sits, not just how it looks).
+		-- tw is the wheel builder's WIDTH argument, not a raw cylinder Size -- Builder:roadWheel maps
+		-- it onto whichever local axis each part needs, so this is the correct place to flatten it.
+		local r, tw, track = 1.3, 0.8, 2.85
 		local fz, rz = -4.2, 4.3
 		local R = 1.52
 		local sill, shoulder, belt, roofY = 1.0, 3.15, 3.4, 5.75
@@ -1092,7 +1097,10 @@ VehicleModels.Models.CrocodiloRanger = {
 	},
 	build = function(b)
 		local HW = 3.6
-		local r, tw, track = 1.75, 1.35, 3.2
+		-- Oliver: "make the car wheel models more flat" -- tw narrowed 1.35 -> 1.15 (ratio 0.39 ->
+		-- 0.33, top of the "quarter to a third" band, kept a touch wider than the others as this is
+		-- the off-road model). r UNCHANGED (ride height; see Rotster's comment for why).
+		local r, tw, track = 1.75, 1.15, 3.2
 		local fz, rz = -4.9, 4.6
 		local R = 2.05
 		local sill, shoulder, belt, roofY = 1.9, 4.1, 4.35, 6.9
@@ -1323,7 +1331,9 @@ VehicleModels.Models.TralalaGT = {
 	},
 	build = function(b)
 		local HW = 3.5
-		local r, tw, track = 1.35, 1.25, 2.93
+		-- Oliver: "make the car wheel models more flat" -- this was the fattest wheel of the four
+		-- (ratio 0.46), so the biggest cut: tw 1.25 -> 0.78 (ratio 0.29). r UNCHANGED; see Rotster.
+		local r, tw, track = 1.35, 0.78, 2.93
 		local fz, rz = -4.45, 4.55
 		local R = 1.56
 		local sill, shoulder, belt, hip, roofY = 0.72, 2.65, 2.9, 3.2, 4.85
@@ -1495,7 +1505,9 @@ VehicleModels.Models.SahurVan = {
 	},
 	build = function(b)
 		local HW = 3.5
-		local r, tw, track = 1.45, 1.1, 3.0
+		-- Oliver: "make the car wheel models more flat" -- tw narrowed 1.1 -> 0.85 (ratio 0.38 ->
+		-- 0.29). r UNCHANGED; see Rotster's comment for why.
+		local r, tw, track = 1.45, 0.85, 3.0
 		local fz, rz = -4.3, 4.4
 		local R = 1.68
 		local sill, belt, roofY = 1.3, 4.3, 7.5

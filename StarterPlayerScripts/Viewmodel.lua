@@ -383,10 +383,27 @@ local function fit(b, stretch)
 		return
 	end
 	b.stretch = stretch
-	local span = math.max((b.rawTop - b.rawBottom).Magnitude, 1e-3)
-	local scale = V(ARM_THICKNESS / b.base.X, b.length * stretch / span, ARM_THICKNESS / b.base.Z)
+	-- Solve the Y scale so the two JOINTS end up `length * stretch` apart, instead of scaling the part
+	-- by the straight-line distance between them and hoping. An R15 body package puts the shoulder and
+	-- elbow attachments OFF the part's centre line -- measured at 0.1700 studs on the stock rig -- so
+	-- the joint-to-joint vector has X and Z in it, and those are scaled by the arm's THICKNESS, not by
+	-- its length. Scaling Y by `wanted / span` therefore left the joints 0.1643 studs apart (0.9557
+	-- instead of 1.1200) on every gun and every pose: Oliver's #11, "the arms joints look disconnected".
+	-- On a rig whose attachments ARE on the centre line this is arithmetically identical to what it
+	-- replaced, so nothing that looks right today can be made wrong by it.
+	local raw = b.rawTop - b.rawBottom
+	local across, through = ARM_THICKNESS / b.base.X, ARM_THICKNESS / b.base.Z
+	local wanted = b.length * stretch
+	local sideways = math.sqrt((raw.X * across) ^ 2 + (raw.Z * through) ^ 2)
+	local along = wanted * wanted - sideways * sideways
+	-- A bone shorter than its own sideways offset has no solution; keep the old scale rather than take
+	-- the root of a negative number.
+	along = along > 0 and math.sqrt(along) or (wanted * math.abs(raw.Y) / math.max(raw.Magnitude, 1e-3))
+	local scale = V(across, along / math.max(math.abs(raw.Y), 1e-3), through)
 	b.part.Size = b.base * scale
 	b.top = b.rawTop * scale
+	-- The joint line in the scaled part's own space. `place` lays THIS along the bone.
+	b.joint = raw * scale
 end
 
 function Arms.new(parent, character)
@@ -536,6 +553,19 @@ function Arms:pose(side, view, hand, curl, parts, cframes, held)
 		local right = view.LookVector:Cross(up)
 		right = right.Magnitude > 1e-3 and right.Unit or view.RightVector
 		local rotation = CFrame.fromMatrix(Vector3.zero, right, up)
+		-- Lay the bone's JOINT LINE along the bone, not the part's +Y. With an off-centre rig
+		-- attachment those are different lines -- 8.7 to 10.3 degrees apart on the stock R15 upper arm --
+		-- and aligning the wrong one is the other half of why the far joint hung away from the joint it
+		-- was supposed to meet (#11). A centred rig has them parallel and this correction is the
+		-- identity. Measured after: worst elbow gap across 62 guns and four poses, 0.327 -> 0.004 studs.
+		local joint = b.joint
+		if joint and joint.Magnitude > 1e-4 then
+			local have = rotation:VectorToWorldSpace(joint).Unit
+			local axis = have:Cross(up)
+			if axis.Magnitude > 1e-4 then
+				rotation = CFrame.fromAxisAngle(axis.Unit, math.acos(math.clamp(have:Dot(up), -1, 1))) * rotation
+			end
+		end
 		add(b.part, rotation + (from - rotation:VectorToWorldSpace(b.top)))
 	end
 	place(arm.upper, shoulder, elbow)

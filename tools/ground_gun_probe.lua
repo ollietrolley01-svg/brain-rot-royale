@@ -1028,5 +1028,76 @@ for _, id in ipairs({ "TralalaShotgun", "PocketPopper" }) do
 	end
 end
 
+-- Oliver: "get rid of the pad ... just make them glow the colour of their tier instead."
+-- The questions that decide it are all "can you see it", so they are all pictures.
+--
+-- NOTE, said out loud because it would otherwise be a stand-in: the rim is created `Enabled = false`
+-- and AmbientClient lights it as the camera comes near. AmbientClient is a LocalScript and does not
+-- run in an edit-mode gallery, so these views switch it on by hand -- which is what the client does
+-- at close range. What is photographed is the real Highlight on the real pickup; what is NOT proven
+-- here is the client's distance gate, which needs a play test.
+local function lightGlow(base, on)
+	local glow = base and base:FindFirstChild("RarityGlow")
+	if glow then
+		glow.Enabled = on
+	end
+	return glow ~= nil
+end
+
+for _, distance in ipairs({ 10, 25, 60 }) do
+	for _, case in ipairs({ { "glow", true }, { "noglow", false } }) do
+		table.insert(views, {
+			name = string.format("glow_%dstud_%s", distance, case[1]),
+			settle = 1.4,
+			hold = 2,
+			setup = function(folder, camera)
+				scene(folder)
+				local made = {}
+				-- One Common and one Uncommon, which is all the map itself ever drops loose, plus a
+				-- Legendary to show a high tier (it reaches the floor only from a death drop).
+				for index, id in ipairs({ "PocketPopper", "TralalaShotgun", "GoldenSahurCannon" }) do
+					local base = drop(folder, id, Vector3.new((index - 2) * 4.5, 0, 0))
+					if base then
+						lightGlow(base, case[2])
+						table.insert(made, base)
+					end
+				end
+				local focus = VIEW_ORIGIN + Vector3.new(0, 1.2, 0)
+				camera.FieldOfView = 70
+				camera.CFrame = CFrame.lookAt(VIEW_ORIGIN + Vector3.new(0, EYE_HEIGHT, distance), focus)
+				out("view glow_%dstud_%s: %d pickups, rim %s", distance, case[1], #made, case[2] and "lit" or "off")
+				frameCheck(string.format("glow_%dstud_%s", distance, case[1]), camera, focus, made[1])
+			end,
+		})
+	end
+end
+
+-- How many Highlights actually render at once. Roblox drops the surplus silently, and a map carries
+-- far more pickups than the cap, so this is the measurement that decides whether the glow can ever be
+-- always-on: forty pickups in a grid, all lit, all the same distance away. Count the rims in the
+-- picture. If fewer than forty glow, the distance gate is not an optimisation, it is the only version
+-- that works.
+table.insert(views, {
+	name = "glow_fortypickups_cap",
+	settle = 2,
+	hold = 2.5,
+	setup = function(folder, camera)
+		scene(folder)
+		local lit = 0
+		for index = 1, 40 do
+			local row, column_ = math.floor((index - 1) / 8), (index - 1) % 8
+			local base = drop(folder, index % 2 == 0 and "PocketPopper" or "TralalaShotgun",
+				Vector3.new((column_ - 3.5) * 3.2, 0, -row * 3.2))
+			if base and lightGlow(base, true) then
+				lit += 1
+			end
+		end
+		out("view glow_fortypickups_cap: %d rims switched on; count how many the picture actually shows", lit)
+		camera.FieldOfView = 70
+		camera.CFrame = CFrame.lookAt(VIEW_ORIGIN + Vector3.new(0, 9, 16), VIEW_ORIGIN + Vector3.new(0, 0, -6))
+		frameCheck("glow_fortypickups_cap", camera, VIEW_ORIGIN + Vector3.new(0, 0, -6))
+	end,
+})
+
 out("gallery: %d views", #views)
 return views

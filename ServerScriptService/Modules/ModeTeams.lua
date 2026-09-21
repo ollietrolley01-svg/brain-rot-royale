@@ -89,8 +89,18 @@ local pads = { {}, {} }
 
 -- token -> 1 or 2
 local teamOf = {}
--- token -> os.clock() when spawn protection ends
+-- token -> the WALL-CLOCK millisecond at which spawn protection ends.
+--
+-- NOT os.clock(). os.clock() is process CPU TIME in Roblox, not elapsed time, so a deadline stored
+-- with it runs for `seconds / cpuRatio` real seconds -- measured at 0.4 under load in this project,
+-- which turns 3 seconds of spawn protection into about 7.5 of a player nobody can kill. The same
+-- mistake also made the expiry safety net unable to fire: see grantProtection.
 local protectedUntil = {}
+
+-- One clock, used for the deadline AND for every test of it. Sub-second, because the window is 3 s.
+local function protectionNowMs()
+	return DateTime.now().UnixTimestampMillis
+end
 -- token -> true while dead and waiting to come back
 local downed = {}
 -- Which team the next joiner goes to, so an odd number of late joiners still balances.
@@ -340,8 +350,7 @@ function ModeTeams.DamageVeto(attackerToken, victimToken, _weaponId)
 		return true
 	end
 
-	local until_ = protectedUntil[victimToken]
-	if until_ and os.clock() < until_ then
+	if ModeTeams.IsProtected(victimToken) then
 		return true
 	end
 	return false
@@ -360,9 +369,12 @@ function ModeTeams.IsHostile(a, b)
 	return true
 end
 
+-- THE ONE COPY OF THIS RULE. It used to exist twice: here, and inline inside DamageVeto, with the
+-- inline one live and this one dead. Two copies of a rule is one copy that gets fixed and one that
+-- does not, which is exactly what happened to the clock. DamageVeto now calls this.
 function ModeTeams.IsProtected(token)
 	local until_ = protectedUntil[token]
-	return until_ ~= nil and os.clock() < until_
+	return until_ ~= nil and protectionNowMs() < until_
 end
 
 -- Protection ends the moment you take a swing, not when you move. Called from the fire and throw
@@ -381,14 +393,20 @@ local function grantProtection(token, seconds)
 	if not seconds or seconds <= 0 then
 		return
 	end
-	protectedUntil[token] = os.clock() + seconds
+	protectedUntil[token] = protectionNowMs() + seconds * 1000
 	local character = Combatants.GetCharacter(token)
 	if character then
 		character:SetAttribute("SpawnProtected", true)
 	end
+	-- task.delay is WALL time, so the test inside it has to be a wall test too. It used to re-read a
+	-- CPU deadline, which at this moment has NOT been reached however long the player has really been
+	-- standing there -- so this never called BreakProtection, and protection ended only when the
+	-- player took a swing or the mode tore down. A condition that cannot be true when it is checked.
+	--
+	-- IsProtected, not a re-implementation: a second grant with a later deadline must win, and it
+	-- brings its own delay with it.
 	task.delay(seconds, function()
-		local until_ = protectedUntil[token]
-		if until_ and os.clock() >= until_ then
+		if protectedUntil[token] and not ModeTeams.IsProtected(token) then
 			ModeTeams.BreakProtection(token)
 		end
 	end)

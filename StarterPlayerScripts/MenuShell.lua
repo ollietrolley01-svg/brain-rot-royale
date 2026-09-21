@@ -15,6 +15,7 @@
 
 local ContextActionService = game:GetService("ContextActionService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
 local UiParts = require(script.Parent:WaitForChild("UiParts"))
@@ -82,22 +83,91 @@ function MenuShell.new(options)
 	create("UIStroke", { Color = Role.Line, Thickness = Stroke.Hairline, Parent = self.panel })
 	self.scale = create("UIScale", { Parent = self.panel })
 
+	self.onClose = options.onClose
+	self.onSettings = options.onSettings
+
+	-- Oliver's #66, "the x button on the menu is broken". It was not a hit-test and not a z-order:
+	-- the button had NO Activated connection at all.
+	--
+	-- These two used to be built as `onClick = options.onClose` / `options.onSettings`. MenuClient
+	-- constructs the shell at its line 138, long before `toggleMenu` exists, so it passes neither --
+	-- and UiParts.button (UiParts.lua:146) only reaches `Activated:Connect` when `onClick` is
+	-- non-nil. So the X was built dead, while UiParts.interactive still gave it hover and press
+	-- states: it looked alive, which is why it reads as "broken" rather than as "missing".
+	--
+	-- The scrim above never had this bug, and the difference is the whole lesson: it
+	-- reads `self.onBack` at CLICK time, and MenuClient assigns that field later. So these read
+	-- their handler at click time too -- and, more to the point, the closures themselves are never
+	-- nil, so the X can no longer be CONSTRUCTED without a connection whatever a host forgets to
+	-- pass. The failure mode is removed rather than patched at one call site.
+	local actions = {
+		{
+			glyph = "⚙",
+			onClick = function()
+				self:Settings()
+			end,
+		},
+		-- The letter, not a multiplication sign: U+2715 isn't in the font Roblox ships and drew a
+		-- tofu box in the render. MenuClient's own close button has always used "X".
+		{
+			glyph = "X",
+			onClick = function()
+				self:Dismiss()
+			end,
+		},
+	}
 	local header, walletSlot = UiParts.header({
 		parent = self.panel,
 		title = options.title or "BRAIN ROT ROYALE",
-		actions = {
-			{ glyph = "⚙", onClick = options.onSettings },
-			-- The letter, not a multiplication sign: U+2715 isn't in the font Roblox ships and drew a
-			-- tofu box in the render. MenuClient's own close button has always used "X".
-			{ glyph = "X", onClick = options.onClose },
-		},
+		actions = actions,
 	})
 	self.header = header
 	self.WalletSlot = walletSlot
 
-	self.nav = create("Frame", {
+	-- The header's only TextButtons are its actions: its title and labels are TextLabels and its
+	-- wallet slot is a Frame. Held by name so a probe, a gallery or a later tab can reach the REAL
+	-- X rather than one it built itself, which would say nothing about what the shell builds.
+	self.HeaderActions = {}
+	do
+		local buttons = {}
+		for _, child in ipairs(header:GetDescendants()) do
+			if child:IsA("TextButton") then
+				table.insert(buttons, child)
+			end
+		end
+		table.sort(buttons, function(a, b)
+			return a.LayoutOrder < b.LayoutOrder
+		end)
+		self.HeaderActions.settings, self.HeaderActions.close = buttons[1], buttons[2]
+	end
+
+	-- What was actually put in each action's `onClick` slot. UiParts.button connects Activated if
+	-- and only if that value is non-nil, so this table IS the wiring -- a nil here is precisely the
+	-- shipped bug. Exposed because Studio's plugin sandbox refuses synthetic input
+	-- ("lacking capability RobloxScript"), so a probe cannot click the button and this is the next
+	-- thing down that is still a measurement of the real construction rather than an assumption.
+	self.HeaderHandlers = { settings = actions[1].onClick, close = actions[2].onClick }
+
+	-- Oliver's #65, "the tabs in the menu aren't fitting inside the menu hud". This was a plain
+	-- Frame, so a destination stack taller than the nav simply drew on past the bottom of the
+	-- PANEL: nothing clipped it, nothing scrolled it, nothing shrank it. A ScrollingFrame cannot
+	-- draw outside itself, so containment is structural now rather than something the arithmetic
+	-- has to keep getting right as the destination list changes.
+	self.nav = create("ScrollingFrame", {
 		Name = "Nav",
 		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		-- Explicit, and not because a ScrollingFrame is believed to clip anyway. The WHOLE of the
+		-- #65 containment claim rests on this one property, and the probe reads it back off the
+		-- instance rather than assuming it -- so if this line is ever removed the probe goes red
+		-- instead of quietly reporting that nothing is drawn outside the panel.
+		ClipsDescendants = true,
+		-- 0, not hidden: on every screen the game is designed for the stack fits, so a visible bar
+		-- would appear only on a shape nobody has, and it would eat width the rail needs.
+		ScrollBarThickness = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
 		Parent = self.panel,
 	})
 	self.navLayout = create("UIListLayout", {
@@ -211,6 +281,12 @@ function MenuShell:SetViewport(viewport, touch)
 		self.navLayout.FillDirection = Enum.FillDirection.Vertical
 		self.navLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 		self.navLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		-- The bar sizes ITSELF to its rows (barHeight above comes from the same wrap), so it never
+		-- has more content than window and must not scroll. Left automatic, a centred list inside a
+		-- growing canvas fights itself; this keeps the bar exactly what it was.
+		self.nav.AutomaticCanvasSize = Enum.AutomaticSize.None
+		self.nav.CanvasSize = UDim2.new()
+		self.nav.ScrollingEnabled = false
 	else
 		self.nav.AnchorPoint = Vector2.zero
 		self.nav.Position = UDim2.fromOffset(Space.LG, headerHeight)
@@ -219,6 +295,11 @@ function MenuShell:SetViewport(viewport, touch)
 		self.navLayout.FillDirection = Enum.FillDirection.Vertical
 		self.navLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
 		self.navLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+		-- The rail is the case that overflowed (#65). It scrolls only when the stack is taller than
+		-- the room; on the screens the game is designed for it is not, so nothing visible changes
+		-- and no destination can be drawn outside the panel at any count.
+		self.nav.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		self.nav.ScrollingEnabled = true
 	end
 
 	self.Content.Position = UDim2.fromOffset(railWidth + (phone and Space.MD or 0), headerHeight)
@@ -235,6 +316,23 @@ end
 function MenuShell:SetDestinations(destinations, active)
 	self.destinations = destinations
 	self.active = active or self.active or (destinations[1] and destinations[1].key)
+
+	-- A changed count changes how many rows the bar wraps to, and therefore how tall the bar is and
+	-- how much height is left for content -- so the panel has to be re-laid BEFORE the cells are
+	-- built, not after. SetViewport's own tail calls straight back in here to do the building, and
+	-- `laying` stops that becoming a loop: the re-entrant call skips this block and goes to the
+	-- build, and this one returns having already had its cells made.
+	if self.viewport and not self.laying then
+		self.laying = true
+		local ok, err = pcall(function()
+			self:SetViewport(self.viewport, self.touch)
+		end)
+		self.laying = false
+		if not ok then
+			error(err, 0)
+		end
+		return
+	end
 	for _, child in ipairs(self.nav:GetChildren()) do
 		if not child:IsA("UIListLayout") then
 			child:Destroy()
@@ -301,6 +399,38 @@ function MenuShell:Select(key)
 	end
 end
 
+-- What the X does, read at CLICK time so a host can assign the field after construction the way
+-- MenuClient already does with `onBack`.
+--
+-- The last branch is deliberate: a close button that does nothing is the bug this replaced, so a
+-- shell nobody has given a handler still CLOSES rather than sitting there looking pressable. There
+-- is no arrangement of options that produces a dead X.
+function MenuShell:Dismiss()
+	local handler = self.onClose or self.onBack
+	if handler then
+		handler()
+	else
+		self:Close()
+	end
+end
+
+-- What the gear does. Dead in the built place for exactly the same reason the X was, and fixed the
+-- same way even though the revamp moves Settings into the destination list and drops the gear: if
+-- anything re-adds it, it has to work by construction rather than by someone remembering to pass a
+-- handler. With no handler it selects a "Settings" destination if the host has one.
+function MenuShell:Settings()
+	if self.onSettings then
+		self.onSettings()
+		return
+	end
+	for _, destination in ipairs(self.destinations) do
+		if destination.key == "Settings" then
+			self:Select(destination.key)
+			return
+		end
+	end
+end
+
 function MenuShell:IsOpen()
 	return self.layer.Visible
 end
@@ -332,6 +462,59 @@ function MenuShell:Toggle()
 	else
 		self:Open()
 	end
+end
+
+-- WHO ASKS "what screen is this?", and why it lives here rather than in the host.
+--
+-- This wiring used to be MenuClient's, and MenuClient never did it (#65) -- the shell kept the
+-- 1280x720 its constructor falls back to, on every screen, so the `short` and `tall` versions never
+-- ran in the game at all. The reason that hid for months is worth writing down: MenuClient is a
+-- LocalScript, and a LocalScript never runs in the runtest harness, so the missing wiring was also
+-- wiring that nothing could test. `SetViewport` itself always worked and was easy to test; its
+-- CALLER was neither. Moving the call in here makes it reachable by a probe, so the gap cannot
+-- reopen silently.
+--
+-- Re-laid on three signals, not one: the viewport (a resize or a rotation), the camera being
+-- REPLACED (workspace.CurrentCamera is swapped out, and a listener left on the old one feeds
+-- nothing), and TouchEnabled, which decides the safe area that keeps the panel clear of Roblox's
+-- own controls.
+function MenuShell:BindViewport(camera)
+	self:UnbindViewport()
+	self.viewportBinding = {}
+	local function relayout()
+		local live = camera or workspace.CurrentCamera
+		if live then
+			self:SetViewport(live.ViewportSize, UserInputService.TouchEnabled)
+		end
+	end
+	local function watch()
+		local live = camera or workspace.CurrentCamera
+		if not live then
+			return
+		end
+		if self.viewportWatch then
+			self.viewportWatch:Disconnect()
+		end
+		self.viewportWatch = live:GetPropertyChangedSignal("ViewportSize"):Connect(relayout)
+		relayout()
+	end
+	watch()
+	if not camera then
+		table.insert(self.viewportBinding, workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watch))
+	end
+	table.insert(self.viewportBinding, UserInputService:GetPropertyChangedSignal("TouchEnabled"):Connect(relayout))
+	return self
+end
+
+function MenuShell:UnbindViewport()
+	if self.viewportWatch then
+		self.viewportWatch:Disconnect()
+		self.viewportWatch = nil
+	end
+	for _, connection in ipairs(self.viewportBinding or {}) do
+		connection:Disconnect()
+	end
+	self.viewportBinding = nil
 end
 
 -- Back, on a pad and on a keyboard.
