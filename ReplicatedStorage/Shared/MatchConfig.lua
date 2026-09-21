@@ -9,8 +9,10 @@ MatchConfig.MaxPlayers = 50
 MatchConfig.MinPlayers = 1
 MatchConfig.LobbyCountdown = 15
 -- Once every player in the server has readied up there's nobody left to wait for, so the
--- countdown drops to this (still long enough to cast a map vote).
-MatchConfig.AllReadyCountdown = 5
+-- countdown drops to this. 8 rather than 5 since the vote became a MODE and map decision
+-- (Oliver's #2): three cards, three different games, and five seconds is not long enough to read
+-- them. Revert this one number if it ever feels slow.
+MatchConfig.AllReadyCountdown = 8
 
 -- How far away text in the lobby can be seen, so the plaza isn't a wall of labels from wherever
 -- you stand. Floating labels (Ready Pad, Trading Post, practice targets, podium names, the

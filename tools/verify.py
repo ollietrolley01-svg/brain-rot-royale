@@ -1123,8 +1123,43 @@ if os.path.exists(os.path.join(root, _gm_path)):
     _gm_missing = [_n for _n, _p in _gm_seams.items() if not re.search(_p, _gm_ms)]
     for _n in _gm_missing:
         problems.append(f"game modes: MatchService seam missing — {_n}")
+    # A mode's description must not hard-code a number that disagrees with its own scoreTarget.
+    # TeamDeathmatch's said "First to 50 eliminations" while scoreTarget said 100, a few lines apart
+    # in the same table, because Oliver's change to 100 never reached the sentence. The descriptions
+    # are composed from the target now; this refuses a build where a literal one creeps back in.
+    def _gm_no_comments(text):
+        # COMMENTS ONLY, NOT STRINGS. verify.py's own _strip_lua replaces every string literal with
+        # an empty one, which is right for finding code and fatal here: the thing being checked IS a
+        # string. Fed stripped source this check saw an empty description, found no digits in it and
+        # passed forever -- and its planted needle still went green, because the needle was handed a
+        # raw string while the real input was not. The needle now travels the same pipeline.
+        text = re.sub(r"--\[\[.*?\]\]", "", text, flags=re.S)
+        return "\n".join(_l for _l in text.split("\n") if not _l.lstrip().startswith("--"))
+
+    def _gm_description_drift(text):
+        text = _gm_no_comments(text)
+        found = []
+        for _m in re.finditer(r"(\w+)\s*=\s*\{(.*?)\n\t\}", text, re.S):
+            _name, _body = _m.group(1), _m.group(2)
+            _target = re.search(r"scoreTarget\s*=\s*(\d+)", _body)
+            _desc = re.search(r'description\s*=\s*"([^"]*)"', _body)
+            if not _target or not _desc:
+                continue
+            for _n in re.findall(r"\b(\d+)\b", _desc.group(1)):
+                if _n != _target.group(1):
+                    found.append(f"{_name}: description says {_n}, scoreTarget says {_target.group(1)}")
+        return found
+
+    for _drift in _gm_description_drift(read("ReplicatedStorage/Shared/GameModes.lua")):
+        problems.append(f"game modes: {_drift} — the sentence and the number must not disagree")
+    # PERMANENT PLANTED NEEDLE, through the same pipeline as the real input.
+    _gm_planted = _gm_description_drift(
+        'Broken = {\n\t\tscoreTarget = 100,\n\t\tdescription = "First to 50 eliminations.",\n\t}')
+    if not _gm_planted:
+        problems.append("game modes: the description-drift check did NOT catch a planted 50-vs-100 "
+                        "disagreement — it is testing nothing")
     print(f"game modes: {len(_gm_seams) - len(_gm_missing)}/{len(_gm_seams)} MatchService seams, "
-          f"BattleRoyale noops present")
+          f"BattleRoyale noops present, {len(_gm_planted)} planted description drift caught")
 
 print("\n".join(problems) if problems else "OK: no problems")
 sys.exit(1 if problems else 0)

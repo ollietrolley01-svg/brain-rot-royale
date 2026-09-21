@@ -163,7 +163,9 @@ end
 
 local PADS_PER_TEAM = 5
 local BASE_FRACTION = 0.72
-local PAD_SPREAD = 30
+-- Where a team's pads are looked for around its base. The first number is the original
+-- spacing; the rest are only reached when that pass finds nothing at all.
+local PAD_SPREADS = { 30, 70, 150 }
 
 -- The arena: a disc centred on town 1. MapGenerator's placeTowns puts town index 1 at distance 0
 -- (plus a +/-40 jitter) on every map and every seed, so it is the one stable anchor there is, and
@@ -197,24 +199,37 @@ end
 
 -- Candidate pads around a base point, each one validated. Public so the spawn probe can call it
 -- against a built map and count what it accepted and refused.
+--
+-- WIDENS WHEN IT COMES UP EMPTY. A base that lands in a town, on a road or in woodland can have all
+-- 60 of its candidates refused inside the first spread, and an empty list is the one case the
+-- placer has no good answer for. Each pass reaches further before giving up, so "no pads" means the
+-- arena really has nowhere to stand rather than the first 30 studs being busy. (Measured: 0 of 120
+-- team-arenas across five maps and twelve axes came up empty even before this, so the widening is
+-- insurance, not a fix for anything seen.)
 function ModeTeams.BuildPads(base, mapInfo)
 	local list = {}
 	local river = mapInfo and mapInfo.river
-	for attempt = 1, PADS_PER_TEAM * 12 do
-		if #list >= PADS_PER_TEAM then
-			break
-		end
-		-- The first candidate is the base itself, so a clean base always yields at least one pad.
-		local x, z = base.X, base.Z
-		if attempt > 1 then
-			local angle = math.random() * math.pi * 2
-			local reach = math.sqrt(math.random()) * PAD_SPREAD
-			x, z = base.X + math.cos(angle) * reach, base.Z + math.sin(angle) * reach
-		end
+	for pass = 1, #PAD_SPREADS do
+		local spread = PAD_SPREADS[pass]
+		for attempt = 1, PADS_PER_TEAM * 12 do
+			if #list >= PADS_PER_TEAM then
+				break
+			end
+			-- The first candidate is the base itself, so a clean base always yields at least one pad.
+			local x, z = base.X, base.Z
+			if attempt > 1 or pass > 1 then
+				local angle = math.random() * math.pi * 2
+				local reach = math.sqrt(math.random()) * spread
+				x, z = base.X + math.cos(angle) * reach, base.Z + math.sin(angle) * reach
+			end
 
-		local refusal = ModeTeams.RefusePad(x, z, river)
-		if not refusal then
-			table.insert(list, Vector3.new(x, terrainAt(x, z) or 0, z))
+			local refusal = ModeTeams.RefusePad(x, z, river)
+			if not refusal then
+				table.insert(list, Vector3.new(x, terrainAt(x, z) or 0, z))
+			end
+		end
+		if #list > 0 then
+			break
 		end
 	end
 	return list
@@ -292,19 +307,28 @@ end
 -- Friendly fire and spawn protection
 --------------------------------------------------------------------------------
 
--- Hung off CombatService.DamageVeto, whose signature is
--- (attackerToken, victimToken, amount, weaponId, headshot). True means the damage does not happen.
--- The trailing three are unused here and named only so a reader knows they arrive.
+-- Hung off CombatService.DamageVeto. True means the damage does not happen.
+--
+-- SIGNATURE, as the two real call sites actually use it:
+--   CombatService.DealDamage:353   DamageVeto(attackerToken, victimToken, weaponId)
+--   CompanionService:594           DamageVeto(player, target.token, tag)
+-- Both pass an IDENTIFIER third. This used to be declared (attacker, victim, amount, weaponId,
+-- headshot) after a comment that no caller ever matched, so `weaponId` arrived in the `amount` slot
+-- and the last two were never passed at all -- harmless only while they went unread.
+-- DO NOT "re-align" this by changing the callers: two tabs calling it the same way IS the contract.
+-- If the callers ever change, change this declaration to follow them, not the other way round.
 --
 -- Every combat damage path in the game reaches CombatService.DealDamage — guns, thrown coconuts
 -- and rockets (ProjectileService), barrels and mines (HazardService) and companions
--- (CompanionService). The one exception is the storm, which calls TakeDamage directly, and no
--- respawn mode runs a storm. So this one function is the whole of friendly fire AND the whole of
--- spawn protection.
+-- (CompanionService). TWO paths do not: the battle royale's storm and the respawn modes' own arena
+-- boundary both call humanoid:TakeDamage directly (StormService:136 and :232), so neither friendly
+-- fire nor spawn protection applies to either. That is deliberate for the boundary -- protection
+-- must not let anyone camp outside the arena -- and it corrects the older comment here, which
+-- claimed no respawn mode runs a storm. StormService.StartStatic IS one, at 4 damage a second.
 --
 -- CombatService calls this AFTER its own dead-victim and zero-amount guards, so it is never asked
 -- about a hit that was going nowhere anyway.
-function ModeTeams.DamageVeto(attackerToken, victimToken, _amount, _weaponId, _headshot)
+function ModeTeams.DamageVeto(attackerToken, victimToken, _weaponId)
 	if not active or attackerToken == nil or attackerToken == victimToken then
 		-- Your own grenade still hurts you. It is a real cost and removing it would be a free
 		-- panic button.
@@ -444,6 +468,140 @@ function ModeTeams.PickPad(team, extraScore)
 end
 
 --------------------------------------------------------------------------------
+-- Ground of last resort, and nobody spawning on anybody
+--------------------------------------------------------------------------------
+
+-- Real ground inside the arena, searched outward from `from` in rings. Returns a point ON the
+-- surface, or nil when the arena has no usable ground anywhere.
+--
+-- This exists because `arenaCentre` is stored FLAT -- Setup forces its Y to 0 -- so "the arena
+-- centre" is sea level, not the ground. The old emergency fallback pivoted a body to
+-- centre + (0, 4, 0). On the five shipped maps the centre's ground measures 0.0, so that happens to
+-- land four studs ABOVE it today; on any map whose centre town stands higher it is underground.
+-- Measured rather than assumed, and fixed because it is wrong either way.
+local GROUND_RINGS = 8
+local GROUND_STEP = 40
+
+function ModeTeams.GroundNear(from)
+	local centre = Vector3.new(from.X, 0, from.Z)
+	for ring = 0, GROUND_RINGS do
+		local reach = ring * GROUND_STEP
+		local steps = ring == 0 and 1 or 8
+		for step = 1, steps do
+			local angle = (step / steps) * math.pi * 2
+			local x = centre.X + math.cos(angle) * reach
+			local z = centre.Z + math.sin(angle) * reach
+			local ground = terrainAt(x, z)
+			if ground and not blocked(Vector3.new(x, ground, z)) then
+				return Vector3.new(x, ground, z)
+			end
+		end
+	end
+	return nil
+end
+
+-- Nobody spawns on top of anybody. PickPad scores a pad by its distance to the nearest ENEMY only,
+-- so a team-mate already standing on the best pad is invisible to it -- which is why three
+-- replacement bots in a row came back at the SAME point with the nearest living body 0 studs away
+-- (measured, tools/respawn_probe.lua). Rings out until the spot is clear, and gives the pad back
+-- unchanged when it already is.
+-- 14, not 10: the probe measured a replacement bot landing 11 studs from a living body, which
+-- cleared the old constant and still reads as close. Before this whole fix the same measurement
+-- was 0 studs -- three replacements on one point. A character is about 5 studs across.
+local SPAWN_CLEARANCE = 14
+
+-- `except` is the body being placed. It is already registered as a combatant by the time
+-- OnCharacterAdded reaches the respawn, and the placement watchdog can run this again when the body
+-- is ALREADY standing on the pad -- so without this it would see itself, call the pad occupied and
+-- shuffle sideways on every check.
+local function occupiedAt(point, except)
+	for character in pairs(Combatants.All()) do
+		if character.Parent and character ~= except then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			local root = character:FindFirstChild("HumanoidRootPart")
+			if humanoid and root and humanoid.Health > 0 and (root.Position - point).Magnitude < SPAWN_CLEARANCE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+function ModeTeams.ClearSpotNear(pad, except)
+	if not occupiedAt(pad, except) then
+		return pad
+	end
+	for ring = 1, 3 do
+		local reach = ring * SPAWN_CLEARANCE * 1.4
+		for step = 1, 8 do
+			local angle = (step / 8) * math.pi * 2 + ring
+			local x = pad.X + math.cos(angle) * reach
+			local z = pad.Z + math.sin(angle) * reach
+			local ground = terrainAt(x, z)
+			if ground then
+				local candidate = Vector3.new(x, ground, z)
+				if not blocked(candidate) and not occupiedAt(candidate, except) then
+					return candidate
+				end
+			end
+		end
+	end
+	-- Everywhere within 42 studs is busy. The pad is still better than the lobby.
+	return pad
+end
+
+-- Places a body when its team has NO PADS AT ALL. PlaceAt's least-bad branch cannot cover this: it
+-- picks the least bad of the pads that WERE refused, and there are none to be least bad. `place`
+-- used to answer that by waiting a second and asking again, up to four times -- while LoadCharacter
+-- had already stood the body on the LOBBY's spawn pad. That wait measured 3075 ms.
+--
+-- Returns whether a body was placed, and the point it went to.
+function ModeTeams.PlaceWithoutPad(token, character)
+	if not character or not character.Parent then
+		return false
+	end
+	local team = teamOf[token] or ModeTeams.Assign(token)
+	local spot = ModeTeams.GroundNear(arenaCentre)
+	if not spot then
+		return false
+	end
+	spot = ModeTeams.ClearSpotNear(spot, character)
+	local position = spot + Vector3.new(0, 4, 0)
+	-- Face the middle -- unless this IS the middle. CFrame.lookAt with the eye and the target in the
+	-- same place has no look vector, and the ring search starts AT the centre, so that is the common
+	-- case here rather than a rare one.
+	local facing = Vector3.new(arenaCentre.X, position.Y, arenaCentre.Z)
+	if Vector3.new(facing.X - position.X, 0, facing.Z - position.Z).Magnitude < 1 then
+		facing = position + Vector3.new(0, 0, 1)
+	end
+	character:PivotTo(CFrame.lookAt(position, facing))
+	character:SetAttribute("Team", team)
+	downed[token] = nil
+	grantProtection(token, mode and mode.spawnProtection or 0)
+	return true, position
+end
+
+-- Deals a combatant onto a NAMED side. Assign deals onto whichever side is smaller, so it cannot be
+-- asked for a particular one -- spawnReplacementBot used to call Forget and Assign again hoping for
+-- a different answer, which deals the same way and could not force anything.
+function ModeTeams.AssignTo(token, team)
+	if team ~= 1 and team ~= 2 then
+		return ModeTeams.Assign(token)
+	end
+	teamOf[token] = team
+	local character = Combatants.GetCharacter(token)
+	if character then
+		character:SetAttribute("Team", team)
+	end
+	return team
+end
+
+-- How far a body may be from where it was put before the placement is treated as not having taken.
+-- Far more than a player can travel in GameMode's confirm delay, far less than the 500 studs
+-- between the arena and the lobby.
+ModeTeams.PlacedTolerance = 150
+
+--------------------------------------------------------------------------------
 -- The loadout
 --------------------------------------------------------------------------------
 
@@ -506,12 +664,15 @@ function ModeTeams.PlaceAt(token, character, extra, allowRefused)
 		return false
 	end
 
+	pad = ModeTeams.ClearSpotNear(pad, character)
 	local position = pad + Vector3.new(0, 4, 0)
 	character:PivotTo(CFrame.lookAt(position, Vector3.new(arenaCentre.X, position.Y, arenaCentre.Z)))
 	character:SetAttribute("Team", team)
 	downed[token] = nil
 	grantProtection(token, mode and mode.spawnProtection or 0)
-	return true, settled
+	-- THIRD RETURN: where the body was actually put, so the caller can read it back a moment later
+	-- and see whether the placement took. Additive; the first two returns are unchanged.
+	return true, settled, position
 end
 
 -- Marks a combatant down. The scoreline is the caller's business; this only tracks the body.

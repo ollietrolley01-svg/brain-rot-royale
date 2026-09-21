@@ -503,7 +503,13 @@ end
 -- model's attributes replicate to everyone. The brightness share itself (and what a wrecked vehicle
 -- does to smoke) lives in VehicleWreckFx.lua, a ModuleScript, so it can be required and proven from
 -- a gallery the way GunFx/ExplosiveFx already are -- this LocalScript can't be.
-local lamps = setmetatable({}, { __mode = "k" })
+-- STRONG keys (bug-hunt B3-2, 2026-09-21): a weak `lamps` table let a collected-and-rebuilt entry
+-- re-read `base` from `part.Color` in lampsOf below -- but updateLamps is the only writer of that
+-- same property, so a rebuild re-primed `base` from an ALREADY-DIMMED colour. Every drop multiplied
+-- the darkening again with no floor (0.34 -> 0.1156 -> 0.039 -> ...), permanently, on any car,
+-- wreck or no wreck -- the "harmless cache" verdict this table used to carry was wrong. Dropped
+-- explicitly in lampsOf, the same AncestryChanged shape `track()` above already uses for `rigs`.
+local lamps = {}
 
 local function lampsOf(model)
 	local found = lamps[model]
@@ -511,21 +517,25 @@ local function lampsOf(model)
 		return found
 	end
 	found = {}
-	for _, part in ipairs(model:GetChildren()) do
+	-- GetDescendants, not GetChildren (bug-hunt B3-3b): a lamp part nested under a sub-model would
+	-- have read as zero found under GetChildren, silently never lighting or dimming.
+	for _, part in ipairs(model:GetDescendants()) do
 		local role = part:IsA("BasePart") and part:GetAttribute("Lamp")
 		if role then
-			table.insert(found, { part = part, role = role, base = part.Color })
+			table.insert(found, { part = part, role = role, base = VehicleWreckFx.LampBaseColor(part) })
 		end
 	end
 	lamps[model] = found
+	model.AncestryChanged:Connect(function()
+		if not model:IsDescendantOf(workspace) then
+			lamps[model] = nil
+		end
+	end)
 	return found
 end
 
 local function updateLamps(model, distance)
 	local found = lampsOf(model)
-	if #found == 0 then
-		return
-	end
 	local seat = model:FindFirstChild("DriverSeat")
 	local driven = seat ~= nil and seat.Occupant ~= nil
 	local braking = false
@@ -534,18 +544,23 @@ local function updateLamps(model, distance)
 		braking = seat:GetAttribute("Handbrake") == true or (seat.ThrottleFloat < -0.05 and forward > 1)
 			or (seat.ThrottleFloat > 0.05 and forward < -1)
 	end
+	local wrecked = model:GetAttribute("Wrecked") == true
 	-- One number describes the whole state, so nothing is written while nothing changes. This is
 	-- the ONLY place anything writes lamp Color -- "wrecked" is folded in as a third bit rather
 	-- than a second writer, the failure mode the prompt-reenable bug (#53/#57) already caught once.
-	local wrecked = model:GetAttribute("Wrecked") == true
-	local state = (driven and 1 or 0) + (braking and 2 or 0) + (wrecked and 4 or 0)
-	if lamps[model].state ~= state and distance <= ANIMATE_DISTANCE then
-		lamps[model].state = state
-		for _, entry in ipairs(found) do
-			local share = VehicleWreckFx.LampShare(entry.role, wrecked, driven, braking)
-			entry.part.Color = Color3.new(entry.base.R * share, entry.base.G * share, entry.base.B * share)
+	if #found > 0 then
+		local state = (driven and 1 or 0) + (braking and 2 or 0) + (wrecked and 4 or 0)
+		if lamps[model].state ~= state and distance <= ANIMATE_DISTANCE then
+			lamps[model].state = state
+			for _, entry in ipairs(found) do
+				local share = VehicleWreckFx.LampShare(entry.role, wrecked, driven, braking)
+				entry.part.Color = Color3.new(entry.base.R * share, entry.base.G * share, entry.base.B * share)
+			end
 		end
 	end
+	-- Bug-hunt B3-3b: this used to sit inside the `#found == 0` early return above, so a vehicle
+	-- with no lamp parts at all never smoked when wrecked -- two unrelated features shared one
+	-- early return that only ever belonged to lamps.
 	VehicleWreckFx.SetSmoke(model, wrecked)
 end
 

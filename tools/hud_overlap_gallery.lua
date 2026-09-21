@@ -58,11 +58,11 @@ local DESKTOP = {
 	{ name = "Use prompt", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0.6, 0 }, size = { 0, 250, 0, 46 } },
 	{ name = "Storm timer", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 72 }, size = { 0, 440, 0, 24 }, group = "stormSlot" },
 	{ name = "Minimap", anchor = { 1, 0 }, pos = { 1, -16, 0, 108 }, size = { 0, 190, 0, 190 } },
-	{ name = "Bounty", anchor = { 1, 0 }, pos = { 1, -16, 0, 304 }, size = { 0, 230, 0, 22 } },
+	{ name = "Bounty", anchor = { 1, 0 }, pos = { 1, -16, 0, 518 }, size = { 0, 230, 0, 22 } },
 	{ name = "Compass", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 100 }, size = { 0, 440, 0, 24 } },
-	{ name = "Location", anchor = { 1, 0 }, pos = { 1, -16, 0, 332 }, size = { 0, 230, 0, 20 } },
+	{ name = "Location", anchor = { 1, 0 }, pos = { 1, -16, 0, 546 }, size = { 0, 230, 0, 20 } },
 	{ name = "Kill feed", anchor = { 1, 0 }, pos = { 1, -16, 0, 312 }, size = { 0, 300, 0, 200 } },
-	{ name = "Toast", anchor = { 0.5, 1 }, pos = { 0.5, 0, 1, -120 }, size = { 0, 460, 0, 36 } },
+	{ name = "Toast", anchor = { 0.5, 1 }, pos = { 0.5, 0, 1, -140 }, size = { 0, 460, 0, 36 } },
 	{ name = "Drop banner", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 128 }, size = { 0, 480, 0, 30 } },
 	{ name = "Damage indicator", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, -170 }, size = { 0, 4, 0, 150 }, group = "centre" },
 }
@@ -197,6 +197,12 @@ local function buildElements(vw, menuOpen)
 end
 
 local EXCLUDE_GROUPS = { centre = true, stormSlot = true }
+-- Compass vs the scoreline: mutually exclusive by code now (HudClient.client.lua hides the compass
+-- in a team mode) -- see the matching note in tools/hud_overlap_probe.lua.
+local function isCompassScorePair(a, b)
+	local names = { [a.name] = true, [b.name] = true }
+	return names["Compass"] and names["Mode score HUD"]
+end
 local function overlappers(elements)
 	local hit = {}
 	for i = 1, #elements do
@@ -204,7 +210,7 @@ local function overlappers(elements)
 			local a, b = elements[i], elements[j]
 			local bothReserved = a.group == "reserved" and b.group == "reserved"
 			local sameExcludedGroup = a.group and a.group == b.group and EXCLUDE_GROUPS[a.group]
-			if not bothReserved and not sameExcludedGroup then
+			if not bothReserved and not sameExcludedGroup and not isCompassScorePair(a, b) then
 				local ox = math.min(a.r.x + a.r.w, b.r.x + b.r.w) - math.max(a.r.x, b.r.x)
 				local oy = math.min(a.r.y + a.r.h, b.r.y + b.r.h) - math.max(a.r.y, b.r.y)
 				if ox > 0 and oy > 0 then

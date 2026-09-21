@@ -204,7 +204,14 @@ local function readyPlayers()
 	return list
 end
 
+-- How many MatchChanged broadcasts have gone out. Read by tools/respawn_probe.lua: CombatClient's
+-- handler treats each ARRIVAL as a state change and drops the sprint on every one that is not
+-- InProgress, so this rate is the rate at which a held sprint dies in the lobby (Oliver's #82).
+-- Never read by game code.
+MatchService.BroadcastCount = 0
+
 local function broadcast()
+	MatchService.BroadcastCount += 1
 	matchChanged:FireAllClients({
 		state = state,
 		countdown = math.max(0, math.floor(countdown)),
@@ -940,6 +947,21 @@ local function finishMatch()
 	currentMode.StopWorld()
 	workspace.Gravity = NORMAL_GRAVITY
 
+	-- S4a. A respawn mode has no spectating, and StopWorld has just cancelled every respawn timer.
+	-- Anyone who died in the last few seconds of it was waiting on a LoadCharacter that will now
+	-- never happen, and with CharacterAutoLoads off nothing else gives them a body until the
+	-- intermission reset fifteen seconds later: a whole results screen with no body and no camera
+	-- subject. Give them one back.
+	if currentMode.respawn then
+		for token in pairs(participants) do
+			if Combatants.IsPlayer(token) and token.Parent and not Combatants.IsAlive(token) then
+				pcall(function()
+					token:LoadCharacter()
+				end)
+			end
+		end
+	end
+
 	local total = countKeys(participants)
 
 	-- Who actually won, so everyone gets closure rather than just their own placement.
@@ -1314,8 +1336,10 @@ local function startMatch()
 	-- Roll this match's event and set every knob it touches; a plain match gets the defaults.
 	currentEvent = MatchEvents.Roll()
 	-- S9. Which mode this match runs, and a veto on events it cannot host: a storm event with no
-	-- storm, or a chest event in a mode where the kit is handed to you.
-	currentMode = GameMode.Resolve(matchId)
+	-- storm, or a chest event in a mode where the kit is handed to you. The mode comes from the
+	-- lobby vote; VoteService.Resolve caches its pick until the next Open, so this call and the one
+	-- that takes the map below answer the same match -- a tie is drawn once, not twice.
+	currentMode = GameMode.Resolve(matchId, select(2, VoteService.Resolve()))
 	if not GameMode.AllowsEvent(currentMode, currentEvent) then
 		currentEvent = nil
 	end
@@ -1495,7 +1519,13 @@ local function startMatch()
 
 			-- Bots drop in under canopies like everyone else, steering for the nearest town or
 			-- landmark, so the opening sky is full and nobody starts on a doorstep.
+			-- S12b. A respawn mode opens on the ground in its own base, so its bots are built there
+			-- and dealt a side, not dropped on the battle royale's spiral under a canopy. Both hooks
+			-- are nil on the battle royale, so its path is byte-identical.
 			local spawned = BotService.Spawn(botCount, function(botIndex)
+				if currentMode.BotSpawnCFrame then
+					return currentMode.BotSpawnCFrame(botIndex)
+				end
 				return spawnCFrameFor(#joining + botIndex, total) + Vector3.new(0, MatchConfig.DropHeight, 0)
 			end, function(bot, humanoid)
 				if not stillThisMatch() then
@@ -1503,8 +1533,16 @@ local function startMatch()
 				end
 				participants[bot] = true
 				alive[bot] = true
+				-- S12c. WITHOUT THIS LINE a bot enters Team Deathmatch and King of the Hill with no
+				-- team at all: killing it scores nothing, it is never retired or replaced, the hill
+				-- never counts it, the spawn-pad enemy scan cannot see it, and it has no team
+				-- objective to chase. Every rule in those modes keys off ModeTeams.TeamOf. Measured
+				-- 8 of 8 teamless before this line existed.
+				if currentMode.EnrolBot then
+					currentMode.EnrolBot(bot, humanoid)
+				end
 				watchDeath(bot, humanoid)
-			end, { dropIn = true, dropTargets = mapInfo.dropSpots })
+			end, { dropIn = not currentMode.respawn, dropTargets = mapInfo.dropSpots })
 
 			if not stillThisMatch() then
 				return

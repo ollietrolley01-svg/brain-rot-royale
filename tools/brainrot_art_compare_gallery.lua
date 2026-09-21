@@ -1295,6 +1295,66 @@ end
 table.insert(views, mixedView("mixed_imports_plus_remake", "Mixed set A: imports for the meme names + REMAKE for the originals", BUILDERS[2]))
 table.insert(views, mixedView("mixed_imports_plus_current", "Mixed set B: imports for the meme names + CURRENT for the originals", BUILDERS[1]))
 
+-- 9. Tom Pearl (new Legendary), only when the place the run uses carries him: a close-up (front
+-- three-quarter and back, so the drips, the puddle and the face all show) and a line-up beside the
+-- two Legendaries he sits next to on value, so he reads as their equal or as an outsider.
+local tomPearl = BrainrotData.Get("Tom Pearl")
+if tomPearl then
+	table.insert(views, {
+		name = "tom_pearl_closeup",
+		settle = 1.4,
+		hold = 2,
+		setup = function(folder, camera)
+			clearGui()
+			pad(folder, ORIGIN, 26, 16)
+			local models, targets = {}, {}
+			local front, count, base = stand(BUILDERS[1], folder, tomPearl, ORIGIN + Vector3.new(-3.0, 0, 0), -0.35)
+			local back = stand(BUILDERS[1], folder, tomPearl, ORIGIN + Vector3.new(3.0, 0, 0), math.pi - 0.3)
+			table.insert(models, front)
+			table.insert(models, back)
+			table.insert(targets, { name = "front", position = front:GetBoundingBox().Position })
+			table.insert(targets, { name = "back", position = back:GetBoundingBox().Position })
+			local puddle = front:FindFirstChild("Puddle")
+			local drips = 0
+			for _, d in ipairs(front:GetChildren()) do
+				if d.Name == "Drip" then
+					drips += 1
+				end
+			end
+			plate(folder, string.format("Tom Pearl  CURRENT builder  %dp  base %+.2f\npuddle %s, drips %d", count, base,
+				puddle and string.format("%.2f wide, underside %+.2f above base", puddle.Size.Y, (puddle.Position.Y - puddle.Size.X / 2) - (ORIGIN.Y)) or "MISSING", drips),
+				ORIGIN + Vector3.new(0, 0.5, -3.2), 10)
+			note("tom_pearl_closeup: parts %d, base offset %+.3f, puddle %s, drips %d", count, base, tostring(puddle ~= nil), drips)
+			frameAll(camera, models, 28, 0.06)
+			frameCheck("tom_pearl_closeup", camera, targets)
+		end,
+	})
+	table.insert(views, {
+		name = "tom_pearl_neighbours",
+		settle = 1.3,
+		hold = 1.5,
+		setup = function(folder, camera)
+			clearGui()
+			local names = { "Imperatore Gelato", "Tom Pearl", "Titano Tuttifrutti", "Titano Tostapane", "Balena Cantante" }
+			pad(folder, ORIGIN, #names * 5.4 + 16, 18)
+			local models, targets = {}, {}
+			for index, name in ipairs(names) do
+				local def = BrainrotData.Get(name)
+				if def then
+					local ground = ORIGIN + Vector3.new((index - (#names + 1) / 2) * 5.4, 0, 0)
+					local model, count = stand(BUILDERS[1], folder, def, ground, 0)
+					table.insert(models, model)
+					table.insert(targets, { name = name, position = model:GetBoundingBox().Position })
+					plate(folder, string.format("%s\n%s %d coins  %dp", name, def.attack, def.coinValue, count), ground + Vector3.new(0, 0.5, -2.6), 5.2)
+				end
+			end
+			plate(folder, "Legendaries beside Tom Pearl on value (17,000) and on attack (Lob)", ORIGIN + Vector3.new(0, 6.4, 8.4), 28)
+			frameAll(camera, models, 30, 0.04)
+			frameCheck("tom_pearl_neighbours", camera, targets)
+		end,
+	})
+end
+
 if ONLY then
 	local kept = {}
 	for _, view in ipairs(views) do

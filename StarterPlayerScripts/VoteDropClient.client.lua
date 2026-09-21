@@ -23,6 +23,9 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 
 local VoteScreen = require(script.Parent:WaitForChild("VoteScreen"))
 local DropPicker = require(script.Parent:WaitForChild("DropPicker"))
+-- The cursor is claimed, never simply switched on and off: see MenuOpenClaims for the two ways a
+-- bare SetAttribute strands it, both of which Oliver has reported.
+local MenuOpenClaims = require(script.Parent:WaitForChild("MenuOpenClaims"))
 
 local matchChanged = Remotes.Event("MatchChanged")
 local voteChanged = Remotes.Event("VoteChanged")
@@ -49,6 +52,8 @@ local matchState = { state = "Waiting", countdown = 0, dropSelect = false }
 local voteState = { open = false, candidates = {}, votes = {} }
 local revealUntil = 0
 local revealId = nil
+-- The picker's outstanding claim on the cursor, held while its window is up.
+local dropCursorClaim = nil
 
 local vote = VoteScreen.new({
 	parent = gui,
@@ -74,10 +79,23 @@ local picker = DropPicker.new({
 		chooseDrop:FireServer(x, z)
 	end,
 	-- The second half of the cursor fix: CombatClient reads MenuOpen so a click on the map does not
-	-- also fire the gun. The picker owns WHEN, this owns the attribute, because a module that a
-	-- gallery can render has no player to set attributes on.
+	-- also fire the gun. The picker owns WHEN, this owns the attribute, because a module a gallery
+	-- can render has no player to set attributes on.
+	--
+	-- Through MenuOpenClaims and NOT by writing the attribute directly. Writing it directly is what
+	-- the first version of this line did, and it is two of Oliver's cursor bugs: an unconditional
+	-- clear strands the menu's own cursor when the picker closes over the top of it, and the menu
+	-- closing underneath strands the picker's. A claim says "this screen wants the cursor" instead
+	-- of "the cursor is now free", which is the thing a single boolean cannot say twice.
 	onMenuOpen = function(open)
-		player:SetAttribute("MenuOpen", open)
+		if open then
+			if not dropCursorClaim then
+				dropCursorClaim = MenuOpenClaims.Claim("DropPicker")
+			end
+		elseif dropCursorClaim then
+			dropCursorClaim()
+			dropCursorClaim = nil
+		end
 	end,
 })
 

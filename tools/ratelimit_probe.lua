@@ -165,4 +165,82 @@ end
 
 RateLimit.Now = realNow
 RateLimit.Clear(player)
+
+--------------------------------------------------------------------------------
+-- THE CLOCK ITSELF, on a real wall clock.
+--
+-- Everything above runs on the virtual clock, which is what makes a 30-second stream instant — and
+-- which is exactly why none of it could ever catch the bug this section exists for. Swapping the
+-- clock out proves the ARITHMETIC and says nothing about which real clock ships. `RateLimit.Now`
+-- was `os.clock` — process CPU time — while every budget in the table is written in wall-clock
+-- terms, so a server that spends its time yielding refilled every bucket slowly and refused
+-- legitimate shots the client had already drawn a tracer for.
+--
+-- This measures the shipped clock against the wall, and then plants the bug itself: `os.clock` put
+-- back deliberately, which must FAIL the same measurement. If it ever passes, the check has stopped
+-- being able to tell the two apart and the number it prints is worthless.
+--------------------------------------------------------------------------------
+
+local WALL_SECONDS = 1.0
+-- Generous: this only has to separate "tracks the wall" from "tracks CPU time", and a runtest
+-- server is busy enough that a tighter band would be flaky rather than more truthful.
+local TOLERANCE = 0.25
+
+local function advanceOverOneSecond(clockFn)
+	local start = clockFn()
+	-- The wall reading is task.wait's own return: the real elapsed time it slept for, summed. Not
+	-- os.time(), which is whole seconds and cannot measure one.
+	local waited = 0
+	while waited < WALL_SECONDS do
+		waited += task.wait(0.05)
+	end
+	return clockFn() - start, waited
+end
+
+local shippedAdvance, shippedWall = advanceOverOneSecond(RateLimit.Now)
+local shippedRatio = shippedAdvance / shippedWall
+expect("RateLimit.Now tracks the wall clock", math.abs(shippedRatio - 1) <= TOLERANCE,
+	string.format("advanced %.3fs over %.3fs of wall time, ratio %.3f", shippedAdvance, shippedWall, shippedRatio))
+
+-- The refill, end to end and in real time: drain the bucket, wait a real second, and the tokens
+-- back must be the budget's rate times the seconds that really passed.
+local key = "Fire"
+local budget = RateLimit.Budgets[key]
+RateLimit.Clear(player)
+local drained = 0
+while RateLimit.Take(player, key) do
+	drained += 1
+	if drained > budget.burst + 5 then
+		break
+	end
+end
+local waited = 0
+while waited < WALL_SECONDS do
+	waited += task.wait(0.05)
+end
+local refilled = 0
+while RateLimit.Take(player, key) do
+	refilled += 1
+	if refilled > budget.burst + 5 then
+		break
+	end
+end
+-- Capped at the burst: a bucket cannot hold more than that however long you wait, and a budget
+-- whose rate exceeds its burst would otherwise fail this for being correct.
+local wanted = math.min(budget.burst, budget.rate * waited)
+expect("a bucket refills at its budget's rate in WALL seconds", math.abs(refilled - wanted) <= math.max(1, wanted * 0.35),
+	string.format("%s: drained %d, %.2fs later got %d back, expected about %.1f", key, drained, waited, refilled, wanted))
+
+-- PLANTED FAULT, every run: the clock this file was shipped with. It must fail the measurement
+-- above, and what it prints is the size of the bug.
+RateLimit.Now = os.clock
+local cpuAdvance, cpuWall = advanceOverOneSecond(RateLimit.Now)
+local cpuRatio = cpuAdvance / cpuWall
+RateLimit.Now = realNow
+expect("planted fault: os.clock FAILS the wall-clock check, so the check can tell them apart",
+	math.abs(cpuRatio - 1) > TOLERANCE,
+	string.format("os.clock advanced %.3fs over %.3fs of wall time, ratio %.3f -- a bucket would refill at %.0f%% of its budget",
+		cpuAdvance, cpuWall, cpuRatio, cpuRatio * 100))
+
+RateLimit.Clear(player)
 print(string.format("[RateProbe] finished: %d passed, %d failed", passes, failures))

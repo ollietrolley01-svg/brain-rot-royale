@@ -62,8 +62,10 @@ check(string.find(picker, "self.modal.Visible = visible", 1, true) ~= nil,
 check(string.find(picker, "self.menuOpenHeld = true", 1, true) ~= nil
 	and string.find(picker, "self.menuOpenHeld = false", 1, true) ~= nil,
 	"the picker claims MenuOpen once and releases it once")
-check(string.find(client, 'player:SetAttribute("MenuOpen", open)', 1, true) ~= nil,
-	"VoteDropClient writes the attribute CombatClient reads, so a click on the map does not fire the gun")
+check(string.find(client, 'MenuOpenClaims.Claim("DropPicker")', 1, true) ~= nil,
+	"VoteDropClient CLAIMS the attribute CombatClient reads, rather than writing it")
+check(string.find(client, 'player:SetAttribute("MenuOpen"', 1, true) == nil,
+	"VoteDropClient never writes MenuOpen directly -- an unconditional clear is two of Oliver's cursor bugs")
 
 -- PLANTED FAULT, every run: the same checks against a copy of the source with `Modal = true`
 -- removed must FAIL. Without this, a check that had stopped matching anything at all would report a
@@ -78,5 +80,86 @@ check(hud == "" or string.find(hud, "local active = false", 1, true) ~= nil,
 	"HudClient's old drop screen is stood down, so there is only one picker on screen")
 check(hud == "" or string.find(hud, "votePanel.Visible = false", 1, true) ~= nil,
 	"HudClient's old vote panel is stood down, so there is only one vote screen on screen")
+
+--------------------------------------------------------------------------------
+-- MenuOpenClaims, driven for real.
+--
+-- Everything above reads source text. This part RUNS the thing: MenuOpenClaims binds to any
+-- Instance, and a Folder has real attributes and a real GetAttributeChangedSignal, so these are the
+-- genuine semantics rather than a mock of them. Both sequences below are bugs Oliver reported, and
+-- both are a second writer clearing what a first writer still needs.
+--------------------------------------------------------------------------------
+
+local claimsOk, MenuOpenClaims = pcall(function()
+	return require(scripts:WaitForChild("MenuOpenClaims"))
+end)
+check(claimsOk, "MenuOpenClaims loads")
+
+if claimsOk then
+	local subject = Instance.new("Folder")
+	subject.Name = "CursorProbeSubject"
+	local realLegacy = MenuOpenClaims.LegacyHolder
+	local legacyHolding = false
+	MenuOpenClaims.LegacyHolder = function()
+		return legacyHolding
+	end
+	local function attribute()
+		return subject:GetAttribute("MenuOpen")
+	end
+
+	MenuOpenClaims.Bind(subject)
+	local release = MenuOpenClaims.Claim("first")
+	check(attribute() == true, "a claim frees the cursor")
+	release()
+	check(attribute() == false, "releasing the only claim gives it back")
+
+	-- THE COUNT, which is the whole point: two screens open, one closes, the cursor stays free.
+	local a = MenuOpenClaims.Claim("a")
+	local b = MenuOpenClaims.Claim("b")
+	check(attribute() == true and MenuOpenClaims.Count() == 2, "two claims, %d outstanding", MenuOpenClaims.Count())
+	a()
+	check(attribute() == true, "the cursor is still free while the SECOND claim is outstanding")
+	b()
+	check(attribute() == false, "it comes back only when the last claim is released")
+
+	-- Releasing twice must not underflow the count, or the next claimant could never hold it.
+	a()
+	a()
+	check(MenuOpenClaims.Count() == 0, "releasing twice is the same as releasing once (%d outstanding)", MenuOpenClaims.Count())
+
+	-- OLIVER'S "CURSOR STUCK FREE, CLICKS FIRE THE GUN": the picker is up and the menu closing
+	-- underneath clears the attribute. It must be put straight back.
+	local held = MenuOpenClaims.Claim("picker")
+	subject:SetAttribute("MenuOpen", false) -- the menu's own close, writing the attribute directly
+	task.wait()
+	check(attribute() == true, "a writer clearing the attribute under an outstanding claim is corrected")
+	held()
+	check(attribute() == false, "and releasing after that still gives the cursor back")
+
+	-- OLIVER'S "CURSOR STUCK LOCKED": the picker closes over the top of an open menu. The menu is an
+	-- unmigrated writer that never writes again until its panel changes, so the last release must
+	-- leave the attribute alone.
+	legacyHolding = true
+	subject:SetAttribute("MenuOpen", true) -- the menu, still open
+	local over = MenuOpenClaims.Claim("picker over the menu")
+	over()
+	check(attribute() == true, "the last release does NOT strand a menu that is still open")
+	legacyHolding = false
+
+	-- PLANTED FAULT, every run: the same two sequences against the code this replaced — a bare
+	-- SetAttribute on open and on close. Both must end WRONG, which is what makes the passes above
+	-- mean something.
+	local raw = Instance.new("Folder")
+	raw:SetAttribute("MenuOpen", true)   -- the menu is open and holding it
+	raw:SetAttribute("MenuOpen", true)   -- the old picker opens: no change, so nothing is notified
+	raw:SetAttribute("MenuOpen", false)  -- the old picker closes: unconditional clear
+	check(raw:GetAttribute("MenuOpen") == false,
+		"planted fault: the old unconditional clear DOES strand the open menu, so these checks can tell the two apart")
+
+	MenuOpenClaims.LegacyHolder = realLegacy
+	MenuOpenClaims.Bind(nil)
+	subject:Destroy()
+	raw:Destroy()
+end
 
 out("done: %d failures", failures)

@@ -178,7 +178,7 @@ GameModes.Modes = {
 		id = "TeamDeathmatch",
 		name = "Team Deathmatch",
 		short = "TDM",
-		description = "Two sides, one arena, and you come straight back. First to 50 eliminations.",
+		description = "Two sides, one arena, and you come straight back.",
 		color = Color3.fromRGB(255, 112, 36),
 		respawn = true,
 		teams = true,
@@ -201,7 +201,7 @@ GameModes.Modes = {
 		id = "KingOfTheHill",
 		name = "King of the Hill",
 		short = "KOTH",
-		description = "One hill. Hold it alone and the clock runs for you. First to 250.",
+		description = "One hill. Hold it alone and the clock runs for you.",
 		color = Color3.fromRGB(40, 196, 190),
 		respawn = true,
 		teams = true,
@@ -238,6 +238,29 @@ GameModes.Modes = {
 -- three slots in five because it is the main game and Oliver asked for these ALONGSIDE it, not
 -- instead of it.
 GameModes.Rotation = { "BattleRoyale", "TeamDeathmatch", "BattleRoyale", "KingOfTheHill", "BattleRoyale" }
+
+-- THE SENTENCE IS BUILT FROM THE NUMBER, because the two drifted.
+--
+-- `TeamDeathmatch.description` read "First to 50 eliminations" while `scoreTarget` a few lines above
+-- it in the same table read 100 (Oliver asked for 100 on 2026-09-18 and got it). Anything printing
+-- the sentence -- a vote card, a mode picker, a toast -- told him the wrong number. Editing the
+-- string would fix today and drift again the next time the target moves; composing it cannot.
+--
+-- So the tables above carry a description with NO NUMBER IN IT, and the scoring sentence is added
+-- here from the mode's own scoreTarget. tools/verify.py refuses a build where any description
+-- hard-codes a number that disagrees with its scoreTarget, with a planted needle, so a literal
+-- creeping back in is caught rather than shipped.
+local SCORE_SENTENCE = {
+	TeamDeathmatch = " First to %d eliminations.",
+	KingOfTheHill = " First to %d seconds held.",
+}
+
+for id, sentence in pairs(SCORE_SENTENCE) do
+	local mode = GameModes.Modes[id]
+	if mode and mode.scoreTarget then
+		mode.description = mode.description .. string.format(sentence, mode.scoreTarget)
+	end
+end
 
 function GameModes.Get(id)
 	return GameModes.Modes[id]

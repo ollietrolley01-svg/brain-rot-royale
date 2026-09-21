@@ -2107,7 +2107,10 @@ dropMap.InputBegan:Connect(function(input)
 end)
 
 function Drop.update()
-	local active = (matchState and matchState.dropSelect == true and isReady()) or false
+	-- Superseded by StarterPlayerScripts/DropPicker.lua, which draws the real terrain and keeps
+	-- this screen's modal-overlay cursor fix. Held at false rather than deleted so the old screen
+	-- is one line away if the new one ever has to be pulled.
+	local active = false
 	if active and not dropScreen.Visible then
 		-- A fresh window: drop last match's pick and redraw for the new map.
 		dropMarker.Visible = false
@@ -3205,7 +3208,9 @@ local function buildVoteCards(candidates)
 end
 
 local function renderVote(voteState)
-	votePanel.Visible = voteState.open and matchState.state == "Countdown"
+	-- Superseded by StarterPlayerScripts/VoteScreen.lua, which votes on the MODE as well as the map
+	-- (Oliver's #2). Same note as the drop screen: one line back if it is ever needed.
+	votePanel.Visible = false
 	if not votePanel.Visible then
 		return
 	end

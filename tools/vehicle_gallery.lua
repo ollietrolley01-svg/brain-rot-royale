@@ -9,6 +9,7 @@
 -- static-check: globals SEAT_ROOT_OVERRIDE, SHOW_OVERRIDE, VIEW_KINDS_OVERRIDE
 
 local VehicleModels = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("VehicleModels"))
+local VehicleWreckFx = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("VehicleWreckFx"))
 
 
 local Players = game:GetService("Players")
@@ -993,6 +994,82 @@ table.insert(views, {
 		note(string.format("bump measurement: %d result lines (want %d, %d kinds x %d surfaces x %d speeds)",
 			#results, #KINDS * #SURFACES * #SPEED_TARGETS, #KINDS, #SURFACES, #SPEED_TARGETS))
 		camera.CFrame = CFrame.lookAt(BUMP_ORIGIN + Vector3.new(-40, 60, 80), BUMP_ORIGIN + Vector3.new(200, 0, 0))
+	end,
+})
+
+--------------------------------------------------------------------------------
+-- Bug-hunt B3-2/B3-3: proves the lamp base-colour fix by BEHAVIOUR (repeated collect-and-rebuild),
+-- not by reading -- main's own words: "that is the bug that hides from inspection". Also checks the
+-- smoke emitter never duplicates under repeated calls (B3-3a), the shape a dropped weak entry used
+-- to produce.
+--------------------------------------------------------------------------------
+
+table.insert(views, {
+	name = "wreckfx_proof",
+	setup = function(folder, camera)
+		stage(folder)
+		local model = place(folder, "CrocodiloRanger", 1, Vector3.zero, 0, false)
+		local lampParts = {}
+		for _, part in ipairs(model:GetDescendants()) do
+			if part:IsA("BasePart") and part:GetAttribute("Lamp") then
+				table.insert(lampParts, part)
+			end
+		end
+		note(string.format("wreckfx_proof: %d lamp parts found on CrocodiloRanger", #lampParts))
+		if #lampParts == 0 then
+			note("wreckfx_proof: FAIL -- no lamp parts to test against")
+		else
+			local part = lampParts[1]
+			local trueBase = part.Color
+			-- Repeated collect-and-rebuild: what a weak `lamps` table used to force on every drop.
+			-- Each cycle reads the base through the fixed mechanism, writes a dimmed colour the
+			-- exact way updateLamps does (LampShare's own share, not a guessed number), then reads
+			-- the base again as if the cache had just been rebuilt from nothing.
+			local worstDrift = 0
+			for cycle = 1, 6 do
+				local base = VehicleWreckFx.LampBaseColor(part)
+				local share = VehicleWreckFx.LampShare(part:GetAttribute("Lamp"), false, false, false)
+				part.Color = Color3.new(base.R * share, base.G * share, base.B * share)
+				local recovered = VehicleWreckFx.LampBaseColor(part)
+				local drift = math.abs(recovered.R - trueBase.R) + math.abs(recovered.G - trueBase.G) + math.abs(recovered.B - trueBase.B)
+				worstDrift = math.max(worstDrift, drift)
+			end
+			note(string.format("wreckfx_proof: base colour after 6 collect-and-rebuild cycles, worst drift from true base %.4f (want 0): %s",
+				worstDrift, worstDrift < 0.001 and "PASS" or "FAIL"))
+			-- Planted fault: the OLD mechanism (re-deriving base from .Color itself), run the same
+			-- 6 cycles, must show real compounding drift -- proving this checker can fail, not just
+			-- pass by construction.
+			local plantedPart = lampParts[#lampParts > 1 and 2 or 1]
+			local plantedTrueBase = plantedPart.Color
+			local plantedBase = plantedTrueBase
+			for cycle = 1, 6 do
+				local share = VehicleWreckFx.LampShare(plantedPart:GetAttribute("Lamp"), false, false, false)
+				plantedPart.Color = Color3.new(plantedBase.R * share, plantedBase.G * share, plantedBase.B * share)
+				plantedBase = plantedPart.Color -- the bug: re-deriving "base" from the just-dimmed colour
+			end
+			local plantedDrift = math.abs(plantedBase.R - plantedTrueBase.R)
+			note(string.format("wreckfx_proof self-check: the OLD mechanism drifts %.4f over 6 cycles (want > 0, proving the checker can fail): %s",
+				plantedDrift, plantedDrift > 0.01 and "PASS" or "FAIL (self-check did not fail -- the drift test proves nothing)"))
+		end
+
+		-- B3-3a: SetSmoke must never create a second emitter, called repeatedly the way
+		-- updateLamps calls it every frame for every nearby vehicle.
+		for _ = 1, 20 do
+			VehicleWreckFx.SetSmoke(model, true)
+		end
+		local chassis = model:FindFirstChild("Chassis")
+		local emitters = 0
+		if chassis then
+			for _, d in ipairs(chassis:GetDescendants()) do
+				if d:IsA("ParticleEmitter") then
+					emitters += 1
+				end
+			end
+		end
+		note(string.format("wreckfx_proof: %d ParticleEmitter(s) under Chassis after 20 SetSmoke calls (want 1): %s",
+			emitters, emitters == 1 and "PASS" or "FAIL"))
+
+		look(camera, Vector3.new(-17, 8, -19), Vector3.new(0, 2.2, 0), 40)
 	end,
 })
 

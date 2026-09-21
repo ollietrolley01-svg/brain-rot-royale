@@ -30,6 +30,7 @@ local Monetization = require(Modules:WaitForChild("Monetization"))
 local WeaponService = require(Modules:WaitForChild("WeaponService"))
 local MatchService = require(Modules:WaitForChild("MatchService"))
 local BattlePassService = require(Modules:WaitForChild("BattlePassService"))
+local LootService = require(Modules:WaitForChild("LootService"))
 
 StateSync.Push = function() end
 StateSync.Notify = function() end
@@ -43,6 +44,18 @@ PlayerData.CanSave = function()
 end
 PlayerData.HasStore = function()
 	return true
+end
+-- DropSlot's real path builds a full ground pickup (static gun model, pad, rarity ring) and its
+-- scatter/snap-to-ground raycasts assume a built map (Terrain, a "Map" folder) that a bare probe
+-- scene doesn't have -- a first run threw "Unable to cast value to Object" partway through that
+-- machinery. None of that is what THIS probe is proving: it's proving AdminService captures the
+-- displaced slot and forwards it, not that LootService can build a pickup with no world around it
+-- (that's LootService's own concern). Stub it to just RECORD the call, the same shape as
+-- PlayerData.Save above and tools/monetization_probe.lua's established pattern -- `require` caches
+-- the module, so this replaces the exact table AdminService's own `modules().Loot` resolves to.
+local dropCalls = {}
+LootService.DropSlot = function(slot, position, from)
+	table.insert(dropCalls, { slot = slot, position = position, from = from })
 end
 
 local failures, samples = 0, 0
@@ -174,9 +187,11 @@ section("weapon edge cases", function()
 		root.Anchored = true
 		root.Parent = admin.Character
 	end
-	local lootFolder = workspace:FindFirstChild("Loot")
-	local groundBefore = lootFolder and #lootFolder:GetChildren() or 0
-	pcall(Actions.Weapon, admin, ninthId)
+	local dropsBefore = #dropCalls
+	local dropOk, dropErr = pcall(Actions.Weapon, admin, ninthId)
+	if not dropOk then
+		out("note  Actions.Weapon threw while dropping the displaced weapon: %s", tostring(dropErr))
+	end
 	local swappedIn = false
 	for _, slot in pairs(WeaponService.Get(admin).slots) do
 		if slot and slot.kind == "weapon" and slot.id == ninthId then
@@ -184,18 +199,12 @@ section("weapon edge cases", function()
 		end
 	end
 	check(swappedIn, "a full inventory swaps the equipped slot for the new weapon (%s) instead of refusing it", tostring(ninthId))
-	lootFolder = workspace:FindFirstChild("Loot")
-	local droppedMatch = false
-	if lootFolder then
-		for _, child in ipairs(lootFolder:GetChildren()) do
-			if child:GetAttribute("WeaponId") == displacedId then
-				droppedMatch = true
-			end
-		end
-	end
 	check(displacedId ~= nil, "setup: there was something in the equipped slot to displace (%s)", tostring(displacedId))
-	check(droppedMatch, "the displaced weapon (%s) lands on the ground instead of vanishing (Loot folder: %d -> %d)",
-		tostring(displacedId), groundBefore, lootFolder and #lootFolder:GetChildren() or 0)
+	local newDrop = dropCalls[#dropCalls]
+	local droppedMatch = #dropCalls == dropsBefore + 1 and newDrop and newDrop.slot and newDrop.slot.id == displacedId
+	check(droppedMatch, "the displaced weapon (%s) is forwarded to LootService.DropSlot instead of vanishing (%d -> %d drop calls, last id %s at %s)",
+		tostring(displacedId), dropsBefore, #dropCalls, newDrop and tostring(newDrop.slot and newDrop.slot.id) or "none",
+		newDrop and tostring(newDrop.position) or "?")
 
 	-- No-ammo weapon: does one exist in the data at all?
 	local noAmmoId

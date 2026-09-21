@@ -4,6 +4,7 @@
 -- those already are, rather than asserted.
 --
 --   VehicleWreckFx.LampShare(role, wrecked, driven, braking) -> 0..1   pure, no Instances, unit-testable
+--   VehicleWreckFx.LampBaseColor(part) -> Color3                       the part's TRUE original colour
 --   VehicleWreckFx.SetSmoke(model, wrecked) -> ParticleEmitter or nil  creates once, toggles after
 --
 -- Reasons wrecked matters twice over: the driver's own HUD warning (VehicleClient's panel) is
@@ -31,11 +32,34 @@ function VehicleWreckFx.LampShare(role, wrecked, driven, braking)
 	return driven and 1 or DIM_PARKED
 end
 
+-- The part's TRUE original colour, read from a persisted attribute rather than from `.Color`
+-- itself (bug-hunt B3-2, the defense-in-depth half; strong-keying VehicleClient's `lamps` cache is
+-- the other half). `.Color` is what LampShare's result gets multiplied into every frame, so reading
+-- it back as "the base" a second time is exactly how a rebuilt cache used to compound the darkening
+-- forever. Set once, on the first call for a given part, and never written again by anything in
+-- this module -- callable any number of times (a rebuilt cache, a repeated probe call) and always
+-- recovers the same value.
+local BASE_COLOR_ATTRIBUTE = "LampBaseColor"
+function VehicleWreckFx.LampBaseColor(part)
+	local base = part:GetAttribute(BASE_COLOR_ATTRIBUTE)
+	if typeof(base) ~= "Color3" then
+		base = part.Color
+		part:SetAttribute(BASE_COLOR_ATTRIBUTE, base)
+	end
+	return base
+end
+
 -- One ParticleEmitter per vehicle, made once (lazily, only once `wrecked` is first true) and just
 -- enabled/disabled after -- attached to the Chassis, which every registered kind has, rather than
 -- any per-model part, so it works without per-model authoring. Returns the emitter (or nil if there
 -- is no Chassis, or none has been made yet and `wrecked` is false) so a caller/probe can inspect it.
-local smoke = setmetatable({}, { __mode = "k" })
+--
+-- STRONG keys (bug-hunt B3-3a, 2026-09-21): this is called every frame, for every vehicle within
+-- ANIMATE_DISTANCE, by VehicleClient's updateLamps. A weak `smoke` table meant a dropped-and-
+-- recreated entry made a SECOND Attachment+ParticleEmitter while the first stayed parented and
+-- enabled (nothing ever destroys the old one) -- duplicate emitters, compounding smoke rate, and a
+-- leaked Instance per drop. Dropped explicitly on AncestryChanged, same shape as `lamps` above.
+local smoke = {}
 function VehicleWreckFx.SetSmoke(model, wrecked)
 	local emitter = smoke[model]
 	if not emitter then
@@ -62,6 +86,11 @@ function VehicleWreckFx.SetSmoke(model, wrecked)
 		emitter.Enabled = false
 		emitter.Parent = attachment
 		smoke[model] = emitter
+		model.AncestryChanged:Connect(function()
+			if not model:IsDescendantOf(workspace) then
+				smoke[model] = nil
+			end
+		end)
 	end
 	emitter.Enabled = wrecked
 	return emitter

@@ -554,6 +554,13 @@ local function onChassisTouched(entry, hit)
 	if last and now - last < ROADKILL_DEBOUNCE then
 		return
 	end
+	if not last then
+		-- First time this humanoid is tracked here: connected once, the strong-key drop that keeps
+		-- this table from growing forever (matches DestructibleService's part.Destroying pattern).
+		humanoid.Destroying:Connect(function()
+			entry.roadkillCooldown[humanoid] = nil
+		end)
+	end
 	entry.roadkillCooldown[humanoid] = now
 	local victimToken = Combatants.FromCharacter(character)
 	if not victimToken then
@@ -643,11 +650,13 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		occupants = {},
 		riders = {},
 		-- This one IS state, not a cache: while it holds a humanoid, that humanoid is moving between
-		-- seats in this vehicle and must not be put out of it. It is still safe to key weakly, and
-		-- for a specific reason: the key is a Humanoid inside a character in the workspace for the
-		-- whole two-second window, so it is strongly reachable and cannot be collected mid-switch.
-		-- The weak keys are only there so a humanoid that is gone for good does not linger here.
-		switching = setmetatable({}, { __mode = "k" }),
+		-- seats in this vehicle and must not be put out of it. STRONG keys (bug-hunt B3-1, 2026-09-
+		-- 21): "reachable through the DataModel" is not "reachable from Lua" -- the exact argument
+		-- that produced the geyser-cooldown exploit this project already recorded, and weak keys
+		-- here would drop the switching flag mid-window rather than just losing a cache entry. Never
+		-- leaks: every entry is cleared within 2s regardless by trySit's own task.delay, whether or
+		-- not the humanoid still exists by then (the closure captures it, not a live lookup).
+		switching = {},
 		prompts = {},
 		deaths = {},
 		savedMass = {},
@@ -664,14 +673,18 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		-- Health (#53/#57): maxHealth/health mirror the VehicleMaxHealth/VehicleHealth attributes
 		-- (the attributes are what replicate to the client HUD; these are the authoritative numbers
 		-- the server reads and writes). lastFlatSpeed starts nil on purpose (see checkCollisionDamage).
-		-- roadkillCooldown is weak-keyed the same way `switching` above is: a humanoid is strongly
-		-- reachable through its character for as long as it could plausibly be hit again, so nothing
-		-- live is ever lost, only entries for characters that are already gone.
+		-- roadkillCooldown: STRONG keys (bug-hunt B3-1). A weak table here was the same
+		-- "reachable through the character" argument that produced the geyser exploit, and its
+		-- consequence was one-directional and nasty: chassis.Touched fires many times a second
+		-- while a car passes over someone, a dropped entry skips the 0.5s debounce entirely, and
+		-- EVERY surviving fire deals full roadkill damage again -- a glancing brush at 40 studs/s
+		-- (50 damage/tick) became an instant kill. Dropped explicitly in onChassisTouched via
+		-- humanoid.Destroying, the same lifecycle hook DestructibleService uses for its part table.
 		maxHealth = maxHealth,
 		health = maxHealth,
 		wrecked = false,
 		lastFlatSpeed = nil,
-		roadkillCooldown = setmetatable({}, { __mode = "k" }),
+		roadkillCooldown = {},
 	}
 	entry.groundParams = RaycastParams.new()
 	entry.groundParams.FilterType = Enum.RaycastFilterType.Exclude

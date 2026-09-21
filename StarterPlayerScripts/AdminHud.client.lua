@@ -27,7 +27,6 @@ local Role, Type, Space, Radius = UiKit.Role, UiKit.Type, UiKit.Space, UiKit.Rad
 
 local hello = Remotes.Event("AdminHello")
 local action = Remotes.Event("AdminAction")
-local matchChanged = Remotes.Event("MatchChanged")
 
 local built = false
 
@@ -141,10 +140,19 @@ local function build()
 	-- the real admin -- so a non-admin client that locally forged its own copy of this attribute
 	-- (SetAttribute from a modified client is local-only, never reaches the server) still gets
 	-- nothing, because this listener was never created on their client at all. See admin_fly_probe.lua
-	-- for the flight module's own leak/teardown proof; the six lines below are every place THIS file
+	-- for the flight module's own leak/teardown proof; the five lines below are every place THIS file
 	-- must call AdminFly.Stop() so nothing outlives its reason to exist:
 	--   (1) the attribute going false, (2) death, (3) respawn, (4) the character being removed,
-	--   (5) the match ending, (6) this HUD being destroyed.
+	--   (5) this HUD being destroyed.
+	--
+	-- There WAS a sixth, "the match ending" via MatchChanged -- removed (bug-hunt tab's find): that
+	-- remote is a snapshot broadcast about once a SECOND in Waiting/Intermission/Countdown, not an
+	-- edge, so it tore Fly down roughly every second in the lobby. Oliver would lift off and drop
+	-- within a second, and since applyFlyState only runs on the attribute CHANGING, pressing "Fly on"
+	-- again did nothing -- the attribute was already true. It worked fine mid-match, which is what
+	-- made it look random rather than broken ("fly only worked for a second in the lobby"). Not
+	-- needed anyway: a match ending calls player:LoadCharacter() for every participant
+	-- (MatchService.lua ~1040-1047), which fires CharacterRemoving -- path (4) already covers it.
 	local function applyFlyState()
 		if player:GetAttribute("AdminFly") == true then
 			if player.Character then
@@ -174,14 +182,8 @@ local function build()
 		AdminFly.Stop() -- (4) character removed
 	end)
 
-	matchChanged.OnClientEvent:Connect(function(state)
-		if state.state ~= "InProgress" then
-			AdminFly.Stop() -- (5) match ended
-		end
-	end)
-
 	gui.Destroying:Connect(function()
-		AdminFly.Stop() -- (6) HUD destroyed
+		AdminFly.Stop() -- (5) HUD destroyed
 	end)
 
 	applyFlyState()

@@ -85,7 +85,18 @@ RateLimit.Exempt = {
 }
 
 -- The clock, as a field so tools/ratelimit_probe.lua can run a 30-second stream in an instant.
-RateLimit.Now = os.clock
+--
+-- `tick`, NOT `os.clock`. Every budget in the table above is written in wall-clock terms — `Fire`
+-- is sized as a 1.4x margin over the fastest gun's rounds per SECOND — but `os.clock()` in Roblox
+-- is process CPU time, which runs slower than the wall while the server is doing anything that
+-- yields. The refill below is `(now - bucket.at) * rate`, so a slow clock refills a bucket slowly
+-- and legitimate held-trigger shots are refused after the client has already drawn the tracer.
+-- Nothing in the table changes; it just gets counted in the units it was written in.
+--
+-- The probe could never have caught this on its own: it replaces this field with a virtual clock,
+-- which proves the arithmetic and says nothing about which real clock ships. So it now also
+-- measures this one against a wall-clock second, and carries `os.clock` back as its planted fault.
+RateLimit.Now = tick
 
 -- [player] = { [key] = { tokens, at, pending, hasPending, thread } }
 local buckets = {}

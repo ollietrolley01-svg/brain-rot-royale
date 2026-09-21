@@ -11,18 +11,24 @@
 --   shoulder = base + RightVector * SHOULDER_SIDE(1.9)
 --   position = shoulder - LookVector * THIRD_PERSON_DISTANCE(9)
 --   camera.CFrame = CFrame.lookAt(position, position + LookVector)
--- FOV 70 (Settings.lua's FieldOfView default), viewport pinned to 1920x1080 for a reproducible area.
+-- FOV 70 (Settings.lua's FieldOfView default).
+--
+-- Occupancy is measured in ANGLE, not pixels: `Camera.ViewportSize` is READ-ONLY (confirmed by a
+-- first run of this probe throwing "Property is read only" trying to set it for a reproducible
+-- area) -- there is no real window in an edit-mode probe to read a meaningful size from either. So
+-- every corner of the companion's world bounding box is transformed into camera-local space and
+-- measured as an angle off the forward axis, horizontal and vertical separately, against the
+-- camera's own FieldOfView (vertical) and a horizontal FOV derived from an ASSUMED 16:9 aspect
+-- (stated as an assumption, not measured) -- this is viewport-size-independent and exactly
+-- reproducible. The HUD-overlap check projects to assumed 1920x1080 pixels using the same angles,
+-- for comparison against HudClient's real anchor positions -- again a stated assumption, not a
+-- measured window.
 --
 -- "Before" goes through the REAL public path -- CompanionService.AttachBot + ModelOf -- so the
 -- measured geometry (crown, glow, health bar included) is exactly what a match would build, at
 -- today's FOLLOW_OFFSET (right/up/behind). "After" calls the SAME underlying BrainrotModels.Build
 -- CompanionService.lua itself calls (same scale, same cframe shape), with only the X mirrored to
 -- -2.8 -- the one-line fix -- since that constant isn't landed yet.
---
--- Occupancy = the companion's projected screen-space bounding box area / viewport area, from its
--- world bounding box's 8 corners. This slightly OVERSTATES true silhouette occupancy for a
--- non-box-shaped creature (a bounding box is a superset of its shape), the same conservative
--- direction the potion probe's corner method takes.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -53,8 +59,9 @@ local function section(name, fn)
 end
 
 local SHOULDER_HEIGHT, SHOULDER_SIDE, THIRD_PERSON_DISTANCE = 1.7, 1.9, 9
-local VIEWPORT = Vector2.new(1920, 1080)
 local FOV = 70
+local ASSUMED_ASPECT = 16 / 9 -- stated assumption, not measured: a 1920x1080-shaped window
+local ASSUMED_VIEWPORT = Vector2.new(1920, 1080)
 
 local folder = Instance.new("Folder")
 folder.Name = "BRR_CompanionOffsetProbe"
@@ -84,52 +91,69 @@ local function thirdPersonCamera(root, humanoid)
 	local position = shoulder - look.LookVector * THIRD_PERSON_DISTANCE
 	local camera = Instance.new("Camera")
 	camera.FieldOfView = FOV
-	camera.ViewportSize = VIEWPORT
 	camera.CFrame = CFrame.lookAt(position, position + look.LookVector)
 	return camera
 end
 
--- Screen-space bounding rect (clamped to the viewport) from a model's world bounding box, plus how
--- much of it (if any) falls outside the frame entirely.
-local function screenRect(camera, model)
+-- The companion's angular extent in the frame: horizontal/vertical angle off the camera's forward
+-- axis for every bounding-box corner, clamped to the camera's own half-angles, as a fraction of the
+-- full frame. Also the same thing projected to assumed 1920x1080 pixels, for the HUD check.
+local function angularRect(camera, model)
 	local cframe, size = model:GetBoundingBox()
 	local half = size * 0.5
-	local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
-	local anyOffFront = false
+	local vFov = math.rad(camera.FieldOfView)
+	local hFov = 2 * math.atan(math.tan(vFov / 2) * ASSUMED_ASPECT)
+	local minH, maxH, minV, maxV = math.huge, -math.huge, math.huge, -math.huge
+	local anyBehind = false
 	for _, sx in ipairs({ -1, 1 }) do
 		for _, sy in ipairs({ -1, 1 }) do
 			for _, sz in ipairs({ -1, 1 }) do
 				local corner = cframe:PointToWorldSpace(Vector3.new(sx * half.X, sy * half.Y, sz * half.Z))
-				local screen, onScreen = camera:WorldToViewportPoint(corner)
-				if not onScreen then
-					anyOffFront = true
+				local local_ = camera.CFrame:PointToObjectSpace(corner)
+				local depth = -local_.Z
+				if depth <= 0.05 then
+					anyBehind = true
 				end
-				minX, maxX = math.min(minX, screen.X), math.max(maxX, screen.X)
-				minY, maxY = math.min(minY, screen.Y), math.max(maxY, screen.Y)
+				local safeDepth = math.max(depth, 0.05)
+				local hAngle = math.atan2(local_.X, safeDepth)
+				local vAngle = math.atan2(local_.Y, safeDepth)
+				minH, maxH = math.min(minH, hAngle), math.max(maxH, hAngle)
+				minV, maxV = math.min(minV, vAngle), math.max(maxV, vAngle)
 			end
 		end
 	end
-	local clampedMinX, clampedMaxX = math.clamp(minX, 0, VIEWPORT.X), math.clamp(maxX, 0, VIEWPORT.X)
-	local clampedMinY, clampedMaxY = math.clamp(minY, 0, VIEWPORT.Y), math.clamp(maxY, 0, VIEWPORT.Y)
+	local hHalf, vHalf = hFov / 2, vFov / 2
+	local clampedMinH, clampedMaxH = math.clamp(minH, -hHalf, hHalf), math.clamp(maxH, -hHalf, hHalf)
+	local clampedMinV, clampedMaxV = math.clamp(minV, -vHalf, vHalf), math.clamp(maxV, -vHalf, vHalf)
+	local fraction = (math.max(0, clampedMaxH - clampedMinH) / hFov) * (math.max(0, clampedMaxV - clampedMinV) / vFov)
+	-- Assumed-pixel projection for the HUD comparison only (tan(angle)/tan(halfFov) * halfSize).
+	local function px(angle, halfFov, halfSize)
+		return halfSize + (math.tan(angle) / math.tan(halfFov)) * halfSize
+	end
 	return {
-		minX = minX, minY = minY, maxX = maxX, maxY = maxY,
-		clampedArea = math.max(0, clampedMaxX - clampedMinX) * math.max(0, clampedMaxY - clampedMinY),
-		anyOffFront = anyOffFront,
+		minH = minH, maxH = maxH, minV = minV, maxV = maxV, hFov = hFov, vFov = vFov,
+		fraction = fraction, anyBehind = anyBehind,
+		pxMinX = px(minH, hHalf, ASSUMED_VIEWPORT.X / 2), pxMaxX = px(maxH, hHalf, ASSUMED_VIEWPORT.X / 2),
+		-- vertical angle here is measured with +Y up in camera space and screen Y grows downward.
+		pxMinY = ASSUMED_VIEWPORT.Y - px(minV, vHalf, ASSUMED_VIEWPORT.Y / 2),
+		pxMaxY = ASSUMED_VIEWPORT.Y - px(maxV, vHalf, ASSUMED_VIEWPORT.Y / 2),
 	}
 end
 
-local function rectOverlap(a, ax0, ay0, ax1, ay1)
-	local ox = math.max(0, math.min(a.maxX, ax1) - math.max(a.minX, ax0))
-	local oy = math.max(0, math.min(a.maxY, ay1) - math.max(a.minY, ay0))
+local function rectOverlapPx(rect, x0, y0, x1, y1)
+	local rx0, rx1 = math.min(rect.pxMinX, rect.pxMaxX), math.max(rect.pxMinX, rect.pxMaxX)
+	local ry0, ry1 = math.min(rect.pxMinY, rect.pxMaxY), math.max(rect.pxMinY, rect.pxMaxY)
+	local ox = math.max(0, math.min(rx1, x1) - math.max(rx0, x0))
+	local oy = math.max(0, math.min(ry1, y1) - math.max(ry0, y0))
 	return ox * oy
 end
 
 -- HUD's own bottom-left panels (companion_icon_gallery.lua's stand-ins, HudClient's real anchors):
 -- health ~[16,296]x[viewportY-96,viewportY], companion panel ~[16,316]x[viewportY-166,viewportY-104],
--- speed pill ~[16,166]x[viewportY-202,viewportY-174]. One bounding rect over all three, generous.
-local HUD_RECT = { x0 = 16, y0 = VIEWPORT.Y - 202, x1 = 320, y1 = VIEWPORT.Y }
+-- speed pill ~[16,166]x[viewportY-202,viewportY-174]. One bounding rect over all three, generous, at
+-- the assumed viewport above.
+local HUD_RECT = { x0 = 16, y0 = ASSUMED_VIEWPORT.Y - 202, x1 = 320, y1 = ASSUMED_VIEWPORT.Y }
 
-local viewportArea = VIEWPORT.X * VIEWPORT.Y
 local def = BrainrotData.Get("Golden Sahur") or BrainrotData.Types[1]
 
 section("before: current right-side offset, through the real public path", function()
@@ -143,12 +167,11 @@ section("before: current right-side offset, through the real public path", funct
 	local model = CompanionService.ModelOf(owner)
 	check(model ~= nil, "ModelOf returns the attached companion")
 	if model then
-		local rect = screenRect(camera, model)
-		local fraction = rect.clampedArea / viewportArea
-		out("measure  before (right): screen rect [%.0f,%.0f]-[%.0f,%.0f] px, %.1f%% of the %dx%d frame%s",
-			rect.minX, rect.minY, rect.maxX, rect.maxY, fraction * 100, VIEWPORT.X, VIEWPORT.Y,
-			rect.anyOffFront and " (partly off-frame)" or "")
-		check(fraction > 0, "the companion is actually in frame to measure (%.2f%%)", fraction * 100)
+		local rect = angularRect(camera, model)
+		out("measure  before (right): %.1f%% of the frame (h %.1f/%.1f deg, v %.1f/%.1f deg)%s",
+			rect.fraction * 100, math.deg(rect.maxH - rect.minH), math.deg(rect.hFov),
+			math.deg(rect.maxV - rect.minV), math.deg(rect.vFov), rect.anyBehind and " (partly behind camera)" or "")
+		check(rect.fraction > 0, "the companion is actually in frame to measure (%.2f%%)", rect.fraction * 100)
 	end
 	pcall(CompanionService.AttachBot, owner, nil) -- despawn, leaves no companion for the next section
 end)
@@ -166,15 +189,15 @@ section("after: mirrored to the left, same builder CompanionService itself calls
 	check(model ~= nil, "the mirrored build succeeds")
 	if model then
 		model.Parent = folder
-		local rect = screenRect(camera, model)
-		local fraction = rect.clampedArea / viewportArea
-		out("measure  after (left): screen rect [%.0f,%.0f]-[%.0f,%.0f] px, %.1f%% of the %dx%d frame%s",
-			rect.minX, rect.minY, rect.maxX, rect.maxY, fraction * 100, VIEWPORT.X, VIEWPORT.Y,
-			rect.anyOffFront and " (partly off-frame)" or "")
-		local hudOverlap = rectOverlap(rect, HUD_RECT.x0, HUD_RECT.y0, HUD_RECT.x1, HUD_RECT.y1)
-		out("measure  after (left): overlap with the bottom-left HUD rect = %.0f px^2 (%.2f%% of the HUD rect)",
-			hudOverlap, hudOverlap / ((HUD_RECT.x1 - HUD_RECT.x0) * (HUD_RECT.y1 - HUD_RECT.y0)) * 100)
-		check(hudOverlap == 0, "moved to the left, the companion does NOT overlap the bottom-left HUD panels")
+		local rect = angularRect(camera, model)
+		out("measure  after (left): %.1f%% of the frame (h %.1f/%.1f deg, v %.1f/%.1f deg)%s",
+			rect.fraction * 100, math.deg(rect.maxH - rect.minH), math.deg(rect.hFov),
+			math.deg(rect.maxV - rect.minV), math.deg(rect.vFov), rect.anyBehind and " (partly behind camera)" or "")
+		local hudOverlap = rectOverlapPx(rect, HUD_RECT.x0, HUD_RECT.y0, HUD_RECT.x1, HUD_RECT.y1)
+		out("measure  after (left): overlap with the assumed bottom-left HUD rect = %.0f px^2 (%.2f%% of the HUD rect, at an assumed %dx%d window)",
+			hudOverlap, hudOverlap / ((HUD_RECT.x1 - HUD_RECT.x0) * (HUD_RECT.y1 - HUD_RECT.y0)) * 100,
+			ASSUMED_VIEWPORT.X, ASSUMED_VIEWPORT.Y)
+		check(hudOverlap == 0, "moved to the left, the companion does NOT overlap the bottom-left HUD panels (assumed window)")
 		model:Destroy()
 	end
 end)

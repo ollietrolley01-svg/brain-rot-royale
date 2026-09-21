@@ -107,11 +107,11 @@ local DESKTOP = {
 	{ name = "Use/interact prompt", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0.6, 0 }, size = { 0, 250, 0, 46 }, cite = "HudClient.client.lua:1379-1388" },
 	{ name = "Storm timer", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 72 }, size = { 0, 440, 0, 24 }, cite = "HudClient.client.lua:1788-1797", group = "stormSlot" },
 	{ name = "Minimap", anchor = { 1, 0 }, pos = { 1, -16, 0, 108 }, size = { 0, 190, 0, 190 }, cite = "HudClient.client.lua:1822-1830" },
-	{ name = "Bounty label", anchor = { 1, 0 }, pos = { 1, -16, 0, 304 }, size = { 0, 230, 0, 22 }, cite = "HudClient.client.lua:2140-2150 (108+MAP_PX+6)" },
+	{ name = "Bounty label", anchor = { 1, 0 }, pos = { 1, -16, 0, 518 }, size = { 0, 230, 0, 22 }, cite = "HudClient.client.lua:2140-2151 (BELOW_KILL_FEED = 312+200+6, fixed: was 304, inside the kill feed)" },
 	{ name = "Compass", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 100 }, size = { 0, 440, 0, 24 }, cite = "HudClient.client.lua:2292-2300" },
-	{ name = "Location label", anchor = { 1, 0 }, pos = { 1, -16, 0, 332 }, size = { 0, 230, 0, 20 }, cite = "HudClient.client.lua:2484-2492 (108+MAP_PX+34)" },
+	{ name = "Location label", anchor = { 1, 0 }, pos = { 1, -16, 0, 546 }, size = { 0, 230, 0, 20 }, cite = "HudClient.client.lua:2501-2510 (BELOW_KILL_FEED+28, fixed: was 332, inside the kill feed)" },
 	{ name = "Kill feed", anchor = { 1, 0 }, pos = { 1, -16, 0, 312 }, size = { 0, 300, 0, 200 }, cite = "HudClient.client.lua:2631-2638" },
-	{ name = "Toast", anchor = { 0.5, 1 }, pos = { 0.5, 0, 1, -120 }, size = { 0, 460, 0, 36 }, cite = "HudClient.client.lua:2686-2696" },
+	{ name = "Toast", anchor = { 0.5, 1 }, pos = { 0.5, 0, 1, -140 }, size = { 0, 460, 0, 36 }, cite = "HudClient.client.lua:2704-2717 (fixed: was -120, 6px into the ability readout)" },
 	{ name = "Drop pickup banner", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 128 }, size = { 0, 480, 0, 30 }, cite = "HudClient.client.lua:546-554" },
 	-- The damage-direction arc is dynamic (angle depends on the shot), always screen-centre anchored
 	-- with a 170 px radial offset; "straight up" (attacker directly ahead) is the representative
@@ -321,6 +321,16 @@ end
 -- slot). Reserved Roblox zones are checked against real HUD elements but not against each other.
 local EXCLUDE_GROUPS = { centre = true, stormSlot = true }
 
+-- Compass vs the team-mode scoreline: NOW mutually exclusive by code (HudClient.client.lua's
+-- updateCompass hides the compass whenever ModeChanged reports a team mode), fixed after this
+-- probe first caught them overlapping 420x16 px at 1920x1080. A name check, not a shared group,
+-- because ModeScoreHud already belongs to the "stormSlot" group for its OTHER exclusion (the storm
+-- timer) and a group is one-to-one here.
+local function isCompassScorePair(a, b)
+	local names = { [a.name] = true, [b.name] = true }
+	return names["Compass"] and names["Mode score HUD (TDM/KOTH)"]
+end
+
 -- Two passes per viewport: the ordinary HUD (menu closed) and the menu-open state the coordinator
 -- asked to add (Oliver's screenshot: the controls pill sitting across the menu panel's bottom
 -- edge). Each pass runs in ITS OWN pcall, geometry computed first, so a failure in one viewport or
@@ -355,7 +365,7 @@ for _, vw in ipairs(VIEWPORTS) do
 					local a, b = elements[i], elements[j]
 					local bothReserved = a.group == "reserved" and b.group == "reserved"
 					local sameExcludedGroup = a.group and a.group == b.group and EXCLUDE_GROUPS[a.group]
-					if not bothReserved and not sameExcludedGroup then
+					if not bothReserved and not sameExcludedGroup and not isCompassScorePair(a, b) then
 						local ox = math.min(a.r.x + a.r.w, b.r.x + b.r.w) - math.max(a.r.x, b.r.x)
 						local oy = math.min(a.r.y + a.r.h, b.r.y + b.r.h) - math.max(a.r.y, b.r.y)
 						if ox > 0 and oy > 0 then

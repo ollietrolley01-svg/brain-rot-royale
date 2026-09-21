@@ -236,6 +236,90 @@ local function jointGaps(arm)
 end
 
 --------------------------------------------------------------------------------
+-- The grip itself (#92, and the question regression B turns on)
+--------------------------------------------------------------------------------
+
+-- Oliver: "the hands gripping the guns in the animations need improvement." Separate from the sights
+-- bug: this is whether the result READS as a hand holding a weapon.
+--
+-- The viewmodel already measures what each hand has under it, so this reads its answer rather than
+-- inventing a second one that could disagree: `vm.gripShapes[anchor]` is `false` when the game itself
+-- measured NOTHING within 2 cm under that palm -- a hand closing on air -- and otherwise carries a
+-- `cap` per finger, how far that finger is allowed to close before it is inside the gun.
+--
+-- That `cap` is also the number regression B turns on. The 18 September fix parks a finger inside the
+-- palm when `cap < FINGER_MIN_CLOSE` (0.3). If no finger on any gun is ever below 0.3, that branch
+-- never runs, the fix is inert, and moving the threshold changes nothing -- which is exactly what the
+-- planted run showed. So the distribution is printed, not just the total.
+local FINGER_MIN_CLOSE = 0.3
+
+local function gripReport(id, vm, grips)
+	if not vm.gripShapes then
+		return
+	end
+	for anchor, shape in pairs(vm.gripShapes) do
+		local row = grips[anchor]
+		if not row then
+			row = { onNothing = {}, guns = 0, fingers = 0, wouldPark = 0, capSum = 0, capMin = 9, capMax = 0, blockers = {} }
+			grips[anchor] = row
+		end
+		row.guns += 1
+		if shape == false or shape == nil then
+			table.insert(row.onNothing, id)
+		else
+			for _, finger in ipairs(shape.fingers or {}) do
+				row.fingers += 1
+				row.capSum += finger.cap
+				row.capMin = math.min(row.capMin, finger.cap)
+				row.capMax = math.max(row.capMax, finger.cap)
+				if finger.cap < FINGER_MIN_CLOSE then
+					row.wouldPark += 1
+				end
+				if finger.blocker then
+					row.blockers[finger.blocker] = (row.blockers[finger.blocker] or 0) + 1
+				end
+			end
+			-- How many DISTINCT grips the arsenal really has: if a pistol, an SMG and a shotgun all come
+			-- out with the same knuckle line, turn and cap, then there is one pose wearing 62 hats and
+			-- the fix is per-weapon-class grips, not a nudged constant.
+			local key = {}
+			for _, finger in ipairs(shape.fingers or {}) do
+				table.insert(key, string.format("%.2f/%.2f/%.2f", finger.knuckle, finger.turn, finger.cap))
+			end
+			row.shapes = row.shapes or {}
+			row.shapes[table.concat(key, " ")] = (row.shapes[table.concat(key, " ")] or 0) + 1
+		end
+	end
+end
+
+local function sayGrips(grips)
+	local anchors = {}
+	for anchor in pairs(grips) do
+		table.insert(anchors, anchor)
+	end
+	table.sort(anchors)
+	for _, anchor in ipairs(anchors) do
+		local row = grips[anchor]
+		local distinct = 0
+		for _ in pairs(row.shapes or {}) do
+			distinct += 1
+		end
+		local blocking = {}
+		for name, count in pairs(row.blockers) do
+			table.insert(blocking, string.format("%s x%d", name, count))
+		end
+		table.sort(blocking)
+		say("#92 %-12s %d guns; on NOTHING under the palm: %d (%s); %d fingers, cap mean %.2f range %.2f-%.2f; %d fingers (%.0f%%) below the %.2f parking threshold; %d DISTINCT grips across the arsenal; blocked by: %s",
+			anchor, row.guns, #row.onNothing,
+			#row.onNothing > 0 and table.concat(row.onNothing, " ", 1, math.min(6, #row.onNothing)) or "none",
+			row.fingers, row.fingers > 0 and row.capSum / row.fingers or 0,
+			row.capMin == 9 and 0 or row.capMin, row.capMax,
+			row.wouldPark, row.fingers > 0 and row.wouldPark / row.fingers * 100 or 0, FINGER_MIN_CLOSE,
+			distinct, #blocking > 0 and table.concat(blocking, ", ") or "nothing")
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Stray lettering on a gun (#72)
 --------------------------------------------------------------------------------
 
@@ -458,7 +542,7 @@ local function sweep(label, fingerMinClose, avatar, quiet, subset)
 	end
 	local problems = {}
 	local counters = { hidden = 0, fingerBlocks = 0, crosshair = 0, poses = 0, worstElbow = 0, worstWrist = 0,
-		worstElbowAt = "-", worstWristAt = "-", armColour = nil, armParts = 0 }
+		worstElbowAt = "-", worstWristAt = "-", armColour = nil, armParts = 0, grips = {} }
 	local list = subset or ids
 	for _, id in ipairs(list) do
 		local def = WeaponData.Get(id)
@@ -478,6 +562,9 @@ local function sweep(label, fingerMinClose, avatar, quiet, subset)
 				table.insert(problems, string.format("%s %s: Pose failed: %s", id, pose.name, tostring(err)))
 			else
 				sweepText(id, vm.model)
+				if pose == POSES[1] then
+					gripReport(id, vm, counters.grips)
+				end
 				measurePose(id, pose, vm, aimed, lines, problems, counters, subset ~= nil)
 				-- The skin the arms actually wear, taken from a part that is not a finger (fingers copy
 				-- the hand's colour, so they would agree even if the arm did not).
@@ -530,6 +617,8 @@ local SEAM = Viewmodel.FingerMinCloseForTest ~= nil
 say("finger threshold seam present: %s (without it the planted regression cannot be reached and the finger result is UNPROVEN)", tostring(SEAM))
 
 local shipped = sweep("SHIPPED", nil, avatarA)
+say("--- #92 how the hands actually grip, from the viewmodel's OWN measurement of each gun ---")
+sayGrips(shipped.grips)
 
 -- THE PLANTED FAULT: the 18 September regression put back. A finger with nothing to grip stands
 -- straight forward along the barrel again. This must be WORSE than the shipped run or the shipped

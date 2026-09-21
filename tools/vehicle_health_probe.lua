@@ -109,11 +109,17 @@ local function drive(seat, throttle, steer)
 	seat.Steer = 0
 end
 
+-- Pinned, not random (the "PIN THE BEHAVIOUR, NOT THE ENVIRONMENT" lesson): VehicleService.Create
+-- draws its own Random when `options.model` is absent, so "car"/"bike" picked a different model
+-- every run -- the nudge test flipped from PASS to FAIL between two runs of identical code because
+-- a faster-accelerating car got picked and the same 0.12-throttle creep crossed the roadkill floor.
+local PINNED_MODEL = { car = "Rotster", bike = "BananiniScoot" }
+
 -- Spawns `kind`, seats a rig in the driver's seat so it can actually be steered (roadkill and
 -- collision both need a driven vehicle, not a parked one -- an unowned/parked vehicle is stepped by
 -- the server's own rest-skip logic and barely moves).
 local function spawnDriven(x, kind)
-	local model = VehicleService.Create(folder, Vector3.new(x, ORIGIN.Y + 3, ORIGIN.Z), 0, kind)
+	local model = VehicleService.Create(folder, Vector3.new(x, ORIGIN.Y + 3, ORIGIN.Z), 0, kind, { model = PINNED_MODEL[kind] })
 	task.wait(1)
 	local seat = model:FindFirstChildOfClass("VehicleSeat")
 	local chassis = model:FindFirstChild("Chassis")
@@ -257,7 +263,7 @@ do
 	local token, humanoid = dummy("RoadkillParked", Vector3.new(x, ORIGIN.Y + 1, ORIGIN.Z - 20))
 	-- Dropped from a few studs up right onto the dummy, so the chassis settles into sustained
 	-- contact rather than a moving pass-through -- the exact "car parked on someone" shape.
-	local model = VehicleService.Create(folder, Vector3.new(x, ORIGIN.Y + 4, ORIGIN.Z - 20), 0, "car")
+	local model = VehicleService.Create(folder, Vector3.new(x, ORIGIN.Y + 4, ORIGIN.Z - 20), 0, "car", { model = PINNED_MODEL.car })
 	task.wait(3.5) -- well past a landing thump, into rest
 	check("a car settled to rest on a dummy deals it no damage", humanoid.Health >= 99.9,
 		string.format("health %.1f after 3.5s resting", humanoid.Health))
@@ -331,6 +337,15 @@ do
 		string.format("health %.0f wrecked %s after %d run(s)", entry.health, tostring(entry.wrecked), attempts))
 	check("Wrecked attribute reaches the client", model:GetAttribute("Wrecked") == true, "")
 	local drivePrompt = entry.prompts[seat]
+	-- Diagnostic, not a check: this run's prompt check failed once already and the code reads as
+	-- correct, so print the state at two points instead of guessing again -- immediately (before
+	-- any deferred signal from the ejection could have run) and after a settle, so a flip between
+	-- them would prove a race rather than "never disabled at all".
+	print(string.format("[BRR_VehicleHealth] diag: immediately after wreck, prompt.Enabled=%s entry.wrecked=%s",
+		tostring(drivePrompt and drivePrompt.Enabled), tostring(entry.wrecked)))
+	task.wait()
+	print(string.format("[BRR_VehicleHealth] diag: one frame later, prompt.Enabled=%s entry.wrecked=%s",
+		tostring(drivePrompt and drivePrompt.Enabled), tostring(entry.wrecked)))
 	check("the drive prompt is disabled once wrecked", drivePrompt ~= nil and drivePrompt.Enabled == false,
 		string.format("prompt %s", drivePrompt and tostring(drivePrompt.Enabled) or "missing"))
 	task.wait(0.3)
