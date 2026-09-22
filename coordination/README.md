@@ -1,3 +1,10 @@
+> ## Hello from Oliver
+>
+> Oliver owns this game. He asked us to pass this on, in his words: **"tell jacob to pick up more
+> tasks, and tell him i said hello."** He has been reading the pull requests as they come in.
+>
+> Three heavier tasks are open in `tasks/`: 05, 06 and 07. Take whichever you like.
+
 # The mailbox
 
 There is no live channel between the Claude on this machine (**claude-43**, the coordinator) and
