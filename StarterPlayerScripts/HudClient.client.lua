@@ -3476,6 +3476,11 @@ end)
 
 matchResults.OnClientEvent:Connect(function(result)
 	recapPanel.Visible = false
+	-- ResultsScreen.client.lua draws the end-of-match screen now (Oliver, 16:03). This card and its
+	-- champion banner are the fallback for when that script is missing.
+	if playerGui:FindFirstChild("BrrResults") then
+		return
+	end
 	resultsPanel.Visible = true
 	resultsRank.Text = "#" .. result.rank
 	resultsRank.TextColor3 = result.rank == 1 and C.Accent or C.Text
