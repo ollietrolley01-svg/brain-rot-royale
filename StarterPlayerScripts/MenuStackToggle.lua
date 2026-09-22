@@ -31,14 +31,15 @@ MenuStackToggle.__index = MenuStackToggle
 
 MenuStackToggle.SettingId = "MenuStackCollapsed"
 
--- The stack's pixel layout in MenuClient's ScreenGui: MENU at (16, 130), 210x42.
+-- The stack's pixel layout in MenuClient's ScreenGui: the SHOP button (top of the five) at (16, 130),
+-- 104x26 (Oliver 14:41: the minimize tab floated away from the buttons when they shrank).
 local STACK_TOP = 124
 local STACK_SIZE = Vector2.new(300, 460)
-local MENU_X, MENU_Y, MENU_W, MENU_H = 16, 130, 210, 42
+local MENU_X, MENU_Y, MENU_W, MENU_H = 16, 130, 104, 26
 local SLIDE = 56
 
 -- 40 wide rather than a sliver: it's a finger's target on a phone.
-local EXPANDED_TAB = { x = MENU_X + MENU_W + 6, w = 40 }
+local EXPANDED_TAB = { x = MENU_X + MENU_W + 3, w = 30 }
 local COLLAPSED_TAB = { x = MENU_X, w = 78 }
 
 local DARK = Color3.fromRGB(20, 16, 6)
