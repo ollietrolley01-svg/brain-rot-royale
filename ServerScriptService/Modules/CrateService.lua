@@ -248,6 +248,25 @@ function CrateService.Open(player, tier, shownLuck)
 	else
 		-- A Style Crate tier names the kinds it draws from; a kind-crate is just its own category.
 		local item = unownedCosmetic(data, crate.kinds or category, rolledRarity)
+		-- Oliver, 2026-09-22 14:14: no duplicate refund from crates. When the rolled rarity has nothing
+		-- new left, the pull moves to the NEAREST rarity this crate can drop that still has something
+		-- unowned (lower first on a tie), so it still pays out a real cosmetic. Only a player who owns
+		-- everything this crate can give still gets the coins below, since there is nothing else to hand out.
+		if not item then
+			local odds = CrateData.EffectiveOdds(crate, luck)
+			local home = Rarity.Index[rolledRarity] or 1
+			for distance = 1, #Rarity.Order do
+				for _, index in ipairs({ home - distance, home + distance }) do
+					local rarity = Rarity.Order[index]
+					if not item and rarity and (odds[rarity] or 0) > 0 then
+						item = unownedCosmetic(data, crate.kinds or category, rarity)
+					end
+				end
+				if item then
+					break
+				end
+			end
+		end
 		if item then
 			data.Cosmetics.owned[item.id] = true
 			result.kind = item.kind
@@ -257,13 +276,13 @@ function CrateService.Open(player, tier, shownLuck)
 			result.color = item.color
 			message = string.format("%s: %s!", crate.name, item.name)
 		else
-			-- Nothing new left at that rarity: a partial refund rather than a dead pull.
+			-- Nothing new left anywhere in this crate: a partial refund rather than a dead pull.
 			local refund = math.floor(crate.coinPrice * (crate.duplicateRefund or 0.3))
 			data.SahurCoins += refund
 			result.kind = "Refund"
 			result.name = string.format("%d SahurCoins", refund)
 			result.coinValue = refund
-			message = string.format("%s: you own every %s here — refunded %d SahurCoins.", crate.name, rolledRarity, refund)
+			message = string.format("%s: you own everything in this crate — refunded %d SahurCoins.", crate.name, refund)
 		end
 	end
 
