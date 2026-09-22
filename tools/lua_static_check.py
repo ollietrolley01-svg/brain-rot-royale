@@ -1,8 +1,12 @@
-"""Static scope check for the Luau sources: catches names that will read as nil at run time.
+"""Static checks for the Luau sources: names that will read as nil at run time, and the eight bug
+patterns this project keeps hitting.
 
 Usage:  python tools/lua_static_check.py .            (whole tree; exit 1 if anything is found)
         Only the FIRST syntax error in a file is reported: fix it and run again to see the next.
         python tools/lua_static_check.py . path.lua   (just those files)
+        python tools/lua_static_check.py . --patterns-only     (just the PATTERN stage)
+        python tools/lua_static_check.py . --no-patterns       (just SCOPE and SYNTAX)
+        python tools/lua_static_check.py . --patterns-strict    (pattern findings fail the run)
 
 Studio is the only real compiler here and a run can wait a long time for the lock, so this finds
 the cheapest class of runtime error before a build. It tokenizes each file and walks its blocks
@@ -29,6 +33,24 @@ What it reports:
               Type annotation colons (`local x: T`, `function f(a: T): R`, `for i: T`) are skipped with
               the annotation, and Luau if-expressions (`x = if a then b else c`, no `end`) are told
               apart from if statements by what comes before the `if`.
+
+And a third stage, the PATTERN stage, which answers a different question: not "will Luau run this"
+but "is this one of the shapes that has already cost this project a session". The eight rules are
+the patterns written up in COORDINATION.md's 2026-09-21 sections, each with the real bug that paid
+for it: CLOCK_WALL_TIME, ATTRIBUTE, SNAPSHOT_AS_EVENT, WEAK_TABLE, RETURN_IGNORED, NIL_HANDLER,
+NUMBER_DRIFT, SILENT_REFUSAL. Every run prints, per rule, whether it is EXACT or a HEURISTIC and how
+many files and CANDIDATE SITES it examined next to how many it flagged — a filter is a claim about
+what it matched, and a rule that has quietly stopped matching reads the same as a clean codebase.
+
+Pattern findings are ADVISORY: they are printed but they do not set the exit code unless
+--patterns-strict is passed, because the project has a real population of every one of them and a
+linter whose first run fails the build gets turned off. What DOES set the exit code is the fixture
+run in tools/patterns/: each rule owns a fault it must flag and a correct file it must not, they run
+on every invocation, and a rule that stops catching its own fault fails loudly. That is this file
+being broken rather than the project, and it is reported as such.
+
+The `lua static check: N files, M findings` line is still the LAST line of output, because that is
+the line HANDOFF.md tells everyone to paste verbatim.
 
 Known false positives and blind spots:
   - Globals this list doesn't know (add them to GLOBALS), and deliberate globals set with `_G.x`.
@@ -816,6 +838,580 @@ def classify(name, line, later_locals):
     return ("UNDECLARED", line, name, "not a local in scope here, and not a known global")
 
 
+# ====================================================================================================
+# PATTERN stage: the eight recurring bug patterns from COORDINATION.md's 2026-09-21 sections.
+#
+# The SCOPE and SYNTAX stages above answer "will Luau run this file". This stage answers a different
+# question — "is this one of the shapes that has already cost this project a session" — so it is kept
+# separate and it does NOT gate the exit code by default. A linter whose first run produces four
+# hundred findings gets turned off, and every pattern below has a real population in this tree.
+# What DOES gate the exit code is the permanent fixture run (see run_pattern_self_test): if a rule
+# stops catching its own planted fault, that is this file being broken and it fails loudly.
+#
+# Every rule reads its input through tokenize() above. That matters: tokenize drops comments and
+# keeps string literals intact, which is the opposite of tools/verify.py:31's _strip_lua (it replaces
+# every string with an empty one). A check on what a string SAYS — rule P7 here — is dead on arrival
+# if it is fed stripped source, and it passed a green self-test on this project already because the
+# needle was handed a raw literal while the real check was fed stripped source. Both the real input
+# and the fixtures here travel the same open() -> tokenize() -> rule route.
+#
+# Every rule reports how many FILES and how many CANDIDATE SITES it examined next to how many it
+# flagged: a filter is a claim about what it matched, and a rule matching nothing otherwise reads
+# identically to a rule that is broken.
+#
+# EXACT vs HEURISTIC is recorded per rule and printed on every run. A heuristic pretending to be
+# exact gets switched off by the first person it annoys.
+# ====================================================================================================
+
+# Where the game's own code lives. tools/ is swept too, but a probe is judged differently from a
+# module the players run, so some rules report tools/ separately.
+GAME_DIRS = ("ServerScriptService", "ReplicatedStorage", "StarterPlayerScripts", "StarterGui")
+
+# Fixture files live here (see run_pattern_self_test). They are NOT swept as project files: the
+# whole point of them is to be wrong. They are counted as game code by the one membership test
+# below so that every rule runs its fixture through exactly the code path it runs real input
+# through — no second route for the needle.
+PATTERN_FIXTURE_DIR = "tools/patterns"
+
+
+class ScanFile:
+    """One file's text and tokens. `rel` is project-relative with forward slashes."""
+
+    __slots__ = ("rel", "text", "tokens", "by_line", "is_game")
+
+    def __init__(self, rel, text):
+        self.rel = rel.replace("\\", "/")
+        self.text = text
+        self.tokens = tokenize(text)
+        self.by_line = {}
+        for token in self.tokens:
+            self.by_line.setdefault(token[2], []).append(token)
+        first = self.rel.split("/")[0]
+        self.is_game = first in GAME_DIRS or self.rel.startswith(PATTERN_FIXTURE_DIR)
+
+
+class PatternReport:
+    """Findings, per-rule coverage counts, and notes (things worth a human's eye but not findings)."""
+
+    def __init__(self):
+        self.findings = []  # (rel, line, code, subject, note)
+        self.notes = []  # (code, text)
+        self.stats = {}  # code -> {files, candidates, flagged}
+
+    def rule(self, code):
+        return self.stats.setdefault(code, {"files": 0, "candidates": 0, "flagged": 0})
+
+    def flag(self, code, rel, line, subject, note):
+        self.findings.append((rel, line, code, subject, note))
+        self.rule(code)["flagged"] += 1
+
+    def note(self, code, text):
+        self.notes.append((code, text))
+
+    def codes_flagged(self):
+        return {finding[2] for finding in self.findings}
+
+
+# --- small token helpers shared by the rules -------------------------------------------------------
+
+def _string_content(literal):
+    """The text inside a string token, quotes/long brackets removed. Escapes are left alone: every
+    rule here looks for digits, and no escape produces one."""
+    if literal.startswith("["):
+        match = re.match(r"\[(=*)\[(.*)\]\1\]$", literal, re.S)
+        return match.group(2) if match else literal
+    return literal[1:-1]
+
+
+def _matching_close(tokens, i):
+    """tokens[i] is an opening bracket; index of its match, or None."""
+    opens = {"(": ")", "[": "]", "{": "}"}
+    if tokens[i][1] not in opens:
+        return None
+    depth = 0
+    for j in range(i, len(tokens)):
+        value = tokens[j][1]
+        if tokens[j][0] != "op":
+            continue
+        if value in opens:
+            depth += 1
+        elif value in (")", "]", "}"):
+            depth -= 1
+            if depth == 0:
+                return j
+    return None
+
+
+# --- P1: os.clock used as wall time ---------------------------------------------------------------
+# os.clock() is process CPU TIME in Roblox, not wall clock. A build that takes 20 s of a player's
+# time can read as 8 s, and the gap moves with how much the code yields — so every cooldown, budget
+# and deadline specified in seconds and counted in os.clock() is wrong by an amount nobody can
+# predict. Use os.time(), tick() or DateTime.now().UnixTimestampMillis.
+#
+# EXACT on the fact (os.clock is CPU time; the call is unambiguous). The site classification below
+# is what keeps the list readable: a reading that only feeds an accumulator or a one-off profile
+# print is counted as a candidate and not flagged, because CPU time is arguably what it wanted.
+
+CLOCK_TIMESTAMP_NAME = re.compile(
+    r"^(at|now|since|start|started|begin|began|t0|"
+    r"last[A-Z_]?\w*|next[A-Z_]?\w*|\w*[Tt]ime|\w*[Uu]ntil|\w*[Ss]tamp|\w*[Dd]eadline|\w*[Ee]xpires?|"
+    r"\w*[Cc]ooldown|\w*[Aa]t)$")
+CLOCK_COMPARE = {"<", "<=", ">", ">=", "==", "~="}
+CLOCK_ACCUMULATE = {"+=", "-="}
+
+
+def _clock_use(scan_file, index):
+    """Why this os.clock() reading is a wall-clock use, or None when it is only CPU profiling."""
+    line = scan_file.tokens[index][2]
+    row = scan_file.by_line.get(line, [])
+    values = [token[1] for token in row]
+    if any(value in CLOCK_COMPARE for value in values):
+        return "compared as a duration"
+    after = scan_file.tokens[index + 5] if index + 5 < len(scan_file.tokens) else None
+    if after is not None and after[1] == "+" and after[2] == line:
+        return "a deadline (os.clock() + seconds)"
+    if any(value in CLOCK_ACCUMULATE for value in values):
+        return None  # `STATS.x += os.clock() - t` is a CPU-time accumulator, not a budget
+    if "=" in values:
+        target = None
+        for token in row:
+            if token[1] == "=":
+                break
+            if token[0] == "name":
+                target = token[1]
+        if target and CLOCK_TIMESTAMP_NAME.match(target):
+            return f"stored as a timestamp in `{target}`"
+    return None
+
+
+def pattern_os_clock(scan, report, targets):
+    code = "CLOCK_WALL_TIME"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    per_file = {}
+    tool_sites = 0
+    tool_files = set()
+    for scan_file in scan:
+        for index, (kind, value, _) in enumerate(scan_file.tokens):
+            if kind != "name" or value != "os":
+                continue
+            tokens = scan_file.tokens
+            if not (index + 2 < len(tokens) and tokens[index + 1][1] == "." and tokens[index + 2][1] == "clock"):
+                continue
+            stats["candidates"] += 1
+            why = _clock_use(scan_file, index)
+            if why is None:
+                continue
+            if scan_file.is_game:
+                per_file.setdefault(scan_file.rel, []).append((tokens[index][2], why))
+            else:
+                tool_sites += 1
+                tool_files.add(scan_file.rel)
+    # One finding per FILE, not per site: 217 separate findings for one systemic mistake is how a
+    # linter gets turned off. The lines are all in the note.
+    for rel, uses in sorted(per_file.items()):
+        if rel not in targets:
+            continue
+        lines = [line for line, _ in uses]
+        shown = ", ".join(str(line) for line in lines[:8])
+        if len(lines) > 8:
+            shown += f", +{len(lines) - 8} more"
+        report.flag(code, rel, lines[0], "os.clock",
+                    f"{len(uses)} wall-clock use(s) of os.clock(), which is CPU time in Roblox; "
+                    f"lines {shown}; first is {uses[0][1]}")
+    if tool_sites:
+        report.note(code, f"{tool_sites} wall-clock os.clock() use(s) in {len(tool_files)} tools/ file(s) "
+                          f"— not flagged (a probe timing itself is a judgement call, but a probe "
+                          f"timeout keyed off os.clock() can never fire)")
+
+
+# --- P2: an attribute written and never read, and the reverse -------------------------------------
+# The admin Fly power set an attribute nothing in the project read, so the button did nothing at all.
+# Sweeps SetAttribute against GetAttribute / GetAttributeChangedSignal across the whole tree.
+#
+# HEURISTIC. The index it builds is exact — "no literal read of this name exists in the swept Lua" —
+# but an attribute can also be set by the place file, by a Studio property, or read by a name this
+# pass cannot see. Names built by concatenation are the big one: `"KP_" .. name` is reported
+# SEPARATELY, and any literal name that shares a prefix or suffix with a concatenated fragment is
+# demoted to a note rather than flagged.
+
+ATTR_WRITERS = {"SetAttribute"}
+ATTR_READERS = {"GetAttribute", "GetAttributeChangedSignal"}
+
+
+def _string_constants(scan_file):
+    """`local NAME = "literal"` in this file, so `part:SetAttribute(BASE_COLOR, v)` resolves."""
+    found = {}
+    tokens = scan_file.tokens
+    for index in range(len(tokens) - 3):
+        if tokens[index][1] != "local" or tokens[index][0] != "kw":
+            continue
+        if tokens[index + 1][0] == "name" and tokens[index + 2][1] == "=" and tokens[index + 3][0] == "str":
+            after = tokens[index + 4] if index + 4 < len(tokens) else None
+            if after is None or after[1] != "..":
+                found[tokens[index + 1][1]] = _string_content(tokens[index + 3][1])
+    return found
+
+
+def pattern_attributes(scan, report, targets):
+    code = "ATTRIBUTE"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    writes, reads = {}, {}
+    computed = []  # (rel, line, kind, fragment or None)
+    fragments = {"prefix": set(), "suffix": set()}
+    for scan_file in scan:
+        constants = _string_constants(scan_file)
+        tokens = scan_file.tokens
+        for index, (kind, value, line) in enumerate(tokens):
+            if kind != "name" or (value not in ATTR_WRITERS and value not in ATTR_READERS):
+                continue
+            if index == 0 or tokens[index - 1][1] not in (":", "."):
+                continue
+            if index + 2 >= len(tokens) or tokens[index + 1][1] != "(":
+                continue
+            stats["candidates"] += 1
+            side = writes if value in ATTR_WRITERS else reads
+            first = tokens[index + 2]
+            after = tokens[index + 3] if index + 3 < len(tokens) else None
+            if first[0] == "str" and after is not None and after[1] == "..":
+                fragments["prefix"].add(_string_content(first[1]))
+                computed.append((scan_file.rel, line, value, _string_content(first[1]) + ".."))
+                continue
+            if first[0] == "str" and after is not None and after[1] in (",", ")"):
+                side.setdefault(_string_content(first[1]), []).append((scan_file.rel, line, scan_file.is_game))
+                continue
+            if first[0] == "name" and first[1] in constants and after is not None and after[1] in (",", ")"):
+                side.setdefault(constants[first[1]], []).append((scan_file.rel, line, scan_file.is_game))
+                continue
+            # A name built at run time. Record any literal fragment in the expression so a literal
+            # name that could be its output is not reported as unread.
+            close = _matching_close(tokens, index + 1)
+            end = close if close is not None else index + 2
+            for j in range(index + 2, end):
+                if tokens[j][0] == "str" and tokens[j][1] not in ("''", '""'):
+                    text = _string_content(tokens[j][1])
+                    if tokens[j - 1][1] == "..":
+                        fragments["suffix"].add(text)
+                    else:
+                        fragments["prefix"].add(text)
+            computed.append((scan_file.rel, line, value, None))
+
+    def concatenation_touched(name):
+        for prefix in fragments["prefix"]:
+            if prefix and (name.startswith(prefix) or prefix.startswith(name)):
+                return prefix
+        for suffix in fragments["suffix"]:
+            if suffix and (name.endswith(suffix) or suffix.endswith(name)):
+                return suffix
+        return None
+
+    demoted, tools_only = [], []
+    for name, sites in sorted(writes.items()):
+        if name in reads:
+            if not any(is_game for _, _, is_game in reads[name]):
+                tools_only.append(name)
+            continue
+        game_sites = [(rel, line) for rel, line, is_game in sites if is_game]
+        if not game_sites:
+            continue
+        touched = concatenation_touched(name)
+        if touched:
+            demoted.append(f"{name} (shares text with a concatenated name `{touched}`)")
+            continue
+        rel, line = game_sites[0]
+        if rel in targets:
+            report.flag(code, rel, line, name,
+                        f"attribute written at {len(sites)} site(s) and never read: no "
+                        f"GetAttribute(\"{name}\") or GetAttributeChangedSignal(\"{name}\") anywhere")
+    for name, sites in sorted(reads.items()):
+        if name in writes:
+            continue
+        game_sites = [(rel, line) for rel, line, is_game in sites if is_game]
+        if not game_sites:
+            continue
+        touched = concatenation_touched(name)
+        if touched:
+            demoted.append(f"{name} (read-only; shares text with a concatenated name `{touched}`)")
+            continue
+        rel, line = game_sites[0]
+        if rel in targets:
+            report.flag(code, rel, line, name,
+                        f"attribute read at {len(sites)} site(s) and never written by any Lua here "
+                        f"— either dead or it comes from the place file")
+    if computed:
+        report.note(code, f"{len(computed)} attribute name(s) built at run time, reported separately and "
+                          f"NOT flagged: " + ", ".join(sorted({f"{rel}:{line}" for rel, line, _, _ in computed})[:10]))
+    if demoted:
+        report.note(code, f"{len(demoted)} name(s) held back from the findings because a concatenated "
+                          f"name could produce or consume them: " + "; ".join(sorted(demoted)))
+    if tools_only:
+        report.note(code, f"{len(tools_only)} attribute(s) whose only reader is a tools/ probe — written "
+                          f"by the game, read by nothing the players run: " + ", ".join(sorted(tools_only)))
+
+
+# --- P7: a stale copy of a number defined elsewhere ------------------------------------------------
+# A mode said "first to 50" while its scoreTarget said 100, a few lines apart in the same table,
+# because a change to the number never reached the sentence. tools/verify.py:1139 has a narrow
+# version of this (GameModes.lua, `description` against `scoreTarget`); this generalises it to every
+# swept file, every description-shaped key, and any numeric field in the same table constructor.
+#
+# HEURISTIC, and read the claim carefully because it is weaker than "these two numbers disagree".
+# What it reports is: this sentence quotes a quantity that agrees with NO number beside it, so
+# nothing keeps the two in step. That is checkable; "the sentence means this field" is not. It has to
+# be the weaker claim because a description may legitimately quote a second number ("rank score =
+# prestige x 100 + rank") and requiring EVERY number to match flags all of those. The recorded fix
+# for this pattern is the same either way: do not copy a number into prose, compose the prose from
+# the number. Expect some findings to be flavour text — that is what triage is for.
+#
+# A sentence containing a number written as a WORD is reported INCONCLUSIVE, not clean and not
+# flagged: "top 10 fifty times" cannot be compared with 50 by any amount of regex.
+#
+# Note on input: this rule is why the whole stage runs off tokenize(). verify.py's _strip_lua
+# replaces every string literal with an empty one, so a check on what a string SAYS reads "" and
+# passes forever. tokenize() drops comments and keeps strings.
+
+DESCRIPTION_KEYS = {"description", "desc", "blurb", "summary", "detail", "details", "tooltip", "hint",
+                    "tagline", "subtitle", "caption", "flavour", "flavor", "note", "body"}
+# A number spelled as a word, and what it is worth. A description is only INCONCLUSIVE when one of
+# its words could BE a number beside it: "top 10 fifty times" next to target=50 is a sentence this
+# rule cannot read, but "First to 50" next to scoreTarget=100 is the bug it exists for, and an
+# earlier version suppressed it because "first" was on the list at all.
+NUMBER_WORDS = {
+    "a": 1, "an": 1, "one": 1, "once": 1, "single": 1, "first": 1,
+    "two": 2, "twice": 2, "double": 2, "second": 2, "pair": 2,
+    "three": 3, "thrice": 3, "triple": 3, "third": 3,
+    "four": 4, "fourth": 4, "five": 5, "fifth": 5, "six": 6, "sixth": 6, "seven": 7, "seventh": 7,
+    "eight": 8, "eighth": 8, "nine": 9, "ninth": 9, "ten": 10, "tenth": 10, "eleven": 11,
+    "twelve": 12, "dozen": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100, "thousand": 1000, "million": 1000000, "half": 0.5,
+}
+NUMBER_WORD = re.compile(r"\b(" + "|".join(sorted(NUMBER_WORDS)) + r")\b", re.I)
+STRING_NUMBER = re.compile(r"(?<![\w.])(\d(?:[\d,]*\d)?(?:\.\d+)?)")
+
+
+def _table_frames(tokens):
+    """Every table constructor in a file, with its own scalar `key = <number>` and `key = "string"`
+    fields. A field belongs to the innermost constructor it is written in, and each frame keeps its
+    nested ones: a crate's `description = "3% Secret"` sits beside `odds = { Secret = 3 }`, so a rule
+    that only looked at one level reported drift against a number written two lines below it."""
+    stack = []
+    done = []
+    for index, (kind, value, line) in enumerate(tokens):
+        if kind == "op" and value == "{":
+            frame = {"numbers": {}, "strings": {}, "line": line, "children": []}
+            if stack:
+                stack[-1]["children"].append(frame)
+            stack.append(frame)
+            continue
+        if kind == "op" and value == "}":
+            if stack:
+                done.append(stack.pop())
+            continue
+        if not stack or kind != "name":
+            continue
+        if index + 2 >= len(tokens) or tokens[index + 1][1] != "=" or tokens[index + 1][0] != "op":
+            continue
+        if index == 0 or tokens[index - 1][1] not in ("{", ",", ";"):
+            continue
+        j = index + 2
+        negative = tokens[j][1] == "-"
+        if negative:
+            j += 1
+        if j + 1 >= len(tokens):
+            continue
+        terminator = tokens[j + 1][1]
+        if terminator not in (",", ";", "}"):
+            continue  # an expression, a call or a nested constructor: not a scalar this rule can use
+        if tokens[j][0] == "num":
+            try:
+                number = float(tokens[j][1].replace("_", ""))
+            except ValueError:
+                continue
+            stack[-1]["numbers"][value] = (-number if negative else number, tokens[j][2])
+        elif tokens[j][0] == "str" and not negative:
+            stack[-1]["strings"][value] = (_string_content(tokens[j][1]), tokens[j][2])
+    return done + stack
+
+
+def _nested_numbers(frame):
+    values = set()
+    for child in frame["children"]:
+        values |= {value for value, _ in child["numbers"].values()}
+        values |= _nested_numbers(child)
+    return values
+
+
+def pattern_number_drift(scan, report, targets):
+    code = "NUMBER_DRIFT"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    inconclusive = 0
+    for scan_file in scan:
+        for frame in _table_frames(scan_file.tokens):
+            if not frame["numbers"]:
+                continue
+            own = {value for value, _ in frame["numbers"].values()}
+            nested = _nested_numbers(frame)
+            siblings = own | nested
+            for key, (content, line) in sorted(frame["strings"].items()):
+                if key.lower() not in DESCRIPTION_KEYS:
+                    continue
+                found = STRING_NUMBER.findall(content)
+                if not found:
+                    continue
+                stats["candidates"] += 1
+                spelled = {NUMBER_WORDS[word.lower()] for word in NUMBER_WORD.findall(content)}
+                if spelled & siblings:
+                    inconclusive += 1
+                    continue
+                numbers = []
+                for text in found:
+                    try:
+                        numbers.append(float(text.replace(",", "")))
+                    except ValueError:
+                        pass
+                if not numbers or any(number in siblings for number in numbers):
+                    continue
+                if scan_file.rel not in targets:
+                    continue
+                quoted = ", ".join(text for text in found)
+                beside = ", ".join(f"{name}={_pretty_number(value)}"
+                                   for name, (value, _) in sorted(frame["numbers"].items()))
+                if nested:
+                    shown = ", ".join(_pretty_number(value) for value in sorted(nested)[:8])
+                    beside += f"; nested: {shown}"
+                report.flag(code, scan_file.rel, line, key,
+                            f"`{key}` quotes {quoted} and no number beside it agrees ({beside}) — a "
+                            f"quantity hard-coded in prose that nothing keeps in step; compose the "
+                            f"sentence from the number instead of copying it")
+    if inconclusive:
+        report.note(code, f"{inconclusive} description(s) INCONCLUSIVE, not clean and not flagged: they "
+                          f"spell a number as a word, which cannot be compared with a numeric field")
+
+
+def _pretty_number(value):
+    return str(int(value)) if value == int(value) else str(value)
+
+
+# --- the rule table -------------------------------------------------------------------------------
+# code, one-line title, EXACT or HEURISTIC, the function, and the fixture pair that must and must not
+# fire. The fixtures are the permanent planted faults: see run_pattern_self_test.
+
+PATTERN_RULES = [
+    ("CLOCK_WALL_TIME", "os.clock used as wall time", "EXACT", pattern_os_clock,
+     "p1_clock_bad", "p1_clock_good"),
+    ("ATTRIBUTE", "an attribute written and never read, or read and never written", "HEURISTIC",
+     pattern_attributes, "p2_attribute_bad", "p2_attribute_good"),
+    ("NUMBER_DRIFT", "a stale copy of a number defined elsewhere", "HEURISTIC",
+     pattern_number_drift, "p7_number_bad", "p7_number_good"),
+]
+
+
+def run_patterns(scan, targets=None):
+    """Run every rule over `scan` (all files, so the cross-file rules can see every reader), reporting
+    findings only for `targets` (project-relative paths; None means all of them)."""
+    if targets is None:
+        targets = {scan_file.rel for scan_file in scan}
+    report = PatternReport()
+    for code, _, _, rule, _, _ in PATTERN_RULES:
+        report.rule(code)
+        rule(scan, report, targets)
+    return report
+
+
+def load_scan(root, paths):
+    """Read and tokenize files. The one route every rule's input takes, fixtures included."""
+    scan = []
+    for path in paths:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+        scan.append(ScanFile(os.path.relpath(path, root), text))
+    return scan
+
+
+# --- the permanent planted faults ------------------------------------------------------------------
+# Each rule owns two fixtures under tools/patterns/: `<name>_bad.lua.fixture` MUST be flagged and
+# `<name>_good.lua.fixture` MUST NOT be. They run on every invocation and they gate the exit code,
+# because a rule that has stopped firing is indistinguishable from a clean codebase.
+#
+# Each fixture is aimed at the rule's INVARIANT, not at the bug that prompted it. "The admin Fly
+# attribute is still unread" would have died the moment somebody added the reader — and the reader
+# has since been added, so that plant would now be silently proving nothing. "An attribute written
+# and never read must be reported" cannot expire.
+#
+# The fixtures are named .lua.fixture rather than .lua on purpose: tools/balance.py globs **/*.lua
+# from the project root and tools/verify.py walks every .lua under it, so a deliberately-wrong .lua
+# file here would show up in two other people's checks. The extension keeps them out of those sweeps
+# while they still travel this stage's own open() -> ScanFile -> rule route, which is the route real
+# input takes (`lua_static_check.py . <path>` reads explicit paths the same way).
+
+def pattern_fixture_paths(root):
+    base = os.path.join(root, "tools", "patterns")
+    if not os.path.isdir(base):
+        return []
+    return [os.path.join(base, name) for name in sorted(os.listdir(base)) if name.endswith(".lua.fixture")]
+
+
+def run_pattern_self_test(root):
+    """Returns (lines, problems). `problems` non-empty means this file is broken, not the project."""
+    paths = pattern_fixture_paths(root)
+    if not paths:
+        return [], [f"pattern self-test: no fixtures found under {os.path.join(root, 'tools', 'patterns')} "
+                    f"— every rule is unproven"]
+    scan = load_scan(root, paths)
+    report = run_patterns(scan)
+    by_file = {}
+    for rel, line, code, subject, note in report.findings:
+        by_file.setdefault(rel, set()).add(code)
+    problems = []
+    fired = 0
+    clean = 0
+    for code, title, _, _, bad, good in PATTERN_RULES:
+        bad_rel = f"tools/patterns/{bad}.lua.fixture"
+        good_rel = f"tools/patterns/{good}.lua.fixture"
+        if not any(path.endswith(f"{bad}.lua.fixture") for path in paths):
+            problems.append(f"pattern self-test: {code} has no planted fault ({bad}.lua.fixture is missing)")
+        elif code in by_file.get(bad_rel, ()):
+            fired += 1
+        else:
+            problems.append(f"pattern self-test: {code} did NOT flag its planted fault "
+                            f"({bad}.lua.fixture) — the rule is testing nothing")
+        if not any(path.endswith(f"{good}.lua.fixture") for path in paths):
+            problems.append(f"pattern self-test: {code} has no false-positive fixture "
+                            f"({good}.lua.fixture is missing)")
+        elif code in by_file.get(good_rel, ()):
+            problems.append(f"pattern self-test: {code} flagged {good}.lua.fixture, which is correct code "
+                            f"— it produces false positives")
+        else:
+            clean += 1
+    total = len(PATTERN_RULES)
+    lines = [f"pattern self-test: {fired}/{total} planted faults fired, {clean}/{total} correct "
+             f"fixtures stayed clean ({len(paths)} fixture files)"]
+    return lines, problems
+
+
+def print_pattern_report(report, scan, self_test_lines):
+    for rel, line, code, subject, note in sorted(report.findings, key=lambda f: (f[0], f[1])):
+        print(f"{rel}:{line}: {code} {subject} ({note})")
+    print("pattern rules (advisory — they do not set the exit code unless --patterns-strict):")
+    for code, title, kind, _, _, _ in PATTERN_RULES:
+        stats = report.stats.get(code, {"files": 0, "candidates": 0, "flagged": 0})
+        print(f"  {code:<18} {kind:<9} files={stats['files']:<5} candidates={stats['candidates']:<6} "
+              f"flagged={stats['flagged']:<4} {title}")
+    if report.notes:
+        print("pattern notes (looked at, deliberately not findings):")
+        for code, text in report.notes:
+            print(f"  {code}: {text}")
+    for line in self_test_lines:
+        print(line)
+    candidates = sum(stats["candidates"] for stats in report.stats.values())
+    print(f"lua pattern check: {len(scan)} files, {len(PATTERN_RULES)} rules, "
+          f"{candidates} candidate sites, {len(report.findings)} findings")
+
+
 def lua_files(root, only):
     if only:
         for path in only:
@@ -829,11 +1425,30 @@ def lua_files(root, only):
                     yield os.path.join(dirpath, name)
 
 
+def pattern_files(root):
+    """The files the PATTERN stage sweeps: the set lua_files walks, minus the fixtures. The fixtures
+    are .lua.fixture so they are already outside lua_files' filter; this keeps them out if anyone
+    ever drops a plain .lua in there."""
+    for path in lua_files(root, None):
+        if os.path.join("tools", "patterns") in path:
+            continue
+        yield path
+
+
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else "."
-    only = sys.argv[2:]
+    args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    flags = {arg for arg in sys.argv[1:] if arg.startswith("--")}
+    root = args[0] if args else "."
+    only = args[1:]
+    unknown = flags - {"--no-patterns", "--patterns-only", "--patterns-strict"}
+    if unknown:
+        print(f"unknown option(s): {' '.join(sorted(unknown))}")
+        print("usage: lua_static_check.py <root> [file...] [--no-patterns|--patterns-only] [--patterns-strict]")
+        sys.exit(2)
     total = 0
     files = 0
+    if "--patterns-only" in flags:
+        return run_pattern_stage(root, only, flags, scope_findings=0, scope_files=0, scope_only=True)
     for path in lua_files(root, only):
         files += 1
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -856,8 +1471,31 @@ def main():
         for kind, line, name, note in findings:
             print(f"{rel}:{line}: {kind} {name} ({note})")
             total += 1
-    print(f"lua static check: {files} files, {total} findings")
-    sys.exit(1 if total else 0)
+    return run_pattern_stage(root, only, flags, scope_findings=total, scope_files=files)
+
+
+def run_pattern_stage(root, only, flags, scope_findings, scope_files, scope_only=False):
+    """The PATTERN stage, then the SCOPE/SYNTAX summary line — in that order, so the line HANDOFF.md
+    tells everyone to paste verbatim (`lua static check: N files, M findings`) is still the last line
+    of output. Pattern findings are advisory by default; what gates the exit code is the self-test,
+    because a rule that has stopped firing is this file being broken."""
+    problems = []
+    pattern_findings = 0
+    if "--no-patterns" not in flags:
+        scan = load_scan(root, list(pattern_files(root)))
+        targets = None
+        if only:
+            targets = {os.path.relpath(path, root).replace("\\", "/") for path in only}
+        report = run_patterns(scan, targets)
+        self_test_lines, problems = run_pattern_self_test(root)
+        print_pattern_report(report, scan, self_test_lines)
+        for problem in problems:
+            print(problem)
+        pattern_findings = len(report.findings)
+    if not scope_only:
+        print(f"lua static check: {scope_files} files, {scope_findings} findings")
+    bad = scope_findings or problems or (pattern_findings and "--patterns-strict" in flags)
+    sys.exit(1 if bad else 0)
 
 
 if __name__ == "__main__":

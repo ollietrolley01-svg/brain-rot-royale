@@ -1,0 +1,18 @@
+-- MUST BE FLAGGED: ATTRIBUTE (twice — once each way)
+-- Invariant: an attribute written by the game must be read by something, and an attribute the game
+-- reads must be written by something. The admin Fly power set an attribute nothing in the project
+-- read, so the button did nothing at all — no error, no warning, nothing to find by eye.
+
+local AttributeBad = {}
+
+function AttributeBad.Grant(character)
+	-- written here and nowhere read: the power is inert
+	character:SetAttribute("FixtureUnreadPower", true)
+end
+
+function AttributeBad.IsGranted(character)
+	-- read here and nowhere written: always nil
+	return character:GetAttribute("FixtureUnwrittenPower") == true
+end
+
+return AttributeBad

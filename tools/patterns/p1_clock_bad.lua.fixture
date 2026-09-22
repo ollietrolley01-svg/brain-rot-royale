@@ -1,0 +1,28 @@
+-- MUST BE FLAGGED: CLOCK_WALL_TIME
+-- Invariant: no wall-clock budget, deadline or cooldown may be counted in os.clock(), which is
+-- process CPU time in Roblox. A build that takes 20 s of a player's time can read as 8 s, and the
+-- gap moves with how much the code yields, so the error is not even a constant.
+
+local ClockBad = {}
+
+local FIXTURE_COOLDOWN_SECONDS = 3
+
+function ClockBad.Fire(state)
+	-- a deadline in CPU seconds
+	state.nextFixtureShotAt = os.clock() + FIXTURE_COOLDOWN_SECONDS
+end
+
+function ClockBad.Ready(state)
+	-- a duration comparison in CPU seconds
+	return os.clock() - state.lastFixtureShotAt > FIXTURE_COOLDOWN_SECONDS
+end
+
+function ClockBad.Wait(state)
+	local startedAt = os.clock()
+	while os.clock() - startedAt < 2 do
+		task.wait()
+	end
+	state.lastFixtureShotAt = os.clock()
+end
+
+return ClockBad

@@ -1,0 +1,34 @@
+-- MUST NOT BE FLAGGED: CLOCK_WALL_TIME
+-- The same cooldown, counted in wall time. Plus the one os.clock() use the rule deliberately does
+-- not flag: an accumulator that is measuring CPU time on purpose, for a profile print. Flagging
+-- that is how a rule gets switched off by the first person it annoys.
+
+local ClockGood = {}
+
+local FIXTURE_COOLDOWN_SECONDS = 3
+local STATS = { fixtureCpuSeconds = 0 }
+
+function ClockGood.Fire(state)
+	state.nextFixtureShotAt = tick() + FIXTURE_COOLDOWN_SECONDS
+end
+
+function ClockGood.Ready(state)
+	return tick() - state.lastFixtureShotAt > FIXTURE_COOLDOWN_SECONDS
+end
+
+function ClockGood.Wait(state)
+	local startedAt = DateTime.now().UnixTimestampMillis
+	while DateTime.now().UnixTimestampMillis - startedAt < 2000 do
+		task.wait()
+	end
+	state.lastFixtureShotAt = os.time()
+end
+
+-- CPU time is what this wants: how much processor the rebuild spent, not how long the player waited.
+function ClockGood.Profile(rebuild)
+	local cpu = os.clock()
+	rebuild()
+	STATS.fixtureCpuSeconds += os.clock() - cpu
+end
+
+return ClockGood

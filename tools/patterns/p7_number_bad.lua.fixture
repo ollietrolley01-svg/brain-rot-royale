@@ -1,0 +1,20 @@
+-- MUST BE FLAGGED: NUMBER_DRIFT
+-- Invariant: a number written into a sentence must agree with the number beside it, because the two
+-- will be changed at different times. A mode said "first to 50" while its scoreTarget said 100, a
+-- few lines apart in the same table, because a change to the number never reached the sentence.
+--
+-- This fixture is also the string-content trap: a check on what a string SAYS is dead if it is fed
+-- source with the string literals blanked out (tools/verify.py:31 does exactly that). If this stops
+-- being flagged, check what the rule is being handed before you change the rule.
+
+local NumberBad = {}
+
+NumberBad.Modes = {
+	FixtureDeathmatch = {
+		scoreTarget = 100,
+		roundSeconds = 600,
+		description = "First to 50 eliminations takes it.",
+	},
+}
+
+return NumberBad

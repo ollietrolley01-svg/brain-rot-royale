@@ -1,0 +1,40 @@
+-- MUST NOT BE FLAGGED: NUMBER_DRIFT
+-- Four shapes the rule must leave alone:
+--   1. the sentence agrees with the number beside it;
+--   2. the sentence quotes a SECOND number that is not a field (the rank-score formula) while still
+--      agreeing about the one that is — a rule demanding every number match flags this;
+--   3. the numbers inside Color3.fromRGB(...) are not fields of the table and must not be treated
+--      as ones, or every description in CosmeticData.lua becomes a finding;
+--   4. a number spelled as a word cannot be compared with a numeric field, so the site is reported
+--      INCONCLUSIVE in the notes rather than passed or flagged.
+
+local NumberGood = {}
+
+NumberGood.Modes = {
+	FixtureDeathmatch = {
+		scoreTarget = 100,
+		roundSeconds = 600,
+		description = "First to 100 eliminations takes it.",
+	},
+	FixtureKingOfTheHill = {
+		scoreTarget = 5,
+		description = "Reach Prestige 5 (rank score = prestige x 100 + rank).",
+	},
+}
+
+NumberGood.Skins = {
+	FixtureBronze = {
+		color = Color3.fromRGB(205, 127, 50),
+		material = Enum.Material.Metal,
+		description = "Prestige 1 reward. The first lap is the hardest.",
+	},
+}
+
+NumberGood.Achievements = {
+	{ id = "fixtureTop10", stat = "top10", target = 50, coins = 3000,
+		description = "Finish in the top 10 fifty times." },
+	{ id = "fixtureDamage", stat = "damage", target = 50000, coins = 6000,
+		description = "Deal 50,000 damage." },
+}
+
+return NumberGood

@@ -1,0 +1,30 @@
+-- MUST NOT BE FLAGGED: ATTRIBUTE
+-- The same power, wired: written on one side and read on the other, plus the case the rule must
+-- report as a NOTE rather than a finding — a name built by concatenation. `FX_` .. kind cannot be
+-- matched against a literal read by any amount of string comparison, so a literal name that shares
+-- its text is held back from the findings instead of being reported as unread.
+
+local AttributeGood = {}
+
+function AttributeGood.Grant(character)
+	character:SetAttribute("FixtureLivePower", true)
+end
+
+function AttributeGood.IsGranted(character)
+	return character:GetAttribute("FixtureLivePower") == true
+end
+
+function AttributeGood.Watch(character, onChange)
+	character:GetAttributeChangedSignal("FixtureLivePower"):Connect(onChange)
+end
+
+function AttributeGood.Tag(part, kind, value)
+	part:SetAttribute("FX_" .. kind, value)
+end
+
+function AttributeGood.ReadTag(part)
+	-- the other half of the concatenated pair: a literal read whose writer is computed
+	return part:GetAttribute("FX_Muzzle")
+end
+
+return AttributeGood
