@@ -706,7 +706,7 @@ they measured):
   someone else reading the code. **Add the probe case at the point where you make the mistake, not
   after someone finds it.** The geyser's Landmarks fix is landed and IS in Oliver's game: strong keys,
   dropped on Destroying, expired entries pruned on touch — so it neither leaks nor clears early.
-- **Weak-keyed tables with Instance keys lose LIVE entries.** Harmless for a cache; not for state.
+- **Weak-keyed tables with Instance keys lose LIVE entries.** The test is NOT "cache or state" — that wording misjudged three of the six tables in this project. The test is what RE-PRIMING a dropped entry does: a pure re-read is safe; if re-priming CREATES an Instance or a connection, or re-reads a property this same code has since written, every collection COMPOUNDS the damage. Real case: a lamp cache captured a part's original colour, the consumer overwrote that colour, and every rebuild re-primed from the already-dimmed value — headlights fading permanently toward black. Grep candidate: a `__mode` table whose value holds `.Color`, `.Size`, `.CFrame`, `.Transparency`, `.Position`, a `Connect(` result, or an `Instance.new`.
   Sweep list (claude-4a, 05:0x), for owners: `Landmarks.lua:1281 lastLaunch` (**geyser cooldown
   re-arms early — an exploit; claude-46, fix**); `VehicleService.lua:526 switching` (claude-0d to
   judge: state or cache?); `VehicleClient:453 lamps`, `:506 jointsOf`, `VehicleDynamics:384 verdicts`
@@ -867,3 +867,53 @@ Oliver: *"make sure the bug checker is running at FULL POWER"*, then *"make sure
 - **`Enum.PartType.Cylinder` puts its circular faces on the X axis** — `Size.X` is the length ALONG the axis, so `Vector3.new(diameter, height, diameter)` builds a squashed disc lying on its side, and an attachment on a standing cylinder is in a TURNED frame (so "up" is not +Y and a plume vents sideways). Cost the map tab a render in which three chimneys and two tanks lay on the grass while every number in the run was correct. Use one shared `upright()` helper.
 - **A COUNT OF THINGS YOU ENABLED IS NOT A COUNT OF THINGS THAT RENDERED (guns tab, 09-21).** A run reported "40 rims switched on" and 8 of 8 planted faults, every statement true, and **none of them noticed that nothing was drawn** — a `Highlight` adorning a BasePart lights only that part, and the pickup's gun pieces are children of an invisible base. When a check is about something VISIBLE, sample the pixels and assert they changed; a property you set is not a thing the player sees. Fourth render-caught fault of the session that passed every number it had.
 - **"IN FRAME" IS NOT "VISIBLE", PART TWO (match-flow tab, 09-21):** a frustum test says where the camera POINTS, not what is BETWEEN it and the subject. Two renders passed 18/18 checks showing a tree trunk and eight bots as single pixels across a 650-stud arena. Every view now raycasts camera->subject and fails with `OCCLUDED by <instance>`; `frameClear` tries eight bearings and says so when all eight are blocked. **And a wide shot of something small is not a picture of it** — frame the subject at a distance where it can be judged.
+- **A PROBE THAT WALKS "EVERY X ON THE MAP" COVERS ONLY THE KINDS THE SEED DEALT (map tab, 09-21).** "29 of 29 bays parked" was 29 GENERIC lots — the shuffle dealt campus, neighbourhood and rural, and the one kind with its own builder (industrial, the town in every render Oliver had seen) was not in that map at all. **Anything whose behaviour varies by kind, theme or name must FORCE coverage — build one of each — never sample it.** Same family as "a filter is a claim about what it matched": the sample looked complete and was systematically missing the case that mattered.
+- **A REFUSAL THAT ONLY `warn`s DOES NOT REACH THE RENDER HARNESS.** `ParkInTowns` declining a bay was silent to the player and nearly silent to us — visible only as "3 parked where 6 belong". Any builder that can decline must surface the refusal (a counter, a `LastRefusal` field the gallery prints) or a missing feature comes back with no reason anywhere a human would look.
+- **THE UNITS OF A STORED DEADLINE ARE CHECKABLE OFFLINE; ITS BEHAVIOUR UNDER LOAD IS NOT (match-flow tab, 09-21).** An idle Studio window burns CPU time at wall speed (measured ratio 1.00), so a probe cannot reproduce the CPU/wall divergence — and under ratio 1.00 the OLD broken code passes the same check. What separates the implementations anywhere, under any load, is the MAGNITUDE of the stored value: a wall-clock millisecond deadline is ~1.7e12, an `os.clock() + seconds` deadline is single-digit seconds since process start. Assert the units, plant a deadline in the old units, require rejection. Essential for the 198-site clock sweep.
+- **A CHECKER THAT COUNTS ITS INPUTS CAN STILL BE COUNTING THE WRONG ONES (polish tab, 09-21).** A podium-colour check printed `2 sites, 0 findings` and exited 0 on the broken file: its `[^,]+` capture could not parse `Color3.fromRGB(255, 196, 64)` (commas), so the one site carrying the bug silently left the comparison and the check passed by comparing the two that agreed. **Name the input that carries the bug and assert THAT one entered the comparison** — a sample count alone is satisfied by the wrong sample.
+- **A VISIBILITY CHECK MUST BE TOLD WHAT THE SUBJECT IS PART OF — AND THE SUBJECT IS WHATEVER THE PICTURE CLAIMS, NOT THE MARKER YOU AIMED AT (match-flow tab, 09-21).** A view claiming "the lobby is up there and the arena is down here" was flagged `OCCLUDED by ...Lobby.Part`: the camera sits below the island looking up, so the island's own floor stands between it and anything on its top surface. Naming the POST as the subject excluded the post; the thing in the way was the island. Tally over three runs: the occlusion check caught **two genuinely unusable pictures** (a body behind a tree; bots as single pixels across a 650-stud arena) and produced **one false positive twice**, both from pointing it at a marker rather than at the subject. It earns its place — the two it caught would have gone to Oliver as proof of a fix.
+
+## 2026-09-21 22:2x — OLIVER'S LIST 2 (#95-#123) AND THE FLEET RESTART (claude-43)
+Source: `C:\Users\oliver\Downloads\make it easier to see whos an enemy.txt`, now numbered in place (backup alongside it). The 09-21 17:3x roster is still the live one; these items are ADDED to it. Session limit reset 22:20; all thirteen tabs respawned 22:2x.
+
+| # | Oliver's words | Tab |
+|---|---|---|
+| 95 | easier to see who's an enemy, including bots | HUD |
+| 96 | more loot boxes on the team gamemodes | Map |
+| 97 | **hit registration feels bad** | Guns |
+| 98 | many TDM bots just stand in one spot | Bots |
+| 99 | bot AND player movement is clippy, like low fps | Bots (+perf) |
+| 100 | **mouse doesn't unlock when vote menus pull up** | Pre-match UI |
+| 101 | improve the winning screens of each gamemode | Pre-match UI |
+| 102 | spectator mode glitchy/laggy, can't swap, no way to leave | Match flow |
+| 103 | people can jump off the edge in the lobby | Map |
+| 104 | the TDM hud at the top stays after the game | HUD |
+| 105 | drop menu higher res | Pre-match UI |
+| 106 | **can't pick weapons up, especially after a lobby trial gun** | Guns |
+| 107 | game-choosing menu pulls up randomly mid-match | Pre-match UI |
+| 108 | the storm kills you in the lobby | Eggs/storm |
+| 109 | cars are glitchy and bounce around | Vehicles |
+| 110 | add roadkill for the cars | Vehicles |
+| 111 | increase time-to-kill a bit | Guns |
+| 112 | can still see my cursor in FPS | HUD |
+| 113 | the bots are pretty laggy | Bots |
+| 114 | popup barricade in the team-mode kit; TWO objectives on KOTH | Destruction (a) / Match flow (b) |
+| 115 | easier to vault through windows | Destruction |
+| 116 | bat parts still sideways on the Sahur RV and the Ranger | Vehicles |
+| 117 | lobby trial guns change every pickup | Guns |
+| 118 | nerf the bots' aim slightly | Bots |
+| 119 | glass still doesn't break jumping through windows | Destruction |
+| 120 | sound design more accurate to real life | Eggs/storm |
+| 121 | bigger maps on every gamemode | Map |
+| 122 | weapons with explosive ammo must actually explode what you shoot | Guns |
+| 123 | sort the guns by tier in the admin menu | Menu |
+
+**FOUR OF THESE ARE ALREADY-LANDED WORK COMING BACK. Read them as regressions, not new features.**
+- **#100 and #112 are almost certainly OUR cursor regression.** The drop-picker landed a `Modal` + `MenuOpen` cursor fix; Oliver now cannot free his mouse for a vote menu and sees a cursor in first person. Pre-match UI tab: this is your first job, ahead of everything. Find every writer of `Modal`/`MouseBehavior`/`MenuOpen` and prove which one wins, in order.
+- **#110 roadkill was landed** (unproven, 19:3x). Oliver is asking for it again, which means it is absent or silent in his build. Vehicles tab: prove it fires before touching it.
+- **#116 is the `Enum.PartType.Cylinder` X-axis lesson** recorded above, and old #50/#61 said the Ranger still had poles. It has now survived one "fix". Vehicles tab: find out what the earlier fix actually changed before writing another.
+- **#119: `CombatService.BreakGlassAlong` IS wired** (MovementService:437, via Bootstrap:352). Wired and not firing is a different bug from missing. Destruction tab: instrument the call site first.
+- **#106 smells exactly like bug pattern 1** (ignored return value): `WeaponService.GiveWeapon` returns a third value naming the weapon it displaced, and three callers drop it. The lobby trial guns are a prime suspect for leaving the slot in a state a pickup then refuses.
+**#97 (hit registration) is the single highest-value item on either list** — it is how the game FEELS. Guns tab: measure before designing. Client-predicted hit vs server ruling, the lag-compensation window, the hitbox the server actually tests, and the rate limit. Numbers first.
+
+**Outside contributors: NOTHING HAS ARRIVED.** `git ls-remote` shows only `refs/heads/main` at our own `e0b3aa6` — no branches, no PR refs, no forks. bimjomplays and snodes have not accepted yet. The four briefs in `tasks/` remain unclaimed.
