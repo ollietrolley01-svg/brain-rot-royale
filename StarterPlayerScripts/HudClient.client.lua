@@ -710,6 +710,11 @@ local function townAt(position)
 end
 
 task.spawn(function()
+	-- #135 (Oliver 09-22): entering a town showed TWO popups -- this "NOW ENTERING" banner and the
+	-- "ENTERING ..." one further down, which already covers towns and landmarks. This one is off.
+	do
+		return
+	end
 	while true do
 		task.wait(0.5)
 

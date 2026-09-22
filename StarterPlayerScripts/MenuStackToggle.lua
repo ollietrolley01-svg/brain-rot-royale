@@ -177,6 +177,18 @@ function MenuStackToggle.new(screenGui, options)
 	end)
 
 	self.stackScale = create("UIScale", { Parent = stack })
+	-- Oliver 15:24: the column ran into the health / shield / stamina block on a short window, and "make
+	-- the hud scale with resolution". On desktop the whole stack (buttons, bundle, quest tracker) shrinks
+	-- to whatever height is left above that block, and re-fits when the window or the tracker changes.
+	local function refit()
+		self:_fitHeight()
+	end
+	screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(refit)
+	for _, item in ipairs(options.items or {}) do
+		item:GetPropertyChangedSignal("AbsoluteSize"):Connect(refit)
+		item:GetPropertyChangedSignal("Visible"):Connect(refit)
+	end
+	task.defer(refit)
 
 	if self.settings then
 		self.settings.Changed:Connect(function(id)
@@ -187,6 +199,32 @@ function MenuStackToggle.new(screenGui, options)
 		self:SetCollapsed(self.settings.Get(MenuStackToggle.SettingId) == true, true, false)
 	end
 	return self
+end
+
+-- Height the bottom-left health / shield / stamina block takes (HudClient anchors it up to 1, -202, plus
+-- its label), kept clear of the stack.
+local BOTTOM_RESERVED = 232
+
+function MenuStackToggle:_fitHeight()
+	if self.phoneStack then
+		return
+	end
+	local gui = self.stack.Parent
+	if not gui then
+		return
+	end
+	local current = math.max(self.stackScale.Scale, 0.01)
+	local bottom = 0
+	for _, item in ipairs(self.stack:GetChildren()) do
+		if item:IsA("GuiObject") and item.Visible then
+			bottom = math.max(bottom, item.Position.Y.Offset + item.AbsoluteSize.Y / current)
+		end
+	end
+	if bottom <= 0 then
+		return
+	end
+	local room = gui.AbsoluteSize.Y - BOTTOM_RESERVED - STACK_TOP
+	self.stackScale.Scale = math.clamp(room / bottom, 0.55, 1)
 end
 
 function MenuStackToggle:_paintHover()
@@ -260,6 +298,7 @@ function MenuStackToggle:SetPhone(spots, inset)
 	else
 		self.phoneTab, self.phoneStack = nil, nil
 		self.stackScale.Scale = 1
+		self:_fitHeight()
 		for index, b in ipairs(self.openBars) do
 			b.Position = UDim2.fromOffset(19, 7 + index * 7)
 			b.Size = UDim2.fromOffset(18, 3)
