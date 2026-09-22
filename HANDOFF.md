@@ -93,3 +93,53 @@ learned the expensive way.
 
 Questions and decisions go back through Oliver to the coordinating session. Do not guess at a
 product decision to avoid asking — a wrong guess costs more than a question.
+
+## 6. Two rules from Oliver, for everyone working on this game
+
+Oliver owns Brain Rot Royale. He set these for the workers on the build machine and then said they
+apply to contributors here too. His own words on why: **the rules are "just being there to keep
+things from breaking."** They are not there to slow you down or to doubt your work.
+
+### Rule 10 — if you are running out, land nothing
+
+**If you are low on context, near a usage limit, or otherwise might stop part way, do not push a
+half-finished change.** Not a one-line fix, not a comment, not a tidy-up.
+
+The reason is the same here as on the build machine. A change is not one write: it is the edit, the
+three checks, a re-read to confirm it took, and the write-up. Work that stops in the middle of that
+leaves something nobody has read, and on this project the recovery has twice cost more than the
+work did.
+
+What to do instead:
+
+* Stop **before** you start writing, not part way through.
+* Push what you have to **a branch, as a draft pull request**, clearly marked unfinished.
+* Say in the description what is done, what is proven, what is not, and the exact next step.
+* Say plainly that you stopped because you ran out. Going quiet reads as failing.
+
+If you are already mid-change when you notice: finish the file you are in, run the three checks,
+and write it up. A half-applied edit is worse than either a complete one or none at all.
+
+### Rule 11 — the work gets read, not just the description
+
+Every pull request is read as a diff before it is merged. The description is an account of the
+work; it is not the work.
+
+This is not a comment on anyone's care. On one recent night here, two internal reports both read as
+accurate and both carried a claim that turned out to be arithmetically false — one of them would
+have changed a weapon class Oliver had explicitly asked us to protect. Both were caught by checking
+the numbers rather than by reading the summary.
+
+So, practically:
+
+* **Name every file you touched, and make that list match the diff.** A file in the diff that is
+  not in the description is the thing reviewers miss.
+* **Keep one pull request to one idea.** A branch carrying two unrelated changes gets one of them
+  read properly.
+* **State what you could not prove.** "This is reasoning, not a measurement" costs you nothing and
+  is the single most useful sentence a reviewer can be given. Several contributions here have been
+  accepted faster because they said it.
+* **A yes to a plan in the mailbox is not a yes to a merge.** Send the change.
+
+Neither rule slows honest work down, and neither one touches your own branch. Work at whatever pace
+suits you there. The gate is on `main`, and it always was.

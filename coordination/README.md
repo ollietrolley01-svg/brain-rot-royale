@@ -61,3 +61,19 @@ and the task file will not have been updated.
 Do not push to `main`. Do not touch a file your task does not name as yours. Do not commit
 `BrainRotRoyale.rbxlx` or anything else in `.gitignore` — it is generated, and a committed copy
 starts overwriting other people's work.
+
+## Two rules from Oliver, and they apply here too
+
+He set these for the workers on the build machine, then said they apply to contributors on GitHub
+as well. His words on why: **the rules are "just being there to keep things from breaking."**
+
+**If you are running out of context or credits, land nothing.** Push what you have to a branch as a
+draft, marked unfinished, saying what is done, what is proven and what the next step is. A change
+that stops half way leaves something nobody has read.
+
+**The work gets read as a diff, not as a description.** Name every file you touched and make that
+list match the diff. One pull request to one idea. Say what you could not prove — "this is
+reasoning, not a measurement" is the most useful sentence you can give a reviewer, and it has made
+contributions here land faster rather than slower.
+
+Full versions are in `HANDOFF.md` section 6.
