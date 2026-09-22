@@ -82,9 +82,12 @@ MatchConfig.PlacementBrackets = {
 	{ maxRank = 5,  crate = "Epic",      coins = 1200, xp = 550 },
 	{ maxRank = 10, crate = "Rare",      coins = 600,  xp = 340 },
 	{ maxRank = 20, crate = "Uncommon",  coins = 260,  xp = 190 },
-	{ maxRank = 30, crate = "Common",    coins = 100,  xp = 90 },
-	{ maxRank = 50, crate = "Common",    coins = 60,   xp = 60 },
+	{ maxRank = 30, crate = "Common",    coins = 120,  xp = 90 },
+	{ maxRank = 50, crate = "Common",    coins = 90,   xp = 70 },
 }
+-- The bottom two were 100 and 60 coins (xp 60 at the bottom). Raised a little (Oliver, 2026-09-22,
+-- from ECONOMY.md s.2): at 50 players a player who keeps losing spends two thirds of their matches in
+-- ranks 31-50 and earned 4.5x less a minute than a middle player.
 
 MatchConfig.CoinsPerKill = 75
 MatchConfig.XpPerKill = 60
