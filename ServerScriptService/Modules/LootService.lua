@@ -436,11 +436,13 @@ local function spawnChest(cframe)
 		-- fault partway through can open it twice.
 		chest:SetAttribute("Claimed", true)
 
-		-- Only fill empty slots. GiveWeapon replaces the equipped gun when the loadout is full,
-		-- so handing out both rolls that way let the second overwrite the first — or, with a
-		-- single free slot, overwrite whatever the player was holding. Anything that doesn't
-		-- fit drops beside the chest instead of vanishing.
-		local taken, dropped = {}, {}
+		-- Oliver, 2026-09-22 14:37: chests spill their loot onto the ground instead of straight into the
+		-- inventory. Everything lands in front of the chest, toward whoever opened it, and is picked up
+		-- the normal way. Ammo still goes straight to the opener: there is no ground pickup for ammo.
+		local opener = player.Character and player.Character.PrimaryPart
+		local toward = opener and (opener.Position - chest.Position) * Vector3.new(1, 0, 1) or Vector3.zero
+		local spill = chest.Position + (toward.Magnitude > 0.1 and toward.Unit * 4 or Vector3.new(0, 0, 4))
+		local dropped = {}
 		local best = "Common"
 		for gunIndex = 1, LootService.ChestGuns do
 			local def = WeaponData.RollChestWeapon()
@@ -456,24 +458,15 @@ local function spawnChest(cframe)
 			if (Rarity.Index[def.rarity] or 0) > (Rarity.Index[best] or 0) then
 				best = def.rarity
 			end
-			if WeaponService.HasFreeSlot(player) and WeaponService.GiveWeapon(player, def.id) then
-				table.insert(taken, def.name)
-			else
-				LootService.DropWeapon(def.id, chest.Position)
-				table.insert(dropped, def.name)
-			end
+			LootService.DropWeapon(def.id, spill, nil, chest.Position)
+			table.insert(dropped, def.name)
 		end
 
 		WeaponService.GiveAmmo(player, 0.4 + math.random() * 0.5)
 
 		local function giveItem(item)
-			local added = LootService.GiveOrDrop(player, item.id, item.pickup, chest.Position)
-			if added > 0 then
-				table.insert(taken, item.name)
-			end
-			if added < item.pickup then
-				table.insert(dropped, item.name)
-			end
+			LootService.DropItem(item.id, spill, item.pickup, chest.Position)
+			table.insert(dropped, item.name)
 		end
 
 		-- Always some recovery, often a second, a fair chance of a movement item, and now and
@@ -492,14 +485,7 @@ local function spawnChest(cframe)
 			giveItem(ItemData.RollThrowable())
 		end
 
-		local parts = {}
-		if #taken > 0 then
-			table.insert(parts, table.concat(taken, ", "))
-		end
-		if #dropped > 0 then
-			table.insert(parts, "on the floor (full): " .. table.concat(dropped, ", "))
-		end
-		StateSync.Notify(player, "Chest: " .. (#parts > 0 and table.concat(parts, "  •  ") or "ammo and heals"))
+		StateSync.Notify(player, "Chest: " .. table.concat(dropped, ", ") .. " on the ground")
 		QuestService.Progress(player, "chests", 1)
 		if nearLandmark(chest.Position) then
 			QuestService.Progress(player, "landmarkChests", 1)
