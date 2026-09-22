@@ -58,15 +58,116 @@ at all — they are in **"Needs a number from Oliver"** at the bottom. One line 
 
 | | List 1 (#1–#94) | List 2 (#95–#135) | A1–A6 | Total |
 |---|---|---|---|---|
-| `[x]` done | 22 | 9 | 1 | **32** |
-| `[~]` in progress / in tree | 41 | 13 | 4 | **58** |
-| `[ ]` not started | 31 | 17 | 0 | **48** |
+| `[x]` done | 23 | 11 | 1 | **35** |
+| `[~]` in progress / in tree | 43 | 15 | 4 | **62** |
+| `[ ]` not started | 28 | 13 | 0 | **41** |
 | `[?]` held → you | 0 | 2 | 1 | **3** |
 | **Items** | **94** | **41** | **6** | **141** |
 
 Counted from the rows below, not asserted: every number #1–#135 appears exactly once, no gaps and
 no duplicates. Re-check with the row marks any time you doubt this table — if they disagree, the
 rows are right and this table is stale.
+
+---
+
+# WHAT'S LEFT, HARDEST FIRST (Oliver, 2026-09-22 18:15)
+
+Updated 18:20 by Oliver's review session. Everything else on the account is paused (STOP.md), so
+Jacob picks from this list. **Hardest = highest priority, easiest = lowest.** Difficulty is a
+judgement of size and risk, not of value. Each line says only what is LEFT; the full evidence is in
+the ledger rows further down.
+
+## Finished
+
+**Numbered items done (35):** #3, #5, #8, #9, #12 (superseded by #64), #15, #19, #23, #27, #28, #33, #36,
+#37, #38, #40 (reversed on your word), #46, #47, #52, #55, #66, #82, #85, #88, #98, #105, #106, #108,
+#115, #118 (reversed with #40), #119, #124, #127, #129, #135, A1, plus the stuck free cursor and the
+team results card.
+
+**Done today and in the 18:15 playtest, outside the numbered list:** no more ditch round monuments;
+graded riverbanks and sand beaches (#73); themed towns switched on (#32); new results screen with your
+reward crate (#101); minimize tab stays attached; Objective Capture icons smaller and bots split across
+both objectives; compass never overlaps, and sits flush under the HUD above it; stamina bar no longer
+overlaps the car HUD; no leftover TDM score in battle royale; economy (Jacob's task 07, your calls):
+real odds on every Robux crate, honest bundle "worth", lobby goals capped, bottom placement pay raised
+a little, Premium pass setup price fixed to 450.
+
+## Built — waiting on YOUR playtest or decision (no agent work until you say)
+
+- **Playtest:** #2 vote screen · #4/#6/#74 respawns (die twice in a TDM) · #32 themed towns · #73 rivers ·
+  #101 results screen · #134 TDM bots fight · #95 enemy/teammate outlines · #102 spectator ·
+  #128 A+B barricade placement · #132 vaulting/glass · #125 bots in unison · #60 vehicle zoom ·
+  #65 menu tabs fit · #100/#112/#68 cursor · #20 menu polish · #48 blood splats · #53 vehicle health
+  warning · #59 head-hit splats · #104 TDM HUD after the game
+- **Your ears:** #49 cart sound · #55 reload sounds · #62 slide sound · #83 car sound
+- **Your call:** #130 codex sort (A–Z or owned-first) · #128 D (aim-and-place) · #122 what "explosive
+  ammo" means · #43 which bench · #91 approve the "tom pearl" concept · #5 is the team arena too big ·
+  A2 set up the dev products on the Creator Dashboard
+
+## Not finished — HARD (biggest, riskiest; highest priority)
+
+1. **#97 Hit registration.** Design ready in `HITREG_DESIGN.md`; client and server halves must land
+   together. Needs your pick on the cover trade.
+2. **#84 / #109 Cars bounce and glitch at speed.** Assigned to Jacob as HIGH PRIORITY (mailbox 17:10).
+3. **#131 / #113 / #126 / #99 Lag and bot performance.** Measure the worst tick, cut it; the second
+   run's 42.6 ms is unexplained.
+4. **#78 Menu revamp** into separate progression, shop and catalogue menus with previews everywhere.
+   Started (five-button split).
+5. **#86 The player's-eye review:** 82 verified sites, 2 of them block play. Large, but each fix is small.
+6. **A5 Brainrot abilities:** 126 brainrots share six effects; a 0-HP companion can fight all match.
+   Tier A coded, probe never run.
+7. **#44 / #13 FPS arms use your avatar; third-person animations match first-person.**
+8. **#89 Other players' animations:** sprint is never sent to other players; the slide pose doesn't draw on
+   other bodies.
+9. **#16 / #51 / #94 Roadside cars:** rebuild from the real vehicle models, anchored and destructible.
+10. **#56 Whole map destructible.**
+11. **#121 Bigger maps on every mode.** Already over the part budget; needs a budget plan first.
+12. **#120 Realistic sound design.**
+13. **#45 Brainrot-themed storm.**
+14. **#71 A breaking animation per material.**
+
+## Not finished — MEDIUM
+
+15. **#29 / #70** Scorch marks float when a blast destroys the floor under them.
+16. **#75 / #81** Bot aggression and reaction speed: the A/B script is built, not run.
+17. **#92 / #26 / #11** Hands gripping guns, bending fingers, arm joints on long rifles.
+18. **#76 / #77** Playtime and daily-streak rewards (a 7-day reward table exists but pays nothing).
+19. **#24** Kill-animations tab in the shop (the animations themselves don't exist yet).
+20. **#79** Leaning in first person; on mobile only when scoped.
+21. **#22** Directional HUD cue for nearby gunfire.
+22. **#107** The game-choosing menu pops up mid-match.
+23. **#31** Parking lots for car spawns (the bays have no builder yet).
+24. **#114 (a)** Popup barricade in the team-mode kit.
+25. **#93** Objective circle as one module shared by the render and the game.
+26. **#80** Upright phone: compass, bounty line and speed pill jump back to desktop positions.
+27. **#42 / #41** Revamp the weak easter eggs; the arrest egg's roof and arms.
+28. **#7** Potion drinking animation clips into your face.
+29. **#1 / #21 / #18** Drop-picker graphics, crate redesign gallery, accessory designs (Studio run).
+30. **#34 / #35 / #39** Run the all-guns floating-tube check; measure the barricade roof hatch; land the
+    routed car placement patch.
+31. **#91** Build "tom pearl" once you've approved the concept.
+32. **#133** Bot idle wander: parked; it made things worse last time. Only retry with the unrun S26 test.
+
+## Not finished — EASY (quick; lowest priority)
+
+33. **#61 / #116 / #50** Ranger poles and sideways bat parts (has survived one fix, so check what that
+    fix changed first).
+34. **#57 / #110** Prove roadkill actually fires before touching it.
+35. **#64** Shotgun nerf: every pellet 2-shot body, 1-shot head. Reverses #12.
+36. **#111** Raise time-to-kill a bit.
+37. **#87** Grenade launcher throws further.
+38. **#30** Brighter gun tracers.
+39. **#25** Zoom on Z, scroll wheel switches hotbar items (spec written).
+40. **#63 / #69** Throwable preview lingers after the throw; detonator left in your hand.
+41. **#72** Floating texts on some gun textures in first person.
+42. **#117** Lobby trial guns change on every pickup.
+43. **#67** Move the companion to your left side.
+44. **#96** More loot boxes in the team modes.
+45. **#103** Stop people jumping off the lobby edge.
+46. **#90** Minimize button for the controls overlay.
+47. **#123** Sort guns by tier in the admin menu.
+48. **#85** Check supply drops spill on the ground like chests now do.
+49. **Renders owed:** #17 cosmetic contact sheets, #10 / #14 / #54 HUD, #58 + A6 sticky bomb and rarity splats, A3 exhaust, A4 phone merge dialog.
 
 ---
 
@@ -90,7 +191,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[ ]` **7. Potion drinking animation clips into your face.** No owner in the current seven tabs. — *unowned*
 - `[x]` **8. Stamina bar takes longer to empty.** `SprintDrainPerSecond` 9 → 5.5; 11.1 s → 18.2 s of sprint. — *movement*
 - `[x]` **9. Bat on top of the van.** Verified in render `run13/033_rearquarter_SahurVan.png` — raked on the rack, no longer flat. — *vehicles*
-- `[~]` **10. TDM to 100 kills + small top HUD.** Server half verified (`GameModes.lua:194`); HUD in
+- `[~]` **10. TDM to 100 kills + small top HUD.** **22 Sep evening: score bar now takes the top slot in team modes and the players-alive banner is hidden there; compass sits flush under it. Render still outstanding.** Server half verified (`GameModes.lua:194`); HUD in
   `ModeScoreHud.client.lua`. Render outstanding. — *HUD*
 - `[ ]` **11. Arm joints look disconnected on long rifles in FPS.** — *guns*
 - `[x]` **12. Buff the shotguns.** Verified in tree (Pump 13/7/110 … hip damage at 10 studs 32→69).
@@ -101,7 +202,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[x]` **15. Infinite stamina in the lobby.** Already true both sides; the dead `LobbyDrains` key removed so nobody trusts it. — *movement*
 - `[ ]` **16. Replace the old map cars with the drivable designs.** Roads tab: "not started here" —
   placement lives in MapGenerator. Pairs with #51 and #94. — *map*
-- `[~]` **17. Previews of every accessory and cosmetic.** IN TREE, probe-proven — all 65 build a
+- `[~]` **17. Previews of every accessory and cosmetic.** **22 Sep evening: live cosmetic previews now draw in the shop rows (01fd06e).** IN TREE, probe-proven — all 65 build a
   preview including the 18 `OfKind` hides; heaviest 103 parts. Contact sheets not re-run since the
   render pipeline was fixed. — *cosmetics*
 - `[~]` **18. Improve the accessory designs before the previews.** IN TREE / **unproven** — detail
@@ -131,9 +232,9 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   **REOPENED by you:** the second-storey case (blast destroys the floor under it) is unmeasured — the
   scorch must land on the upper floor and go with the surface. Same cause as #70. — *destruction*
 - `[ ]` **30. Make gun tracers more visible.** — *guns*
-- `[~]` **31. Real parking lots for cars to spawn on.** The mechanism now exists — `MapTerrain.FlattenPad`
+- `[~]` **31. Real parking lots for cars to spawn on.** **22 Sep evening: still no bays: TownKinds describes parking bays but nothing builds them yet. Town lots are now padded flat (#32).** The mechanism now exists — `MapTerrain.FlattenPad`
   landed and is probe-proven (20 pads, flatness 0.000 footprint, 3.6 ms/pad). Bays themselves not built. Converged with #32. — *roads + vehicles*
-- `[~]` **32. Give the cities personalisation.** Phase 1 approved, 18 named characters over 7 layout kinds.
+- `[~]` **32. Give the cities personalisation.** **22 Sep evening: HOOKED UP and in the 18:15 playtest (9ba0a79): themed set pieces, flags, props, per-kind streets and buildings, every lot padded flat. Playtest decides.** Phase 1 approved, 18 named characters over 7 layout kinds.
   **BLOCKED ON A HOOK:** `TownThemes` (4,857 lines) and `TownKinds` (485) have **no production caller at
   all** — confirmed independently by the contributors' census. The hook is the item. — *map*
 - `[x]` **33. Bots sometimes don't drop their weapons.** Proven merged9 8/8 — in respawn modes
@@ -150,7 +251,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[~]` **39. Vehicles stuck in the ground.** Measured with the vehicle loop running: 0 buried, mean
   tyre gap −0.17. 1 of 13 hangs 1.48 studs where MapGenerator asks for that spot — fixed by the routed
   placement patch, ticks when that patch is in a build. — *vehicles*
-- `[x]` **40. Nerf the AI aim.** `MatchConfig.lua:103-104` Near 0.66→0.55, Far 0.19→0.15; measured
+- `[x]` **40. Nerf the AI aim.** **22 Sep evening: REVERSED on your word (a43b176): bot aim back to 0.66 near / 0.19 far.** `MatchConfig.lua:103-104` Near 0.66→0.55, Far 0.19→0.15; measured
   43/33/12% at 20/60/150 studs. **Hit rate stays here** — #75/#81 buy aggression through commitment, not lethality. — *bots*
 
 ## #41–#60
@@ -175,7 +276,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[x]` **52. Admin HUD for you only.** Probe 0 failures with both planted faults (wrong user gets
   nothing; wrong constant gives you nothing), nine forged payloads refused, every action logged. — *HUD*
 - `[~]` **53. Vehicle low-health warning HUD.** There was no vehicle health at all — cars 300 hp, bikes 150, built and in the build. — *vehicles*
-- `[~]` **54. KOTH HUD at the top.** In `ModeScoreHud.client.lua`; KOTH's score IS seconds held, so it
+- `[~]` **54. KOTH HUD at the top.** **22 Sep evening: now called Objective Capture, with two objectives (A/B) and a score lead line.** In `ModeScoreHud.client.lua`; KOTH's score IS seconds held, so it
   reads as the leading score and the gap. Render outstanding. — *HUD*
 - `[x]` **55. Improve the reloading sounds.** The 7 closing beats now carry a low layer; opening beats
   stay light; volumes untouched. **In the build — needs your ears.** — *audio*
@@ -210,7 +311,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[~]` **70. Bombs leave a floating circle on a destructible floor.** Same cause as #29 and reopened with it. — *destruction*
 - `[ ]` **71. A breaking animation per material instead of fading to clear.** — *destruction*
 - `[ ]` **72. Random floating texts on some gun textures in FPS.** — *guns*
-- `[~]` **73. Improve the rivers and their banks/valleys.** **MEASURED, NOT DESIGNED.** 579 cross-sections:
+- `[~]` **73. Improve the rivers and their banks/valleys.** **22 Sep evening: BUILT and in the 18:15 playtest (be9a58e): graded banks (no sheer cliffs), sand beaches, shelving shore, roads/bridges/plateaus kept on their ground. Playtest decides.** **MEASURED, NOT DESIGNED.** 579 cross-sections:
   width 34/30 wetted constant, depth 4.3, and the finding that matters — **the typical riverbank (60–66°)
   is steeper than a player can climb out of** (escapable at ≤50°; swim 12.3 studs/s). Ruled banks first,
   width second. Design note is the next step. — *roads*
@@ -219,10 +320,10 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   measured (first shot 0.83 s front / 2.09 s behind; rifle duels 3.1–4.9 s). A/B dial script **BUILT, NOT RUN**. — *bots*
 - `[ ]` **76. Compounding playtime awards.** — *progression*
 - `[ ]` **77. Daily streak awards.** — *progression*
-- `[ ]` **78. Revamp the menu: separate progression, shop and catalogue menus, previews everywhere.**
+- `[~]` **78. Revamp the menu: separate progression, shop and catalogue menus, previews everywhere.** **22 Sep evening: started: the menu is split into SHOP / BRAINROTS / PROGRESS / ROBUX / SETTINGS buttons and the progression pages are their own tabs.**
   The big one. #20 is the polish; this is the restructure. — *menu*
 - `[ ]` **79. Leaning in FPS; on mobile only when scoped.** — *movement*
-- `[~]` **80. Fix HUD overlap everywhere, diligently.** The play-through sweep landed a long row of fixes.
+- `[~]` **80. Fix HUD overlap everywhere, diligently.** **22 Sep evening: more fixed: compass and minimap names no longer overlap, compass docks flush under whatever is above it, stamina bar hides while driving so it no longer overlaps the car HUD.** The play-through sweep landed a long row of fixes.
   **Still live:** on an upright phone the compass, bounty line and speed pill set `Visible = true` every
   frame and reappear at desktop positions over the portrait layout. See also #86. — *HUD*
 
@@ -234,8 +335,8 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   client read every repeat as "you left the match", cancelling sprint and aim. Fixed — hold shift in the lobby and say. — *movement*
 - `[~]` **83. The car sound is messed up.** Rebuilt — the engine loop was a brick-crash sample through
   distortion, i.e. a car repeatedly hitting something, at every speed. Needs your ears. — *audio*
-- `[ ]` **84. Cars get bumpy and glitchy at speed.** Same as #109. — *vehicles*
-- `[ ]` **85. Chests and supply drops should drop contents on the ground, not into inventory.** — *loot*
+- `[ ]` **84. Cars get bumpy and glitchy at speed.** **22 Sep evening: ASSIGNED TO JACOB as HIGH PRIORITY (mailbox 17:10). Not started as of 18:00.** Same as #109. — *vehicles*
+- `[x]` **85. Chests and supply drops should drop contents on the ground, not into inventory.** **22 Sep evening: chests spill their loot onto the ground (f316617). Supply drops: check in playtest.** — *loot*
 - `[~]` **86. Bug-fixer pass over the HUD and menus for fit and crowding.** **DONE AS A REVIEW, NOT AS
   FIXES:** the player's-eye review produced 142 claims → 89 survived adversarial refutation → 82 unique
   sites (2 blocks-play, 46 confuses, 34 minor), in `coordination/handoffs/bug-review-player-eye.md`.
@@ -247,12 +348,12 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   retracted: the slide IS published (`MatchService:858`) and you hearing it proves it arrives — so the
   state arrives and the POSE doesn't draw on someone else's body. **SPRINT is genuinely never published
   at all** — that half is real and separate. — *movement*
-- `[ ]` **90. Minimize button on the controls.** Collapsed state to be remembered between rounds; starts collapsed on phones. — *HUD*
+- `[ ]` **90. Minimize button on the controls.** **22 Sep evening: a minimize tab now exists for the HUD button stack (not the controls overlay, which is off by default).** Collapsed state to be remembered between rounds; starts collapsed on phones. — *HUD*
 - `[ ]` **91. Legendary brainrot "tom pearl".** **Concept comes to you before it is built.** Also checks
   the crate odds and the hard-coded "126 brainrots" in the menu. — *brainrot*
 - `[ ]` **92. The hands gripping the guns need improvement.** Rides in the hands/sights render — measuring
   whether the palm meets the grip on every gun, and whether one pose is reused for every weapon shape. — *guns*
-- `[ ]` **93. Improve the King of the Hill objective circle.** To be built as a module the render and the
+- `[~]` **93. Improve the King of the Hill objective circle.** **22 Sep evening: marker made smaller (30x30), only drawn within 260 studs, no longer on top of everything; the pillar is the main marker.** To be built as a module the render and the
   game share, so the picture you approve is the code that ships. — *match flow*
 - `[ ]` **94. Improve the cars that can't be driven and spawn on the road.** Any roadside car that stays
   decoration gets built from the real vehicle model, anchored — and destructible for free. Pairs with #16/#51. — *vehicles*
@@ -275,37 +376,37 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   together or not at all. Design, the cap, the server-clock rule and the cover trade you must choose are
   in `HITREG_DESIGN.md`. Rewind deliberately unbuilt. — *guns*
 - `[x]` **98. Many TDM bots just stand in one spot.** `nextSlot` for replacement bots + S25. — *bots*
-- `[~]` **99. Bot and player movement is clippy, like low fps.** — *bots + perf*
+- `[~]` **99. Bot and player movement is clippy, like low fps.** **22 Sep evening: bots re-claim their physics every second, which stopped the teleporting (85c3042).** — *bots + perf*
 - `[~]` **100. Mouse doesn't unlock when vote menus pull up.** Read as **our own cursor regression**, not a
   new bug. Ready-up loop landed: an unready player's vote no longer takes the cursor or the overlay. — *pre-match UI*
-- `[~]` **101. Improve the winning screens of each gamemode.** — *pre-match UI*
+- `[~]` **101. Improve the winning screens of each gamemode.** **22 Sep evening: NEW RESULTS SCREEN in the 18:15 playtest (c5895d1 + 01fd06e): VICTORY/DEFEAT/DRAW, stat tiles, reward chips and your reward crate as a 3D tile. Playtest decides.** — *pre-match UI*
 - `[~]` **102. Spectator mode glitchy, can't swap, no way to leave.** IN TREE, proven 15/15 —
   `InMatch` written true/false for every Player, leave key L, `[E]` next / `[L]` leave labelled. **The
   focus gate is now closed against a modified client** (`MatchService.FocusTarget`), which is the least
   visible and most important part. — *bug review*
 - `[ ]` **103. People can jump off the edge in the lobby.** — *map*
-- `[~]` **104. The TDM HUD at the top stays after the game.** IN TREE — five elements plus the TDM/KOTH
+- `[~]` **104. The TDM HUD at the top stays after the game.** **22 Sep evening: also fixed: battle royale showed the last TDM score.** IN TREE — five elements plus the TDM/KOTH
   scoreline hidden when in-progress and not in the match; a mid-game joiner renders the live score. — *HUD*
-- `[ ]` **105. Make the drop menu higher res.** — *pre-match UI*
+- `[x]` **105. Make the drop menu higher res.** **22 Sep evening: drop map image up to 640 px on a 192x192 grid (77545a9, 90a2238).** — *pre-match UI*
 - `[x]` **106. Can't pick weapons up, especially after a lobby trial gun.** Range-stop guard in `verify.py`;
   found from the contributors' ignored-return-value rule within twenty minutes of merging it. — *guns*
 - `[ ]` **107. The game-choosing menu pulls up randomly mid-match.** — *pre-match UI*
 - `[x]` **108. The storm kills you in the lobby.** 20/20 probe. — *storm*
-- `[ ]` **109. Cars are glitchy and bounce around.** Same as #84. — *vehicles*
+- `[ ]` **109. Cars are glitchy and bounce around.** **22 Sep evening: same as #84, ASSIGNED TO JACOB as HIGH PRIORITY.** Same as #84. — *vehicles*
 - `[~]` **110. Add roadkill for the cars.** Already landed once as #57 and unproven. You asking again means
   it is absent or silent — **prove it fires before touching it.** — *vehicles*
 - `[ ]` **111. Increase time-to-kill a bit.** — *guns*
 - `[~]` **112. I can still see my cursor in FPS.** Same cursor family as #100 and #68. — *HUD*
 - `[~]` **113. The bots are pretty laggy.** Cap now 15 (your figure), bots 30. Worst tick measured
   32.4 ms at cap 15 on one run; **a second run read 42.6 ms and that is deliberately unresolved.** — *bots*
-- `[ ]` **114. Popup barricade in the team-mode kit; two objectives on KOTH.** — *destruction (a) / match flow (b)*
+- `[~]` **114. Popup barricade in the team-mode kit; two objectives on KOTH.** **22 Sep evening: (b) DONE: two capturable objectives A/B, bots split between them (7ddb96e, 9ba0a79). (a) popup barricade in the team kit: not confirmed.** — *destruction (a) / match flow (b)*
 - `[x]` **115. Make it easier to vault through windows.** `Parkour.lua` sets `MaxParts` per query instead
   of a flat 1 — with the flat cap, a box straddling a pane and the pier beside it reported CLEAR whenever
   Roblox returned the pane first, and the client CFramed you through the pier. — *destruction*
 - `[ ]` **116. Bat parts still sideways on the Sahur RV and the Ranger.** The `Enum.PartType.Cylinder`
   X-axis lesson. Has survived one fix — see #50/#61. — *vehicles*
 - `[ ]` **117. Lobby trial guns change every pickup.** — *guns*
-- `[x]` **118. Nerf the bots' aim slightly.** Measured 43/33/12% at 20/60/150 studs (was 58/43/19). — *bots*
+- `[x]` **118. Nerf the bots' aim slightly.** **22 Sep evening: REVERSED on your word, see #40.** Measured 43/33/12% at 20/60/150 studs (was 58/43/19). — *bots*
 - `[x]` **119. Glass still doesn't break jumping through windows.** **Struck as already fixed** by the
   MovementService rewrite: no root-height ray left, `panesAhead` sweeps feet+1.6…feet+8.2 onto the wall,
   and `MovementService.LastGlass = {found, broken, at}` plus a warn-once say why on a miss. — *destruction*
@@ -343,10 +444,10 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   and it failed the coordinator's bar on the bots tab's own numbers**: stationary share went 4.7% → 6.5%,
   the wrong direction, on a confounded metric. At cap 15 the frozen state is ~0.1% of bot-samples, so your
   own cap choice already removed most of it. Do not re-propose without the built-and-unrun S26 run. — *bots*
-- `[ ]` **134. Bots just stand around in clumps in TDM and don't fight.** Reported by Oliver on 09-22 13:36. Not yet
+- `[~]` **134. Bots just stand around in clumps in TDM and don't fight.** **22 Sep evening: BUILT and in the playtest (85c3042): TDM bots hunt enemies instead of camping or circling. Playtest decides.** Reported by Oliver on 09-22 13:36. Not yet
   diagnosed. Related, not the same: #125 (team bots in unison) and #133 (idle
   wander) are about movement; this one is about bots not engaging enemies at all in Team Deathmatch. — *bots*
-- `[ ]` **135. Moving into a new area pops up two HUD notifications for it instead of one.** Reported by Oliver
+- `[x]` **135. Moving into a new area pops up two HUD notifications for it instead of one.** **22 Sep evening: one area popup instead of two (441248b).** Reported by Oliver
   on 09-22 13:36. Not yet diagnosed; find which client scripts show the area notice and why it fires twice. — *HUD*
 
 ---
