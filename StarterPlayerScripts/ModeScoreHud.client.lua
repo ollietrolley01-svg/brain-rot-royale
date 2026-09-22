@@ -126,7 +126,9 @@ local function fit()
 		-- zero overlaps in the storm readout's slot, which no team mode uses.
 		scale.Scale = 1
 		root.AnchorPoint = Vector2.new(0.5, 0)
-		root.Position = UDim2.new(0.5, 0, 0, 72)
+		-- The top slot: HudClient hides the players-alive banner in team modes, so the score bar sits
+		-- there and clears the compass below it (it used to overlap the compass at y 100).
+		root.Position = UDim2.new(0.5, 0, 0, 10)
 	else
 		-- On a touch screen the desktop literals are NOT what is drawn — PhoneLayout replaces the
 		-- whole HUD with its own map — so measuring this against them was measuring the wrong thing

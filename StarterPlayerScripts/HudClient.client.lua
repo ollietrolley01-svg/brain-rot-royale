@@ -2314,7 +2314,7 @@ local COMPASS_SPAN = 180 -- degrees across the strip
 
 local compass = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 100),
+	Position = UDim2.new(0.5, 0, 0, 104),
 	Size = UDim2.fromOffset(COMPASS_W, COMPASS_H),
 	BackgroundColor3 = C.Background,
 	BackgroundTransparency = 0.35,
@@ -3593,6 +3593,11 @@ end)
 local function renderBanner()
 	local ready = isReady()
 	updateReadyButton()
+
+	-- Oliver: the players-alive bubble is Battle Royale only. In a team mode the score bar takes
+	-- this slot (ModeScoreHud moves up to it), so the banner hides while you're playing one.
+	banner.Visible = not (matchState.state == "InProgress" and loadout
+		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale")
 
 	if matchState.state == "Waiting" then
 		bannerTitle.Text = ready and "WAITING FOR PLAYERS" or "READY UP TO PLAY"
