@@ -888,15 +888,26 @@ local function modeObjective(bot, root, state, now)
 		end
 		return state.hill + ring, "contest"
 	end
-	-- Team deathmatch: rally, then push together.
-	local centroid, count = squadCentroid(bot, root, state.team)
-	if centroid and count > 0 and flatDistance(root.Position, centroid) > RALLY_GAP then
-		return centroid, "rally"
-	end
+	-- Team deathmatch (Oliver #134: bots camped spawn or circled a town). No squad rally any more; it
+	-- clumped them. Push the team's last sighting, else hunt the nearest living enemy, so every bot
+	-- always has somewhere real to go and the teams meet.
 	local sighting = teamSightings[state.team]
-	if sighting and now - sighting.at < SIGHTING_MEMORY then
+	if sighting and now - sighting.at < SIGHTING_MEMORY and flatDistance(root.Position, sighting.position) > 20 then
 		local spread = Vector3.new(math.cos(slot), 0, math.sin(slot)) * 10
 		return sighting.position + spread, "push"
+	end
+	local nearest, nearestDistance = nil, math.huge
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token) then
+			local distance = flatDistance(root.Position, entry.position)
+			if distance < nearestDistance then
+				nearest, nearestDistance = entry, distance
+			end
+		end
+	end
+	if nearest then
+		local spread = Vector3.new(math.cos(slot), 0, math.sin(slot)) * 8
+		return nearest.position + spread, "hunt"
 	end
 	if state.arena then
 		return state.arena + Vector3.new(math.cos(slot), 0, math.sin(slot)) * 60, "sweep"
@@ -2183,6 +2194,14 @@ local function updateBot(bot)
 	local now = os.clock()
 	local head = bot.character:FindFirstChild("Head") or root
 
+	-- Oliver: "bots teleport around a lot". Welding a gun or companion on changes the assembly and
+	-- Roblox hands its physics to a nearby player's client until the server claims it back; that
+	-- used to wait for forgetStale's 5 s sweep, and a client-owned bot rubber-bands. Re-claim every second.
+	if now - (bot.claimedAt or 0) > 1 then
+		bot.claimedAt = now
+		claimPhysics(bot.character)
+	end
+
 	updateAnimation(bot, humanoid)
 
 	-- Mid-climb or mid-vault: MovementService is driving the root until it lets go. Afterwards the
@@ -2411,7 +2430,10 @@ local function updateBot(bot)
 		bot.lootCheckedAt = now
 		-- A landed supply drop is worth contesting at any armament level; ordinary loot only
 		-- while under-armed.
-		local item = SupplyDropService.FindNearest(root.Position, SUPPLY_SEEK_RANGE)
+		-- Team modes: bots fight, they don't tour the map for crates (#134). Supply drops and armed
+		-- chest runs are Battle Royale only; an under-armed team bot still grabs gear nearby.
+		local teamMode = BotService.ModeState(bot) ~= nil
+		local item = not teamMode and SupplyDropService.FindNearest(root.Position, SUPPLY_SEEK_RANGE) or nil
 		if item and not lootAllowed(bot, item, (item.Position - root.Position).Magnitude, center, circleRadius, now) then
 			item = nil
 		end
@@ -2420,7 +2442,7 @@ local function updateBot(bot)
 		end
 		-- Oliver 15:27: "bots dont open crates or supply drops". An armed bot now also opens the nearest
 		-- unopened chest in range, not just a bot that is short of guns.
-		if not item then
+		if not item and not teamMode then
 			local bestDistance = LOOT_SEEK_RANGE
 			for _, entry in ipairs(lootItems(now)) do
 				local chest = entry.item
@@ -2487,6 +2509,9 @@ local function updateBot(bot)
 	bot.objectiveKind = objectiveKind
 	if objective then
 		bot.branch = "objective"
+		if objectiveKind == "sweep" and flatDistance(root.Position, objective) < 24 then
+			bot.slot = math.random(0, 999)
+		end
 		if not bot.wanderGoal or flatDistance(bot.wanderGoal, objective) > 12 then
 			bot.wanderGoal = objective
 			bot.wanderAt = now
