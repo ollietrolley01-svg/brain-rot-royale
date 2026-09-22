@@ -574,8 +574,8 @@ function DropPicker.DrawOverlays(disc, px, data, options)
 		})
 	end
 
-	-- Town rings, at the town's own radius.
-	for _, town in ipairs(data.towns) do
+	-- Town rings removed (Oliver 16:05: "get rid of the town bubbles"); the town name labels stay.
+	for _, town in ipairs({}) do
 		local ring = math.max(town.r * k, 8)
 		create("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
@@ -1253,7 +1253,7 @@ function Picker:Layout()
 	})
 	local lx, ly = 0, 0
 	for _, item in ipairs({
-		{ "Town", "ring" }, { "Landmark", "diamond" }, { "Road", "road" },
+		{ "Landmark", "diamond" }, { "Road", "road" },
 		{ "Water", "w" }, { "Buildings", "b" },
 	}) do
 		local w = textWidth(item[1], Type.Caption.Size, Type.Caption.Font)
