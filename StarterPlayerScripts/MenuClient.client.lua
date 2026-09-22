@@ -1609,8 +1609,7 @@ local function renderCosmetics()
 				-- Where it's earned: the progression hub on the Pass tab. Rank cosmetic ids start with
 				-- Prestige, Mastery or Cell (verify.py holds them to it), which picks the page.
 				addButton(buttons, 1, "HOW", Color3.fromRGB(255, 150, 176), function()
-					ProgressionPanel.SetView(string.find(id, "^Cell") and "Shop" or string.find(id, "^Mastery") and "Mastery" or "Rank")
-					activeTab = "Pass"
+					activeTab = string.find(id, "^Cell") and "CellShop" or string.find(id, "^Mastery") and "Mastery" or "Rank"
 					renderTab()
 				end)
 			elseif sectionIndex == 4 then
@@ -1670,7 +1669,7 @@ local function renderPass()
 
 	-- The progression hub shares this tab: a PASS | RANK | MASTERY | INDEX | CELL SHOP toggle on top,
 	-- and every page but PASS is drawn by ProgressionPanel instead of the pass list below.
-	if ProgressionPanel.Render(content, profile, { rerender = renderTab }) then
+	if ProgressionPanel.Render(content, profile, { rerender = renderTab, noTabs = true }) then
 		return
 	end
 
@@ -2658,7 +2657,14 @@ local TABS = {
 	{ key = "Crates", label = "Crates", render = renderCrates },
 	{ key = "Style", label = "Style Crates", render = renderStyleCrates },
 	{ key = "Cosmetics", label = "Cosmetics", render = renderCosmetics },
-	{ key = "Pass", label = "Pass", render = renderPass },
+	-- Oliver 09-22 14:15: rank, mastery and the cell shop were all under the Pass tab. Each progression
+	-- page is its own tab now; they share the Pass renderer, which hands every page but PASS to
+	-- ProgressionPanel.
+	{ key = "Pass", label = "Pass", render = function() ProgressionPanel.View = "Pass"; renderPass() end },
+	{ key = "Rank", label = "Rank", render = function() ProgressionPanel.View = "Rank"; renderPass() end },
+	{ key = "Mastery", label = "Mastery", render = function() ProgressionPanel.View = "Mastery"; renderPass() end },
+	{ key = "Index", label = "Rot Index", render = function() ProgressionPanel.View = "Index"; renderPass() end },
+	{ key = "CellShop", label = "Cell Shop", render = function() ProgressionPanel.View = "Shop"; renderPass() end },
 	{ key = "Quests", label = "Quests", render = renderQuests },
 	{ key = "Robux", label = "Robux Shop", render = renderRobuxShop },
 	{ key = "Settings", label = "Settings", render = renderSettings },
@@ -2691,6 +2697,10 @@ local DESTINATION_LOOK = {
 	Style = { glyph = "✦", sub = "Cosmetic crates" },
 	Cosmetics = { glyph = "◆", sub = "Skins and auras" },
 	Pass = { glyph = "▲", sub = "Brainrot Pass" },
+	Rank = { glyph = "★", sub = "Rot Rank" },
+	Mastery = { glyph = "◎", sub = "Gun mastery" },
+	Index = { glyph = "▦", sub = "Every brainrot" },
+	CellShop = { glyph = "✚", sub = "Spend Brain Cells" },
 	Quests = { glyph = "✓", sub = "Daily and weekly" },
 	Robux = { glyph = "$", sub = "Robux" },
 	Settings = { glyph = "⚙", sub = "Keys and audio" },
@@ -2701,7 +2711,7 @@ local DESTINATION_LOOK = {
 local TAB_GROUP = {
 	Crates = "Shop", Style = "Shop", Cosmetics = "Shop",
 	Brainrots = "Brainrots", Trade = "Brainrots",
-	Pass = "Progress", Quests = "Progress",
+	Pass = "Progress", Rank = "Progress", Mastery = "Progress", Index = "Progress", CellShop = "Progress", Quests = "Progress",
 	Robux = "Robux",
 	Settings = "Settings",
 }
@@ -3427,19 +3437,31 @@ end)
 -- Compact (Oliver 14:01: "small enough to fit on the screen without taking too much space") and
 -- stacked top to bottom (14:06): five 100 x 28 buttons, 4 px apart, y 130-286. The bundle nudge and the
 -- quest tracker below were moved down by the same 114 px to make room.
-local HUD_BUTTON_W = 100
-local HUD_BUTTON_H = 28
+local HUD_BUTTON_W = 104
+local HUD_BUTTON_H = 26
+local HUD_BUTTON_GAP = 3
+-- One look for all five (Oliver 14:16: "neat and snug"): a dark translucent pill with the accent
+-- as a thin outline and the label, left aligned, fixed size, so the column reads as one tidy list.
+local function hudButtonLook()
+	return {
+		rounded(6),
+		create("UIStroke", { Color = C.Accent, Thickness = 1, Transparency = 0.35, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
+		create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 6) }),
+	}
+end
 local menuButton = create("TextButton", {
 	Position = UDim2.new(0, 16, 0, 130),
 	Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
-	BackgroundColor3 = C.Accent,
+	BackgroundColor3 = C.Background,
+	BackgroundTransparency = 0.2,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
 	Text = "SHOP",
-	TextColor3 = Color3.new(0, 0, 0),
-	TextScaled = true,
+	TextColor3 = C.Accent,
+	TextSize = 13,
+	TextXAlignment = Enum.TextXAlignment.Left,
 	Parent = screenGui,
-}, { rounded(8), create("UITextSizeConstraint", { MaxTextSize = 12 }), create("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }) })
+}, hudButtonLook())
 
 -- CombatClient reads this. While the menu is open mid-match the mouse has to be free — first
 -- person otherwise keeps it locked to centre, leaving the panel unclickable — and clicks must
@@ -3475,16 +3497,19 @@ for index, spec in ipairs({
 	{ "SETTINGS", "Settings" },
 }) do
 	local button = create("TextButton", {
-		Position = UDim2.new(0, 0, 0, index * (HUD_BUTTON_H + 4)),
-		Size = UDim2.new(1, 0, 1, 0),
-		BackgroundColor3 = C.Accent,
+		-- -10: the child sits inside the parent's 10 px left padding, so pull it back to the edge.
+		Position = UDim2.new(0, -10, 0, index * (HUD_BUTTON_H + HUD_BUTTON_GAP)),
+		Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
+		BackgroundColor3 = C.Background,
+		BackgroundTransparency = 0.2,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
 		Text = spec[1],
-		TextColor3 = Color3.new(0, 0, 0),
-		TextScaled = true,
+		TextColor3 = C.Accent,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = menuButton,
-	}, { rounded(8), create("UITextSizeConstraint", { MaxTextSize = 12 }), create("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }) })
+	}, hudButtonLook())
 	button.Activated:Connect(function()
 		hudButtonOpen(spec[2])
 	end)

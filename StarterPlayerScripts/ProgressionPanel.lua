@@ -493,6 +493,11 @@ local function renderToggle(content, progression, ctx)
 
 	local claimable = progression and claimableCount(progression) or 0
 	for index, view in ipairs(VIEWS) do
+		-- Each page is its own menu tab now (MenuClient, Oliver 09-22 14:15), so the in-page tabs are
+		-- skipped and only the Brain Cells chip is drawn.
+		if ctx and ctx.noTabs then
+			break
+		end
 		local selected = ProgressionPanel.View == view.key
 		local text = narrow and view.short or view.label
 		-- A count fits on a 96 px tab and not on a 54 px one: "INDEX 10" measured 52 px wide in the
