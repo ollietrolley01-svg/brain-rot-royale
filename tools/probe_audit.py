@@ -212,9 +212,12 @@ def flag_always_true(cond):
 
 
 LOOP = re.compile(r"^(\s*)for\s+.*\bin\s+(?:ipairs|pairs)\s*\(\s*([^)]*?)\s*\)\s*do\b")
-# Anything that would make an empty collection visible: a count compared against zero, or a
-# reported sample total.
-GUARD = re.compile(r"[#\w.\[\]()]+\s*(?:>|>=|~=)\s*(?:0|1)\b|\bnext\s*\(")
+# Anything that would make an empty collection visible: a count compared against zero, a count
+# pinned to an exact non-zero size (stronger than non-empty, and what arsenal_probe.lua:48 does one
+# line above its sweep), or a next() emptiness test.
+GUARD = re.compile(r"[#\w.\[\]()]+\s*(?:>|>=|~=)\s*(?:0|1)\b"
+                   r"|#\s*[\w.\[\]()]+\s*==\s*[1-9]\d*\b"
+                   r"|\bnext\s*\(")
 
 
 def constant_tables(clean):
