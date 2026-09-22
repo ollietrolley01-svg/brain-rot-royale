@@ -109,8 +109,9 @@ MatchConfig.BotThinkInterval = 0.25
 -- is about a sixth off a bot's hit rate at every range (measured at 20, 60 and 150 studs by
 -- tools/bot_probe.lua's S23). Accuracy falls off with distance, so these two numbers and the falloff
 -- below are the whole difficulty dial, alongside BotDamageScale.
-MatchConfig.BotAccuracyNear = 0.55
-MatchConfig.BotAccuracyFar = 0.15
+-- Oliver, 2026-09-22 14:39: "un nerf the bots aim". Back to the pre-#118 values.
+MatchConfig.BotAccuracyNear = 0.66
+MatchConfig.BotAccuracyFar = 0.19
 MatchConfig.BotAccuracyFalloff = 120
 MatchConfig.BotReactionTime = 0.28
 MatchConfig.BotBurstRest = 0.48
