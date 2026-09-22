@@ -36,7 +36,9 @@ local DropMapService = {}
 
 -- 128 x 128 over the map's square: 20 studs a cell on the 1280-radius maps, 15 on the smallest.
 -- Both strings are one byte a cell, so the wire is 2 * N * N bytes plus the vectors.
-DropMapService.N = 128
+-- Oliver 09-22 15:34: "improve the resolution on the map drop picker". 192 (was 128): 1.5x finer
+-- cells for the same number of wire bytes per cell; sampling still yields once per row.
+DropMapService.N = 192
 
 -- The height alphabet travels WITH the payload. A wire format written down in two files drifts;
 -- this one is written down once and the decoder is handed the table it was encoded with.
