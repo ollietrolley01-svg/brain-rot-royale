@@ -1,0 +1,23 @@
+-- MUST BE FLAGGED: NIL_HANDLER
+-- Invariant: a field a constructor uses as a callback, and does not default, has to be supplied by
+-- every caller that builds the options table. The menu's X button hovered and depressed and was
+-- connected to nothing: the constructor read `options.onClose` at build time and the caller's table
+-- did not carry that key. Nothing errors. The button is simply inert.
+
+local HandlerBad = {}
+
+function HandlerBad.FixtureCloseButton(parent, options)
+	local button = Instance.new("TextButton")
+	button.Parent = parent
+	button.Activated = options.onFixtureClose
+	return button
+end
+
+function HandlerBad.Build(parent)
+	return HandlerBad.FixtureCloseButton(parent, {
+		text = "X",
+		size = 28,
+	})
+end
+
+return HandlerBad

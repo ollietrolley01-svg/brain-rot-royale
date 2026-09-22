@@ -1,0 +1,25 @@
+-- MUST NOT BE FLAGGED: WEAK_TABLE
+-- The same module writes .Color, so the "does this file write the property" half of the rule is
+-- satisfied here too. What makes it correct is where the baseline comes from: an attribute written
+-- once and read back, not the live property. The weak table holds only a verdict that can be worked
+-- out again from scratch, which is what a weak-keyed cache is for.
+
+local WeakGood = {}
+
+local BASE_COLOUR = "FixtureBaseColour"
+local dimmable = setmetatable({}, { __mode = "k" })
+
+function WeakGood.Dim(part, amount)
+	if dimmable[part] == nil then
+		dimmable[part] = part:IsA("BasePart") and part.Transparency < 1
+	end
+	if not dimmable[part] then
+		return
+	end
+	if part:GetAttribute(BASE_COLOUR) == nil then
+		part:SetAttribute(BASE_COLOUR, part.Color)
+	end
+	part.Color = part:GetAttribute(BASE_COLOUR):Lerp(Color3.new(), amount)
+end
+
+return WeakGood

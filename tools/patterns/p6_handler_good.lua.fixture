@@ -1,0 +1,25 @@
+-- MUST NOT BE FLAGGED: NIL_HANDLER
+-- The same button, two ways it is allowed to be right: the caller supplies the handler, AND the
+-- constructor defaults it so a caller that does not is still left with a working button rather than
+-- an inert one. Either alone is enough for the rule; both is what the menu should have had.
+
+local HandlerGood = {}
+
+local function noop() end
+
+function HandlerGood.FixtureOkButton(parent, options)
+	local button = Instance.new("TextButton")
+	button.Parent = parent
+	button.Activated = options.onFixtureOk or noop
+	return button
+end
+
+function HandlerGood.Build(parent, close)
+	return HandlerGood.FixtureOkButton(parent, {
+		text = "OK",
+		size = 28,
+		onFixtureOk = close,
+	})
+end
+
+return HandlerGood

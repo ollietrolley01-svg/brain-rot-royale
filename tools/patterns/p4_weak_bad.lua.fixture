@@ -1,0 +1,18 @@
+-- MUST BE FLAGGED: WEAK_TABLE
+-- Invariant: a cache primed from a property must not be primed from a property its own module
+-- overwrites. A lamp cache captured a part's original colour, the consumer overwrote that colour,
+-- and every rebuild re-primed from the already-dimmed value — headlights fading permanently towards
+-- black, with every number in the run correct.
+
+local WeakBad = {}
+
+local originalColour = setmetatable({}, { __mode = "k" })
+
+function WeakBad.Dim(part, amount)
+	if originalColour[part] == nil then
+		originalColour[part] = part.Color
+	end
+	part.Color = originalColour[part]:Lerp(Color3.new(), amount)
+end
+
+return WeakBad

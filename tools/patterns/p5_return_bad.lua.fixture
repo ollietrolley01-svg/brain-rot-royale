@@ -1,0 +1,29 @@
+-- MUST BE FLAGGED: RETURN_IGNORED
+-- Invariant: if one caller needs a function's third return value, every other caller has to have
+-- decided about it. WeaponService.GiveWeapon returns a third value naming the weapon it displaced;
+-- three callers ignored it and one silently deleted the player's held gun.
+
+local ReturnBad = {}
+
+-- Returns: the tool given, whether it went to the hotbar, and the weapon it DISPLACED.
+function ReturnBad.GiveFixtureWeapon(player, weaponId)
+	local displaced = player.Backpack:FindFirstChild("Held")
+	if displaced then
+		displaced:Destroy()
+	end
+	return Instance.new("Tool"), true, displaced
+end
+
+function ReturnBad.Loadout(player)
+	-- this caller knows about the third value and puts it back
+	local tool, hotbar, displaced = ReturnBad.GiveFixtureWeapon(player, "Rifle")
+	return tool, hotbar, displaced
+end
+
+function ReturnBad.Pickup(player)
+	-- and this one does not, so the displaced weapon is destroyed and never restored
+	local tool = ReturnBad.GiveFixtureWeapon(player, "Pistol")
+	return tool
+end
+
+return ReturnBad

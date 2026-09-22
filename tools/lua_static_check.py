@@ -923,6 +923,16 @@ def _string_content(literal):
     return literal[1:-1]
 
 
+def _dotted_before(tokens, i):
+    """The `a.b:c` chain ending at the name tokens[i], as a list of segments."""
+    parts = [tokens[i][1]]
+    j = i - 1
+    while j - 1 >= 0 and tokens[j][0] == "op" and tokens[j][1] in (".", ":") and tokens[j - 1][0] == "name":
+        parts.insert(0, tokens[j - 1][1])
+        j -= 2
+    return parts, j + 1
+
+
 def _matching_close(tokens, i):
     """tokens[i] is an opening bracket; index of its match, or None."""
     opens = {"(": ")", "[": "]", "{": "}"}
@@ -940,6 +950,141 @@ def _matching_close(tokens, i):
             if depth == 0:
                 return j
     return None
+
+
+def _statement_end(tokens, i):
+    """Index one past the statement starting at tokens[i], judged the same way the scope pass judges
+    it: bracket depth, then a line break that neither side continues."""
+    depth = 0
+    prev = None
+    j = i
+    while j < len(tokens):
+        kind, value, line = tokens[j]
+        if kind == "op" and value in ("(", "[", "{"):
+            depth += 1
+        elif kind == "op" and value in (")", "]", "}"):
+            if depth == 0:
+                return j
+            depth -= 1
+        elif depth == 0:
+            if kind == "op" and value == ";":
+                return j
+            # No statement STARTS with a block-closing keyword, so this is right at j == i too:
+            # `warn(...) return end` has an empty return, and reading past the `end` was how the
+            # SILENT_REFUSAL rule managed to stop matching its own planted fault.
+            if kind == "kw" and value in ("end", "else", "elseif", "until"):
+                return j
+            if prev is not None and line > prev[2] and prev[1] not in CONTINUES_PREV and value not in CONTINUES_NEXT:
+                return j
+        prev = tokens[j]
+        j += 1
+    return j
+
+
+def _param_names(tokens, i):
+    """tokens[i] is the '(' of a parameter list. Returns (names, index of the ')')."""
+    names = []
+    close = _matching_close(tokens, i)
+    if close is None:
+        return names, min(i, len(tokens) - 1)
+    depth = 0
+    j = i + 1
+    while j < close:
+        kind, value, _ = tokens[j]
+        if kind == "op" and value in ("(", "[", "{", "<"):
+            depth += 1
+        elif kind == "op" and value in (")", "]", "}", ">"):
+            depth -= 1
+        elif depth == 0 and kind == "name" and (j == i + 1 or tokens[j - 1][1] == ","):
+            names.append(value)
+        j += 1
+    return names, close
+
+
+def function_frames(tokens):
+    """Every function in a file: its name, params and token range.
+
+    A small independent block walk rather than a change to check_file's scope pass, which is doing a
+    different job and is not mine to restructure. Keys: name (dotted, or None for an anonymous one),
+    params, start (the `function` keyword), body (first token after the signature), end (its `end`).
+    """
+    frames = []
+    stack = []  # (kind, frame or None)
+    expect_do = 0
+    expression_ifs = 0
+    prev = None
+    i = 0
+    count = len(tokens)
+    while i < count:
+        kind, value, line = tokens[i]
+        if kind == "kw":
+            if value == "function":
+                j = i + 1
+                parts = []
+                while j < count and tokens[j][1] != "(":
+                    if tokens[j][0] == "name":
+                        parts.append(tokens[j][1])
+                    j += 1
+                if j >= count:
+                    break
+                if not parts and prev is not None and prev[1] == "=" and i - 2 >= 0 and tokens[i - 2][0] == "name":
+                    # `M.f = function(...)` — the name is on the other side of the '='.
+                    parts, _ = _dotted_before(tokens, i - 2)
+                params, close = _param_names(tokens, j)
+                frame = {
+                    "name": ".".join(parts) if parts else None,
+                    "params": params,
+                    "start": i,
+                    "body": close + 1,
+                    "end": None,
+                    "line": line,
+                }
+                frames.append(frame)
+                stack.append(("function", frame))
+                prev = tokens[close]
+                i = close + 1
+                continue
+            if value in ("for", "while"):
+                stack.append((value, None))
+                expect_do += 1
+            elif value == "do":
+                if expect_do > 0:
+                    expect_do -= 1
+                else:
+                    stack.append(("do", None))
+            elif value == "if":
+                if prev is not None and prev[1] in EXPRESSION_BEFORE_IF and prev[2] == line:
+                    expression_ifs += 1
+                else:
+                    stack.append(("if", None))
+            elif value == "else" and expression_ifs > 0 and (not stack or stack[-1][0] != "if"):
+                expression_ifs -= 1
+            elif value == "repeat":
+                stack.append(("repeat", None))
+            elif value == "end":
+                if stack:
+                    _, frame = stack.pop()
+                    if frame is not None:
+                        frame["end"] = i
+            elif value == "until":
+                if stack:
+                    stack.pop()
+        prev = tokens[i]
+        i += 1
+    return [frame for frame in frames if frame["end"] is not None]
+
+
+def _owning_frame(frames, index):
+    """The innermost frame containing a token index — the function a statement really belongs to."""
+    best = None
+    for frame in frames:
+        if frame["body"] <= index < frame["end"] and (best is None or frame["body"] > best["body"]):
+            best = frame
+    return best
+
+
+def _last_segment(name):
+    return name.rsplit(".", 1)[-1] if name else name
 
 
 # --- P1: os.clock used as wall time ---------------------------------------------------------------
@@ -1150,6 +1295,443 @@ def pattern_attributes(scan, report, targets):
                           f"by the game, read by nothing the players run: " + ", ".join(sorted(tools_only)))
 
 
+# --- P4: a weak-keyed table holding state, and the property-cache version -------------------------
+# Weak-keyed tables drop live Instances, so one holding STATE loses it silently. The sharper version:
+# a weak table whose VALUE was read off a property the same module later WRITES. A lamp cache
+# captured a part's original colour, the consumer overwrote that colour, and every rebuild re-primed
+# from the already-dimmed value — headlights fading permanently towards black.
+#
+# The property half is EXACT about what it matched (a property read into a weak table, and a write to
+# that same property in the same file). Whether a given weak table is a cache or state is not
+# decidable here, so every weak table found is listed as a note for review instead.
+
+WRITABLE_PROPS = ("Color", "Size", "CFrame", "Transparency", "Position", "Material", "Orientation",
+                  "BrickColor", "Reflectance", "Rotation", "Anchored", "Massless", "Texture")
+
+
+def pattern_weak_tables(scan, report, targets):
+    code = "WEAK_TABLE"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        weak = {}  # table name -> line
+        for index, (kind, value, line) in enumerate(tokens):
+            if kind != "name" or value != "__mode":
+                continue
+            if not (index + 2 < len(tokens) and tokens[index + 1][1] == "=" and tokens[index + 2][0] == "str"):
+                continue
+            if "k" not in _string_content(tokens[index + 2][1]):
+                continue
+            stats["candidates"] += 1
+            name = None
+            for j in range(index, max(-1, index - 12), -1):
+                if tokens[j][1] == "=" and j >= 1 and tokens[j - 1][0] == "name":
+                    name = tokens[j - 1][1]
+                    break
+            weak[name or f"<line {line}>"] = line
+            report.note(code, f"{scan_file.rel}:{line}: weak-keyed table `{name or '?'}` — a cache is "
+                              f"fine here, state is not; the collector takes entries for live "
+                              f"Instances")
+        if not weak:
+            continue
+        written_props = set()
+        for index in range(len(tokens) - 2):
+            if tokens[index][1] == "." and tokens[index + 1][1] in WRITABLE_PROPS and tokens[index + 2][1] == "=":
+                written_props.add(tokens[index + 1][1])
+        if not written_props:
+            continue
+        for name, declared in weak.items():
+            if name.startswith("<line "):
+                continue
+            for index, (kind, value, line) in enumerate(tokens):
+                if kind != "name" or value != name or index + 1 >= len(tokens) or tokens[index + 1][1] != "[":
+                    continue
+                close = _matching_close(tokens, index + 1)
+                if close is None or close + 1 >= len(tokens) or tokens[close + 1][1] != "=":
+                    continue
+                end = _statement_end(tokens, close + 2)
+                for j in range(close + 2, end):
+                    if tokens[j][1] == "." and j + 1 < end and tokens[j + 1][1] in written_props:
+                        prop = tokens[j + 1][1]
+                        if scan_file.rel in targets:
+                            report.flag(code, scan_file.rel, line, name,
+                                        f"weak table primed from `.{prop}`, a property this file also "
+                                        f"writes (line {declared} declares it) — a rebuild re-primes "
+                                        f"from the already-changed value")
+                        break
+                else:
+                    continue
+                break
+
+
+# --- P5: an ignored return value -------------------------------------------------------------------
+# WeaponService.GiveWeapon returns a third value naming the weapon it displaced; three callers
+# ignored it and one silently deleted the player's held gun.
+#
+# HEURISTIC. Lua truncates return values as a matter of course, so "returns 3, captures 1" is not by
+# itself a bug and flagging it produces hundreds of findings. What is flagged is DISAGREEMENT: a
+# function whose callers capture different numbers of values, which is the shape above — somebody
+# needed the extra value and somebody else did not know it existed. Sites capturing fewer than the
+# definition's arity with no disagreeing sibling are counted as candidates, not flagged.
+#
+# One part of it IS exact and is flagged on its own: a caller capturing MORE values than the function
+# can return has a target that is always nil.
+#
+# Name resolution follows Lua's scoping, which is most of what keeps this rule usable, and two
+# versions of it were wrong before this one:
+#   - A single-name definition (`local function travel`) is file-local, so only calls in the SAME
+#     FILE resolve to it. Without that, one `travel` helper in Ballistics.lua matched a different
+#     `travel` in five other files and the rule produced 60 findings, none about the same function.
+#   - A call is NEVER resolved by its last segment alone. `PlayerData.Get(giver)` matched
+#     `StatusEffects.Get` on the strength of the word "Get", which invented a caller that needed
+#     two values and put 48 innocent call sites on the list behind it. Only `self:Method()` falls
+#     back, because there the qualifier is a variable and the method is the only name there is.
+# The disagreeing caller must also be in game code: "a tools/ probe captures three" is not evidence
+# about what the game needs.
+
+def _return_arity(tokens, index):
+    """tokens[index] is a `return`. Returns (arity, known)."""
+    end = _statement_end(tokens, index + 1)
+    if end <= index + 1:
+        return 0, True
+    depth = 0
+    commas = []
+    for j in range(index + 1, end):
+        kind, value, _ = tokens[j]
+        if kind == "op" and value in ("(", "[", "{"):
+            depth += 1
+        elif kind == "op" and value in (")", "]", "}"):
+            depth -= 1
+        elif kind == "op" and value == "," and depth == 0:
+            commas.append(j)
+    last_start = (commas[-1] + 1) if commas else (index + 1)
+    tail = tokens[last_start:end]
+    known = True
+    if tail:
+        if tail[-1][1] == "...":
+            known = False
+        elif tail[-1][1] == ")":
+            # A call in the tail position expands to any number of values.
+            depth = 0
+            for j in range(end - 1, last_start - 1, -1):
+                value = tokens[j][1]
+                if value in (")", "]", "}"):
+                    depth += 1
+                elif value in ("(", "[", "{"):
+                    depth -= 1
+                    if depth == 0:
+                        before = tokens[j - 1] if j >= 1 else None
+                        if before is not None and (before[0] in ("name", "str") or before[1] in (")", "]", "}")):
+                            known = False
+                        break
+    return len(commas) + 1, known
+
+
+def _capture_count(tokens, start, call_open):
+    """How many values the call whose chain starts at `start` has captured. None = a context this
+    pass will not claim to understand (an argument, an operand, a table field)."""
+    before = tokens[start - 1] if start >= 1 else None
+    close = _matching_close(tokens, call_open)
+    if before is not None and before[0] == "op" and before[1] == "=":
+        # Count the assignment targets to the left of the '='.
+        equals = start - 1
+        depth = 0
+        targets = 1
+        j = equals - 1
+        while j >= 0:
+            kind, value, line = tokens[j]
+            right = tokens[j + 1]
+            # Stop at the start of the statement. Without this the walk ran back over earlier lines
+            # and counted THEIR commas: `allowed, sent = stream(...)` read as five targets, and the
+            # exact half of this rule reported "the extra targets are always nil" about a call that
+            # captured exactly what it should.
+            if depth == 0 and line < right[2] and value not in CONTINUES_PREV \
+                    and right[1] not in CONTINUES_NEXT:
+                break
+            if kind == "op" and value in (")", "]", "}"):
+                depth += 1
+            elif kind == "op" and value in ("(", "[", "{"):
+                depth -= 1
+                if depth < 0:
+                    return None  # inside a bracket: a table field or an argument, not an assignment
+            elif depth == 0:
+                if kind == "op" and value == ",":
+                    targets += 1
+                elif kind == "kw" and value == "local":
+                    break
+                elif kind == "op" and value == ";":
+                    break
+                elif kind == "kw" and value in ("end", "then", "do", "else", "elseif", "return", "until"):
+                    break
+                elif kind == "op" and value in ("==", "~=", "<", "<=", ">", ">=", "+", "-", "*", "/"):
+                    return None
+            j -= 1
+        return targets
+    starts_statement = before is None or (
+        before[0] == "kw" and before[1] in ("then", "do", "else", "end", "repeat", "until")) or (
+        before[0] == "op" and before[1] == ";") or (
+        before[2] < tokens[start][2] and before[1] not in CONTINUES_PREV)
+    if starts_statement and close is not None:
+        after = tokens[close + 1] if close + 1 < len(tokens) else None
+        if after is None or after[1] == ";" or after[2] > tokens[close][2] or (
+                after[0] == "kw" and after[1] in ("end", "else", "elseif", "until", "return")):
+            return 0
+    return None
+
+
+def pattern_ignored_return(scan, report, targets):
+    code = "RETURN_IGNORED"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    definitions = {}  # key -> {rel, line, arity, known, name}; key is "M.f" or "<rel>::f" (file-local)
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        frames = function_frames(tokens)
+        for frame in frames:
+            if not frame["name"]:
+                continue
+            arity, known = 0, True
+            for index in range(frame["body"], frame["end"]):
+                if tokens[index][0] != "kw" or tokens[index][1] != "return":
+                    continue
+                if _owning_frame(frames, index) is not frame:
+                    continue
+                count, ok = _return_arity(tokens, index)
+                arity = max(arity, count)
+                known = known and ok
+            if arity < 2:
+                continue
+            qualified = "." in frame["name"]
+            key = frame["name"] if qualified else f"{scan_file.rel}::{frame['name']}"
+            earlier = definitions.get(key)
+            if earlier is None:
+                definitions[key] = {"rel": scan_file.rel, "line": frame["line"], "arity": arity,
+                                    "known": known, "name": frame["name"], "qualified": qualified,
+                                    "definitions": 1}
+            else:
+                # This project fills seams by assignment: `LobbyService.OnDailySpin` is a 2-value
+                # stub in its own module and a 3-value implementation in Bootstrap, and whichever
+                # was read last used to win. Take the widest arity, and stop making the exact
+                # "always nil" claim about a name that is defined more than once.
+                earlier["definitions"] += 1
+                if arity > earlier["arity"]:
+                    earlier.update({"rel": scan_file.rel, "line": frame["line"], "arity": arity})
+                earlier["known"] = earlier["known"] and known
+    by_short = {}
+    for key, definition in definitions.items():
+        if definition["qualified"]:
+            by_short.setdefault(_last_segment(definition["name"]), []).append(key)
+    call_sites = {}  # definition key -> [(rel, line, captured, is_game)]
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        for index, (kind, value, line) in enumerate(tokens):
+            if kind != "name" or index + 1 >= len(tokens) or tokens[index + 1][1] != "(":
+                continue
+            parts, start = _dotted_before(tokens, index)
+            resolved = None
+            if len(parts) == 1:
+                # A bare name is a local or a global: only this file's definition can be it.
+                local_key = f"{scan_file.rel}::{parts[0]}"
+                resolved = local_key if local_key in definitions else None
+            else:
+                dotted = ".".join(parts)
+                if dotted in definitions:
+                    resolved = dotted
+                elif parts[0] == "self" and len(parts) == 2:
+                    candidates = by_short.get(parts[-1], [])
+                    resolved = candidates[0] if len(candidates) == 1 else None
+            if resolved is None:
+                continue
+            stats["candidates"] += 1
+            captured = _capture_count(tokens, start, index + 1)
+            if captured is None:
+                continue
+            call_sites.setdefault(resolved, []).append((scan_file.rel, line, captured, scan_file.is_game))
+    probe_sites = [0]
+    probe_files = set()
+    for key, sites in sorted(call_sites.items()):
+        definition = definitions[key]
+        if not definition["known"]:
+            continue
+        name = definition["name"]
+        arity = definition["arity"]
+        # Exact half: a target that can never be filled. Only where the name has ONE definition,
+        # because a seam's arity is whatever the widest of its implementations returns.
+        for rel, line, captured, _ in sites if definition["definitions"] == 1 else []:
+            if captured > arity and rel in targets:
+                report.flag(code, rel, line, name,
+                            f"captures {captured} values from `{name}`, which returns at most "
+                            f"{arity} ({definition['rel']}:{definition['line']}) — the extra "
+                            f"target(s) are always nil")
+        usable = [(rel, line, captured, is_game) for rel, line, captured, is_game in sites
+                  if captured <= arity]
+        game_counts = [captured for _, _, captured, is_game in usable if is_game]
+        if not game_counts or len({captured for _, _, captured, _ in usable}) < 2:
+            continue
+        best = max(game_counts)
+        user = next((f"{rel}:{line}" for rel, line, captured, is_game in usable
+                     if is_game and captured == best), None)
+        if user is None:
+            continue
+        # One finding per FILE per function. And only for GAME code: a gallery or probe deliberately
+        # taking one value out of three is not a bug, and 400 probe sites is how a linter gets
+        # turned off. The probe count goes in a note instead.
+        short_callers = {}
+        for rel, line, captured, is_game in usable:
+            if captured >= best:
+                continue
+            if is_game:
+                short_callers.setdefault(rel, []).append((line, captured))
+            else:
+                probe_sites[0] += 1
+                probe_files.add(rel)
+        for rel, hits in sorted(short_callers.items()):
+            if rel not in targets:
+                continue
+            lines = ", ".join(str(line) for line, _ in hits[:8])
+            if len(hits) > 8:
+                lines += f", +{len(hits) - 8} more"
+            report.flag(code, rel, hits[0][0], name,
+                        f"captures {hits[0][1]} of the {arity} value(s) `{name}` returns "
+                        f"({definition['rel']}:{definition['line']}) at {len(hits)} site(s) "
+                        f"(lines {lines}), while {user} captures {best} — the callers disagree "
+                        f"about what it returns")
+    if probe_sites[0]:
+        report.note(code, f"{probe_sites[0]} short call(s) in {len(probe_files)} tools/ file(s) — not "
+                          f"flagged: a probe or gallery taking one value out of three is a choice, "
+                          f"not an oversight")
+
+
+# --- P6: a handler slot filled with nil at construction --------------------------------------------
+# The menu's X button hovered and depressed and was connected to nothing: the constructor read
+# `options.onClose` at build time and its caller's table did not carry that key. Nothing errors —
+# the button is simply inert, which is the worst kind of bug to find by eye.
+#
+# HEURISTIC, but a narrow one: it only looks at callers that build the options table INLINE, where
+# the keys are visible. A caller passing a variable is counted as a candidate and not flagged. A
+# constructor that defaults the field (`options.onClose or noop`) or tests it is not a finding.
+
+BAG_PARAM = {"options", "opts", "props", "config", "conf", "spec", "def", "definition", "params", "info"}
+HANDLER_FIELD = re.compile(
+    r"^(on[A-Z]\w*|\w*(Callback|Handler|Activated|Clicked|Pressed|Toggled|Selected)|callback|handler)$")
+HANDLER_GUARD_BEFORE = {"if", "elseif", "while", "not", "and", "or", "assert", "return"}
+HANDLER_GUARD_AFTER = {"or", "and", "==", "~="}
+
+
+def pattern_nil_handler(scan, report, targets):
+    code = "NIL_HANDLER"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    wanted = {}  # definition name -> {rel, line, fields: {field: guarded}}
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        for frame in function_frames(tokens):
+            if not frame["name"]:
+                continue
+            bags = [param for param in frame["params"] if param in BAG_PARAM]
+            if not bags:
+                continue
+            fields = {}
+            for index in range(frame["body"], frame["end"] - 2):
+                if tokens[index][0] != "name" or tokens[index][1] not in bags:
+                    continue
+                if tokens[index + 1][1] != "." or tokens[index + 2][0] != "name":
+                    continue
+                field = tokens[index + 2][1]
+                if not HANDLER_FIELD.match(field):
+                    continue
+                stats["candidates"] += 1
+                before = tokens[index - 1][1] if index >= 1 else None
+                after = tokens[index + 3][1] if index + 3 < len(tokens) else None
+                guarded = before in HANDLER_GUARD_BEFORE or after in HANDLER_GUARD_AFTER
+                fields[field] = fields.get(field, False) or guarded
+            unguarded = sorted(field for field, guarded in fields.items() if not guarded)
+            if unguarded:
+                wanted[frame["name"]] = {"rel": scan_file.rel, "line": frame["line"], "fields": unguarded}
+    if not wanted:
+        return
+    probe_sites = 0
+    probe_files = set()
+    by_short = {}
+    for name in wanted:
+        by_short.setdefault(_last_segment(name), []).append(name)
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        # Fields this file fills in AFTER construction. MenuClient does exactly that on purpose and
+        # says why at MenuShell.lua:92 — the shell reads `self.onBack` at click time, so assigning it
+        # later works. Without this the deliberate idiom reads as three nil handlers.
+        assigned_later = {tokens[i + 1][1] for i in range(len(tokens) - 2)
+                          if tokens[i][1] == "." and tokens[i + 1][0] == "name"
+                          and tokens[i + 2][1] == "=" and tokens[i + 2][0] == "op"}
+        for index, (kind, value, line) in enumerate(tokens):
+            if kind != "name" or index + 1 >= len(tokens) or tokens[index + 1][1] not in ("(", "{"):
+                continue
+            parts, _ = _dotted_before(tokens, index)
+            dotted = ".".join(parts)
+            resolved = dotted if dotted in wanted else None
+            if resolved is None:
+                candidates = by_short.get(parts[-1], [])
+                resolved = candidates[0] if len(candidates) == 1 else None
+            if resolved is None:
+                continue
+            if wanted[resolved]["rel"] == scan_file.rel and abs(wanted[resolved]["line"] - line) < 1:
+                continue
+            close = _matching_close(tokens, index + 1)
+            if close is None:
+                continue
+            # The last top-level table literal in the argument list is the options bag.
+            depth = 0
+            brace = None
+            for j in range(index + 1, close):
+                if tokens[j][0] != "op":
+                    continue
+                if tokens[j][1] in ("(", "["):
+                    depth += 1
+                elif tokens[j][1] in (")", "]"):
+                    depth -= 1
+                elif tokens[j][1] == "{" and depth == 1:
+                    brace = j
+                    break
+                elif tokens[j][1] == "{" and depth == 0 and tokens[index + 1][1] == "{":
+                    brace = j
+                    break
+            stats["candidates"] += 1
+            if brace is None:
+                continue
+            brace_close = _matching_close(tokens, brace)
+            if brace_close is None:
+                continue
+            keys = set()
+            depth = 0
+            for j in range(brace + 1, brace_close):
+                if tokens[j][0] == "op" and tokens[j][1] in ("(", "[", "{"):
+                    depth += 1
+                elif tokens[j][0] == "op" and tokens[j][1] in (")", "]", "}"):
+                    depth -= 1
+                elif depth == 0 and tokens[j][0] == "name" and tokens[j + 1][1] == "=" \
+                        and tokens[j - 1][1] in ("{", ",", ";"):
+                    keys.add(tokens[j][1])
+            missing = [field for field in wanted[resolved]["fields"]
+                       if field not in keys and field not in assigned_later]
+            if not missing:
+                continue
+            if not scan_file.is_game:
+                # A gallery builds widgets to photograph, not to click. Counted, not flagged.
+                probe_sites += 1
+                probe_files.add(scan_file.rel)
+                continue
+            if scan_file.rel in targets:
+                report.flag(code, scan_file.rel, line, resolved,
+                            f"builds the options table inline without {', '.join(missing)}, which "
+                            f"{wanted[resolved]['rel']}:{wanted[resolved]['line']} uses as a handler "
+                            f"and does not default — the slot is nil at construction")
+    if probe_sites:
+        report.note(code, f"{probe_sites} inline options table(s) in {len(probe_files)} tools/ file(s) "
+                          f"missing a handler field — not flagged: a gallery builds widgets to "
+                          f"photograph, not to click")
+
+
 # --- P7: a stale copy of a number defined elsewhere ------------------------------------------------
 # A mode said "first to 50" while its scoreTarget said 100, a few lines apart in the same table,
 # because a change to the number never reached the sentence. tools/verify.py:1139 has a narrow
@@ -1305,6 +1887,12 @@ PATTERN_RULES = [
      "p1_clock_bad", "p1_clock_good"),
     ("ATTRIBUTE", "an attribute written and never read, or read and never written", "HEURISTIC",
      pattern_attributes, "p2_attribute_bad", "p2_attribute_good"),
+    ("WEAK_TABLE", "a weak-keyed table primed from a property the module writes", "EXACT",
+     pattern_weak_tables, "p4_weak_bad", "p4_weak_good"),
+    ("RETURN_IGNORED", "an ignored return value, where the callers disagree", "HEURISTIC",
+     pattern_ignored_return, "p5_return_bad", "p5_return_good"),
+    ("NIL_HANDLER", "a handler slot filled with nil at construction", "HEURISTIC",
+     pattern_nil_handler, "p6_handler_bad", "p6_handler_good"),
     ("NUMBER_DRIFT", "a stale copy of a number defined elsewhere", "HEURISTIC",
      pattern_number_drift, "p7_number_bad", "p7_number_good"),
 ]

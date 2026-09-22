@@ -1,0 +1,23 @@
+-- MUST NOT BE FLAGGED: RETURN_IGNORED
+-- Two callers of a two-value function, both capturing both values. Truncating return values is
+-- ordinary Lua, so what the rule looks for is callers DISAGREEING — one of them needing a value the
+-- other does not know exists. Here they agree, so there is nothing to report.
+
+local ReturnGood = {}
+
+-- Returns: the tool given, and whether it went to the hotbar.
+function ReturnGood.GiveFixtureSidearm(player, weaponId)
+	return Instance.new("Tool"), true
+end
+
+function ReturnGood.Loadout(player)
+	local tool, hotbar = ReturnGood.GiveFixtureSidearm(player, "Rifle")
+	return tool, hotbar
+end
+
+function ReturnGood.Pickup(player)
+	local tool, hotbar = ReturnGood.GiveFixtureSidearm(player, "Pistol")
+	return tool, hotbar
+end
+
+return ReturnGood
