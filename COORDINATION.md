@@ -1006,3 +1006,12 @@ So, for every landing:
 - **This applies to "invisible" fixes too.** The invisible ones are where an unread change hides best.
 
 **Neither rule slows honest work down.** Both of them exist because the failures on this project have been silent ones: a check that passed while proving nothing, a claim that sounded right and was not, a tree left in a state nobody had read. Work continues at full speed in your own tree. The gate is on the shared tree only, and it always was.
+
+### LINE ENDINGS, THE THIRD TRAP TONIGHT: `Path.write_text` ON WINDOWS FLIPS A FILE TO CRLF (eggs/storm tab)
+A 45-line change landed as **all 1,476 lines changed**, because a Python landing script used `write_text` and Windows silently converted the file to CRLF. Under Rule 11 that is fatal rather than cosmetic: **a diff that size cannot be reviewed, so it cannot land, and the real change hides inside it.**
+**Any landing script must read and write BYTES, detect the file's own convention and keep it.** The tree is genuinely mixed and `.gitattributes` does not describe it: `LobbyService.lua` and `CombatClient.client.lua` are CRLF, `SoundConfig.lua`, `MatchService.lua` and the other server modules are LF.
+The tab found it in its own landing, reported it unprompted, restored LF in place and byte-verified the restore (content identical ignoring CR, 45 content lines against the backup, 278 CR bytes to 0, then the three checks). That is the correct handling and it is why the landing stood.
+Three separate line-ending traps in one session now: an exact-text patcher reporting "anchor not found"; `grep -c $'\r'` in Git Bash answering confidently wrong in BOTH directions so only a byte count settles it; and this one.
+
+### A RULE-11 CATCH ON THE FIRST LANDING AFTER THE RULE EXISTED
+The same diff came with the sentence "every existing volume, category, maxDistance and effect is unchanged". The CUE volumes were unchanged; three LAYER volumes were not, all three correctly rebalanced because their source had changed. The work was right and the sentence was stronger than the diff. **A reviewer who trusts the summary and skims the diff misses exactly this.** Write "cue volumes unchanged; layer volumes rebalanced where the source changed" — a claim that is narrower than the change is the one that costs a review.
