@@ -322,7 +322,9 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   work re-hit it and was written with **two** constants (slot × 2.399963 + leg × 1.0) so equal slot+leg
   can't align again. — *bots*
 - `[ ]` **126. Too many bots in one area = lag.** Cap A/B partially done; see #113 and #131. — *bots*
-- `[x]` **127. Reduce the bot count to 30.** `MatchConfig.BotFillTarget` 50 → 30; your playtest build was cut from this. — *bots*
+- `[x]` **127. Reduce the bot count to 30.** `MatchConfig.BotFillTarget` 50 → 30. **Changed 09-22 13:45 on your word:**
+  "50 players in the battle royale rounds and keep 30 in the other gamemodes" — the battle royale now fills to
+  `BotFillTargetBattleRoyale` = 50, TDM and KOTH stay at `BotFillTarget` = 30. — *bots*
 - `[~]` **128. Place barricades anywhere.** **A + B LANDED UNPROVEN and both are in the build you are
   playing.** A: a kit stops on first contact with anything solid (kills the 5.6/11.9-stud roll). B:
   per-footprint slope allowance, proven exactly over five runs. **B governs on terrain only** — expect
