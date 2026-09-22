@@ -1478,9 +1478,13 @@ def pattern_weak_tables(scan, report, targets):
 #     FILE resolve to it. Without that, one `travel` helper in Ballistics.lua matched a different
 #     `travel` in five other files and the rule produced 60 findings, none about the same function.
 #   - A call is NEVER resolved by its last segment alone. `PlayerData.Get(giver)` matched
-#     `StatusEffects.Get` on the strength of the word "Get", which invented a caller that needed
-#     two values and put 48 innocent call sites on the list behind it. Only `self:Method()` falls
-#     back, because there the qualifier is a variable and the method is the only name there is.
+#     `StatusEffects.Get` on the strength of the word "Get", which invented a caller that needed two
+#     values and put 48 innocent call sites on the list behind it. The fallback was then kept for
+#     `self:Method()` only, on the reasoning that there the qualifier is a variable — and it matched
+#     `MenuShell:Toggle`'s `self:Open()` to `CrateService.Open`, a module MenuShell does not even
+#     mention. So there is no fallback at all: an exact `Module.Func` or nothing.
+# The cost is a false negative wherever a module is required under a different name (`local SE =
+# require(...)` then `SE.Get()`), which is the direction to be wrong in.
 # The disagreeing caller must also be in game code: "a tools/ probe captures three" is not evidence
 # about what the game needs.
 
@@ -1612,10 +1616,6 @@ def pattern_ignored_return(scan, report, targets):
                 if arity > earlier["arity"]:
                     earlier.update({"rel": scan_file.rel, "line": frame["line"], "arity": arity})
                 earlier["known"] = earlier["known"] and known
-    by_short = {}
-    for key, definition in definitions.items():
-        if definition["qualified"]:
-            by_short.setdefault(_last_segment(definition["name"]), []).append(key)
     call_sites = {}  # definition key -> [(rel, line, captured, is_game)]
     for scan_file in scan:
         tokens = scan_file.tokens
@@ -1630,11 +1630,7 @@ def pattern_ignored_return(scan, report, targets):
                 resolved = local_key if local_key in definitions else None
             else:
                 dotted = ".".join(parts)
-                if dotted in definitions:
-                    resolved = dotted
-                elif parts[0] == "self" and len(parts) == 2:
-                    candidates = by_short.get(parts[-1], [])
-                    resolved = candidates[0] if len(candidates) == 1 else None
+                resolved = dotted if dotted in definitions else None
             if resolved is None:
                 continue
             stats["candidates"] += 1
