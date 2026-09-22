@@ -289,7 +289,9 @@ end
 -- Draws the ground, then the river, then the roads, into one ImageLabel. Returns the label and the
 -- pixel size, or nil and the reason it could not.
 function DropPicker.DrawImage(parent, data, px)
-	local W = math.clamp(math.floor(px), 192, 384)
+	-- Up to 640 px (was 384) so a large drop screen draws the map at its own size instead of stretching
+	-- a 384 px picture (Oliver 09-22 15:34).
+	local W = math.clamp(math.floor(px), 192, 640)
 	local ok, result = pcall(function()
 		local AssetService = game:GetService("AssetService")
 		local image = AssetService:CreateEditableImage({ Size = Vector2.new(W, W) })
