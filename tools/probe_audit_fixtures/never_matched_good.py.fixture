@@ -1,0 +1,37 @@
+"""The same checker with the pattern fixed. No site in this file may be flagged.
+
+It proves the detector stays quiet on a checker whose every regex reaches its input, which a
+planted fault on its own cannot show. Note the last block: a pattern that matches on purpose and
+reports a problem when it does -- a negative detector -- still matches here, so the detector is
+not being kept quiet by luck.
+"""
+import re
+import sys
+
+root = sys.argv[1] if len(sys.argv) > 1 else "."
+problems = []
+
+SOURCE = """
+local Colours = {}
+Colours.Primary   = Color3.fromRGB(208, 149, 241)
+Colours.Secondary = Color3.fromRGB(24, 24, 24)
+Colours.Accent    = Color3.new(0.82, 0.58, 0.95)
+BAD_MATERIAL = Enum.Material.Neon
+"""
+
+rgb = re.findall(r"Color3\.fromRGB\((\d+), (\d+), (\d+)\)", SOURCE)
+if len(rgb) < 2:
+    problems.append("colours: fewer than two RGB colours found")
+
+# Fixed: floats, so the third site is read like the other two.
+floats = re.findall(r"Color3\.new\(([\d.]+), ([\d.]+), ([\d.]+)\)", SOURCE)
+for r, g, b in floats:
+    if float(r) > 1.0:
+        problems.append("colours: a component above 1.0")
+
+# A negative detector that does match, so the file has no zero-hit site of any kind.
+if re.search(r"Enum\.Material\.Neon", SOURCE):
+    problems.append("colours: Neon is not in the palette")
+
+print("\n".join(problems) if problems else "fixture: no problems")
+sys.exit(0)

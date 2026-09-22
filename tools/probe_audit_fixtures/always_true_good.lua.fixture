@@ -1,0 +1,28 @@
+-- The correct forms of every shape in always_true_bad.lua.fixture. This file must NOT be flagged.
+--
+-- It exists so the detector is shown not to fire on ordinary checks. A rule with only a planted
+-- fault is proven able to fire, not proven able to stay quiet, and a noisy rule gets switched off.
+
+local failures = 0
+local function check(ok, fmt, ...)
+	if not ok then
+		failures += 1
+	end
+	print(string.format((ok and "ok   " or "FAIL ") .. fmt, ...))
+end
+
+local parts = workspace:GetChildren()
+
+-- A count that can be wrong, compared against something that can be false.
+check(#parts > 0, "the stage has %d parts", #parts)
+check(#parts == 12, "the stage has its 12 parts, not %d", #parts)
+
+-- A signed measurement legitimately tested against zero: a drop below the floor is a real failure,
+-- and >= 0 here is the fault it is looking for, not a tautology.
+local clearance = parts[1] and parts[1].Position.Y or -1
+check(clearance >= 0, "the first part sits on or above the floor (%.2f)", clearance)
+
+-- Two different values compared.
+check(failures == 0, "no failures so far")
+
+return failures

@@ -1,0 +1,34 @@
+-- PLANTED FAULT for probe_audit.py's UNGUARDED detector. This file must be flagged.
+--
+-- Aimed at the invariant: a sweep whose only checks are per-item, over a collection built at
+-- runtime, must be reported when nothing in the file fails on an empty collection. This is the
+-- shape a real audit on this project had -- it filtered for one part shape, found none of the
+-- parts carrying the fault, and reported the model clean.
+--
+-- Note there is nothing wrong with the per-item logic below. That is the point: the logic is
+-- sound and the sweep still proves nothing, because the filter can quietly match nothing.
+
+local failures = 0
+local function check(ok, fmt, ...)
+	if not ok then
+		failures += 1
+	end
+	print(string.format((ok and "ok   " or "FAIL ") .. fmt, ...))
+end
+
+-- The filter. A rename upstream, a changed ClassName, a folder that moved, and this is empty.
+local rods = {}
+for _, part in ipairs(workspace:GetDescendants()) do
+	if part:IsA("BasePart") and part.Shape == Enum.PartType.Cylinder then
+		table.insert(rods, part)
+	end
+end
+
+-- Every check in the file lives inside the sweep, so an empty `rods` prints a clean run.
+for _, rod in ipairs(rods) do  -- MUST FLAG
+	check(rod.Size.X > 0.1, "%s is thicker than 0.1", rod.Name)
+	check(rod.Anchored, "%s is anchored", rod.Name)
+end
+
+print(string.format("rods: %d failures", failures))
+return failures
