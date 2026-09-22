@@ -2409,8 +2409,17 @@ local function buildPitch(lobby, base)
 			for _, other in ipairs(Players:GetPlayers()) do
 				StateSync.Notify(other, string.format("GOAL by %s!", scorer.DisplayName))
 			end
-			if now - (lastGoalPaidAt[scorer] or -math.huge) >= GOAL_PAY_COOLDOWN then
-				lastGoalPaidAt[scorer] = now
+			-- At most one paid goal every GOAL_PAY_COOLDOWN, and at most 5 in any 10 minutes (Oliver,
+			-- 2026-09-22, ECONOMY.md s.2: a player who never readied could farm up to 6,300 coins an
+			-- hour here, more than a player who keeps losing earns in matches). 5 covers every goal a
+			-- player gets to score between matches; the cap only bites on someone who never leaves.
+			local paid = lastGoalPaidAt[scorer] or {}
+			lastGoalPaidAt[scorer] = paid
+			while paid[1] and now - paid[1] > 600 do
+				table.remove(paid, 1)
+			end
+			if now - (paid[#paid] or -math.huge) >= GOAL_PAY_COOLDOWN and #paid < 5 then
+				table.insert(paid, now)
 				LobbyService.OnGoal(scorer)
 			end
 		end
