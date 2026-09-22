@@ -243,8 +243,10 @@ to 3.0, so 0.07 at scale 1 holds everywhere).
 1. **Lobby** — a marble plaza ringed by display podiums. Nobody is pulled into a match until
    they hit **READY UP**; stay unreadied and you can hang out, trade and show off in the lobby
    for as long as you like. Once enough players are ready (`MinPlayers`, 1) a 15s countdown
-   starts and three maps go up for a vote — and if everyone unreadies, it cancels. When every
-   player in the server is ready, the countdown skips down to 5s. Who plays
+   starts and three cards go up for a vote — one per mode (Battle Royale, Team Deathmatch, King
+   of the Hill), each on its own random map — and if everyone unreadies, it cancels. When every
+   player in the server is ready, the countdown drops to 8s rather than 5, since reading three
+   different games' worth of cards takes longer than picking a map alone. Who plays
    is locked in when loading begins, and your ready choice carries over between matches, so
    people who played re-queue automatically and lobby-stayers are never respawned or moved.
    Readied players get a green **READY** tag under their name while they're in the lobby.
@@ -339,10 +341,11 @@ mode instead of the battle royale (`Modules/GameMode.lua`, `Modules/ModeTeams.lu
 `Modules/ModeKingOfTheHill.lua`). **Team Deathmatch** is first to **100 team kills** or 8 minutes;
 a death to the world (falling, the arena edge) pays the other side, so nobody stalls by dying to
 it. **King of the Hill** scores a point a second for the side holding the hill, to 250. Nobody is
-eliminated: a player who dies is back **5 seconds** later on one of their side's pads with a fresh
-green kit and **3 seconds** of spawn protection; a bot that dies is replaced on its side 5 seconds
-later. A death here drops no loot and pays nothing — deliberately, until the reward rate has been
-measured against the battle royale's.
+eliminated: a player who dies is back on one of their side's pads with a fresh green kit and
+**3 seconds** of spawn protection — **5 seconds** later in Team Deathmatch, **6** in King of the
+Hill, a second longer since losing the hill should cost more than losing a duel in the open; a
+bot's respawn follows the same per-mode delay. A death here drops no loot and pays nothing —
+deliberately, until the reward rate has been measured against the battle royale's.
 
 The **arena** is a circle of half the map's radius, between 450 and 650 studs (it was 280–380,
 one town's worth, and far too small for fifty combatants), centred on the first town; the storm
@@ -592,7 +595,7 @@ Each map generates:
   flowers and lamp arms don't collide or stop bullets
 - **Drivable vehicles** (`Modules/VehicleService.lua`, `Shared/VehicleModels.lua`,
   `Shared/VehicleDynamics.lua`, `VehicleClient.client.lua`) — six to sixteen per map, parked along
-  the roads, drawn from seven designs with five or six paint schemes each: the **Rotster** hot
+  the roads, drawn from seven designs with five paint schemes each: the **Rotster** hot
   hatch, the **Crocodilo Ranger** 4x4 pickup (a crocodile grin, eye-pod lamps, two seats in the
   bed), the **Tralala GT** shark coupe, the **Sahur Van** (wood panels, a bat and a drum on the
   roof), and the **Patapim Scrambler** dirt bike, **Bananini Scoot** scooter and **Brr
@@ -714,18 +717,18 @@ the name under the minimap while you're there.
 | **Brainrot Carnival** | A fairground: a turning ferris wheel, a spinning carousel, game booths, bunting and an entrance arch | chests in the booths, items round the rides |
 | **Sahur Farmstead** | A barn with a hayloft and gambrel roof, two silos joined by a catwalk with a zipline down, a windmill turning, a yard with a tractor and a scarecrow | chests in the barn and loft, loot in the yard |
 | **The Sigma Spire** | An eight-floor tower with stairs the whole way up, a helipad roof with a beacon and two ziplines off it | chests on the way up and on the roof |
-| **Sahur Hot Springs** | Steaming pools, a bath house, lanterns, a statue of a Rare brainrot, and a **geyser** whose vent throws anyone who steps on it 120 studs a second straight up — the quick way onto the roof, or out of a fight | chests in the bath house, items round the pools |
+| **Sahur Hot Springs** | Steaming pools, a bath house, lanterns, a statue of a Rare brainrot, and a **geyser** whose vent throws anyone who steps on it 120 studs a second up, with a little sideways scatter so a crowd doesn't all land in the same spot — the quick way onto the roof, or out of a fight | chests in the bath house, items round the pools |
 
 | **The Great Sundial** (Sahur Springs) | A bronze gnomon fifty studs long over a marble dial on a stepped plinth, ringed with hour stones; the slope is walkable to a perch at the top | chest on the dial, chest at the foot, items round the ring |
 | **Aura Windmill** (Sahur Springs) | A tapered stone-and-timber mill, sails always turning, windows glowing aura-purple, a balcony round the third drum reached by a ladder | chest on the balcony, chest on the plinth, loot round the foot |
 | **Sahur Aqueduct** (Sahur Springs) | A line of stone arches striding across the fields with water running along the top: cover to fight along, and a walkway to fight over. Built on the ground as it lies — every pier finds its own | chest on the deck, chest under an arch, loot along the channel |
 | **Crane Yard** (Tralala Town) | A half-built tower and a climbable 92-stud tower crane, its jib out over the frame with a container on the hook, a zipline from the deck back to the street | chest on the top floor, loot up the frame |
-| **The Tralala Arch** (Tralala Town) | A steel gateway over the road with TRALALA in pink neon on both faces and a walkway across the top | chest on the walkway, loot at the feet |
+| **The Tralala Arch** (Tralala Town) | A seventy-stud steel gateway over a plaza with TRALALA in pink neon on both faces and a walkway across the top | chest on the walkway, loot at the feet |
 | **The Beached Galleon** (Bombardiro Bay) | A warship keeled over on the sand: walk into the stove-in hull, climb to the crow's nest, cannons and barrels spilled round it | chest on the aft deck, chest in the hold, item in the nest |
 | **Sandcastle Citadel** (Bombardiro Bay) | A sandcastle built by something enormous: moat, curtain wall you can walk, four towers with pennants, a keep, and the bucket and spade it was made with | chest on the keep, loot round the walls |
 | **The Stone Noggin** (Rot Ridge) | A colossal carved head in a knitted beanie with a pompom, glowing eyes, snow on top; its open mouth is a cave | chest in the mouth, item on the hat |
 | **Turbine Ridge** (Rot Ridge) | Three wind turbines turning on the heights, a service ladder up one to the nacelle roof, and a zipline off it | chest in the hut, chest at a tower's foot, item on the nacelle |
-| **The Giant Scarecrow** (Patapim Plains) | A forty-stud scarecrow in its own corn patch, crows on its arms and hat, hay bales at its foot | chests in the corn, item on the crossbar |
+| **The Giant Scarecrow** (Patapim Plains) | A fifty-stud scarecrow in its own corn patch, crows on its arms and hat, hay bales at its foot | chests in the corn, item on the crossbar |
 | **Patapim Water Tower** | A red-and-white tank on splayed legs with a railed catwalk, the name round the tank, and a zipline down | chest on the catwalk, chest at the foot |
 | **Crop Circle** (Patapim Plains) | A crashed saucer in flattened rings of wheat, its pale beam climbing 170 studs — what you steer by from across the map | chest in the circle, loot in the rings |
 
@@ -735,11 +738,11 @@ the Scarecrow and the Water Tower.
 
 ### Easter eggs
 
-Every map hides 3–6 original gags out between the towns, plus one **Obby of Rot** — a neon
-rainbow parkour spiral up to a gold trophy, visible across the map. Hit **Inspect** on one for
-a one-liner and, the first time each match, **+30 SahurCoins and 25 pass XP** (the obby pays
-**+100 / 60 XP**). Several nod at what's big on Roblox right now, all without borrowing any
-other game's characters:
+Every map hides 3–6 original gags drawn from a pool out between the towns, plus two that are
+always there: one **Obby of Rot** — a neon rainbow parkour spiral up to a gold trophy, visible
+across the map — and **The Sweaty Incident**. Hit **Inspect** on one for a one-liner and, the
+first time each match, **+30 SahurCoins and 25 pass XP** (the obby pays **+100 / 60 XP**).
+Several nod at what's big on Roblox right now, all without borrowing any other game's characters:
 
 | Egg | What it is |
 |---|---|
@@ -751,6 +754,7 @@ other game's characters:
 | Fridgehenge | A stone-circle of fridges around a floating, turning sandwich |
 | Definitely A Normal Guy | A banana in a trench coat and fedora, swaying gently |
 | Big Squeak | An 18-stud rubber duck bobbing in a pond |
+| The Sweaty Incident (always present) | A sweater on display; nobody will say what he did |
 
 Flames flicker, the duck bobs and the sandwich turns — all animated client-side via tags
 (`AmbientBob` / `AmbientSpin`), so none of it costs replication. Your results card shows how
@@ -805,11 +809,12 @@ play for real:
 - **Die like players** — the same ragdoll and per-gun kill effects, then the body is cleared
 
 Difficulty is mainly two dials in `MatchConfig`: `BotDamageScale` (0.8) and the accuracy
-pair. Accuracy falls off with distance — `BotAccuracyNear` 0.66 at point blank down to
-`BotAccuracyFar` 0.19 past 120 studs — so close fights are dangerous and long ones survivable.
-They were raised from 0.72, 0.58 and 0.14, alongside a shorter reaction time (0.28), a shorter
-rest between bursts (0.48) and a lower retreat threshold, which together make bots meaningfully
-harder without making them twitch shooters.
+pair. Accuracy falls off with distance — `BotAccuracyNear` 0.55 at point blank down to
+`BotAccuracyFar` 0.15 past 120 studs — so close fights are dangerous and long ones survivable.
+Nerfed down from 0.66 and 0.19 on Oliver's ask (about a sixth off a bot's hit rate at every
+range), on top of an earlier pass that raised accuracy along with a shorter reaction time
+(0.28), a shorter rest between bursts (0.48) and a lower retreat threshold, together making bots
+meaningfully harder without making them twitch shooters.
 
 They occupy placement ranks but never earn rewards, and when the last real player dies the
 match ends rather than leaving bots to fight on an empty server.
@@ -850,16 +855,25 @@ Rarity drives stats **and** an ability, which is what makes chest loot worth fig
 | Legendary | Rizz Rifle | **Lifesteal** — heals 12% of damage dealt |
 | Legendary | Golden Sahur Cannon, Nonna Double Barrel | **Gold Rush** — kills pay bonus SahurCoins |
 
+This is the original 27-gun roster. `Shared/ArsenalExpansion.lua` adds fifteen more, on the same
+pattern of rarity, ability and style, running all the way to **Mythic** and **Secret** — the
+first guns to reach those tiers; the file names each one and its ability in full.
+
 Only Common and Uncommon spawn on the ground. Everything else is chest-only, and the chest pool
-is weighted so the top tiers are genuinely scarce rather than merely less likely:
+is weighted so the top tiers are genuinely scarce rather than merely less likely. This is a live
+split over every gun's `chestWeight`, not a fixed table, so treat the shares below as a snapshot
+rather than a promise — they shift by a fraction of a point whenever a gun's weight is tuned or a
+new one is added, and nothing currently checks that this table still matches:
 
 | Rarity | Share of chest guns |
 |---|---|
-| Common | 32.6% |
-| Uncommon | 40.0% |
-| Rare | 18.6% |
-| Epic | 6.5% |
+| Common | 35.0% |
+| Uncommon | 38.0% |
+| Rare | 17.7% |
+| Epic | 6.7% |
 | Legendary | 2.3% |
+| Mythic | 0.13% |
+| Secret | 0.03% |
 
 Tune it with `chestWeight` per gun in `Shared/WeaponData.lua`; `groundWeight` is the separate
 pool for what lies loose on the map. Supply drops and the Aura Farm event are the reliable routes
@@ -1016,8 +1030,9 @@ defenses are put down on whatever is under them now.
 grey tick and nothing else — no damage number, no hit cue — so chipping the wall in front of someone
 never sounds or looks like hitting the player behind it. Damage numbers mean a person.
 
-**Headshots** use each gun's `headshotMultiplier` (1.3× on scatterguns up to 2.5× on the Larila
-Sniper), and you hear them: the shooter gets a high ding over a crack, a gold hit marker
+**Headshots** use each gun's `headshotMultiplier` (as low as 1× on the two launchers, whose
+headshot bonus lands only on their direct impact damage — see *Explosives* — up to 2.5× on the
+Larila Sniper), and you hear them: the shooter gets a high ding over a crack, a gold hit marker
 (**HEADSHOT** on the killing shot) and a gold damage number with a `!`; whoever took it hears a
 heavier ouch. Bots land one hit in ten on the head (`BOT_HEADSHOT_CHANCE` in `BotService`), so
 their fire spikes the way a player's does.
@@ -1109,6 +1124,10 @@ weapon its own fittings on top of its silhouette:
 | Bubble Burster | a bigger tank with a gauge |
 | Rizz Rifle | a holo sight, gold engraving and a vertical foregrip on a lifestealing rifle (it used to be a rotary; the id `RizzRotary` stayed so saved loadouts still work) |
 
+The kill-effect, style and variant tables above cover the original 27 guns. `Shared/ArsenalExpansion.lua`'s
+fifteen add their own kill effects, silhouettes and fittings the same way; the file is short enough
+to read directly rather than duplicated here.
+
 A **laser** is real in first person: aim, and a red beam runs from the emitter to the point under
 the crosshair, with a dot there.
 
@@ -1199,10 +1218,11 @@ Every hit leaves a **bullet mark**, a dark chip on whatever it hit (walls, groun
 bodies or pickups) with a puff of dust and sparks, sitting a hair off the surface, fading after
 fourteen seconds and capped at eighty. Bubbles, rockets and grenades leave no chip.
 
-**Third-person camera.** Scroll the mouse wheel out and the camera backs out of your head into
-an over-the-shoulder view; keep scrolling to back it off further (2 studs a notch, 5 to 17), and
-scroll in past the closest step to go back to first person. **T** (or the toggle in Settings →
-Gameplay) flips it too. The camera hangs behind and to the right, the mouse stays locked to the
+**Third-person camera.** Press **Z** to step the camera out of your head into an over-the-shoulder
+view, and keep pressing to back it off further in 4-stud steps out to 17; press again past the
+furthest step to go back to first person. The mouse wheel used to do this, but now cycles your
+hotbar instead (so one scroll can't zoom and switch guns at once), and **Z** took over the zoom.
+**T** (or the toggle in Settings → Gameplay) flips first/third person outright. The camera hangs behind and to the right, the mouse stays locked to the
 centre, and your character turns to face wherever you look, so the crosshair means what it means
 in first person and aiming still zooms. The camera pulls in over your shoulder whenever a wall
 would get between them, so it never clips into buildings. Your own gun, held item and accessory
@@ -1243,7 +1263,7 @@ bar over their health bar. Everyone drops in with none. The storm ignores shield
 | Launch Pad | 2 | instant | Drops a pad that throws anyone who steps on it high into the air, along the way they're running, for 30s |
 | Blink Bean | 4 | instant | A lightning-fast 44-stud dash the way you're facing, stopping short of walls; you come out still moving and any fall is cancelled |
 | Bounce Boots | 2 | 0.6s | Nearly triple-height jumps plus one mid-air **double jump**, for 18s |
-| Rot Glider | 2 | instant | A real wing opens over your head and you **sail where you look** for 16s, falling slowly — opened near the ground an **updraft** throws you ~36 studs up first. The same canopy as the match drop |
+| Rot Glider | 2 | instant | A real wing opens over your head and you **sail where you look** for 16s, falling slowly — opened near the ground an **updraft** throws you ~37 studs up first. The same canopy as the match drop |
 
 Movement items are meant to be worth a slot (`Modules/MovementService.lua`). They weren't: a
 player's character runs Roblox's humanoid controller, whose air control brakes any sideways speed
@@ -1262,7 +1282,7 @@ up 40° 35 out and 30 high, looking down 25° 61 out and 12 high. Launches with 
 Springs' geyser) are applied exactly as before, and an explosion's knockback (`"blast"`) is a plain
 capped velocity (60 sideways, 70 up) that also knocks you out of a climb or slide.
 
-**Stamina** (the bar at the bottom of the screen during a match). Sprinting drains 9 a second of
+**Stamina** (the bar at the bottom of the screen during a match). Sprinting drains 5.5 a second of
 100, only while you're actually moving; it refills at 25 a second after a 0.8s pause. A slide costs
 18, a vault 8, a climb 12 (hopping onto anything 4.5 studs or lower is free). Hit zero and you're
 **exhausted**: the sprint drops, slides and vaults are refused, the refill waits 1.4s, and you can't
@@ -1349,9 +1369,11 @@ The Cappuccina Launcher and the Tralala Thumper fire real rounds, not hitscan sh
 (`Modules/ProjectileService.lua`, with the flight and blast maths in `Shared/Ballistics.lua`,
 shared with the client so what you see is what the server computes). The rocket leaves the tube at
 120 studs/s, is at 260 after a third of a second, and barely drops (2.7 studs at 150, 16 at 400);
-it bursts on whatever it meets or in the air after 2.2 s. The 40mm flies at 140 with almost half
-gravity (8 studs of drop at 60, 22 at 100, about 220 studs of reach), and it only arms after
-0.12 s: fired into a wall at your feet it bounces back as a dud and pops 0.8 s later, on you.
+it bursts on whatever it meets or in the air after 2.2 s. The 40mm flies at 180 studs/s with a
+little over a third gravity — a level shot from eye height now reaches 64.8 studs (it was 140 and
+nearly half gravity, reaching only 45.1 level; a lobbed shot now carries as far as 463, up from
+227) — and it only arms after 0.12 s: fired into a wall at your feet it bounces back as a dud and
+pops 0.8 s later, on you.
 Bots can fire launchers through the same rounds (`ProjectileService.FireWeapon`, aimed with
 `LeadAim`); `BotService` doesn't yet, so a bot's launcher shot is still an instant roll.
 
@@ -1379,9 +1401,10 @@ of sight through it too (`ProjectileService.SmokeBlocks`, wired into their `hasL
 While a throwable is in hand a dotted arc runs the same simulation the server will, first bounce
 included, ending in a ring the size of the blast or the cloud; a live grenade that can reach you
 puts a red ring under it and a marker on your screen. A vehicle's driver can't throw (passengers
-can). Chests hold one 30% of the time (Coconut 14 : Latte 10, two at a time) and 22% of ground
-item spots carry one; bots get the same odds and throw them at people behind cover, at bunched
-pairs, and as smoke when retreating (`ProjectileService.Throw`, `Dangers`, `ProjectileInfo`).
+can). Chests hold one 30% of the time (weighted Coconut 14 : Latte 10 : Crumpet 8; two at a time
+for the Coconut or Latte, one for the Crumpet) and 22% of ground item spots carry one; bots get
+the same odds and throw them at people behind cover, at bunched pairs, and as smoke when
+retreating (`ProjectileService.Throw`, `Dangers`, `ProjectileInfo`).
 
 The third throwable is the **Clingy Crumpet**, a sticky bomb (`Ballistics.Throwables` kind `sticky`):
 a toasted crumpet with a blob of jam underneath and a brass timer on top. It sticks to the first
@@ -1658,10 +1681,11 @@ every seven days and share the same tab.
 A quest pays the moment it completes (coins respect the 2x pass), with a toast, and finishing all
 three pays an **Epic Crate** on top.
 
-**Achievements and titles.** Twenty-three lifetime milestones — first kill through 500 kills, 1/10/50
-wins, 25/200 matches, 100 chests, 50,000 damage, ten Cloud Climb clears, 25 goals, ten bounties,
-20 crates, 30 quests, one and four complete rarity sets, 50 barrels blown up, 25 eliminations by
-barrel or mine, 30 vendor buys — each pay coins once and unlock a
+**Achievements and titles.** Lifetime milestones — first kill through 500 kills, 1/10/50
+wins, 25/200 matches, 50 top-10s, 100 chests, 50 landmark chests, 50 builds, 50,000 damage, ten
+Cloud Climb clears, 25 goals, ten bounties, 20 crates, 30 quests, one and four complete rarity
+sets, 50 barrels blown up, 25 eliminations by barrel or mine, 30 vendor buys, plus eleven more
+for Rot Rank and progression (see below) — each pay coins once and unlock a
 **title** ("Rookie", "Champion", "Legend", "Cloud Climber", "Bounty Hunter", "Curator",
 "Demolitionist", "Trapper", "Big Spender"…). The first
 one you earn goes straight onto your nameplate, under your name in gold; pick any unlocked one
@@ -2112,9 +2136,11 @@ The server owns every merge (`RewardService.MergeBrainrot`) and can't be talked 
 `tools/verify.py` checks the merge constants agree (`MergeCopies` has one entry per star), that
 every stat readout passes stars, and that the remote, the confirmation card and the menu are wired.
 
-There are **126 brainrots** — 26 Common, 24 Uncommon, 23 Rare, 21 Epic, 16 Legendary, 10 Mythic and
-6 Secret — each an original little creature built from parts (`Shared/BrainrotModels.lua`):
-- **14 body shapes** — blob, bean, cube, pear, disc, stack, egg, mushroom, cloud, can, cone,
+There's a full roster of brainrots — run `python tools/verify.py .` for the current count and its
+breakdown by rarity, since a hardcoded number here would only go stale the next time one is added,
+the way this sentence itself once did — each an original little creature built from parts
+(`Shared/BrainrotModels.lua`):
+- **Body shapes** — blob, bean, cube, pear, disc, stack, egg, mushroom, cloud, can, cone,
   ghost, loaf and totem. Each is built as a form rather than as one or two bare primitives: a lit
   crown, a shaded underside and a seam or band where its masses meet, plus whatever that shape
   asks for — rounded edge beads and a soft face pad on the cube, a blended neck on the pear, a
@@ -2133,18 +2159,18 @@ There are **126 brainrots** — 26 Common, 24 Uncommon, 23 Rare, 21 Epic, 16 Leg
   face. Two attributes mark what is deliberate so the audits' counts mean something —
   `IntentionalFloat` for parts that hover on purpose (orbiting motes, a halo, raindrops) and
   `IntentionalAsymmetry` for scatter that is deliberately not mirrored (sprinkles, quills, fries).
-- **13 eye styles** — each a white eyeball with an iris and pupil lying on its front like lenses,
+- **Eye styles** — each a white eyeball with an iris and pupil lying on its front like lenses,
   and a glint (`look.iris` sets the colour; otherwise it comes from the accent). Sleepy eyes get a
   heavy lid, angry and worried ones rounded brows; also big, wink, hearts, five-point stars,
   goggles with a strap round the head, visors and three-eyed.
-- **11 mouths**, drawn as curves: smiles and frowns, an open grin — one dark hollow with a lip
+- **Mouths**, drawn as curves: smiles and frowns, an open grin — one dark hollow with a lip
   round it, teeth under the top lip and a tongue — an O with a lip, beaks, fangs, buck teeth and
   tusks. A beard hangs below the mouth rather than over it, so the smile still reads.
 - **Limbs.** Jointed arms (upper arm, elbow, forearm and a mitten hand with a thumb) posed by the
   companion's move — Bonk and Shockwave brainrots flex, Zap, Chain and Lob ones hold their hands
   ready, the rest let them hang — and feet with a darker sole and three toes, on a short leg
   wherever a round body stands clear of them. Nothing reaches below the base.
-- **95 extras.** The general kit: antlers, fins, tentacles curling along the ground, top hats,
+- **Extras.** The general kit: antlers, fins, tentacles curling along the ground, top hats,
   headphones, capes, monocles, beards, petals, feathered wings, a teardrop flame, a smooth halo,
   floating gems, spots, stripes, blush, unicorn horns, whiskers, fishbowl helmets, lightning bolts,
   shells and ties. On top of that, **signature details** give the original-concept brainrots the
@@ -2163,7 +2189,7 @@ There are **126 brainrots** — 26 Common, 24 Uncommon, 23 Rare, 21 Epic, 16 Leg
   exactly what follows you around.
 - **Statue-safe.** Fine detail is made of balls and sphere-meshed parts, which have no flat faces,
   so the lobby-wide and map-wide z-fight passes every statue goes through have nothing to nudge.
-  `tools/brainrot_models_probe.lua` builds all 126 at every statue scale, off-axis, runs that pass
+  `tools/brainrot_models_probe.lua` builds every brainrot at every statue scale, off-axis, runs that pass
   again and reports anything that moves (none do), along with part counts, anything below the
   base and the z-fight nudges at companion scale. `tools/brainrot_gallery.lua` photographs every
   brainrot in rarity sheets plus a front-and-back close-up of each body shape.
@@ -2282,8 +2308,13 @@ out, so you can see how it looks.
 | Deal | Price | What's inside |
 |---|---|---|
 | **Starter Bundle** (one time only) | 300 R$ | 25,000 coins, Legendary + Epic + 2 Rare Crates, 2 one-match **1.5x health** boosts, exclusive *Starter Spark* gun skin |
-| **Pro Bundle** | 800 R$ | 150,000 coins, **5 Super Crates, 10 Mythic Crates**, 3 Legendary Crates, 5 one-match **2x health** and 5 one-match **1.5x speed** Pro boosts, exclusive *Pro Plating* skin and *Pro Aura* |
-| **Super Crate** (always in stock) | 100 R$ | Mythic or Secret brainrot every time, 60% chance of a 50K–250K jackpot |
+| **Pro Bundle** | 800 R$ | 50,000 coins, **1 Super Crate, 2 Mythic Crates**, 2 Legendary Crates, 5 one-match **2x health** and 5 one-match **1.5x speed** Pro boosts, exclusive *Pro Plating* skin and *Pro Aura* |
+| **Super Crate** (always in stock) | 999 R$ | Mythic or Secret brainrot every time, 60% chance of a 50K–250K jackpot |
+
+The Pro Bundle's contents were cut down on 2026-09-18 alongside a full crate repricing: at the
+new per-crate Robux prices, the old contents (5 Super, 10 Mythic, 3 Legendary, 150K coins) would
+have been worth roughly 30,000 R$ for 800 — arbitrage, not a bundle. It's still worth roughly
+7,000 R$ of crates and coins for 800.
 
 A pulsing button under **MENU** points at the Starter Bundle until it's bought, then the Pro
 Bundle. Buying a bundle pops up a card listing everything it gave. Bundle exclusives never come
@@ -2373,7 +2404,7 @@ buttons open the Codex at that rarity. Prices, one table in `GamepassConfig.Brai
 |---|---|---|---|---|---|---|---|
 | Robux | 2000 | 1100 | 600 | 300 | 150 | 75 | 35 |
 
-There are seven developer products, one per rarity, rather than 126, so the purchase alone can't
+There are seven developer products, one per rarity, rather than one per brainrot, so the purchase alone can't
 say *which* brainrot was bought. `BrainrotShopService` ties the pick to the purchase: the server
 stores the chosen brainrot in the profile (`PendingBrainrot`) and only then opens the prompt, and the
 receipt grants exactly that brainrot. It can't be gamed or lost:
@@ -2396,11 +2427,13 @@ pass and checks the results against the shown odds, checks pity still guarantees
 drives receipts through `Monetization.HandleReceipt` (duplicates, disconnects, lost picks, old saves).
 
 **Developer products:**
-- the **Super Crate** (100 R$), which is the best crate in the game and is Robux-only: a Mythic or
+- the **Super Crate** (999 R$), which is the best crate in the game and is Robux-only: a Mythic or
   Secret brainrot every time, plus a 60% chance of a 50K–250K coin jackpot;
 - one-match versions of the health and speed boosts (35 each); the bundles' 1.5x / 2x health and
   1.5x speed boosts are `Health`, `HealthPro` and `SpeedPro` consumables, spent when a match starts;
-- the brainrot crates: Common 49, Uncommon 99, **Rare 25, Epic 50, Legendary 75**;
+- the brainrot crates: Common 5, Uncommon 10, **Rare 35, Epic 135, Legendary 499**;
+- the cosmetic-only Style Crates (Style 69 R$, Deluxe Style 199 R$, Prestige Style 449 R$) —
+  a newer route to any accessory, gun skin, aura or parachute, not covered elsewhere in this file;
 - 10k / 50k coin packs.
 
 The Mythic crate and the item crates are coins-only. The Super Crate sits at the top of the Crates
@@ -2456,7 +2489,8 @@ burn it, and permanent passes take priority so a consumable is never wasted.
 | Space (held) | Jump; into a ledge, climb it; running at something low and thin, vault it; in the air with Bounce Boots, double jump |
 | G | Companion move |
 | V | Inspect your gun |
-| Mouse wheel | Zoom: scroll out of first person into third, keep scrolling to back off (up to 17 studs), scroll in past the closest step to return to first person |
+| Mouse wheel | Cycle to the next filled hotbar slot |
+| Z | Zoom: step the camera out of first person into third, further in 4-stud steps out to 17, and past the furthest step back to first person |
 | T | Toggle first / third person (saved to your profile) |
 | 1 – 8 | Hold an inventory slot (tap a hotbar cell works too); **Q** steps to the next filled slot |
 | W A S D | Drive, once you're in a vehicle's seat — **Space** gets you out |
@@ -2551,13 +2585,14 @@ in it collides, is queried or has a health bar). The aim is CombatClient's own c
 (`AimState`). What the preview cannot assume is that the kit arrives where you aimed. A kit is lobbed on
 an arc (`DefensePlacement.ThrowArc`, the one `DefenseService` throws it with) flat enough to clip a rising
 hill, and measuring 72 real throws on SahurSprings (the gallery's `grip` section, in Run mode with
-physics) put the first ground contact a median 10 studs from the aim point and the resting place 21 —
-and no amount of friction, weight or bounce on the kit changed that, because most of the error happens in
-the air. So the preview walks the same arc with a raycast per segment, stands the ghost where the throw
-will really land, says *lands N studs short of your aim* when the arc is going to clip something, and
-stops the dotted lob there instead of drawing through the hillside. The roll afterwards is the part
-nothing can predict, and that is what the ring round the landing spot is for. The Rot Mine gets the lob
-and the ring only.
+physics, 2026-09-17) found that once it lands, the kit still rolls before it rests, typically 2.7 to 12
+studs further (mean 5.6) — which is what the ring round the ghost shows (`DefensePreview.LandingSpread`,
+5 studs) — and no amount of friction, weight or bounce on the kit changed that, because most of the error
+happens in the air, in the throw's own flight. So the preview walks the same arc with a raycast per
+segment, stands the ghost where the throw will really land, says *lands N studs short of your aim* when
+the arc is going to clip something, and stops the dotted lob there instead of drawing through the
+hillside. The roll afterwards is the part nothing can predict, and that is what the ring round the
+landing spot is for. The Rot Mine gets the lob and the ring only.
 
 **The lobby signpost** at the head of the pier has a finger for every place on the island: ROT EXPRESS,
 CLOUD CLIMB, CRATE ALTAR, DAILY SPIN, TRADING HALL, COSMETICS, THE ARENA, THE PITCH and WALK OF FAME,
@@ -2596,10 +2631,14 @@ is (for the menu's panel), `Mode` asks what the device is (for a HUD that must d
 controls). A tablet held upright at 768x1024 is `large` to one and `upright` to the other. They share no
 words on purpose.
 
-The centred panels get the same treatment through `PhoneLayout.FitPanel`: the menu (760x480), the drop
-screen (480x536), the results card, the map vote and the match recap each carry a UIScale that keeps them
-inside the screen with a 16-pixel margin and never grows them, so a phone shows the whole menu and the
-whole landing map (0.62 and 0.67 of their size at 844x390) while a desktop screen is left at exactly 1.
+The centred panels get the same treatment through `PhoneLayout.FitPanel`: the drop screen (480x536),
+the results card, the map vote and the match recap each carry a UIScale that keeps them inside the
+screen with a 16-pixel margin and never grows them, so a phone shows the whole landing map (about
+0.67 of its size at 844x390) while a desktop screen is left at exactly 1. The menu no longer goes
+through `FitPanel`: `MenuShell` now sizes its own panel straight from the viewport and applies
+`PhoneLayout.PanelScale` itself, since fitting a fixed 760x480 would be fitting a size nothing
+draws any more — measured, that comes out at exactly 1.000 on every screen down to 640x360, and
+only first shrinks, to 0.969, at 600x320.
 
 `StarterPlayerScripts/TouchControls.lua` is the companion piece for the buttons themselves — one owner
 for the FIRE / AIM / RELOAD / RUN / PET / SLIDE / MOVE cluster, in the slots PhoneLayout gives them,
@@ -2766,7 +2805,7 @@ that recreates the old behaviour and fails.
 
 - **No uploaded audio.** Every cue is built from the sound files the Roblox client itself ships.
   That used to mean one stand-in file per cue, on the belief that only 11 remained; measuring it
-  with `tools/sound_probe.lua` found **23**, and the cues are now layered recipes over 21 of them
+  with `tools/sound_probe.lua` found **23**, and the cues are now layered recipes over 22 of them
   — a gunshot is a sharp transient, an explosion body and a mechanical tick, compressed and
   lightly distorted, rather than a single sped-up explosion. Reloads are a catch, a mag seating
   and a click, spaced by real delays. Effects are used where they earn it: flange on the zipline,
