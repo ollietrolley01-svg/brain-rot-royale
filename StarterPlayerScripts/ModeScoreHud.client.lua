@@ -191,7 +191,7 @@ local function render(state)
 		local leader = (scores[1] or 0) == (scores[2] or 0) and nil or ((scores[1] or 0) > (scores[2] or 0) and 1 or 2)
 		caption.Text = clock(state.secondsLeft)
 		if leader then
-			caption.Text = clock(state.secondsLeft) .. "\n" .. GameModes.TeamName(leader) .. " +" .. lead .. "s"
+			caption.Text = clock(state.secondsLeft) .. "\n" .. GameModes.TeamName(leader) .. " +" .. lead
 			caption.TextColor3 = GameModes.TeamColor(leader)
 		else
 			caption.Text = clock(state.secondsLeft) .. "\nlevel"
