@@ -57,6 +57,29 @@ BrainrotData.AbilityPower = 1.65
 BrainrotData.AbilityCooldown = 3.5
 
 --------------------------------------------------------------------------------
+-- Boons: what a companion does FOR its owner
+--------------------------------------------------------------------------------
+-- A brainrot opts in by carrying `boon`; CompanionBoons reads the field and names no brainrot. Only
+-- SOME carry one -- a boon on every entry would make the choice of companion meaningless. The
+-- vocabulary is closed and verify.py refuses a key that is not in it, so a typo cannot ship as
+-- "no effect at all", which is the failure mode that hides longest.
+--
+--   regen  = hp per second healed while it is out
+--   speed  = walk-speed factor  (1.05 = 5% faster)
+--   jump   = jump-height factor
+--   health = bonus MaxHealth while equipped (never current health -- see CompanionBoons)
+--   venom  = { damage, duration }  its hits poison for `damage` total over `duration` seconds
+BrainrotData.Boons = { regen = true, speed = true, jump = true, health = true, venom = true }
+
+-- An ability that explodes instead of landing a single hit. `blast = true` opts in, and verify.py
+-- refuses it below BlastMinRarity so a stray edit cannot hand one to a Common. Radius comes from the
+-- rarity step rather than being typed per brainrot, so the ladder cannot drift entry by entry.
+BrainrotData.BlastMinRarity = "Legendary"
+BrainrotData.BlastRadius = 12
+BrainrotData.BlastRadiusStep = 2
+BrainrotData.BlastPower = 0.9
+
+--------------------------------------------------------------------------------
 -- The collection
 --------------------------------------------------------------------------------
 
@@ -66,9 +89,9 @@ BrainrotData.Types = {
 		look = { body = "Bean", color = rgb(196, 150, 104), accent = rgb(120, 84, 52), eyes = "Round", mouth = "Grin", extras = { "Arms" } } },
 	{ name = "Bombardiro Crocodilo", rarity = "Common", coinValue = 65, attack = "Lob", move = "Air Drop",
 		look = { body = "Blob", color = rgb(92, 150, 80), accent = rgb(150, 160, 170), eyes = "Angry", mouth = "Fangs", extras = { "Wings" } } },
-	{ name = "Trippi Troppi", rarity = "Common", coinValue = 80, attack = "Spit", move = "Bubble Pop",
+	{ name = "Trippi Troppi", rarity = "Common", coinValue = 80, attack = "Spit", move = "Bubble Pop", boon = { regen = 0.5 },
 		look = { body = "Stack", color = rgb(100, 200, 210), accent = rgb(60, 140, 160), eyes = "Round", mouth = "O", extras = { "Ears" } } },
-	{ name = "Pizzarino Blobbo", rarity = "Common", coinValue = 55, attack = "Spit", move = "Pepperoni Spit",
+	{ name = "Pizzarino Blobbo", rarity = "Common", coinValue = 55, attack = "Spit", move = "Pepperoni Spit", boon = { health = 15 },
 		look = { body = "Blob", color = rgb(250, 190, 80), accent = rgb(210, 50, 40), eyes = "Round", mouth = "Grin", extras = { "Cap", "Spots" } } },
 	{ name = "Sockolino Stinko", rarity = "Common", coinValue = 60, attack = "Lob", move = "Stink Cloud",
 		look = { body = "Bean", color = rgb(190, 214, 150), accent = rgb(120, 170, 60), eyes = "Sleepy", mouth = "O", extras = { "Stink" } } },
@@ -84,11 +107,11 @@ BrainrotData.Types = {
 		look = { body = "Blob", color = rgb(130, 96, 70), accent = rgb(90, 64, 44), eyes = "Sleepy", mouth = "Grin", extras = { "Feet", "Drips" } } },
 
 	-- Uncommon ----------------------------------------------------------------
-	{ name = "Tralalero Tralala", rarity = "Uncommon", coinValue = 180, attack = "Zap", move = "Wave Beam",
+	{ name = "Tralalero Tralala", rarity = "Uncommon", coinValue = 180, attack = "Zap", move = "Wave Beam", boon = { speed = 1.05 },
 		look = { body = "Disc", color = rgb(90, 150, 230), accent = rgb(230, 240, 255), eyes = "Round", mouth = "Grin", extras = { "Feet" } } },
 	{ name = "Chimpanzini Bananini", rarity = "Uncommon", coinValue = 220, attack = "Lob", move = "Peel Toss",
 		look = { body = "Pear", color = rgb(250, 220, 80), accent = rgb(130, 90, 60), eyes = "Round", mouth = "Smile", extras = { "Ears", "Arms" } } },
-	{ name = "Boneca Ambalabu", rarity = "Uncommon", coinValue = 260, attack = "Bonk", move = "Hop Slam",
+	{ name = "Boneca Ambalabu", rarity = "Uncommon", coinValue = 260, attack = "Bonk", move = "Hop Slam", boon = { jump = 1.08 },
 		look = { body = "Cube", color = rgb(210, 70, 70), accent = rgb(250, 200, 70), eyes = "Angry", mouth = "Grin", extras = { "Feet" } } },
 	{ name = "Cappellino Fizzolo", rarity = "Uncommon", coinValue = 190, attack = "Zap", move = "Fizz Beam",
 		look = { body = "Bean", color = rgb(80, 190, 180), accent = rgb(180, 255, 240), eyes = "Visor", mouth = "Smile", extras = { "Cap", "Bubbles" } } },
@@ -104,13 +127,13 @@ BrainrotData.Types = {
 		look = { body = "Blob", color = rgb(250, 246, 240), accent = rgb(120, 220, 255), eyes = "Dots", mouth = "Smile", extras = { "Pixels" } } },
 
 	-- Rare --------------------------------------------------------------------
-	{ name = "Lirili Larila", rarity = "Rare", coinValue = 600, attack = "Spit", move = "Thorn Volley",
+	{ name = "Lirili Larila", rarity = "Rare", coinValue = 600, attack = "Spit", move = "Thorn Volley", boon = { regen = 1.1 },
 		look = { body = "Bean", color = rgb(110, 160, 100), accent = rgb(230, 220, 140), eyes = "Sleepy", mouth = "O", extras = { "Spikes" } } },
 	{ name = "Ballerina Cappuccina", rarity = "Rare", coinValue = 750, attack = "Shockwave", move = "Spin Pulse",
 		look = { body = "Stack", color = rgb(236, 206, 180), accent = rgb(250, 140, 190), eyes = "Dots", mouth = "Smile", extras = { "Bow" } } },
-	{ name = "Brr Brr Patapim", rarity = "Rare", coinValue = 900, attack = "Bonk", move = "Stomp Stomp",
+	{ name = "Brr Brr Patapim", rarity = "Rare", coinValue = 900, attack = "Bonk", move = "Stomp Stomp", boon = { health = 30 },
 		look = { body = "Blob", color = rgb(70, 120, 70), accent = rgb(130, 90, 60), eyes = "Round", mouth = "Smile", extras = { "Mustache", "Leaf", "Feet" } } },
-	{ name = "Robottino Bip Bop", rarity = "Rare", coinValue = 700, attack = "Zap", move = "Laser Bip",
+	{ name = "Robottino Bip Bop", rarity = "Rare", coinValue = 700, attack = "Zap", move = "Laser Bip", boon = { speed = 1.09 },
 		look = { body = "Cube", color = rgb(180, 190, 200), accent = rgb(80, 220, 255), material = Enum.Material.Metal, eyes = "Visor", mouth = "None", extras = { "Antenna", "Arms", "Panel" } } },
 	{ name = "Draghetto Tostato", rarity = "Rare", coinValue = 820, attack = "Spit", move = "Toast Flame",
 		look = { body = "Pear", color = rgb(210, 70, 50), accent = rgb(255, 170, 60), eyes = "Angry", mouth = "Fangs", extras = { "Horns", "Wings", "Tail" } } },
@@ -122,13 +145,13 @@ BrainrotData.Types = {
 		look = { body = "Mushroom", color = rgb(240, 230, 214), accent = rgb(220, 50, 50), spotColor = rgb(255, 255, 255), eyes = "Round", mouth = "Smile", extras = { "Spots", "Feet", "Blush" } } },
 
 	-- Epic --------------------------------------------------------------------
-	{ name = "Frigo Camelo", rarity = "Epic", coinValue = 2400, attack = "Zap", move = "Frost Ray",
+	{ name = "Frigo Camelo", rarity = "Epic", coinValue = 2400, attack = "Zap", move = "Frost Ray", boon = { venom = { damage = 16, duration = 4 } },
 		look = { body = "Cube", color = rgb(226, 240, 250), accent = rgb(120, 200, 255), eyes = "Visor", mouth = "None", extras = { "Arms", "Humps", "Handle" } } },
 	{ name = "Bombombini Gusini", rarity = "Epic", coinValue = 3000, attack = "Lob", move = "Honk Bomb",
 		look = { body = "Pear", color = rgb(170, 176, 186), accent = rgb(255, 150, 40), eyes = "Angry", mouth = "Beak", extras = { "Wings", "Tail" } } },
-	{ name = "Vulcanino Brontolo", rarity = "Epic", coinValue = 2600, attack = "Shockwave", move = "Magma Pulse",
+	{ name = "Vulcanino Brontolo", rarity = "Epic", coinValue = 2600, attack = "Shockwave", move = "Magma Pulse", boon = { health = 45 },
 		look = { body = "Pear", color = rgb(110, 40, 36), accent = rgb(255, 120, 30), eyes = "Angry", mouth = "Grin", extras = { "Flame", "Cracks" } } },
-	{ name = "Specchio Riflesso", rarity = "Epic", coinValue = 2800, attack = "Chain", move = "Mirror Arc",
+	{ name = "Specchio Riflesso", rarity = "Epic", coinValue = 2800, attack = "Chain", move = "Mirror Arc", boon = { jump = 1.14 },
 		look = { body = "Cube", color = rgb(210, 220, 235), accent = rgb(180, 120, 255), material = FOIL, reflectance = 0.45, eyes = "Visor", mouth = "None", extras = { "Orbit" } } },
 	{ name = "Gufo Mezzanotte", rarity = "Epic", coinValue = 2700, attack = "Zap", move = "Night Beam",
 		look = { body = "Blob", color = rgb(40, 50, 100), accent = rgb(255, 214, 90), belly = rgb(118, 128, 176), eyes = "Big", mouth = "Beak", extras = { "Ears", "Wings" } } },
@@ -138,11 +161,11 @@ BrainrotData.Types = {
 		look = { body = "Stack", color = rgb(240, 242, 246), accent = rgb(80, 160, 255), eyes = "Visor", mouth = "None", extras = { "Helmet", "Antenna", "Backpack" } } },
 
 	-- Legendary ---------------------------------------------------------------
-	{ name = "La Vacca Saturno Saturnita", rarity = "Legendary", coinValue = 12000, attack = "Shockwave", move = "Ring Quake",
+	{ name = "La Vacca Saturno Saturnita", rarity = "Legendary", coinValue = 12000, attack = "Shockwave", move = "Ring Quake", boon = { health = 50 }, blast = true,
 		look = { body = "Blob", color = rgb(246, 246, 240), accent = rgb(60, 60, 70), eyes = "Round", mouth = "Grin", extras = { "Horns", "Orbit", "Spots" } } },
-	{ name = "Golden Sahur", rarity = "Legendary", coinValue = 18000, attack = "Bonk", move = "Golden Bonk",
+	{ name = "Golden Sahur", rarity = "Legendary", coinValue = 18000, attack = "Bonk", move = "Golden Bonk", boon = { regen = 2.0 },
 		look = { body = "Bean", color = rgb(255, 196, 60), accent = rgb(255, 240, 160), material = FOIL, eyes = "Round", mouth = "Grin", extras = { "Crown", "Arms" } } },
-	{ name = "Re Formaggione", rarity = "Legendary", coinValue = 15000, attack = "Shockwave", move = "Royal Stink Wave",
+	{ name = "Re Formaggione", rarity = "Legendary", coinValue = 15000, attack = "Shockwave", move = "Royal Stink Wave", blast = true,
 		look = { body = "Cube", color = rgb(255, 214, 90), accent = rgb(200, 150, 40), spotColor = rgb(220, 170, 50), eyes = "Round", mouth = "Grin", extras = { "Crown", "Mustache", "Spots" } } },
 	{ name = "Galassia Sognante", rarity = "Legendary", coinValue = 16000, attack = "Chain", move = "Cosmic Chain",
 		look = { body = "Disc", color = rgb(120, 60, 200), accent = rgb(120, 240, 255), material = NEON, eyes = "Cyclops", mouth = "O", extras = { "Orbit", "Halo" } } },
@@ -179,9 +202,9 @@ BrainrotData.Types = {
 
 	-- Mythic ------------------------------------------------------------------
 	-- Only from the Legendary and Mythic crates. A little bigger than everything below them.
-	{ name = "Fenice Pixelata", rarity = "Mythic", coinValue = 65000, attack = "Spit", move = "Pixel Inferno",
+	{ name = "Fenice Pixelata", rarity = "Mythic", coinValue = 65000, attack = "Spit", move = "Pixel Inferno", boon = { regen = 2.8 }, blast = true,
 		look = { body = "Pear", size = 1.1, color = rgb(255, 90, 60), accent = rgb(255, 220, 80), eyes = "Angry", mouth = "Fangs", extras = { "Wings", "Tail", "Flame", "Pixels" } } },
-	{ name = "Kraken Caramello", rarity = "Mythic", coinValue = 72000, attack = "Chain", move = "Caramel Tentacles",
+	{ name = "Kraken Caramello", rarity = "Mythic", coinValue = 72000, attack = "Chain", move = "Caramel Tentacles", boon = { venom = { damage = 30, duration = 5 } }, blast = true,
 		look = { body = "Blob", size = 1.1, color = rgb(200, 120, 60), accent = rgb(255, 200, 120), eyes = "Cyclops", mouth = "Grin", extras = { "Tentacles", "Drips", "Orbit" } } },
 	{ name = "Oracolo Lavatrice", rarity = "Mythic", coinValue = 80000, attack = "Shockwave", move = "Spin Cycle Prophecy",
 		look = { body = "Cube", size = 1.1, color = rgb(236, 240, 246), accent = rgb(80, 200, 255), eyes = "Cyclops", mouth = "O", extras = { "Porthole", "Halo", "Antenna" } } },
@@ -192,9 +215,9 @@ BrainrotData.Types = {
 
 	-- Secret ------------------------------------------------------------------
 	-- The rarest things in the game: a fraction of a percent from the top crates.
-	{ name = "Il Glitch Primordiale", rarity = "Secret", coinValue = 300000, attack = "Chain", move = "Reality Tear",
+	{ name = "Il Glitch Primordiale", rarity = "Secret", coinValue = 300000, attack = "Chain", move = "Reality Tear", boon = { speed = 1.15 }, blast = true,
 		look = { body = "Cube", size = 1.2, color = rgb(24, 24, 34), accent = rgb(0, 255, 200), eyes = "Visor", mouth = "None", extras = { "Pixels", "Halo", "Spikes" } } },
-	{ name = "Cosmo Nonno Stellare", rarity = "Secret", coinValue = 420000, attack = "Shockwave", move = "Big Bang Nap",
+	{ name = "Cosmo Nonno Stellare", rarity = "Secret", coinValue = 420000, attack = "Shockwave", move = "Big Bang Nap", boon = { health = 70 }, blast = true,
 		look = { body = "Pear", size = 1.2, color = rgb(40, 30, 90), accent = rgb(255, 240, 150), eyes = "Sleepy", mouth = "Grin", extras = { "Mustache", "Beard", "Nightcap", "Orbit" } } },
 	{ name = "Arcobalenissimo", rarity = "Secret", coinValue = 500000, attack = "Zap", move = "Infinite Prism",
 		look = { body = "Disc", size = 1.2, color = rgb(255, 120, 220), accent = rgb(120, 255, 250), material = FOIL, eyes = "Cyclops", mouth = "O", extras = { "Rainbow", "Halo", "Wings" } } },

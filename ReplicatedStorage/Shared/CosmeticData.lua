@@ -762,15 +762,23 @@ CosmeticData.Items = {
 		-- end to end make the taper (barrel into handle) -- their touching faces point at each other,
 		-- which is contact rather than a fight -- and the strap is a 12-piece band, each 0.22 wide where
 		-- the ring allows 0.236 at the inner corners.
+		--
+		-- The heights matter and were wrong first time. The strap sits at 0.04 so its underside is 0.01
+		-- INSIDE the head, and the bat at 0.31 so the barrel reaches down to 0.075, under the strap's
+		-- 0.09 top. At 0.08 and 0.44 the whole thing touched nothing at all -- a bat floating over a
+		-- strap floating over the head, 15 disconnected clusters. The probe's loose check never caught
+		-- it because every piece had a neighbour; none of them had the wearer.
 		parts = concat(
-			ring(12, 0.5, 0.08, Vector3.new(0.22, 0.1, 0.12), BLACK),
+			ring(12, 0.5, 0.04, Vector3.new(0.22, 0.1, 0.12), BLACK),
 			{
-				rod(0.86, 0.34, CFrame.new(-0.12, 0.44, 0) * CFrame.Angles(0, 0, math.rad(9)), WOOD),
-				rod(0.54, 0.19, CFrame.new(0.58, 0.55, 0) * CFrame.Angles(0, 0, math.rad(9)), WOOD),
-				ball(0.25, Vector3.new(0.86, 0.6, 0), WOOD),
-				ball(0.1, Vector3.new(-0.3, 0.6, 0.08), STEEL),
-				ball(0.1, Vector3.new(-0.02, 0.58, -0.1), STEEL),
-				ball(0.1, Vector3.new(0.2, 0.54, 0.06), STEEL),
+				rod(0.86, 0.34, CFrame.new(-0.12, 0.31, 0) * CFrame.Angles(0, 0, math.rad(9)), WOOD),
+				rod(0.54, 0.19, CFrame.new(0.58, 0.42, 0) * CFrame.Angles(0, 0, math.rad(9)), WOOD),
+				ball(0.25, Vector3.new(0.86, 0.47, 0), WOOD),
+				-- On the skin, not in the wood: radial 0.20 against the barrel's 0.17 leaves each stud 0.08
+				-- proud. Two of these three were buried inside the barrel and invisible.
+				ball(0.1, Vector3.new(-0.3, 0.47, 0.08), STEEL),
+				ball(0.1, Vector3.new(-0.02, 0.499, -0.1), STEEL),
+				ball(0.1, Vector3.new(0.188, 0.486, 0.155), STEEL),
 			}
 		),
 	},
@@ -791,12 +799,17 @@ CosmeticData.Items = {
 			column(0.12, 1.28, Vector3.new(0, 0.06, 0), WHITE),
 			column(0.06, 1.24, Vector3.new(0, 0.24, 0), STINK),
 			column(0.06, 1.18, Vector3.new(0, 0.44, 0), STINK),
-			ball(0.42, Vector3.new(0.44, 0.78, 0.3), STINK, Enum.Material.Snow),
-			ball(0.34, Vector3.new(-0.4, 0.86, 0.12), STINK, Enum.Material.Snow),
-			ball(0.3, Vector3.new(0.06, 0.94, -0.36), STINK, Enum.Material.Snow),
-			ball(0.26, Vector3.new(-0.22, 1.02, 0.42), STINK, Enum.Material.Snow),
-			ball(0.22, Vector3.new(0.34, 1.1, -0.2), STINK, Enum.Material.Snow),
-			ball(0.18, Vector3.new(-0.02, 1.18, 0.08), STINK, Enum.Material.Snow),
+			-- A chain, not a scatter: each puff's centre is closer to the next than the sum of their radii,
+			-- and the first overlaps the sock itself (its underside reaches 0.45 where the sock's surface
+			-- at that point is 0.465). Spread out as they first were, all six touched nothing whatever --
+			-- six balls hanging in the air over a hat -- which the probe reports as loose and a player
+			-- reads as a bug. Top of the cloud is 1.24 over the head, inside the 1.43 ceiling.
+			ball(0.42, Vector3.new(0.34, 0.66, 0.24), STINK, Enum.Material.Snow),
+			ball(0.34, Vector3.new(0.12, 0.8, 0.02), STINK, Enum.Material.Snow),
+			ball(0.3, Vector3.new(-0.1, 0.9, 0.14), STINK, Enum.Material.Snow),
+			ball(0.26, Vector3.new(0.02, 0.99, 0.02), STINK, Enum.Material.Snow),
+			ball(0.22, Vector3.new(0.18, 1.08, 0.1), STINK, Enum.Material.Snow),
+			ball(0.18, Vector3.new(0.06, 1.15, -0.02), STINK, Enum.Material.Snow),
 		},
 	},
 	NoodleBowl = {
@@ -813,13 +826,20 @@ CosmeticData.Items = {
 			{
 				sphere(Vector3.new(1.3, 0.64, 1.3), Vector3.new(0, 0.3, 0), BROTH),
 				column(0.1, 1.36, Vector3.new(0, 0.58, 0), CRUST),
-				rod(0.9, 0.07, CFrame.new(0.16, 0.92, -0.1) * CFrame.Angles(0, 0, math.rad(16)), WOOD),
-				rod(0.9, 0.07, CFrame.new(0.2, 0.9, 0.12) * CFrame.Angles(0, 0, math.rad(24)), WOOD),
+				-- Dropped until they rest in the bowl: at 0.92 and 0.90 both chopsticks hung clear of
+				-- everything, which the probe reports as loose. Their low ends now reach 0.622 and 0.625,
+				-- inside the rim's 0.63 top. A cylinder's flank carries no face, so resting one on the rim
+				-- cannot start a fight.
+				rod(0.9, 0.07, CFrame.new(0.16, 0.78, -0.1) * CFrame.Angles(0, 0, math.rad(16)), WOOD),
+				rod(0.9, 0.07, CFrame.new(0.2, 0.84, 0.12) * CFrame.Angles(0, 0, math.rad(24)), WOOD),
 			},
 			(function()
 				local strands = {}
 				for index = 0, 7 do
 					local angle = index / 8 * math.pi * 2
+					-- Keep every lean more than 1.82 degrees off 90. Index 5 lands on 87, and that strand's end
+					-- disc overlaps the rim's top face by 0.19 while sitting only 0.06 under it -- the angle is
+					-- the ONLY thing keeping the pass off it. Base 63.2, or step 5.24, would put it in the window.
 					local lean = math.rad(62 + index * 5)
 					table.insert(strands, rod(0.54 + index % 3 * 0.12, 0.1,
 						CFrame.Angles(0, angle, 0) * CFrame.new(0, 0.18, 0.56) * CFrame.Angles(0, 0, lean), NOODLE))
@@ -829,14 +849,17 @@ CosmeticData.Items = {
 		),
 	},
 	CactinoCrown = {
-		name = "Cactino Pokko",
+		name = "Pokko's Cactus",
 		kind = "Accessory",
 		rarity = "Rare",
 		price = 14000,
 		anchor = "HeadTop",
 		color = CACTUS,
 		description = "Needles included. Pokko does not consider that a warning.",
-		-- Arms stop at 0.85 where the stem's top face is 1.0: 0.15 apart, and clear at every head size.
+		-- Both arms stop clear of the stem's 1.0 top face: the left at 0.85, the right at 0.87. The
+		-- right one was at 0.96 -- 0.04 under the stem's top, well inside the pass's reach -- and was
+		-- saved only by 0.144 of plan separation that nothing recorded. Both are +Y cylinder discs, so
+		-- only height and plan separation keep them apart.
 		-- The needles are rods pointing out radially, so their ends face along the spine they sit on and
 		-- are parallel to nothing.
 		parts = concat(
@@ -845,7 +868,7 @@ CosmeticData.Items = {
 				rod(0.34, 0.2, CFrame.new(-0.3, 0.42, 0), CACTUS),
 				column(0.44, 0.2, Vector3.new(-0.44, 0.63, 0), CACTUS),
 				rod(0.3, 0.18, CFrame.new(0.28, 0.6, 0), CACTUS),
-				column(0.36, 0.18, Vector3.new(0.4, 0.78, 0), CACTUS),
+				column(0.36, 0.18, Vector3.new(0.4, 0.69, 0), CACTUS),
 				ball(0.17, Vector3.new(0, 1.06, 0), BLOOM),
 				ball(0.13, Vector3.new(0.13, 1.04, 0.05), BLOOM),
 				ball(0.13, Vector3.new(-0.11, 1.05, -0.08), BLOOM),
@@ -874,15 +897,23 @@ CosmeticData.Items = {
 		anchor = "Back",
 		color = CROC,
 		description = "Air Drop, without the drop. Or the air. They are decorative.",
-		-- Each wing is a wedge pair, which is the one shape that gives a real swept point; the struts lie
-		-- along the wings at their own angles, and the pack between them is a sphere with no faces.
+		-- Each wing is a wedge pair, which is the one shape that gives a real swept point; the pack
+		-- between them is a sphere with no faces.
+		--
+		-- The struts are at 10 degrees, not the 6 they read best at. spike() rolls each wing 96 degrees,
+		-- so a wedge's bottom-face normal points 6 degrees off horizontal -- and a cylinder's only faces
+		-- are its two end discs, whose normal is its own axis. At 6 those two normals were IDENTICAL
+		-- (96 - 90 = 6 exactly): 0.038 apart with 0.096 of overlap, so the z-fight pass moved both struts
+		-- on every head under 1.75 studs, which is every standard rig. At 10 the axis sits 4 degrees off
+		-- the wedge normal, and the pass calls anything within 1.81 degrees parallel -- better than double
+		-- the margin. 8 would have left 0.19 of a degree.
 		parts = concat(
 			spike(CFrame.new(-0.78, 0.18, 0.32) * CFrame.Angles(0, 0, math.rad(96)), 1.04, 0.72, 0.14, CROC),
 			spike(CFrame.new(0.78, 0.18, 0.32) * CFrame.Angles(0, 0, math.rad(-96)), 1.04, 0.72, 0.14, CROC),
 			{
 				sphere(Vector3.new(0.74, 0.86, 0.44), Vector3.new(0, 0.1, 0.3), CROC_DARK),
-				rod(0.86, 0.09, CFrame.new(-0.74, 0.3, 0.33) * CFrame.Angles(0, 0, math.rad(6)), CROC_DARK),
-				rod(0.86, 0.09, CFrame.new(0.74, 0.3, 0.33) * CFrame.Angles(0, 0, math.rad(-6)), CROC_DARK),
+				rod(0.86, 0.09, CFrame.new(-0.74, 0.3, 0.33) * CFrame.Angles(0, 0, math.rad(10)), CROC_DARK),
+				rod(0.86, 0.09, CFrame.new(0.74, 0.3, 0.33) * CFrame.Angles(0, 0, math.rad(-10)), CROC_DARK),
 				rod(0.66, 0.08, CFrame.new(-0.66, -0.06, 0.33) * CFrame.Angles(0, 0, math.rad(-14)), CROC_DARK),
 				rod(0.66, 0.08, CFrame.new(0.66, -0.06, 0.33) * CFrame.Angles(0, 0, math.rad(14)), CROC_DARK),
 				ball(0.2, Vector3.new(0, 0.62, 0.34), STEEL),
@@ -890,7 +921,7 @@ CosmeticData.Items = {
 			}
 		),
 	},
-		StinkoCloud = {
+	StinkoCloud = {
 		name = "Stinko Cloud",
 		kind = "Aura",
 		rarity = "Uncommon",
@@ -917,12 +948,17 @@ CosmeticData.Items = {
 		description = "Needle Shot, permanently. Cactino Pokko does not aim it.",
 		-- Fast, small, tight and spinning: the opposite end of the same contract. A 35 degree spread
 		-- reads as a spit rather than a halo, and the short life keeps them close.
+		--
+		-- rise is -28, not the -9 it was: at -9 a needle thrown at 6-9 studs/s needs 0.67-1.0 s to turn
+		-- around and only lives 0.35-0.6, so every one of them RISES for its whole life. The sign alone
+		-- was enough to flip CosmeticPreview's specks to sinking, so the shop picture disagreed with the
+		-- game. At -28 the slowest needle peaks at 0.21 s and spends the rest of its life falling.
 		aura = {
 			lightColor = CACTUS,
 			lightRange = 7,
 			lightBrightness = 0.9,
 			layers = {
-				{ rate = 26, size = 0.22, endSize = 0.05, speed = { 6, 9 }, rise = -9,
+				{ rate = 26, size = 0.22, endSize = 0.05, speed = { 6, 9 }, rise = -28,
 					lifetime = { 0.35, 0.6 }, transparency = 0.1, spread = 35, spin = 180 },
 			},
 		},
@@ -956,14 +992,20 @@ CosmeticData.Items = {
 		-- A trail that hangs where you were, with green sparks cutting down through it. `fade` gives the
 		-- trail a second colour at the end of its life, which is the one thing a single emitter could
 		-- never do when an aura was one Color3.
+		--
+		-- Two numbers are deliberate. The sparks' rise is -20 so a 7 studs/s spark turns over at 0.35 s
+		-- and falls for the rest of its 0.4-0.8 life -- at -2 they rose the whole way and the word
+		-- 'cutting down' was a lie about my own design. And the trail's rate is 12, not 20: at 20 with
+		-- a 1.6-2.4 life this carried about 2.8x the live particles of any aura that shipped, on an
+		-- Epic nobody had profiled. It should be the densest; it should not be triple.
 		aura = {
 			lightColor = CROC,
 			lightRange = 11,
 			lightBrightness = 1,
 			layers = {
-				{ rate = 20, size = 0.7, endSize = 0.2, speed = { 0.5, 1 }, rise = 0.6, drag = 0.6,
+				{ rate = 12, size = 0.7, endSize = 0.2, speed = { 0.5, 1 }, rise = 0.6, drag = 0.6,
 					lifetime = { 1.6, 2.4 }, transparency = 0.5, spread = 40, fade = WHITE },
-				{ rate = 8, size = 0.18, color = CROC, speed = { 4, 7 }, rise = -2,
+				{ rate = 8, size = 0.18, color = CROC, speed = { 4, 7 }, rise = -20,
 					lifetime = { 0.4, 0.8 }, transparency = 0.15, spread = 55, spin = 120 },
 			},
 		},
@@ -987,7 +1029,7 @@ CosmeticData.Items = {
 			},
 		},
 	},
-		-- Parachutes: the canopy that opens over you on the drop-in and with the Rot Glider. Each id is a
+	-- Parachutes: the canopy that opens over you on the drop-in and with the Rot Glider. Each id is a
 	-- design in Shared/ParachuteModels, which builds it; `color` is its main colour for icons and
 	-- crate reveals. Common to Epic rotate through the shop; Legendary and up only come from the
 	-- Parachute Crate. With none equipped you get the default Rot Glider canopy.
