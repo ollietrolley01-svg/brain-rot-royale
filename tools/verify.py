@@ -1459,5 +1459,56 @@ print(f"guns: water {_gun_water_examined} shot-raycast site(s) examined, {len(_g
       f"fire paths, FIRE_BURST {_gun_burst.group(1) if _gun_burst else '?'}; range stop {_gun_clears} "
       f"Clear site(s), guarded {_gun_guarded}; {_gun_needles}/4 planted pairs fired")
 
+# ---------------------------------------------------------------------------
+# Companion boons (what a brainrot does FOR its owner) and explosive abilities.
+#
+# Two ways this data rots silently, which is why it is gated rather than trusted:
+#   * a MISSPELLED boon key ("regan") is an error nowhere -- CompanionBoons reads the fields it knows
+#     and ignores the rest, so that brainrot simply does nothing and nobody finds out.
+#   * a `blast` on a low rarity hands a Common an explosion. The rule is BlastMinRarity, in one place.
+_bd = read("ReplicatedStorage/Shared/BrainrotData.lua")
+_bv = re.search(r"BrainrotData\.Boons = \{(.*?)\}", _bd, re.S)
+_boon_vocab = set(re.findall(r"(\w+) = true", _bv.group(1))) if _bv else set()
+_ri = re.search(r"BrainrotData\.RarityIndex = \{(.*?)\}", _bd, re.S)
+_rarity_index = dict((m[0], int(m[1])) for m in re.findall(r"(\w+) = (\d+)", _ri.group(1))) if _ri else {}
+_mr = re.search(r'BrainrotData\.BlastMinRarity = "(\w+)"', _bd)
+_min_rarity = _mr.group(1) if _mr else "Legendary"
+
+
+def _boon_problems(text):
+    """(bad boon keys, blasts below the floor, how many entries carried a boon)."""
+    bad_keys, bad_blast, carried = [], [], 0
+    floor = _rarity_index.get(_min_rarity, 4)
+    for entry in re.finditer(r'\{ name = "([^"]+)", rarity = "(\w+)",([^\n]*)', text):
+        name, rarity, rest = entry.group(1), entry.group(2), entry.group(3)
+        boon = re.search(r"boon = \{(.*?)\},", rest)
+        if boon:
+            carried += 1
+            for key in re.findall(r"(\w+) =", boon.group(1)):
+                if key in ("damage", "duration"):
+                    continue
+                if key not in _boon_vocab:
+                    bad_keys.append("%s: boon key '%s'" % (name, key))
+        if re.search(r"\bblast = true", rest) and _rarity_index.get(rarity, 0) < floor:
+            bad_blast.append("%s (%s)" % (name, rarity))
+    return bad_keys, bad_blast, carried
+
+
+_bk, _bb, _carried = _boon_problems(_bd)
+if not _boon_vocab:
+    problems.append("boons: BrainrotData.Boons is missing or empty - the vocabulary check tests nothing")
+for _b in _bk:
+    problems.append("boons: %s is not in BrainrotData.Boons, so CompanionBoons ignores it and that brainrot silently does nothing" % _b)
+for _b in _bb:
+    problems.append("boons: %s carries blast = true below BlastMinRarity (%s)" % (_b, _min_rarity))
+
+_pk, _, _ = _boon_problems(_bd.replace("boon = { regen = 0.5 }", "boon = { regan = 0.5 }", 1))
+_, _pb, _ = _boon_problems(_bd.replace('{ name = "Trippi Troppi", rarity = "Common",', '{ name = "Trippi Troppi", rarity = "Common", blast = true,', 1))
+if not _pk or not _pb:
+    problems.append("boons: a planted fault did NOT fire (bad key caught: %s, low-rarity blast caught: %s) - this check is testing nothing" % (bool(_pk), bool(_pb)))
+
+print("boons: %d brainrot(s) carry a boon, vocabulary %d keys, blast floor %s; 2/2 planted faults fired" % (_carried, len(_boon_vocab), _min_rarity))
+
+
 print("\n".join(problems) if problems else "OK: no problems")
 sys.exit(1 if problems else 0)

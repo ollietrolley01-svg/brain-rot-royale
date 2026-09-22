@@ -11,7 +11,8 @@
 --   cost      how long the first build of each kind takes, and how long a clone takes after, since
 --             the page pays the first once and the clone per row
 --   budget    parts per preview, because twenty rows of a 300-part model is not a thumbnail
---   lazy      Fill on a frame that has never been laid out must build nothing at all
+--   throttle  five slots filled at once must build at most one model in the first frame, so a
+--             page of rows spreads its cost instead of paying for all of them on the first draw
 --   teardown  Destroy and Release leave nothing behind
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -136,13 +137,42 @@ local viewport = frame:FindFirstChild("CosmeticPreview")
 if not viewport then
 	fail("Fill put no ViewportFrame in the frame it was given")
 else
-	-- Never laid out (it is not in a PlayerGui), so AbsoluteSize is zero and nothing should have been
-	-- built yet. This is the whole point of the lazy path: a page of rows costs nothing until drawn.
-	local built = #viewport:GetChildren() > 1
-	if built then
-		fail("Fill built a model into a frame that has never been laid out, so opening a page pays for every row at once")
+	-- The contract is not "never builds" -- it is "at most one build per frame", so a page of twenty
+	-- rows spreads its work instead of paying for every row on the first draw. The earlier version of
+	-- this check asserted that a frame with no layout builds NOTHING, which is false: Roblox gives a
+	-- ScreenGui's children a nominal size even outside a PlayerGui, so the frame is laid out enough to
+	-- build. It failed on correct behaviour every run, which is the same disease as a check that
+	-- passes on broken behaviour.
+	local SLOT_IDS = { "CrownOfRot", "GoldenHalo", "BonkStick", "CactinoCrown", "StinkoSock" }
+	local slots, handles = {}, {}
+	for index = 1, 5 do
+		local slot = Instance.new("Frame")
+		slot.Size = UDim2.fromOffset(102, 102)
+		slot.Position = UDim2.fromOffset(0, (index - 1) * 110)
+		slot.Parent = gui
+		slots[index] = slot
+	end
+	for index, slot in ipairs(slots) do
+		handles[index] = CosmeticPreview.Fill(slot, SLOT_IDS[index])
+	end
+	task.wait()
+	local builtAfterOneFrame = 0
+	for _, slot in ipairs(slots) do
+		local view = slot:FindFirstChild("CosmeticPreview")
+		if view and #view:GetChildren() > 1 then
+			builtAfterOneFrame += 1
+		end
+	end
+	if builtAfterOneFrame > 1 then
+		fail("five slots filled at once built %d models in one frame; the throttle is meant to allow one", builtAfterOneFrame)
 	else
-		out("lazy: nothing built into a frame with no size, as intended")
+		out("throttle: %d of 5 slots built in the first frame, so a page spreads its cost", builtAfterOneFrame)
+	end
+	for _, h in ipairs(handles) do
+		h:Destroy()
+	end
+	for _, slot in ipairs(slots) do
+		slot:Destroy()
 	end
 end
 
