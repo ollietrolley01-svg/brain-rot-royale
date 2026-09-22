@@ -2757,6 +2757,18 @@ end
 --------------------------------------------------------------------------------
 -- Crate reveal
 --------------------------------------------------------------------------------
+-- IN A DO-BLOCK, and it is the whole crate reveal. This file's main chunk reached 200 top-level
+-- locals -- Luau's hard limit -- at which point one more anywhere in the file stops it compiling,
+-- SILENTLY: no error at build time, and the entire menu simply does not run. Locals declared inside
+-- a do-block are released at its end, so the 35 declared below cost the main chunk nothing.
+--
+-- The reveal was chosen because it is genuinely self-contained: none of its 35 names is referenced
+-- anywhere before this block or after it (checked by name across the whole file, both directions),
+-- so enclosing it changes no behaviour. It is the same treatment HudClient already gives its drop
+-- screen and its inventory, and for the same reason.
+--
+-- If you add a top-level local to this file, check `verify.py`'s "main-chunk locals" line first.
+do
 
 -- Full-screen opening. Everything is built from parts in a ViewportFrame, so there are no image
 -- assets. Click to skip to the reveal, click again to close.
@@ -3319,6 +3331,8 @@ crateOpened.OnClientEvent:Connect(function(result)
 		end
 	end)
 end)
+end
+-- End of the crate reveal's block; its 35 locals are released here.
 
 --------------------------------------------------------------------------------
 -- Trade invite popup
@@ -3569,7 +3583,7 @@ end
 local TRACKER_WIDTH = 250
 
 local tracker = create("TextButton", {
-	Position = UDim2.new(0, 16, 0, 338),
+	Position = UDim2.new(0, 16, 0, 318),
 	Size = UDim2.fromOffset(TRACKER_WIDTH, 40),
 	AutomaticSize = Enum.AutomaticSize.Y,
 	BackgroundColor3 = C.Background,
@@ -3752,7 +3766,7 @@ end)
 -- A pulsing shortcut under the menu button to the best deal still open to you: the Starter Bundle
 -- until it's been bought, then the Pro Bundle. Only for products whose ID is set (or in Studio).
 local bundleNudge = create("TextButton", {
-	Position = UDim2.new(0, 16, 0, 294),
+	Position = UDim2.new(0, 16, 0, 278),
 	Size = UDim2.new(0, 210, 0, 34),
 	BackgroundColor3 = C.Green,
 	BorderSizePixel = 0,

@@ -110,17 +110,18 @@ function MenuStackToggle.new(screenGui, options)
 	-- Expanded: a chevron pointing left, "tuck it away".
 	local tuck = create("Frame", { Name = "Tuck", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = tab })
 	self.tuckBars = {
-		bar(tuck, 18, 16, 12, 3, -45, C.Muted),
-		bar(tuck, 18, 25, 12, 3, 45, C.Muted),
+		-- Sized for the 30x26 tab beside the 26 px buttons (was drawn for 40x42 and hung out of it).
+		bar(tuck, 14, 10, 9, 3, -45, C.Muted),
+		bar(tuck, 14, 16, 9, 3, 45, C.Muted),
 	}
 	self.tuck = tuck
 
 	-- Collapsed: a menu icon, today's quests, a chevron pointing right.
 	local open = create("Frame", { Name = "Open", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, Parent = tab })
 	self.openBars = {
-		bar(open, 19, 14, 18, 3, 0, DARK),
-		bar(open, 19, 21, 18, 3, 0, DARK),
-		bar(open, 19, 28, 18, 3, 0, DARK),
+		bar(open, 19, 7, 18, 3, 0, DARK),
+		bar(open, 19, 13, 18, 3, 0, DARK),
+		bar(open, 19, 19, 18, 3, 0, DARK),
 	}
 	self.summary = create("TextLabel", {
 		Name = "Summary",
@@ -203,7 +204,7 @@ end
 
 -- Height the bottom-left health / shield / stamina block takes (HudClient anchors it up to 1, -202, plus
 -- its label), kept clear of the stack.
-local BOTTOM_RESERVED = 232
+local BOTTOM_RESERVED = 150
 
 function MenuStackToggle:_fitHeight()
 	if self.phoneStack then
@@ -224,7 +225,8 @@ function MenuStackToggle:_fitHeight()
 		return
 	end
 	local room = gui.AbsoluteSize.Y - BOTTOM_RESERVED - STACK_TOP
-	self.stackScale.Scale = math.clamp(room / bottom, 0.55, 1)
+	-- Never below 0.85 (Oliver 15:37: at 0.55 it was too small to read).
+	self.stackScale.Scale = math.clamp(room / bottom, 0.85, 1)
 end
 
 function MenuStackToggle:_paintHover()
@@ -300,7 +302,7 @@ function MenuStackToggle:SetPhone(spots, inset)
 		self.stackScale.Scale = 1
 		self:_fitHeight()
 		for index, b in ipairs(self.openBars) do
-			b.Position = UDim2.fromOffset(19, 7 + index * 7)
+			b.Position = UDim2.fromOffset(19, 1 + index * 6)
 			b.Size = UDim2.fromOffset(18, 3)
 		end
 		for _, b in ipairs(self.openChevron) do

@@ -87,9 +87,10 @@ local bannerSub = create("TextLabel", {
 	Font = Enum.Font.Gotham,
 	Text = "",
 	TextColor3 = C.Muted,
-	TextSize = 14,
+	-- Shrinks to fit rather than running out of the banner (Oliver 15:37).
+	TextScaled = true,
 	Parent = banner,
-})
+}, { create("UITextSizeConstraint", { MaxTextSize = 14 }), create("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }) })
 
 -- Ready up / stay in the lobby. A big pill beside the banner: amber and gently pulsing while
 -- you're not ready, green with a tick once you are, with the live ready count underneath.
@@ -888,7 +889,7 @@ local profileMatches = nil
 local tipIndex = 0
 local NEW_PLAYER_TIPS = {
 	"Step on the green pad or press F to ready up for the next match",
-	"Press M for the menu: crates, quests, the shop and your brainrots",
+	"The buttons on the left: shop, brainrots, progress, Robux and settings",
 	"Loot guns, heals, shields and items — eight slots, keys 1 to 8 (Q cycles)",
 	"Equip a brainrot as your companion and press {Companion} to use its move in a fight",
 	"Try the Cloud Climb up the tree, kick a ball into the goal, spin the daily wheel",
