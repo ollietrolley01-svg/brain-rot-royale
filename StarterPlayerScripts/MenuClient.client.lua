@@ -1354,7 +1354,15 @@ local function renderCrates()
 		-- The GUARANTEE itself is untouched — CrateService still forces the rarity up after a dry run,
 		-- and the open still says "(guaranteed — your luck was due)" when it fires. Only the menu's
 		-- running count is gone.
-		fitLine(statLine(card, 32, oddsText, C.Text, Enum.Font.GothamBold, 12), 30, oddsHeight)
+		local oddsLabel = statLine(card, 32, oddsText, C.Text, Enum.Font.GothamBold, 12)
+		fitLine(oddsLabel, 30, oddsHeight)
+		if not narrow then
+			-- Wide, the line stays one row, so a long one (2x luck plus the accessory note) shrinks
+			-- to fit instead of losing its last rarities off the end.
+			oddsLabel.TextTruncate = Enum.TextTruncate.None
+			oddsLabel.TextScaled = true
+			create("UITextSizeConstraint", { MaxTextSize = 12, MinTextSize = 8, Parent = oddsLabel })
+		end
 		if category == "Brainrot" then
 			fitLine(statLine(card, 52, (crate.description or "") .. "  Best possible drops:", C.Muted, Enum.Font.Gotham, 12), 86 + shift)
 
@@ -2076,8 +2084,44 @@ local function featuredCard(order, product)
 	local lines = product.grant.kind == "Bundle" and GamepassConfig.DescribeContents(product.grant, cosmeticLabel) or nil
 	local rows = lines and math.ceil(#lines / 2) or 0
 
+	-- Every crate this card sells is a paid random item, so the card carries the odds that are rolled
+	-- for each one (a bundle: one line per crate kind inside it), sized to wrap and never cut off.
+	-- Same luck and crateBoosted rule as the Crates tab.
+	local odds = {}
+	do
+		local tiers, seen = {}, {}
+		if product.grant.kind == "Crate" then
+			table.insert(tiers, product.grant.crate)
+		end
+		for _, entry in ipairs(product.grant.contents or {}) do
+			if entry.kind == "Crate" and not seen[entry.crate] then
+				seen[entry.crate] = true
+				table.insert(tiers, entry.crate)
+			end
+		end
+		local TextService = game:GetService("TextService")
+		local _, width = narrowContent()
+		local column = math.max(64, width - 8 - math.min(310, math.max(0, width - 64)))
+		local top = lines and (66 + rows * 20 + 2)
+			or (66 + TextService:GetTextSize(product.description or "", 13, Enum.Font.Gotham, Vector2.new(column, 10000)).Y + 6)
+		for _, tier in ipairs(tiers) do
+			local crate = CrateData.Get(tier)
+			if crate then
+				local boosted = profile and profile.crateBoosted and profile.crateBoosted[tier] or false
+				local text = table.concat(CrateData.OddsLine(crate, profile and profile.crateLuck or 1, boosted), "   ")
+				if lines then
+					text = (crate.name or (tier .. " Crate")) .. ":   " .. text
+				end
+				local height = TextService:GetTextSize(text, 12, Enum.Font.GothamBold, Vector2.new(column, 10000)).Y + 2
+				table.insert(odds, { text = text, top = top, height = height })
+				top += height + 2
+			end
+		end
+		odds.bottom = top
+	end
+
 	local card = create("Frame", {
-		Size = UDim2.new(1, -8, 0, math.max(128, 70 + rows * 20 + 12)),
+		Size = UDim2.new(1, -8, 0, math.max(128, 70 + rows * 20 + 12, #odds > 0 and odds.bottom + 12 or 0)),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
@@ -2176,6 +2220,22 @@ local function featuredCard(order, product)
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextYAlignment = Enum.TextYAlignment.Top,
 			TextSize = 13,
+			Parent = card,
+		})
+	end
+
+	for _, entry in ipairs(odds) do
+		create("TextLabel", {
+			Position = UDim2.fromOffset(130, entry.top),
+			Size = UiKit.textSpan(select(2, narrowContent()), 310, entry.height),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.GothamBold,
+			Text = entry.text,
+			TextColor3 = C.Text,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextSize = 12,
 			Parent = card,
 		})
 	end
@@ -2309,6 +2369,32 @@ local function renderRobuxShop()
 		shopSection(nextOrder(), "CRATES, BOOSTS & COINS", C.Green)
 		for _, product in ipairs(products) do
 			local buttons = makeRow(nextOrder(), product.name, C.Text, product.description)
+			-- A crate here is a paid random item, so its row carries the odds that are rolled, the same
+			-- line the Crates tab draws (same luck, same crateBoosted rule), wrapped and never cut off.
+			local crate = product.grant.kind == "Crate" and CrateData.Get(product.grant.crate)
+			if crate then
+				local row = buttons.Parent
+				local narrow, width = narrowContent()
+				local boosted = profile and profile.crateBoosted and profile.crateBoosted[product.grant.crate] or false
+				local oddsText = table.concat(CrateData.OddsLine(crate, profile and profile.crateLuck or 1, boosted), "   ")
+				local reserve = narrow and -28 or -320
+				local column = math.max(80, width - 8 + reserve)
+				local height = math.max(16, game:GetService("TextService"):GetTextSize(oddsText, 12, Enum.Font.GothamBold, Vector2.new(column, 10000)).Y + 2)
+				row.Size += UDim2.fromOffset(0, height + 4)
+				create("TextLabel", {
+					Position = UDim2.fromOffset(14, 54),
+					Size = UDim2.new(1, reserve, 0, height),
+					BackgroundTransparency = 1,
+					Font = Enum.Font.GothamBold,
+					Text = oddsText,
+					TextColor3 = C.Text,
+					TextWrapped = true,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
+					TextSize = 12,
+					Parent = row,
+				})
+			end
 			addButton(buttons, 1, product.suggestedPrice .. " R$", C.Green, function()
 				MarketplaceService:PromptProductPurchase(player, product.id)
 			end, product.id > 0)
