@@ -1097,7 +1097,12 @@ do
 		staminaView.rush = MovementState.rush
 		staminaView.draining = MovementState.draining
 		staminaView.refusedAt = MovementState.refusedAt
+		-- Hidden while driving: nobody sprints in a car, and the bar sat on the car's speedometer (17:10).
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
 		staminaView.hidden = not MovementState.inMatch or player:GetAttribute("MenuOpen") == true
+			or (seat ~= nil and seat:IsA("VehicleSeat"))
 		staminaBar:Update(math.min(dt, 0.1), staminaView)
 	end)
 end
@@ -2500,6 +2505,31 @@ local function updateCompass(root)
 		return
 	end
 	compass.Visible = true
+	-- Always flush under whatever the top-centre HUD is showing right now (Oliver 17:16): the players-
+	-- alive banner, the storm line under it, or a team mode's score bar -- measured off what is actually
+	-- on screen, so it follows any of them changing size, hiding or scaling. A phone layout places the
+	-- compass itself and is left alone.
+	if not compass:GetAttribute("PhonePlaced") then
+		local bottom = nil
+		local function under(gui)
+			if gui and gui.Visible and gui.AbsoluteSize.Y > 0 then
+				local edge = gui.AbsolutePosition.Y + gui.AbsoluteSize.Y
+				bottom = bottom and math.max(bottom, edge) or edge
+			end
+		end
+		under(banner)
+		if stormLabel.Text ~= "" then
+			under(stormLabel)
+		end
+		local scoreGui = playerGui:FindFirstChild("ModeScoreHud")
+		if scoreGui and scoreGui.Enabled then
+			under(scoreGui:FindFirstChild("Scoreline"))
+		end
+		local y = math.floor((bottom and (bottom - screenGui.AbsolutePosition.Y) or 6) + 4 + 0.5)
+		if compass.Position.Y.Offset ~= y or compass.Position.Y.Scale ~= 0 then
+			compass.Position = UDim2.new(0.5, 0, 0, y)
+		end
+	end
 	local look = camera.CFrame.LookVector
 	local heading = math.deg(math.atan2(look.X, -look.Z))
 	local here = root.Position
@@ -3122,6 +3152,7 @@ do
 		local function apply()
 			local viewport = camera.ViewportSize
 			local phone = PhoneLayout.Active(viewport)
+			compass:SetAttribute("PhonePlaced", phone == true)
 			local spots = phone and PhoneLayout.Rects(viewport) or nil
 			-- Portrait is the simplified HUD: a piece PhoneLayout has no rect for there (the compass, the
 			-- kill feed, the bounty and location lines, the speed pill) is hidden rather than left behind.
@@ -3674,13 +3705,6 @@ local function renderBanner()
 	-- this slot (ModeScoreHud moves up to it), so the banner hides while you're playing one.
 	banner.Visible = not (matchState.state == "InProgress" and loadout
 		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale")
-	-- With the banner and the storm line gone, the compass tucks up under the 44-tall score bar
-	-- (y 10..54) instead of hanging 50 px below it (Oliver 16:59: "the hud is messed up at the top").
-	-- Only from the desktop spots, so a phone layout that has placed it elsewhere is left alone.
-	local compassY = compass.Position.Y.Offset
-	if compass.Position.Y.Scale == 0 and (compassY == 104 or compassY == 60) then
-		compass.Position = UDim2.new(0.5, 0, 0, banner.Visible and 104 or 60)
-	end
 
 	if matchState.state == "Waiting" then
 		bannerTitle.Text = ready and "WAITING FOR PLAYERS" or "READY UP TO PLAY"

@@ -159,15 +159,31 @@ end
 -- way -- so this is ONE predicate that covers every path, not one that has to be threaded through
 -- each of them.
 local inProgress = false
+-- The mode the CURRENT match is (MatchChanged carries it). A scoreline cached from an earlier team match
+-- used to come back when the next match was a battle royale: `lastState` below is only replaced by a
+-- ModeChanged push, which a battle royale never sends, so the loadout arriving re-rendered the old
+-- TDM score (Oliver's 17:10 screenshot: 84-77 FIRST TO 100 over a battle royale's storm and ALIVE bar).
+local currentMode = nil
+local forgetScores -- set below, once lastState exists
 matchChanged.OnClientEvent:Connect(function(state)
 	inProgress = state ~= nil and state.state == "InProgress"
-	if not inProgress then
+	local mode = state and state.mode or nil
+	if mode ~= currentMode then
+		currentMode = mode
+		-- Only a switch to a mode with no scoreline drops the cache: a team match's first ModeChanged can
+		-- arrive before this, and render() already refuses a cached push from a different mode.
+		if (mode == nil or mode == "BattleRoyale") and forgetScores then
+			forgetScores()
+		end
+	end
+	if not inProgress or currentMode == nil or currentMode == "BattleRoyale" then
 		root.Visible = false
 	end
 end)
 
 local function render(state)
-	local teams = inProgress and state and state.scores ~= nil
+	local teams = inProgress and state and state.scores ~= nil and currentMode ~= nil and currentMode ~= "BattleRoyale"
+		and (state.mode == nil or state.mode == currentMode)
 	if not teams then
 		root.Visible = false
 		return
@@ -223,6 +239,10 @@ end
 -- player spawning into a game already at 3-1 would see nothing until someone scored again.
 local inMatch = false
 local lastState = nil
+function forgetScores()
+	lastState = nil
+	root.Visible = false
+end
 
 Remotes.Event("LoadoutChanged").OnClientEvent:Connect(function(newLoadout)
 	local joined = newLoadout ~= nil

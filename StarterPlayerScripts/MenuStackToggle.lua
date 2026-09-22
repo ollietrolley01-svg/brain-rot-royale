@@ -227,7 +227,18 @@ function MenuStackToggle:_fitHeight()
 	if bottom <= 0 then
 		return
 	end
-	local room = gui.AbsoluteSize.Y - BOTTOM_RESERVED - STACK_TOP
+	-- On a screen too narrow for the stamina bar to sit bottom-centre it moves up above the bottom-left
+	-- stack (StaminaBar.Layout), so the column has to stop above IT, not just above the health block --
+	-- it used to run into the bar (Oliver 17:10, STARTER BUNDLE under STAMINA).
+	local reserved = BOTTOM_RESERVED
+	local okStamina, StaminaBar = pcall(require, script.Parent:FindFirstChild("StaminaBar"))
+	if okStamina and StaminaBar and StaminaBar.Layout then
+		local anchor, position, scale = StaminaBar.Layout(gui.AbsoluteSize)
+		if anchor.X == 0 then
+			reserved = math.max(reserved, -position.Y.Offset + 50 * scale + 10)
+		end
+	end
+	local room = gui.AbsoluteSize.Y - reserved - STACK_TOP
 	-- Never below 0.85 (Oliver 15:37: at 0.55 it was too small to read), and grows up to 1.25x where
 	-- there is room (Oliver 16:16: "the quest menu and buttons are still a bit too small").
 	local scale = math.clamp(room / bottom, 0.85, 1.25)
