@@ -1068,7 +1068,26 @@ text = "\n".join(lines)
 if CHECK_ONLY:
     current = open(OUT, encoding="utf-8").read() if os.path.exists(OUT) else ""
     if current != text:
-        problems.append("CloudClimbCourse.lua is out of date: rerun python tools/climb_design.py")
+        # Say WHAT differs, not just that something does. An outside contributor cannot rerun the
+        # generator (this file is outside every task brief's ownership) and cannot see this machine,
+        # so a bare "out of date" is unactionable and gets pasted into pull requests as a failure
+        # nobody caused. Reported 2026-09-21 by the outside clone, where it fires on pristine main;
+        # it does not reproduce here, so the check now carries its own evidence.
+        a, b = current.split("\n"), text.split("\n")
+        where = None
+        if not current:
+            where = "the file is missing"
+        else:
+            for i in range(min(len(a), len(b))):
+                if a[i] != b[i]:
+                    where = "first difference at line %d; on disk %.100r, generated %.100r" % (
+                        i + 1, a[i], b[i])
+                    break
+            if where is None:
+                where = "every shared line agrees; %d lines on disk against %d generated" % (
+                    len(a), len(b))
+        problems.append(
+            "CloudClimbCourse.lua is out of date: rerun python tools/climb_design.py (" + where + ")")
         print("PROBLEM " + problems[-1])
 else:
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
