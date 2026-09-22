@@ -3440,26 +3440,19 @@ end)
 local HUD_BUTTON_W = 104
 local HUD_BUTTON_H = 26
 local HUD_BUTTON_GAP = 3
--- One look for all five (Oliver 14:16: "neat and snug"): a dark translucent pill with the accent
--- as a thin outline and the label, left aligned, fixed size, so the column reads as one tidy list.
+-- Oliver 14:16/14:21: snug and neat by size and arrangement, same look as the old MENU button.
 local function hudButtonLook()
-	return {
-		rounded(6),
-		create("UIStroke", { Color = C.Accent, Thickness = 1, Transparency = 0.35, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
-		create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 6) }),
-	}
+	return { rounded(8) }
 end
 local menuButton = create("TextButton", {
 	Position = UDim2.new(0, 16, 0, 130),
 	Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
-	BackgroundColor3 = C.Background,
-	BackgroundTransparency = 0.2,
+	BackgroundColor3 = C.Accent,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
 	Text = "SHOP",
-	TextColor3 = C.Accent,
+	TextColor3 = Color3.new(0, 0, 0),
 	TextSize = 13,
-	TextXAlignment = Enum.TextXAlignment.Left,
 	Parent = screenGui,
 }, hudButtonLook())
 
@@ -3497,17 +3490,14 @@ for index, spec in ipairs({
 	{ "SETTINGS", "Settings" },
 }) do
 	local button = create("TextButton", {
-		-- -10: the child sits inside the parent's 10 px left padding, so pull it back to the edge.
-		Position = UDim2.new(0, -10, 0, index * (HUD_BUTTON_H + HUD_BUTTON_GAP)),
+		Position = UDim2.new(0, 0, 0, index * (HUD_BUTTON_H + HUD_BUTTON_GAP)),
 		Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
-		BackgroundColor3 = C.Background,
-		BackgroundTransparency = 0.2,
+		BackgroundColor3 = C.Accent,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
 		Text = spec[1],
-		TextColor3 = C.Accent,
+		TextColor3 = Color3.new(0, 0, 0),
 		TextSize = 13,
-		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = menuButton,
 	}, hudButtonLook())
 	button.Activated:Connect(function()
