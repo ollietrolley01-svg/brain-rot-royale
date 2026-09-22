@@ -24,6 +24,9 @@ local Rarity = require(Shared:WaitForChild("Rarity"))
 
 local DETAILS = { { label = "full", options = {} }, { label = "world", options = { detail = "world" } } }
 local TOLERANCE = GunModels.ZFightOptions.tolerance
+-- Guns are authored in millimetres; face positions are reported in them, not in studs, so a number
+-- here can be compared against the source without converting in your head.
+local MM = GunModels.StudsPerMillimetre
 
 local function out(fmt, ...)
 	print("[AUDIT gunzfight] " .. string.format(fmt, ...))
@@ -96,7 +99,28 @@ local function measure(label, def, options)
 		local pairNames = {}
 		for index = 1, math.min(#written, 8) do
 			local pair = written[index]
-			table.insert(pairNames, string.format("%s/%s gap %.4f", pair.a.Name, pair.b.Name, pair.gap or -1))
+			-- The face normal and both parts' sizes, not just the names: a pair says WHICH faces are
+			-- flush and how big the parts are, which is the difference between fixing the fault and
+			-- changing a dimension that was never the one touching. (A fix aimed at the wrong axis
+			-- passed review on its arithmetic and changed nothing measurable.)
+			-- The face normal, and where each part's two faces ALONG that normal actually sit, in the
+			-- millimetres this kit builds in. Sizes alone were not enough: a shell segment is rotated,
+			-- so its local Z is not the ring's axis, and comparing local sizes sent a fix to the wrong
+			-- dimension twice. What settles it is the world position of the touching planes.
+			local n = pair.normal
+			local function faces(part)
+				if not n then
+					return "?"
+				end
+				local half = math.abs(n:Dot(part.CFrame.RightVector)) * part.Size.X / 2
+					+ math.abs(n:Dot(part.CFrame.UpVector)) * part.Size.Y / 2
+					+ math.abs(n:Dot(part.CFrame.LookVector)) * part.Size.Z / 2
+				local centre = n:Dot(part.Position)
+				return string.format("%.1f..%.1f", (centre - half) / MM, (centre + half) / MM)
+			end
+			table.insert(pairNames, string.format("%s %s[%s]/%s[%s] gap %.4f",
+				n and string.format("n(%.0f,%.0f,%.0f)", n.X, n.Y, n.Z) or "n?",
+				pair.a.Name, faces(pair.a), pair.b.Name, faces(pair.b), pair.gap or -1))
 		end
 		out("%s: %d parts%s; written flush pairs %d [%s]; build pass changed %d parts [%s]; second pass %d",
 			label, count, mismatch and " (part counts differ between builds!)" or "", #written, table.concat(pairNames, "; "),

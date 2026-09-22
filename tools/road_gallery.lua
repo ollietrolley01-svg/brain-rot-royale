@@ -99,7 +99,17 @@ local function measure(info)
 			tightest = math.min(tightest, curve.curve.radius)
 			widest = math.max(widest, curve.curve.radius)
 		end
-		note(string.format("curves: %d of %d bends, radius %.0f..%.0f", #curves, (roads.nodes and #roads.nodes or 0), tightest, widest))
+		-- Bends, not nodes: this line used to divide by every node on the map -- junctions, tees and
+		-- street mouths included -- and so reported "26 of 79 bends" on a map whose every bend was
+		-- curved. A bend is a node with two arms that turn, which is RoadNetwork's own "bend" kind.
+		local bends = 0
+		for _, node in ipairs(roads.nodes) do
+			if node.kind == "bend" then
+				bends += 1
+			end
+		end
+		note(string.format("curves: %d of %d bends (nodes on this map: %d), radius %.0f..%.0f",
+			#curves, bends, #roads.nodes, tightest, widest))
 	else
 		note("curves: none on this map")
 	end

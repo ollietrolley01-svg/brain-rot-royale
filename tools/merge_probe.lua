@@ -129,6 +129,82 @@ ok, message = RewardService.SellAllOfRarity(player, "Common")
 expect("SELL ALL with only a merged copy left sells nothing", not ok and count() == 1, message)
 expect("stars survive selling", data.Stars[name] == 5)
 
+-- The showcase never outlives the collection ----------------------------------------
+-- THE INVARIANT: nothing showcased is absent from the player's collection.
+--
+-- Written that way, not as "selling clears the showcase", because the showcase can be orphaned by
+-- anything that takes the last copy and there are four such paths (SELL 1, SELL ALL, a trade, and
+-- selling duplicates). A check aimed at one of them goes quiet as soon as that one is fixed.
+--
+-- It matters more than a stale field looks: a podium keeps rendering the brainrot, and it is in
+-- other players' showcase and trade lists and in the saved profile until something else clears it.
+do
+	local function showcaseIsOwned()
+		return data.Showcase == nil or table.find(data.Brainrots, data.Showcase) ~= nil
+	end
+	local function reset(names)
+		table.clear(data.Brainrots)
+		table.clear(data.Stars)
+		for _, entry in ipairs(names) do
+			RewardService.GiveBrainrot(player, entry)
+		end
+	end
+
+	-- SELL 1 of the last copy.
+	reset({ "Trippi Troppi", "Pizzarino Blobbo" })
+	data.Showcase = "Trippi Troppi"
+	local sold, why, showcaseChanged = RewardService.SellBrainrot(player, "Trippi Troppi")
+	expect("SELL 1 of the showcased brainrot's last copy clears the showcase", sold and showcaseIsOwned(), why)
+	expect("...and says so, so the podiums can be rebuilt", showcaseChanged == true, tostring(showcaseChanged))
+
+	-- SELL 1 of a spare must NOT clear it: the invariant is one-directional.
+	reset({ "Trippi Troppi", "Trippi Troppi" })
+	data.Showcase = "Trippi Troppi"
+	sold, why, showcaseChanged = RewardService.SellBrainrot(player, "Trippi Troppi")
+	expect("selling a spare leaves the showcase alone", sold and data.Showcase == "Trippi Troppi", why)
+	expect("...and reports no showcase change", not showcaseChanged, tostring(showcaseChanged))
+
+	-- SELL ALL of the rarity it belongs to.
+	reset({ "Trippi Troppi", "Pizzarino Blobbo" })
+	data.Showcase = "Pizzarino Blobbo"
+	sold, why, showcaseChanged = RewardService.SellAllOfRarity(player, "Common")
+	expect("SELL ALL clears a showcase it sold", sold and showcaseIsOwned(), why)
+	expect("...and says so", showcaseChanged == true, tostring(showcaseChanged))
+
+	-- Selling duplicates keeps one of every name, so it can never orphan the showcase. Checked
+	-- rather than assumed: if that ever changes, this is where it shows up.
+	reset({ "Trippi Troppi", "Trippi Troppi", "Pizzarino Blobbo" })
+	data.Showcase = "Trippi Troppi"
+	sold = RewardService.SellDuplicates(player)
+	expect("selling duplicates leaves the showcase owned", sold and showcaseIsOwned(),
+		tostring(data.Showcase) .. " / " .. tostring(RewardService.CountOf(data, "Trippi Troppi")))
+
+	-- A profile SAVED with an orphan (everyone who hit this before it was fixed) heals on load.
+	local healed = PlayerData.Reconcile({ Brainrots = { "Trippi Troppi" }, Showcase = "Pizzarino Blobbo" })
+	expect("a saved showcase the player no longer owns is dropped on load", healed.Showcase == nil,
+		tostring(healed.Showcase))
+	local kept = PlayerData.Reconcile({ Brainrots = { "Trippi Troppi" }, Showcase = "Trippi Troppi" })
+	expect("...and one they do own survives the load", kept.Showcase == "Trippi Troppi", tostring(kept.Showcase))
+
+	-- PLANTED: the check must be able to fail. A showcase pointed at something never owned is
+	-- exactly the state the bug left behind, and the invariant has to report it.
+	reset({ "Trippi Troppi" })
+	data.Showcase = "Pizzarino Blobbo"
+	expect("planted: a showcase the player does not own is caught", not showcaseIsOwned(), tostring(data.Showcase))
+	data.Showcase = nil
+
+	-- Put the profile back exactly as this block found it: one copy of the merged brainrot at five
+	-- stars. The sections below are written against that state -- one of them removes `name` by index
+	-- and another asserts the snapshot still carries five stars -- so leaving my own scratch state
+	-- behind would have failed two tests that have nothing to do with showcases.
+	table.clear(data.Brainrots)
+	table.clear(data.Stars)
+	RewardService.GiveBrainrot(player, name)
+	data.Stars[name] = 5
+	expect("showcase cases left the profile as they found it", count() == 1 and data.Stars[name] == 5,
+		string.format("%d copies, stars %s", count(), tostring(data.Stars[name])))
+end
+
 -- Stars survive losing every copy (a trade), and come back on a new one.
 table.remove(data.Brainrots, table.find(data.Brainrots, name))
 expect("no copies left", count() == 0)

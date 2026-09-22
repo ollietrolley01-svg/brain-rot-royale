@@ -247,6 +247,12 @@ function MatchService.SetReady(player, value)
 	end
 	lastReadyToggle[player.UserId] = now
 
+	-- Not while a match is loading: the HUD already refuses, but the lobby's ready pad did not, and a
+	-- lobby player stepping on it during the drop window got the full drop picker and its cursor claim
+	-- for a match they are not in (logic review #24).
+	if value and state == "Loading" then
+		return
+	end
 	if isReady(player) == value then
 		return
 	end
@@ -258,8 +264,109 @@ function MatchService.IsParticipant(player)
 	return participants[player] == true
 end
 
+-- #102: the client's spectator cycle (CombatClient.livingCharacters) reads `InMatch` off each Player to
+-- skip lobby idlers, mid-match joiners and anyone who has left. Written for EVERYONE present, true or
+-- FALSE -- never left unset -- because the client treats an absent attribute as "in", so the read stays
+-- inert wherever the write has not happened and a player who was never tagged would otherwise show up
+-- in every spectator's cycle. Takes the list rather than asking Players itself so the probe can hand it
+-- stand-ins. Bots have no Player and are always candidates on the client.
+local function tagInMatch(everyone)
+	for _, player in ipairs(everyone) do
+		player:SetAttribute("InMatch", participants[player] == true)
+	end
+end
+
 function MatchService.IsAlive(player)
-	return alive[player] == true
+	-- A respawn mode keeps alive[] set through the 5 s wait (that is what routes the next body back
+	-- to a pad), but a dead player is not alive to anything that asks here: DropSlot dumped the whole
+	-- kit at the corpse on every death (Bootstrap's handler asks IsAlive), and the companion kept
+	-- fighting for a corpse (logic review #12).
+	if alive[player] ~= true then
+		return false
+	end
+	return not (currentMode.respawn and GameMode.IsDowned(player))
+end
+
+-- Is this player WATCHING the match rather than playing it?
+--
+-- One predicate, in one place, because two copies of it is exactly how the exit below and
+-- Bootstrap's replication-focus guard would drift apart -- and they must agree, or a player can
+-- leave spectating while the server still streams the match to them, or be refused an exit from a
+-- state the focus guard thinks they are in.
+--
+-- A spectator is a PARTICIPANT of the running match who is no longer alive. Respawn modes never
+-- spectate at all -- eliminate() returns at its `currentMode.respawn` branch, which sits ABOVE the
+-- spectate fire -- so they are excluded by name here rather than by trusting that alive[] is never
+-- cleared over there. If that branch ever moves, this stays correct.
+function MatchService.IsSpectating(player)
+	if currentMode and currentMode.respawn then
+		return false
+	end
+	return participants[player] == true and not alive[player]
+end
+
+-- #102: "theres no way to leave spectator mode." There was not. The Spectate remote had exactly two
+-- fire sites -- true on elimination, false inside the match-reset loop -- so the ONLY exit was the
+-- end of the match. No key, no button, no remote: the spectator HUD was a text label and a rounded
+-- corner. This is the exit.
+--
+-- Leaving drops them to the lobby and does NOT let them back in (Oliver's call, taken knowing it):
+-- re-entry needs a spectate-list UI that does not exist, and inventing one to support a button is
+-- how scope doubles. The button says so.
+--
+-- They stay a PARTICIPANT on purpose. Their placement already stands, they are eliminated either
+-- way, and leaving forfeits nothing they still had -- while staying in `participants` means the
+-- match-end reset still respawns them with everybody else instead of leaving them the one player
+-- the reset skips.
+--
+-- Returns whether they were actually spectating, so a stray remote is distinguishable from a real
+-- exit rather than silently doing nothing.
+function MatchService.LeaveSpectate(player)
+	if not MatchService.IsSpectating(player) then
+		return false
+	end
+
+	-- The client is told FIRST, and the order is load-bearing. setSpectating(false) is what tears
+	-- the spectator camera down and hands the view back; doing it after LoadCharacter would race a
+	-- brand-new body's camera against a spectator camera still pointed at somebody else, which is
+	-- the same two-writers-one-property fault this item is already about.
+	spectate:FireClient(player, false)
+	-- Out of the match for good: not a spectator target for anyone else either (#102).
+	player:SetAttribute("InMatch", false)
+
+	-- Cleared here as well as by the client's own focus call, because that call is rate-limited
+	-- (RateLimit "SetReplicationFocus") and may be applied a moment late. A player standing in the
+	-- lobby must not still be streaming the arena.
+	player.ReplicationFocus = nil
+
+	-- LoadCharacter lands in OnCharacterAdded, where `alive[player]` is false, so it takes the
+	-- lobby branch and PlaceInLobby puts them on Rot Island. Deliberately NOT calling PlaceInLobby
+	-- here as well: two placements for one body is how a spawn ends up fighting itself.
+	local ok = pcall(function()
+		player:LoadCharacter()
+	end)
+	return ok
+end
+
+-- #102, the streaming half: which body a spectator may point replication at. Bootstrap's
+-- SetReplicationFocus handler asks here -- one rule, next to IsSpectating and LeaveSpectate, which it
+-- must agree with. The spectator test was always right; the TARGET test used to be "any combatant or
+-- any Player's character", and Combatants.FromCharacter falls back to Players:GetPlayerFromCharacter,
+-- so a lobby idler's body passed and a modified client could stream the arena from the lobby by naming
+-- one. The target must be a combatant of THIS match who is alive in the server's own table -- a bot
+-- token or a Player that alive[] says is standing. Returns the part to focus on, or nil.
+function MatchService.FocusTarget(player, part)
+	if not MatchService.IsSpectating(player) then
+		return nil
+	end
+	if typeof(part) ~= "Instance" or not part:IsA("BasePart") or part.Name ~= "HumanoidRootPart" or not part.Parent then
+		return nil
+	end
+	local target = Combatants.FromCharacter(part.Parent)
+	if not target or alive[target] ~= true then
+		return nil
+	end
+	return part
 end
 
 function MatchService.GetState()
@@ -314,6 +421,11 @@ end
 
 -- Permanent gamepasses always apply. Single-use consumables are spent here, at the moment
 -- the match actually starts, so buying one and then leaving doesn't burn it.
+-- What applyBoosts granted each player at the opening spawn, so a respawn body (a respawn mode's
+-- second, third... body) gets the same max health and speed WITHOUT spending another consumable
+-- (logic review #23). Overwritten every match start; cleared when the player leaves.
+local grantedBoosts = {}
+
 local function applyBoosts(player, humanoid)
 	local data = PlayerData.Get(player)
 	local bonusHealth, bonusSpeed = 0, 0
@@ -348,11 +460,25 @@ local function applyBoosts(player, humanoid)
 		StateSync.Push(player)
 	end
 
+	grantedBoosts[player] = { health = bonusHealth, speed = bonusSpeed, scale = speedScale }
 	humanoid.MaxHealth = MatchConfig.StartHealth + bonusHealth
 	humanoid.Health = humanoid.MaxHealth
 
 	-- Remembered so sprinting can scale it without losing the gamepass bonus. A Rot Rush match
 	-- scales the lot.
+	baseSpeeds[player] = (MatchConfig.BaseWalkSpeed + bonusSpeed) * speedScale * (currentEvent and currentEvent.speedMultiplier or 1)
+	humanoid.WalkSpeed = baseSpeeds[player]
+end
+
+-- The same numbers on a respawn body, from the record: nothing is spent, nothing is re-rolled. A
+-- player with no record (joined a running respawn mode) gets the gamepass bonuses only.
+local function reapplyBoosts(player, humanoid)
+	local granted = grantedBoosts[player]
+	local bonusHealth = granted and granted.health or (Monetization.Owns(player, "ExtraHealth") and 50 or 0)
+	local bonusSpeed = granted and granted.speed or (Monetization.Owns(player, "ExtraSpeed") and 4 or 0)
+	local speedScale = granted and granted.scale or 1
+	humanoid.MaxHealth = MatchConfig.StartHealth + bonusHealth
+	humanoid.Health = humanoid.MaxHealth
 	baseSpeeds[player] = (MatchConfig.BaseWalkSpeed + bonusSpeed) * speedScale * (currentEvent and currentEvent.speedMultiplier or 1)
 	humanoid.WalkSpeed = baseSpeeds[player]
 end
@@ -905,9 +1031,13 @@ function MatchService.ApplySpeedBoost(player, multiplier, duration, options)
 		syncStamina(player, true)
 	end
 	applySpeed(player)
-	-- The HUD shows a SPEED BOOST pill while this is set.
+	-- The HUD shows a SPEED BOOST pill while this is set, and counts down to the stamp: SERVER time,
+	-- the clock the client reads back with workspace:GetServerTimeNow(), the way MovementService stamps
+	-- BounceBootsUntil. A second soda re-stamps; the first soda's delayed clear below sees a newer
+	-- untilTime and leaves both alone.
 	if Combatants.IsPlayer(player) then
 		player:SetAttribute("SpeedBoosted", true)
+		player:SetAttribute("SpeedBoostUntil", workspace:GetServerTimeNow() + duration)
 	end
 	task.delay(duration, function()
 		local boost = speedBoosts[player]
@@ -919,6 +1049,7 @@ function MatchService.ApplySpeedBoost(player, multiplier, duration, options)
 			end
 			if Combatants.IsPlayer(player) and player.Parent then
 				player:SetAttribute("SpeedBoosted", false)
+				player:SetAttribute("SpeedBoostUntil", nil)
 			end
 		end
 	end)
@@ -942,6 +1073,14 @@ local function finishMatch()
 	StormService.Stop()
 	SupplyDropService.Stop()
 	LootService.Clear()
+	-- S5a. Ranks BEFORE the world comes down: a respawn mode's RankOf reads the team table that
+	-- StopWorld clears, so read after it every team was nil and every player ranked #2 - no winner,
+	-- no "Won by", both sides paid rank 2 (logic review #17).
+	local ranks = {}
+	for token in pairs(participants) do
+		ranks[token] = placements[token] or (currentMode.RankOf and currentMode.RankOf(token) or nil)
+	end
+
 	-- S4. Tears down whatever the mode built: the hill, the arena boundary, team state and the
 	-- respawn timers. A no-op in the battle royale.
 	currentMode.StopWorld()
@@ -980,7 +1119,7 @@ local function finishMatch()
 		-- S5. A respawn mode has no placements, so its rank and its payout come from the mode.
 		-- AwardResult is deliberately NOT AwardPlacement: that counts Stats.wins and submits to the
 		-- global battle-royale board, and a Team Deathmatch win must not inflate either.
-		local rank = placements[token] or (currentMode.RankOf and currentMode.RankOf(token) or nil)
+		local rank = ranks[token]
 		if rank and Combatants.IsPlayer(token) and token.Parent then
 			local reward = currentMode.AwardResult and currentMode.AwardResult(token, rank)
 				or RewardService.AwardPlacement(token, rank)
@@ -1038,8 +1177,12 @@ local function finishMatch()
 		broadcast()
 
 		for _, player in ipairs(Players:GetPlayers()) do
-			WeaponService.Clear(player)
+			-- Only the match's own loadouts. Clearing everyone nilled a lobby player's rack gun taken
+			-- during the results screen with no push and no held-gun refresh: a dead welded gun and a
+			-- hotbar entry until they took another (logic review #8).
 			if wereIn[player] then
+				player:SetAttribute("InMatch", false)
+				WeaponService.Clear(player)
 				spectate:FireClient(player, false)
 				pcall(function()
 					player:LoadCharacter()
@@ -1094,17 +1237,77 @@ local function dropLoot(token)
 	end
 end
 
--- S7a. A bot's death in a respawn mode leaves the gun it held (claude-43's ruling on Oliver's
--- "sometimes the bots dont drop their weapons"): a bot's gun is the only loot in those modes, and
--- a body that leaves nothing reads as broken. A player leaves nothing — a fresh kit is five
--- seconds away, and a full kit on the floor every five seconds is the litter S7 avoids. Bots track
--- a magazine but no reserve, so the gun comes down the way the battle royale's bot drops do,
--- full, rather than as a four-round gun with nothing behind it. Coins, XP and mastery are
--- untouched: this is loot, not the reward economy.
-local function dropHeldGun(token)
+-- The battle royale is over when one combatant (or no real player) is left: rank the survivors and
+-- finish. Called from eliminate() once the match is running, and from the end of startMatch for a
+-- match that lost everyone WHILE loading - finishing one that was still starting resumed startMatch
+-- over the results screen with a fresh storm and combat (logic review #21).
+local function concludeIfOver()
+	if state ~= "InProgress" then
+		return false
+	end
+	if currentMode.respawn then
+		-- A respawn mode never ends by elimination; with no real player left it ran on with bots to the
+		-- deadline while late joiners sat on "Not in this match" (logic review #20).
+		if realPlayersAlive() == 0 then
+			finishMatch()
+			return true
+		end
+		return false
+	end
+	if aliveCount <= 1 or realPlayersAlive() == 0 then
+		local rank = aliveCount
+		for survivor in pairs(alive) do
+			placements[survivor] = rank
+			rank = math.max(1, rank - 1)
+			alive[survivor] = nil
+			disconnectDeath(survivor)
+		end
+		aliveCount = 0
+		finishMatch()
+		return true
+	end
+	return false
+end
+
+-- S7a, Oliver's #124: in a kit mode a death drops nothing of the ISSUED kit - nobody needs a floor
+-- of kit guns in a mode that hands one out every five seconds - but everything picked up during the
+-- match still drops, players and bots through this one rule. The kit is tagged where it is issued:
+-- ModeTeams.GrantLoadout marks a player's slots `issued`, and the spawn callbacks record a bot's
+-- `issuedWeaponId` (a bot's kit items are never consumed today, so what it holds was picked up). A
+-- pickup that displaced an issued slot is untagged and drops; ammo picked up INTO an issued gun stays
+-- with it. Bots track a magazine but no reserve, so a dropped bot gun comes down full, the way the
+-- battle royale's do. Coins, XP and mastery are untouched: this is loot, not the reward economy.
+local function dropPickedUp(token)
 	local root = Combatants.GetRoot(token)
-	if root and token.weapon and token.weapon.id then
-		LootService.DropWeapon(token.weapon.id, root.Position)
+	if not root then
+		return
+	end
+	local position = root.Position
+	if Combatants.IsBot(token) then
+		if token.weapon and token.weapon.id and token.weapon.id ~= token.issuedWeaponId then
+			LootService.DropWeapon(token.weapon.id, position)
+		end
+		local heals = token.heals
+		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
+			LootService.DropHeal(position)
+		end
+		local shields = token.shields
+		if shields and (shields.MiniShield or 0) + (shields.ShieldPotion or 0) > 0 then
+			LootService.DropItem((shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
+		end
+		if (token.defenses or 0) > 0 then
+			LootService.DropItem("RotBarricade", position, token.defenses)
+		end
+		return
+	end
+	local loadout = WeaponService.Get(token)
+	if not loadout then
+		return
+	end
+	for _, slot in pairs(loadout.slots) do
+		if not slot.issued then
+			LootService.DropSlot(slot, position)
+		end
 	end
 end
 
@@ -1120,15 +1323,13 @@ local function eliminate(token, killerToken, method, weaponId)
 	-- no spectating and no last one standing.
 	--
 	-- This sits ABOVE dropLoot and above the kill-reward block on purpose, so a respawn mode drops
-	-- no loot (nobody needs a floor of guns in a mode that hands out a kit every five seconds) and
+	-- nothing of the ISSUED kit (what was picked up still drops - dropPickedUp, Oliver's #124) and
 	-- **PAYS NOTHING AT ALL** — no kill coins, no XP, no mastery. That is DELIBERATE AND TEMPORARY:
 	-- Oliver asked for rewards scaled to what the same performance would earn per minute in the
 	-- battle royale, and no economy moves here until that rate has been measured rather than
 	-- guessed. When the reward work lands, it hangs off currentMode.OnDeath, not off this seam.
 	if currentMode.respawn then
-		if Combatants.IsBot(token) then
-			dropHeldGun(token)
-		end
+		dropPickedUp(token)
 		currentMode.OnDeath(token, killerToken, method, weaponId)
 		return
 	end
@@ -1221,17 +1422,7 @@ local function eliminate(token, killerToken, method, weaponId)
 	broadcast()
 
 	-- A server of bots fighting each other with nobody watching is not worth running out.
-	if aliveCount <= 1 or realPlayersAlive() == 0 then
-		local rank = aliveCount
-		for survivor in pairs(alive) do
-			placements[survivor] = rank
-			rank = math.max(1, rank - 1)
-			alive[survivor] = nil
-			disconnectDeath(survivor)
-		end
-		aliveCount = 0
-		finishMatch()
-	end
+	concludeIfOver()
 end
 
 CombatService.OnElimination = function(victim, killer, weaponDef, weaponId)
@@ -1297,6 +1488,14 @@ GameMode.Bind({
 		return true
 	end,
 })
+
+-- #108. The storm asks before it hurts anyone: only a LIVE PARTICIPANT of the running match is
+-- eligible, players and bots alike. A lobby body is registered like every other (OnCharacterAdded)
+-- but never enters `alive`, so it can never take storm damage. Installed here, beside GameMode.Bind,
+-- because it is the same kind of seam: a closure over this file's internals, handed over once.
+StormService.SetEligibility(function(token)
+	return alive[token] == true
+end)
 
 --------------------------------------------------------------------------------
 -- Match start
@@ -1390,6 +1589,7 @@ local function startMatch()
 			aliveCount += 1
 		end
 	end
+	tagInMatch(Players:GetPlayers())
 
 	local botCount = math.clamp(
 		math.min(MatchConfig.BotFillTarget, MatchConfig.MaxPlayers) - #joining,
@@ -1533,6 +1733,9 @@ local function startMatch()
 				end
 				participants[bot] = true
 				alive[bot] = true
+				-- The gun SpawnLoadout issued (it runs before this callback): a death in a kit mode drops
+				-- the held gun only if it is a different one (dropPickedUp, Oliver's #124).
+				bot.issuedWeaponId = bot.weapon and bot.weapon.id or nil
 				-- S12c. WITHOUT THIS LINE a bot enters Team Deathmatch and King of the Hill with no
 				-- team at all: killing it scores nothing, it is never retired or replaced, the hill
 				-- never counts it, the spawn-pad enemy scan cannot see it, and it has no team
@@ -1568,6 +1771,9 @@ local function startMatch()
 	state = "InProgress"
 	CombatService.SetEnabled(true)
 	broadcast()
+	-- Anyone who left while the match was loading was taken out of the counts without ending it (see
+	-- concludeIfOver); now that it has started, the same test runs once.
+	concludeIfOver()
 end
 
 --------------------------------------------------------------------------------
@@ -1600,6 +1806,14 @@ function MatchService.OnCharacterAdded(player, character)
 		-- Only once the match is running: the opening spawn is placed by startMatch's PlaceAtStart.
 		if state == "InProgress" then
 			currentMode.OnRespawn(player, character)
+			-- Everything startMatch gave the opening body, the respawn body gets too - passes and the
+			-- consumable's max-health boost, the movement speed, and the event's start shield, which
+			-- GrantLoadout's Reset has just zeroed - re-applied from the record, not re-spent
+			-- (logic review #23).
+			reapplyBoosts(player, humanoid)
+			if currentEvent and currentEvent.startShield then
+				WeaponService.SetShield(player, currentEvent.startShield)
+			end
 		end
 		-- Handled by startMatch, which pivots to the spawn point itself.
 		return
@@ -1628,13 +1842,29 @@ function MatchService.OnPlayerRemoving(player)
 	sprinting[player] = nil
 	slides[player], stamina[player], rateBuckets[player], statusSpeeds[player] = nil, nil, nil, nil
 	crouching[player] = nil
-	if alive[player] then
+	if alive[player] and currentMode.respawn then
+		-- S7b. Leaving a respawn mode is not a death. eliminate() handed it to the mode's onDeath, which
+		-- scored a "died to the world" point for the other side (a second one if they quit during the
+		-- respawn wait) and never took them out of the alive count, so "N ALIVE" overstated by one per
+		-- quitter for the rest of the match (logic review #19, #18). Out the way a retired bot goes.
+		disconnectDeath(player)
+		CombatService.ClearAttacker(player)
+		aliveCount -= 1
+		participants[player], alive[player] = nil, nil
+		concludeIfOver()
+	elseif alive[player] then
 		eliminate(player, nil)
+	elseif placements[player] and state == "InProgress" and Combatants.IsPlayer(player) then
+		-- Eliminated, told "placed #N", then left while spectating: finishMatch pays placements only to
+		-- players still here, so theirs was never paid. Rank is final at death, so pay it now - this
+		-- runs before PlayerData.Release in Bootstrap's leave handler, so it saves (logic review #1).
+		pcall(RewardService.AwardPlacement, player, placements[player])
 	end
 	participants[player] = nil
 	alive[player] = nil
 	placements[player] = nil
 	chosenDrop[player] = nil
+	grantedBoosts[player] = nil
 end
 
 function MatchService.Start()

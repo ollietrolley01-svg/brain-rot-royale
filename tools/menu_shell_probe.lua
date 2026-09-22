@@ -475,3 +475,54 @@ for _, section in ipairs({
 	end
 end
 print(string.format("[PROBE] RESULT %d passed, %d failed", passes, failures))
+
+--------------------------------------------------------------------------------
+-- NEGATIVE WIDTHS (the labels that draw nothing on a portrait phone)
+--------------------------------------------------------------------------------
+
+-- `UDim2.new(1, -N, ...)` past the parent's width draws NOTHING rather than truncating, so a row
+-- goes blank with no sign of what happened. Five labels in MenuClient were sized that way and
+-- became reachable the moment the `tall` form started running. The arithmetic now goes through
+-- UiKit.textSpan, which is pure and lives in a module precisely so this can test it -- the
+-- renderers themselves are in a LocalScript and nothing in this harness can run one.
+local function sectionSpans()
+	print("[PROBE] == SPANS (labels that drew nothing at portrait widths) ==")
+	-- Every content width the shell produces, measured: `tall` gives panel width - 24.
+	local WIDTHS = { 296, 311, 326, 350, 603, 645, 728, 780 }
+	-- The five reserves that were in the tree, worst case for each.
+	local RESERVES = { 340, 220, 420, 310, 310 }
+	local checked, worst = 0, math.huge
+	for _, width in ipairs(WIDTHS) do
+		for _, reserve in ipairs(RESERVES) do
+			local span = UiKit.textSpan(width, reserve, 22)
+			local drawn = width + span.X.Offset
+			checked += 1
+			worst = math.min(worst, drawn)
+			if drawn <= 0 then
+				expect(string.format("span stays positive at content %d with reserve %d", width, reserve),
+					false, string.format("%d px", drawn))
+			end
+		end
+	end
+	expect("every label keeps a positive width at every content width",
+		worst > 0, string.format("%d combinations checked, narrowest %d px", checked, worst))
+	-- Where there is room, nothing changes: the reserve is honoured exactly.
+	local roomy = UiKit.textSpan(728, 340, 22)
+	expect("with room to spare the reserve is unchanged", roomy.X.Offset == -340,
+		string.format("offset %d at 728 wide", roomy.X.Offset))
+
+	-- THE PLANTED FAULT: the arithmetic as it was in the tree -- a flat `1, -N`. It must come out
+	-- NEGATIVE at a portrait width, or this section is not measuring the thing it claims to.
+	local shipped = UDim2.new(1, -340, 0, 22)
+	expect("PLANTED FAULT: the shipped flat reserve is reported as negative at 296 px of content",
+		296 + shipped.X.Offset < 0, string.format("%d px", 296 + shipped.X.Offset))
+end
+
+do
+	local ok, err = pcall(sectionSpans)
+	if not ok then
+		failures += 1
+		print("[PROBE] FAIL section SPANS threw: " .. tostring(err))
+	end
+	print(string.format("[PROBE] RESULT (with spans) %d passed, %d failed", passes, failures))
+end

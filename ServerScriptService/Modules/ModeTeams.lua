@@ -189,11 +189,24 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	local dropSpots = mapInfo and mapInfo.dropSpots
 	arenaCentre = (dropSpots and dropSpots[1]) or Vector3.zero
 	arenaCentre = Vector3.new(arenaCentre.X, 0, arenaCentre.Z)
-	-- Half the map's radius, between 450 and 650. It was 0.30 clamped to 280..380, which Oliver
-	-- found far too small: on SahurSprings (radius 1280) that was 380, one town and its verges for
-	-- up to fifty combatants, 9,000 square studs each. 650 is 2.9x the area, room for the towns on
-	-- the first ring as well as the centre one, with the bases 940 studs apart at BASE_FRACTION.
-	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.50, 450, 650)
+	-- 0.62 of the map's radius, between 560 and 820 (Oliver's #121, "bigger maps on every
+	-- gamemode"; claude-43 approved 09-21 22:4x).
+	--
+	-- It was 0.30 clamped to 280..380, then 0.50 clamped to 450..650 -- and the comment that came
+	-- with 0.50 claimed it left "room for the towns on the first ring as well as the centre one".
+	-- MEASURED ACROSS ALL FIVE MAPS, that was wrong: at 0.50 there is EXACTLY ONE town inside the
+	-- arena on every map, because placeTowns puts the first ring 543..1160 studs from the centre
+	-- town while the arena reached only 450..650. The clamp was also doing the deciding on two
+	-- maps rather than the map itself -- BombardiroBay (radius 1480) was pinned at 650, giving the
+	-- BIGGEST map the proportionally SMALLEST arena at 0.439 R, while RotRidge (880) was pushed up
+	-- to 450 from 440.
+	--
+	-- 0.62 with a 560..820 clamp is +24% radius and +54% area, uniform across all five, and it
+	-- unsticks both clamped maps. The cost is traversal, not build time: the arena is only a
+	-- boundary circle drawn over a map that is already built at full size, so this is free. Bases
+	-- sit BASE_FRACTION apart, so the longest crossing (BombardiroBay) goes 936 -> 1181 studs,
+	-- about 52 s -> 66 s at MatchConfig.BaseWalkSpeed, which is a respawn mode's to absorb.
+	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.62, 560, 820)
 
 	-- Two bases on opposite sides of the centre, on an axis rolled per match so the same map does
 	-- not always play along the same street.
@@ -379,6 +392,17 @@ end
 
 -- Protection ends the moment you take a swing, not when you move. Called from the fire and throw
 -- paths; safe to call when nothing is protected.
+-- The raw deadline, for tools/respawn_probe.lua. Read-only and read by nothing in the game.
+--
+-- It exists because the UNITS are checkable offline and the BEHAVIOUR is not: this deadline was
+-- once `os.clock() + seconds` (process CPU time, a small number of seconds since the process
+-- started) and is now a wall-clock millisecond (~1.7e12). Under load those two implementations
+-- behave very differently -- 3 seconds of invulnerability became about 7.5 -- but in an idle window
+-- they behave identically, so no timing test can tell them apart there. The magnitude can, always.
+function ModeTeams.ProtectionDeadline(token)
+	return protectedUntil[token]
+end
+
 function ModeTeams.BreakProtection(token)
 	if protectedUntil[token] then
 		protectedUntil[token] = nil
@@ -642,6 +666,15 @@ function ModeTeams.GrantLoadout(player)
 			if WeaponService.GiveConsumable(player, entry.id, wanted) > 0 then
 				stacks += 1
 			end
+		end
+	end
+	-- Everything present now is the issued kit: tagged so a death in this mode drops only what was
+	-- picked up later (MatchService.dropPickedUp, Oliver's #124). A pickup that displaces an issued
+	-- slot arrives untagged, so it drops.
+	local loadout = WeaponService.Get(player)
+	if loadout then
+		for _, slot in pairs(loadout.slots) do
+			slot.issued = true
 		end
 	end
 	return weaponId, stacks

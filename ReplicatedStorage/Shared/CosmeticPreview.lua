@@ -61,7 +61,27 @@ local function anchor(model)
 	return model
 end
 
+-- A ViewportFrame draws no particles and no light, so an aura is previewed as an orb with specks
+-- around it. When a design declares `aura.layers`, the first layer picks the speck count, size and
+-- direction, so a sinking cloud of heavy puffs does not preview identically to a fast spit of
+-- needles. An aura with no layers gets exactly what it got before: seven specks of 0.22.
+local function auraLook(item)
+	local layer = item.aura and item.aura.layers and item.aura.layers[1]
+	if not layer then
+		return { count = 7, size = 0.22, rise = 1, spin = 0.9, color = item.color }
+	end
+	local speed = layer.speed and layer.speed[2] or 3
+	return {
+		count = math.clamp(math.floor((layer.rate or 14) / 3), 4, 12),
+		size = math.clamp((layer.size or 0.55) * 0.4, 0.1, 0.4),
+		rise = (layer.rise or 2.5) >= 0 and 1 or -1,
+		spin = math.clamp(speed / 3, 0.4, 2.4),
+		color = layer.color or item.color,
+	}
+end
+
 local function auraModel(item)
+	local look = auraLook(item)
 	local model = Instance.new("Model")
 	model.Name = "Aura"
 
@@ -79,13 +99,13 @@ local function auraModel(item)
 	-- moved by the turn loop, which is also the only thing that makes an aura read as an aura. They
 	-- start spread around the orb rather than stacked at one point, so a still of one -- a crate
 	-- reveal's first frame, a render -- looks like an aura too.
-	local SPECKS = 7
+	local SPECKS = look.count
 	for index = 1, SPECKS do
 		local speck = Instance.new("Part")
 		speck.Name = "Speck" .. index
 		speck.Shape = Enum.PartType.Ball
-		speck.Size = Vector3.new(0.22, 0.22, 0.22)
-		speck.Color = item.color
+		speck.Size = Vector3.new(look.size, look.size, look.size)
+		speck.Color = look.color
 		speck.Material = Enum.Material.Neon
 		speck.Transparency = 0.15
 		local spin = index / SPECKS * math.pi * 2
@@ -223,6 +243,7 @@ local function build(preview)
 	preview.model = model
 	preview.specks = {}
 	if item.kind == "Aura" then
+		preview.look = auraLook(item)
 		for _, part in ipairs(model:GetChildren()) do
 			if part.Name:match("^Speck") then
 				table.insert(preview.specks, part)
@@ -318,9 +339,13 @@ function CosmeticPreview.Fill(frame, id, options)
 								local pivot = entry.pivot or Vector3.zero
 								entry.camera.CFrame = CFrame.new(pivot) * CFrame.Angles(0, swing, 0) * CFrame.new(-pivot) * entry.base
 							end
+							local look = entry.look
 							for n, speck in ipairs(entry.specks) do
-								local spin = now * 0.9 + n * (math.pi * 2 / #entry.specks)
+								local spin = now * (look and look.spin or 0.9) + n * (math.pi * 2 / #entry.specks)
 								local rise = ((now * 0.35 + n * 0.17) % 1)
+								if look and look.rise < 0 then
+									rise = 1 - rise
+								end
 								local radius = 0.95 - rise * 0.25
 								speck.CFrame = CFrame.new(math.cos(spin) * radius, rise * 1.5 - 0.75, math.sin(spin) * radius)
 								speck.Transparency = 0.15 + rise * 0.7

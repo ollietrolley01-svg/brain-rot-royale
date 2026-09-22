@@ -232,6 +232,28 @@ for id, item in pairs(ItemData.Items) do
 	item.id = id
 end
 
+-- How many structures ONE player can have standing at once. DefenseService enforces it (a fourth
+-- collapses their oldest), and it lives here because the client has to be able to say so: a cap the
+-- player only discovers by losing a wall they built is not a rule, it is a surprise.
+--
+-- Mines are not structures and are not capped -- they arm where they land and belong to
+-- HazardService -- so the sentence below goes on the three that build something, not on all four
+-- "defense" items.
+ItemData.MaxStructuresPerPlayer = 3
+
+-- `capRule` is its own field rather than a sentence glued onto `description`, at the HUD tab's asking
+-- and for their reason, which is better than the editorial one: joining two fields is a line of code,
+-- while splitting one requires parsing English. A fused field imposes its choice on every consumer
+-- that will ever exist; a split field imposes nothing on anyone.
+--
+-- Still composed from the constant, never typed: a split is exactly the moment someone writes
+-- "three" by hand, and tools/lua_static_check.py fails that pattern for good reason.
+for _, id in ipairs({ "RotBarricade", "PopupBunker", "BrainrotFortress" }) do
+	ItemData.Items[id].capRule = string.format(
+		"Up to %d of your own can stand at once - a new one replaces your oldest.",
+		ItemData.MaxStructuresPerPlayer)
+end
+
 function ItemData.Get(id)
 	return ItemData.Items[id]
 end

@@ -183,9 +183,11 @@ function Capture-Gallery([string]$path, [int]$viewKey = -1, [string]$logPath = "
 		}
 		$bmp = New-Object System.Drawing.Bitmap $w, $h
 		$g = [System.Drawing.Graphics]::FromImage($bmp)
-		$hdc = $g.GetHdc()
-		[BrrWin]::PrintWindow($p.MainWindowHandle, $hdc, 2) | Out-Null
-		$g.ReleaseHdc($hdc); $g.Dispose()
+		# From the screen, not PrintWindow: PrintWindow returns this window's chrome with the GPU
+		# viewport unpainted -- measured 1 distinct colour against the screen grab's 68 -- so the
+		# capture tag is never in the picture. Numbers in pending/gallery_screen_capture.py.
+		$g.CopyFromScreen($r.Left, $r.Top, 0, 0, (New-Object System.Drawing.Size $w, $h))
+		$g.Dispose()
 		$image = $bmp
 		if (-not $NoCrop) {
 			$cw = $w - $CropLeft - $CropRight; $ch = $h - $CropTop - $CropBottom
@@ -228,6 +230,10 @@ if not string.find(game.Name, "BRR_Gallery", 1, true) then
 	return
 end
 local HOLD = HOLD_SECONDS
+-- True when -Hold was passed explicitly. `view.hold or HOLD` meant a gallery that hard-codes its own
+-- hold SILENTLY IGNORED the flag, so a tab slowing a run down to chase a capture problem changed
+-- nothing and had no way to tell. An explicit -Hold now wins; a view's own hold is still the default.
+local HOLD_FORCED = HOLD_WAS_PASSED
 task.delay(10, function()
 	print("[BRR_Gallery] start")
 	local ok, views = pcall(function()
@@ -310,13 +316,13 @@ GALLERY_SOURCE
 			-- back with 0 shots -- the tag sat at 0 for the whole run.)
 			setTagIndex(index)
 			print(string.format("[BRR_Gallery] ready %03d %s", index, tostring(view.name)))
-			hold(view.hold or HOLD)
+			hold(HOLD_FORCED and HOLD or (view.hold or HOLD))
 		end
 	end
 	print("[BRR_Gallery] finished")
 end)
 '@
-$lua = $lua.Replace("HOLD_SECONDS", [string]$Hold).Replace("GALLERY_SOURCE", $gallerySource)
+$lua = $lua.Replace("HOLD_WAS_PASSED", $(if ($PSBoundParameters.ContainsKey("Hold")) { "true" } else { "false" })).Replace("HOLD_SECONDS", [string]$Hold).Replace("GALLERY_SOURCE", $gallerySource)
 $xml = "<roblox version=`"4`">`n`t<Item class=`"Script`" referent=`"RBX0`">`n`t`t<Properties>`n`t`t`t<string name=`"Name`">BRR_Gallery_TEMP</string>`n`t`t`t<ProtectedString name=`"Source`">" + $lua.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;") + "</ProtectedString>`n`t`t</Properties>`n`t</Item>`n</roblox>`n"
 [System.IO.File]::WriteAllText($plugin, $xml, (New-Object System.Text.UTF8Encoding $false))
 
@@ -349,9 +355,11 @@ function Grab-GalleryFrame {
 	if ($w -lt 200 -or $h -lt 200) { $script:tinyWindowShots++; return $null }
 	$bmp = New-Object System.Drawing.Bitmap $w, $h
 	$g = [System.Drawing.Graphics]::FromImage($bmp)
-	$hdc = $g.GetHdc()
-	[BrrWin]::PrintWindow($p.MainWindowHandle, $hdc, 2) | Out-Null
-	$g.ReleaseHdc($hdc); $g.Dispose()
+	# From the screen, not PrintWindow: PrintWindow returns this window's chrome with the GPU
+	# viewport unpainted -- measured 1 distinct colour against the screen grab's 68 -- so the
+	# capture tag is never in the picture. Numbers in pending/gallery_screen_capture.py.
+	$g.CopyFromScreen($r.Left, $r.Top, 0, 0, (New-Object System.Drawing.Size $w, $h))
+	$g.Dispose()
 	$index = if (Test-BlankFrame $bmp) { -2 } else { Get-GalleryTagIndex $bmp }
 	$image = $bmp
 	if (-not $NoCrop) {
@@ -373,8 +381,53 @@ $finished = $false
 $finishSeen = $null
 $taglessFrames = 0
 $blankFrames = 0
+# Roblox Studio opens a modal "Auto-Recovery" dialog when a previous Studio did not exit cleanly.
+# It blocks the place from loading, so the plugin never draws its capture tag, every frame is
+# legitimately untagged, and the run saves nothing -- and because a blocked run also cannot exit
+# cleanly, it writes the file that re-arms the dialog for the NEXT run. Measured 2026-09-22: the
+# dialog reappeared on a fresh launch even with %LOCALAPPDATA%\Roblox\AutoSaves emptied first, and
+# three tabs lost days to that loop while every theory reached past it.
+#
+# WM_CLOSE is deliberate: it is the X button, which leaves the recovery files alone. Not "Open",
+# which would load someone's recovered work into a render; not "Delete", which would throw away
+# their recovery data to unblock a screenshot. Studio decides what happens to those files; the
+# harness only stops the asking.
+if (-not ("BrrAutoRecovery" -as [type])) {
+	Add-Type @"
+using System;using System.Text;using System.Runtime.InteropServices;
+public class BrrAutoRecovery {
+ public delegate bool EP(IntPtr h, IntPtr p);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(EP e, IntPtr p);
+ [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int c);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+}
+"@
+}
+function Close-AutoRecoveryDialog {
+	$ids = @(Get-Process -Name RobloxStudioBeta, RobloxStudio -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+	if ($ids.Count -eq 0) { return }
+	$script:brrAutoRecoveryHits = @()
+	$cb = [BrrAutoRecovery+EP]{ param($h, $p)
+		$owner = 0
+		[BrrAutoRecovery]::GetWindowThreadProcessId($h, [ref]$owner) | Out-Null
+		if ($ids -contains [int]$owner -and [BrrAutoRecovery]::IsWindowVisible($h)) {
+			$sb = New-Object System.Text.StringBuilder 200
+			[BrrAutoRecovery]::GetWindowText($h, $sb, 200) | Out-Null
+			if ($sb.ToString() -eq "Auto-Recovery") { $script:brrAutoRecoveryHits += $h }
+		}
+		return $true }
+	[BrrAutoRecovery]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+	foreach ($h in $script:brrAutoRecoveryHits) {
+		[BrrAutoRecovery]::SendMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+		"closed a Studio Auto-Recovery dialog (it blocks the place from loading)"
+	}
+}
+
 while ((Get-Date) -lt $deadline) {
 	Start-Sleep -Milliseconds 200
+	Close-AutoRecoveryDialog
 	if (-not $log) {
 		$log = Get-ChildItem $logDir -File -Filter "*Studio*" -ErrorAction SilentlyContinue |
 			Where-Object { $_.LastWriteTime -gt $since } | Sort-Object LastWriteTime -Descending |

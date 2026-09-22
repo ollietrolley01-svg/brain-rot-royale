@@ -361,7 +361,10 @@ local function buildLatte(b, color)
 	-- while the item is in use), and the pull tab on a wire that starts just outside the tip.
 	b.column("Spout", 0.2, 0.1, V(0, lidY + 0.335, -0.22), STEEL_DARK, Enum.Material.Metal)
 	b.column("Glow", 0.06, 0.13, V(0, lidY + 0.465, -0.22), color, Enum.Material.Neon)
-	b.link("TabWire", V(0.082, lidY + 0.455, -0.22), V(0.17, lidY + 0.42, -0.22), 0.025, STEEL, Enum.Material.Metal)
+	-- The wire runs INTO the glow and INTO the tab: a rod's end disc inside a tilted box has no
+	-- same-facing plane to fight. It used to start 0.017 outside the tip and stop 0.02 short of the
+	-- tab, joined to neither, and both gaps read plainly at pickup size.
+	b.link("TabWire", V(0.04, lidY + 0.462, -0.22), V(0.25, lidY + 0.4, -0.22), 0.025, STEEL, Enum.Material.Metal)
 	b.piece("PullTab", V(0.12, 0.09, 0.02), CF(0.25, lidY + 0.4, -0.22) * ANG(0, 0, -0.2), Color3.fromRGB(214, 52, 48), Enum.Material.SmoothPlastic)
 
 	b.piece("Grip", V(0.2, 0.2, 0.2), V(0, -0.05, 0.25), CUP, nil, nil, 1)
@@ -379,21 +382,21 @@ end
 -- stickOffset (0.2) below it, which is what the stuck frame and the placement ghost stand on.
 --
 -- Nothing here shares a plane with anything it overlaps: the holes stand 0.07 proud of the top
--- (past the pass's 0.055), the inner three sit in the band between the timer and the outer ring
--- without touching either's footprint, and the jam disc hangs 0.09 below the body.
+-- (past the pass's 0.055) and none reaches the timer's footprint, the rim or another hole, and the
+-- jam disc hangs 0.09 below the body.
 local function buildCrumpet(b, color)
 	local TOAST = Color3.fromRGB(232, 186, 104)
 	local TOAST_DARK = Color3.fromRGB(168, 118, 60)
 	local EMBER = Color3.fromRGB(255, 70, 60)
 	local body = b.column("Body", 0.22, 0.8, V(0, 0, 0), TOAST, Enum.Material.Sand)
-	for index = 0, 8 do
-		local angle = index / 9 * math.pi * 2 + 0.2
-		local r = 0.27 + (index % 2) * 0.04
-		b.column("Hole", 0.07, 0.07 + (index % 3) * 0.015, V(math.cos(angle) * r, 0.145, math.sin(angle) * r), TOAST_DARK, Enum.Material.SmoothPlastic)
-	end
-	for index = 0, 2 do
-		local angle = index / 3 * math.pi * 2 + 1.1
-		b.column("Hole", 0.07, 0.06, V(math.cos(angle) * 0.185, 0.145, math.sin(angle) * 0.185), TOAST_DARK, Enum.Material.SmoothPlastic)
+	-- Bubble holes: wide, flat, dark discs on the top, 0.07 proud (past the z-fight pass's 0.055),
+	-- bottoms on the top face where only opposite-facing planes meet, each clear of its neighbours
+	-- (0.24 between centres round the ring), the timer and the rim. They were 0.07-0.1 wide and as
+	-- tall as they were wide, and read as candles on a cake at pickup size.
+	for index = 0, 6 do
+		local angle = index / 7 * math.pi * 2 + 0.2
+		local r = 0.28 + (index % 2) * 0.01
+		b.column("Hole", 0.07, 0.13 + (index % 3) * 0.015, V(math.cos(angle) * r, 0.145, math.sin(angle) * r), TOAST_DARK, Enum.Material.SmoothPlastic)
 	end
 	local jam = b.column("Jam", 0.09, 0.62, V(0, -0.155, 0), color, Enum.Material.SmoothPlastic)
 	jam.Reflectance = 0.22

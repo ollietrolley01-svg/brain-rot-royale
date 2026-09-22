@@ -133,15 +133,15 @@ function DefensePreview.Site(character, itemId, aimPoint, extraExclude)
 	end
 	local head = character:FindFirstChild("Head") or root
 	local look = root.CFrame.LookVector
-	local flatLook = Vector3.new(look.X, 0, look.Z)
-	flatLook = flatLook.Magnitude > 0.01 and flatLook.Unit or Vector3.new(0, 0, -1)
-	local from = head.Position + flatLook * 2 + Vector3.new(0, 0.5, 0)
+	local exclude = extraExclude or clientOnly()
+	-- The same wall clip the server throws from (DefensePlacement.ThrowOrigin): pressed against a
+	-- building, a ghost drawn from an unclipped origin would show the throw starting inside the wall.
+	local from = DefensePlacement.ThrowOrigin(character, head.Position, look, exclude)
 	local velocity, flightTime, target, facing, offset = DefensePlacement.ThrowArc(from, look, aimPoint)
 	-- Where the kit will really arrive, not where it was aimed. The server throws it on this arc and
 	-- builds where it stops, and measured on a real map the arc meets the ground a median 10 studs from
 	-- the aim point -- it is flat enough to clip a rising hill well short. Walking the same arc here is
 	-- the difference between a ghost that lies and one that points at the hillside it will hit.
-	local exclude = extraExclude or clientOnly()
 	-- The same filter the ground check uses, except that standing defenses are NOT left out: a kit
 	-- thrown at your own bunker hits the bunker, and the arc should stop there like it will.
 	local landing, struck, landTime = DefensePlacement.TraceThrow(from, velocity, flightTime,

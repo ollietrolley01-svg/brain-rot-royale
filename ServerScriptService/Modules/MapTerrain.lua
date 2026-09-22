@@ -19,6 +19,7 @@
 -- (so it carves through them).
 
 local MapDecor = require(script.Parent:WaitForChild("MapDecor"))
+local RoadNetwork = require(script.Parent:WaitForChild("RoadNetwork"))
 local ZiplineService = require(script.Parent:WaitForChild("ZiplineService"))
 
 local MapTerrain = {}
@@ -258,6 +259,8 @@ function MapTerrain.Relief(terrain, preset, radius, centers, townSpread, roads, 
 		end
 		return math.min(height, RELIEF_CEILING - 4) * factor
 	end
+
+	MapTerrain.ResetPads(roads, material)
 
 	-- The ground everything is actually written to: the natural field, shaped under the roads.
 	local shapedAt = heightAt
@@ -569,6 +572,355 @@ function MapTerrain.RestoreRoadGround(terrain, roads, aroundBridges)
 		end
 	end
 	return written
+end
+
+
+--------------------------------------------------------------------------------
+-- Flat pads under structures
+--------------------------------------------------------------------------------
+
+-- A structure wants flat ground under the whole of itself. Left to the natural relief, a building
+-- on a slope stands on its highest corner with daylight under the other three, which is what
+-- "floating on ledges" looks like from inside the game.
+--
+--   MapTerrain.FlattenPad(site, size, options) -> height | nil, reason
+--
+-- Levels the ground under a footprint: dead flat at one height across it and `margin` studs round
+-- it, cut where the ground stands higher, filled SOLID down to the natural ground where it falls
+-- away (never a shelf with a hollow under it), then graded back into the ground beyond over a short
+-- smoothstepped slope.
+--
+--   site     CFrame at the footprint's centre; only its yaw is used. Its Y is the height wanted
+--            unless options.height says otherwise.
+--   size     Vector3: X across the site's X, Z across its Z (Y ignored). For a round pad, X is the
+--            diameter.
+--   options  shape    "rect" (default) or "round".
+--            height   a number, or "mid" (halfway between the lowest and highest ground under the
+--                     footprint), "mean", "low", "high". Default: site.Y.
+--            margin   flat ground beyond the footprint. Default 3. Keep it inside your own claim.
+--            blend    width of the graded edge beyond that. Default: twice the height it makes up,
+--                     between 6 and 24.
+--            retain   true: no graded edge, the flat stops dead (build the retaining wall yourself).
+--            maxCut   refuse if the ground stands more than this above the pad.
+--            maxFill  refuse if it falls more than this below.
+--            material paint for the flat top; must be a smooth material (see RoadNetwork.SmoothMaterials:
+--                     rough and stepped ones move the rendered surface by up to a stud with no change
+--                     to the voxels at all). Default: the ground's own where that is smooth.
+--            space    a MapSpace, and `ignore` an entry in it: the graded edge then leaves alone any
+--                     ground that something else has claimed, except your own claim.
+--
+-- Returns the pad's height, or nil and a reason: "road" (the footprint reaches a road's flat
+-- corridor -- roads always win), "pad" (it overlaps an earlier pad at a different height -- the
+-- first pad wins), "cut"/"fill" (past maxCut/maxFill), "material", "nothing" (no ground there at all).
+--
+-- THE CONTRACT FOR CALLERS. A refusal is loud in a probe and quiet in play: this warns nothing
+-- itself. On nil, try your next candidate site, or nudge the footprint and retry; if nothing is
+-- left, skip the structure and `warn` once with the reason. NEVER build a structure un-padded.
+-- Build at the height RETURNED, not the one you asked for.
+--
+-- Order: the first pad registered wins, so MapGenerator calls owners in a fixed order. Nothing here
+-- consumes math.random, and it never yields: one voxel read and one voxel write per pad.
+--
+-- MapTerrain.PadCost(site, size, options) -> low, high, mean: the ground under the footprint and
+-- margin, read from the voxels rather than by raycast (so a rough material's drawn surface can't
+-- make a flat site look bumpy), without writing anything. For ranking candidate sites.
+-- MapTerrain.PadAt(x, z) -> height | nil: the height of a registered pad's flat there.
+-- MapTerrain.PadNear(x, z, margin) -> boolean: the same, including each pad's graded skirt and
+-- `margin` beyond it -- for anything that should keep off a made site, like scattered grass.
+-- MapTerrain.RewritePads(terrain): writes every registered pad's flat again. Cheap insurance against
+-- anything that wrote terrain afterwards, and it makes "was the pad actually written?" answerable.
+
+local PAD_MARGIN = 3
+local PAD_BLEND_MIN, PAD_BLEND_MAX = 6, 24
+local PAD_CELL = 4
+
+MapTerrain.Pads = {}
+
+-- Called once per build, from Relief, with the planned roads and the map's own ground material.
+function MapTerrain.ResetPads(roads, groundMaterial)
+	MapTerrain.Pads = {}
+	MapTerrain._padRoads = roads
+	MapTerrain._padGround = RoadNetwork.SmoothMaterials[groundMaterial] and groundMaterial or Enum.Material.Ground
+end
+
+-- How far outside the footprint (x, z) is, in studs; 0 or less means inside it.
+local function padShape(site, size, options)
+	local _, yaw = site:ToOrientation()
+	local frame = CFrame.new(site.Position.X, 0, site.Position.Z) * CFrame.Angles(0, yaw, 0)
+	local halfX, halfZ = size.X / 2, size.Z / 2
+	if options.shape == "round" then
+		return function(x, z)
+			local p = frame:PointToObjectSpace(Vector3.new(x, 0, z))
+			return math.sqrt(p.X * p.X + p.Z * p.Z) - halfX
+		end, halfX
+	end
+	return function(x, z)
+		local p = frame:PointToObjectSpace(Vector3.new(x, 0, z))
+		return math.max(math.abs(p.X) - halfX, math.abs(p.Z) - halfZ)
+	end, math.sqrt(halfX * halfX + halfZ * halfZ)
+end
+
+-- A column's ground height from its own voxels: the top solid one's occupancy read back through the
+-- same formula every writer here uses. Water is not ground.
+local function columnGround(materials, occupancies, ix, iz, sizeY, originY)
+	for iy = sizeY, 1, -1 do
+		local occupancy = occupancies[ix][iy][iz]
+		local material = materials[ix][iy][iz]
+		if occupancy > 0 and material ~= Enum.Material.Air and material ~= Enum.Material.Water then
+			return originY + (iy - 1) * PAD_CELL + occupancy * PAD_CELL + MapTerrain.SurfaceLift, material
+		end
+	end
+	return nil
+end
+
+local function padRegion(site, reach)
+	local p = site.Position
+	return Region3.new(Vector3.new(p.X - reach, RELIEF_FLOOR - 8, p.Z - reach),
+		Vector3.new(p.X + reach, RELIEF_CEILING + 140, p.Z + reach)):ExpandToGrid(PAD_CELL)
+end
+
+function MapTerrain.PadCost(site, size, options)
+	options = options or {}
+	local outside, reach = padShape(site, size, options)
+	local margin = options.margin or PAD_MARGIN
+	local region = padRegion(site, reach + margin + PAD_CELL)
+	local materials, occupancies = workspace.Terrain:ReadVoxels(region, PAD_CELL)
+	local origin = region.CFrame.Position - region.Size / 2
+	local count = region.Size / PAD_CELL
+	local low, high, total, samples = math.huge, -math.huge, 0, 0
+	for ix = 1, count.X do
+		local x = origin.X + (ix - 0.5) * PAD_CELL
+		for iz = 1, count.Z do
+			local z = origin.Z + (iz - 0.5) * PAD_CELL
+			if outside(x, z) <= margin then
+				local ground = columnGround(materials, occupancies, ix, iz, count.Y, origin.Y)
+				if ground then
+					low, high, total, samples = math.min(low, ground), math.max(high, ground), total + ground, samples + 1
+				end
+			end
+		end
+	end
+	if samples == 0 then
+		return nil
+	end
+	return low, high, total / samples
+end
+
+function MapTerrain.PadAt(x, z)
+	for _, pad in ipairs(MapTerrain.Pads) do
+		if pad.outside(x, z) <= pad.margin then
+			return pad.height
+		end
+	end
+	return nil
+end
+
+function MapTerrain.PadNear(x, z, margin)
+	margin = margin or 0
+	for _, pad in ipairs(MapTerrain.Pads) do
+		if pad.outside(x, z) <= pad.margin + pad.blend + margin then
+			return true
+		end
+	end
+	return false
+end
+
+function MapTerrain.FlattenPad(site, size, options)
+	options = options or {}
+	local margin = options.margin or PAD_MARGIN
+	if options.material and not RoadNetwork.SmoothMaterials[options.material] then
+		return nil, "material"
+	end
+	local outside, reach = padShape(site, size, options)
+	local blendRoom = options.retain and 0 or PAD_BLEND_MAX
+	local region = padRegion(site, reach + margin + blendRoom + PAD_CELL)
+	local terrain = workspace.Terrain
+	local materials, occupancies = terrain:ReadVoxels(region, PAD_CELL)
+	local origin = region.CFrame.Position - region.Size / 2
+	local count = region.Size / PAD_CELL
+	local roads = MapTerrain._padRoads
+
+	local ground, groundMaterial = {}, {}
+	local low, high, total, samples = math.huge, -math.huge, 0, 0
+	for ix = 1, count.X do
+		ground[ix], groundMaterial[ix] = {}, {}
+		local x = origin.X + (ix - 0.5) * PAD_CELL
+		for iz = 1, count.Z do
+			local z = origin.Z + (iz - 0.5) * PAD_CELL
+			local height, material = columnGround(materials, occupancies, ix, iz, count.Y, origin.Y)
+			ground[ix][iz], groundMaterial[ix][iz] = height, material
+			if outside(x, z) <= margin then
+				if roads and roads:WithinCorridor(x, z) then
+					return nil, "road"
+				end
+				if height then
+					low, high, total, samples = math.min(low, height), math.max(high, height), total + height, samples + 1
+				end
+			end
+		end
+	end
+	if samples == 0 then
+		return nil, "nothing"
+	end
+
+	local height = options.height
+	if height == nil then
+		height = site.Position.Y
+	elseif height == "mid" then
+		height = (low + high) / 2
+	elseif height == "mean" then
+		height = total / samples
+	elseif height == "low" then
+		height = low
+	elseif height == "high" then
+		height = high
+	end
+	if options.maxCut and high - height > options.maxCut then
+		return nil, "cut"
+	end
+	if options.maxFill and height - low > options.maxFill then
+		return nil, "fill"
+	end
+	-- An earlier pad's flat wins, so two pads never argue over one column.
+	for ix = 1, count.X do
+		local x = origin.X + (ix - 0.5) * PAD_CELL
+		for iz = 1, count.Z do
+			local z = origin.Z + (iz - 0.5) * PAD_CELL
+			if outside(x, z) <= margin then
+				local other = MapTerrain.PadAt(x, z)
+				if other and math.abs(other - height) > 0.05 then
+					return nil, "pad"
+				end
+			end
+		end
+	end
+
+	local space, ignore = options.space, options.ignore
+	local painted = options.material
+	for ix = 1, count.X do
+		local x = origin.X + (ix - 0.5) * PAD_CELL
+		for iz = 1, count.Z do
+			local z = origin.Z + (iz - 0.5) * PAD_CELL
+			-- Two voxels beyond the margin, because a column is 4 studs wide and its centre decides
+			-- which side of the edge it is on, and because smooth terrain draws its surface through the
+			-- neighbouring columns as well as the one underfoot. One voxel left the pad's own edge
+			-- sagging toward the ground beyond it (0.46 studs measured); a half-height step there made
+			-- it worse, not better. Flat means flat, then the graded edge starts. Same 8 studs the
+			-- roads hold past their shoulders, for the same reason.
+			local distance = outside(x, z) - margin - 2 * PAD_CELL
+			local current = ground[ix][iz]
+			local target, paint = nil, nil
+			if distance <= 0 then
+				target = height
+				local own = groundMaterial[ix][iz]
+				paint = painted or (own and RoadNetwork.SmoothMaterials[own] and own) or MapTerrain._padGround or Enum.Material.Ground
+
+			elseif current and not options.retain then
+				local blend = math.clamp(math.abs(current - height) * 2, PAD_BLEND_MIN, PAD_BLEND_MAX)
+				local clear = not (roads and roads:WithinCorridor(x, z)) and not MapTerrain.PadAt(x, z)
+					and not (space and not space:IsFree(x, z, 0.01, ignore))
+				if distance < blend and clear then
+					local t = distance / blend
+					target = height + (current - height) * (t * t * (3 - 2 * t))
+				end
+			end
+			if target then
+				for iy = 1, count.Y do
+					local bottom = origin.Y + (iy - 1) * PAD_CELL
+					local occupancy = math.clamp((target - MapTerrain.SurfaceLift - bottom) / PAD_CELL, 0, 1)
+					local was = materials[ix][iy][iz]
+					if was ~= Enum.Material.Water then
+						occupancies[ix][iy][iz] = occupancy
+						if occupancy <= 0 then
+							materials[ix][iy][iz] = Enum.Material.Air
+						elseif paint then
+							materials[ix][iy][iz] = paint
+						elseif was == Enum.Material.Air then
+							materials[ix][iy][iz] = groundMaterial[ix][iz] or MapTerrain._padGround or Enum.Material.Ground
+						end
+					end
+				end
+			end
+		end
+	end
+	terrain:WriteVoxels(region, PAD_CELL, materials, occupancies)
+
+	-- What the ground ACTUALLY has now, read back from the voxels rather than assumed: a caller that
+	-- builds at the height it asked for inherits any error this didn't notice, and the whole point of
+	-- a pad is that the floor is where the structure thinks it is.
+	local check = padRegion(site, PAD_CELL)
+	local gotMaterials, gotOccupancies = terrain:ReadVoxels(check, PAD_CELL)
+	local gotOrigin = check.CFrame.Position - check.Size / 2
+	local achieved = columnGround(gotMaterials, gotOccupancies, 1, 1, (check.Size / PAD_CELL).Y, gotOrigin.Y)
+	if achieved and math.abs(achieved - height) > 0.05 then
+		height = achieved
+	end
+
+	local blend = options.retain and 0 or PAD_BLEND_MAX
+	table.insert(MapTerrain.Pads, { outside = outside, margin = margin, blend = blend, height = height,
+		site = site, size = size, material = painted, shape = options.shape })
+	return height
+end
+
+-- Every registered pad's flat, written again. Anything that wrote terrain after a pad was made --
+-- a lake, a landmark's own carving, a later prop -- is undone over the pad itself, and the count
+-- returned says how many were re-asserted.
+function MapTerrain.RewritePads(terrain)
+	-- Over a copy, and with the registry restored afterwards: FlattenPad appends to MapTerrain.Pads
+	-- when it succeeds, so walking the live list while writing into it never ends. That hung Studio
+	-- for 280 seconds with no error the first time this ran.
+	local pads = table.clone(MapTerrain.Pads)
+	local written = 0
+	for _, pad in ipairs(pads) do
+		local height = MapTerrain.FlattenPad(pad.site, pad.size,
+			{ shape = pad.shape, margin = pad.margin, material = pad.material, retain = true, height = pad.height })
+		if height then
+			written += 1
+		end
+	end
+	MapTerrain.Pads = pads
+	return written
+end
+
+-- Material, and only material: the occupancy of every voxel is copied through untouched, so this
+-- cannot move ground under anything. Fill* would: it writes occupancy as well, and on ground lower
+-- than the fill it fills rather than paints. Skips road corridors and made pads.
+function MapTerrain.PaintPatch(site, size, material, options)
+	options = options or {}
+	if not RoadNetwork.SmoothMaterials[material] and not options.allowRough then
+		return 0
+	end
+	local outside, reach = padShape(site, size, options)
+	local region = padRegion(site, reach + PAD_CELL)
+	local terrain = workspace.Terrain
+	local materials, occupancies = terrain:ReadVoxels(region, PAD_CELL)
+	local origin = region.CFrame.Position - region.Size / 2
+	local count = region.Size / PAD_CELL
+	local roads = MapTerrain._padRoads
+	local from = options.from
+	local painted = 0
+	for ix = 1, count.X do
+		local x = origin.X + (ix - 0.5) * PAD_CELL
+		for iz = 1, count.Z do
+			local z = origin.Z + (iz - 0.5) * PAD_CELL
+			if outside(x, z) <= 0 and not (roads and roads:GroundAt(x, z, 0)) and not MapTerrain.PadAt(x, z) then
+				local touched = false
+				for iy = 1, count.Y do
+					local was = materials[ix][iy][iz]
+					if occupancies[ix][iy][iz] > 0 and was ~= Enum.Material.Air and was ~= Enum.Material.Water
+						and (not from or was == from) then
+						materials[ix][iy][iz] = material
+						touched = true
+					end
+				end
+				if touched then
+					painted += 1
+				end
+			end
+		end
+	end
+	terrain:WriteVoxels(region, PAD_CELL, materials, occupancies)
+	return painted
 end
 
 --------------------------------------------------------------------------------

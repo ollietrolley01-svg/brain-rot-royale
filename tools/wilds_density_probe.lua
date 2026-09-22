@@ -85,9 +85,17 @@ for _, budget in ipairs(BUDGETS) do
 	-- What the parts actually ARE: "19,563 parts" can't be acted on, "6,400 leaf clusters at four a
 	-- tree" can (claude-79, 00:20).
 	local byName = {}
+	-- Shadow casters too: the trim on secondary foliage (an oak's outer lobes, a spruce's top tier)
+	-- is only worth anything if the count says how much of the build stopped casting.
+	local casting, quiet = 0, 0
 	for _, d in ipairs(result.model:GetDescendants()) do
 		if d:IsA("BasePart") then
 			byName[d.Name] = (byName[d.Name] or 0) + 1
+			if d.CastShadow then
+				casting += 1
+			else
+				quiet += 1
+			end
 		end
 	end
 	local names = {}
@@ -106,6 +114,17 @@ for _, budget in ipairs(BUDGETS) do
 		budget, result.parts, result.counts.trees, result.counts.undergrowth, result.counts.shelters, result.paintedPatches or 0,
 		seconds, mapParts, mapParts + result.parts, #flush)
 	out("budget %.1f parts by name, top ten: %s", budget, table.concat(top, ", "))
+	out("budget %.1f shadows: %d parts cast, %d do not (%.0f%% of the build silent)", budget, casting, quiet,
+		100 * quiet / math.max(1, casting + quiet))
+	local v = result.vetoed or {}
+	out("budget %.1f vetoed spots: %d no ground at all, %d water, %d the map says no ground, %d inside a road corridor",
+		budget, v.nothing or 0, v.water or 0, v.mapSaysNone or 0, v.corridor or 0)
+	local caps = {}
+	for _, cap in ipairs(result.cappedAt or {}) do
+		table.insert(caps, string.format("%s(%.2f) x%d", cap.phase, cap.share, cap.hits))
+	end
+	out("budget %.1f spent %d of %d (%.0f%%); phases that ran out of budget: %s", budget, result.parts, result.budget,
+		100 * result.parts / math.max(1, result.budget), #caps > 0 and table.concat(caps, ", ") or "NONE -- the attempts ran out first")
 	if #flush > 0 then
 		out("budget %.1f flush detail: %s", budget, table.concat(ZFight.Describe(flush, function(p)
 			local node = p

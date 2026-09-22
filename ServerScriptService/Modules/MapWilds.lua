@@ -37,7 +37,10 @@
 --   * NO GLOBAL RNG. Everything rolls on a Random seeded from ctx.seed, so adding or tuning a
 --     feature here never shifts a roll anywhere else on the map. Nothing here adds loot.
 --   * A PART BUDGET. Each map gets about BUDGET_PER_RADIUS parts per stud of radius, shared out
---     by phase so shelters and woods always get built before the ground clutter.
+--     by phase so shelters and woods always get built before the ground clutter. It is a CEILING,
+--     not a target: measured, the build stops growing at about 12 per stud because the attempt
+--     counts below (stands, single trees, undergrowth) run out first, so raising the budget alone
+--     changes nothing. Raise the counts to get more foliage; raise the budget to let them spend.
 --
 -- API:
 --   MapWilds.Build(map, ctx) -> { model, parts, seconds, counts = { trees, undergrowth, shelters, byKind } }
@@ -59,11 +62,33 @@ local MapWilds = {}
 
 -- Agreed with claude-79 (00:55) against the measured curve: 7.5 is the density we can defend on
 -- part count, and it is raised later with numbers rather than taste.
-MapWilds.BUDGET_PER_RADIUS = 7.5
+MapWilds.BUDGET_PER_RADIUS = 12
 
 -- Trunks, posts and walls start this far underground, like MapDecor's, so a slope never leaves
 -- one standing on air on its low side.
 local SINK = 1.5
+
+-- While this is true, everything built casts no shadow. The low foliage turns it on round itself:
+-- map-wide, 92.6% of all parts cast shadows and 2,817 of them are under a stud (performance tab's
+-- baseline), and a shadow a player cannot resolve is a shadow-map draw spent on a smudge. It is a
+-- switch rather than a per-part flag so a builder cannot half-apply it.
+local noShadow = false
+
+-- Off builds the same wilds with every part casting, so a before and an after can be photographed
+-- from one camera and counted in one run. It is not a quality setting to ship either way -- it is
+-- how the trim gets shown to be worth having.
+MapWilds.SHADOW_TRIM = true
+
+-- Under a stud in every direction, or inside a stretch of low foliage: no shadow. Called from both
+-- part constructors, so there is one rule rather than two.
+local function shadowFor(p, size)
+	if not MapWilds.SHADOW_TRIM then
+		return
+	end
+	if noShadow or (size.X < 1 and size.Y < 1 and size.Z < 1) then
+		p.CastShadow = false
+	end
+end
 
 -- Solid leaves never come lower than this over the ground a tree stands on: a player is about
 -- 5.3 studs tall, and a crown at head height snags everyone walking under it.
@@ -140,6 +165,7 @@ local function part(parent, name, size, cframe, color, material, shape)
 	p.CFrame = cframe
 	p.Color = color
 	p.Material = material or Enum.Material.SmoothPlastic
+	shadowFor(p, size)
 	p.Anchored = true
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
@@ -155,6 +181,7 @@ local function classPart(className, parent, name, size, cframe, color, material)
 	p.CFrame = cframe
 	p.Color = color
 	p.Material = material or Enum.Material.SmoothPlastic
+	shadowFor(p, size)
 	p.Anchored = true
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
@@ -345,7 +372,10 @@ local function oak(parent, p, s)
 		local size = rand(8.5, 10.5) * s
 		centre += Vector3.new(0, math.max(0, p.Y + HEAD_CLEAR + size / 2 - centre.Y), 0)
 		soft(rod(parent, "Branch", p + Vector3.new(0, height * 0.72, 0), centre, 0.9 * s, bark, Enum.Material.Wood))
-		ball(parent, "Leaves", centre, size, green:Lerp(rgb(255, 255, 210), rand(0, 0.08)), Enum.Material.Grass)
+		-- Solid (it is cover above head height) but it casts no shadow: a lobe sits inside or above the
+		-- main crown, whose shadow already covers the same ground.
+		local lobe = ball(parent, "Leaves", centre, size, green:Lerp(rgb(255, 255, 210), rand(0, 0.08)), Enum.Material.Grass)
+		lobe.CastShadow = false
 	end
 end
 
@@ -384,6 +414,15 @@ local function spruce(parent, p, s, snowy)
 	-- Three pyramid tiers, each turned 45 degrees on the one below. The bottom skirt reaches the
 	-- ground, so it's concealment you walk through; the upper tiers are above head height and solid.
 	local yaw = rand(0, math.pi / 2)
+	-- Two dice per tree, so no two spruces' flat tier bottoms can lie in one plane. MEASURED: the
+	-- last six flush pairs left in the wilds were all one stand spruce against one single spruce,
+	-- 0.021 studs apart with parallel downward normals -- and both halves of that were built in.
+	-- The head-height clamp below handed many trees the SAME tier height, and terrain renders on
+	-- 4-stud voxel boundaries, so neighbours' ground heights matched exactly too. ZFight calls a
+	-- pair flush within 0.045 studs and 1.8 degrees, so: the lean now points anywhere on the
+	-- circle rather than into one of four diagonals, and the clamp varies by over a stud per tree.
+	local leanAt, leanBy = rand(0, math.pi * 2), rand(0.05, 0.11)
+	local clear = HEAD_CLEAR + 0.4 + rand(0, 1.3)
 	local y = 2.2 * s
 	for index, tier in ipairs({ { 12, 11 }, { 8.6, 9.5 }, { 5, 8 } }) do
 		local width, height = tier[1] * s, tier[2] * s
@@ -391,19 +430,24 @@ local function spruce(parent, p, s, snowy)
 		if snowy then
 			color = color:Lerp(SNOW, 0.35 + index * 0.1)
 		end
-		-- Each tier leans a few degrees its own way. It reads as a tree rather than a stack, and it
-		-- keeps two neighbouring spruces' flat tier bottoms from ever lying in one plane.
-		local tilt = CFrame.Angles((chance(0.5) and 1 or -1) * rand(0.035, 0.07), 0, (chance(0.5) and 1 or -1) * rand(0.035, 0.07))
+		-- Each tier still leans its own way (a radian round from the one below), so the tree reads as
+		-- a tree rather than a stack; the DIRECTION of the whole lean is the per-tree die.
+		local tilt = CFrame.Angles(math.cos(leanAt + index) * leanBy, 0, math.sin(leanAt + index) * leanBy)
 		local pieces = pyramid(parent, "Needles", CFrame.new(p + Vector3.new(0, y, 0)) * tilt * CFrame.Angles(0, yaw + index * math.pi / 4, 0),
 			width, height, color, Enum.Material.Grass)
 		if index == 1 then
 			for _, piece in ipairs(pieces) do
 				soft(piece, true)
 			end
+		elseif index > 2 then
+			-- The top tier sits inside the one below it: solid, but its shadow is already drawn.
+			for _, piece in ipairs(pieces) do
+				piece.CastShadow = false
+			end
 		end
 		y += height * 0.55
 		-- The solid tiers start above head height, tilt included, even on a small spruce.
-		y = math.max(y, HEAD_CLEAR + 0.4)
+		y = math.max(y, clear)
 	end
 end
 
@@ -546,8 +590,8 @@ local TREES = {
 local function fern(parent, p, s, color)
 	local turn = rand(0, math.pi * 2)
 	for index = 1, 5 do
-		soft(block(parent, "Fern", Vector3.new(1.1 * s, 0.12, 3.8 * s),
-			CFrame.new(p - Vector3.new(0, 0.12, 0)) * CFrame.Angles(0, turn + index * math.pi * 2 / 5 + rand(-0.25, 0.25), 0)
+		soft(block(parent, "Fern", Vector3.new(1.1 * s, 0.12 + (index % 3) * 0.02, 3.8 * s),
+			CFrame.new(p - Vector3.new(0, 0.12 - index * 0.015, 0)) * CFrame.Angles(0, turn + index * math.pi * 2 / 5 + rand(-0.25, 0.25), 0)
 				* CFrame.Angles(math.rad(rand(22, 40)), 0, 0) * CFrame.new(0, 0, -1.75 * s),
 			(color or rgb(72, 120, 58)):Lerp(rgb(160, 190, 90), rand(0, 0.15)), Enum.Material.Grass))
 	end
@@ -579,12 +623,22 @@ local function mushrooms(parent, p, s)
 	for index = 1, 2 do
 		local at = p + Vector3.new(index * 0.9 - 1.3, 0, rand(-0.6, 0.6))
 		local y = groundY(at.X, at.Z, p.Y)
-		local height = rand(0.7, 1.1) * s
+		-- The taller of the two stands a clear step above the other -- a WHOLE step, not one scaled
+		-- down with the mushroom, which on a small pair came out under ZFight's 0.045 and put the two
+		-- flat brims in one plane. And each mushroom leans its own way, so two brims in DIFFERENT
+		-- clumps can't be level with each other either: measured, that was 5 of the 7 flush pairs left
+		-- on Sahur Springs, all of them Mushroom against Mushroom with a dead-flat downward normal.
+		local height = rand(0.7, 1.1) * s + (index - 1) * 0.35
 		local width = rand(1.1, 1.5) * s
-		soft(column(parent, "Mushroom", Vector3.new(at.X, y - 0.2, at.Z), height + 0.2, 0.34 * s, rgb(232, 226, 210)))
-		-- The cap: a flat round brim with a low dome sunk into it.
-		soft(column(parent, "Mushroom", Vector3.new(at.X, y + height - 0.05, at.Z), 0.22 * s, width, cap:Lerp(rgb(0, 0, 0), 0.1)))
-		soft(ball(parent, "Mushroom", Vector3.new(at.X, y + height + 0.02 - width * 0.3, at.Z), width * 0.92, cap, Enum.Material.SmoothPlastic))
+		local brim = 0.22 * s + (index - 1) * 0.05
+		local leanAt, leanBy = rand(0, math.pi * 2), rand(0.06, 0.14)
+		local up = Vector3.new(math.cos(leanAt) * leanBy, 1, math.sin(leanAt) * leanBy).Unit
+		local foot = Vector3.new(at.X, y - 0.2, at.Z)
+		soft(rod(parent, "Mushroom", foot, foot + up * (height + 0.2), 0.34 * s, rgb(232, 226, 210), Enum.Material.SmoothPlastic))
+		-- The cap: a flat round brim with a low dome sunk into it, both square to the stalk.
+		local top = foot + up * (height + 0.15)
+		soft(rod(parent, "Mushroom", top, top + up * brim, width, cap:Lerp(rgb(0, 0, 0), 0.1), Enum.Material.SmoothPlastic))
+		soft(ball(parent, "Mushroom", top + up * (brim - width * 0.3), width * 0.92, cap, Enum.Material.SmoothPlastic))
 	end
 end
 
@@ -592,14 +646,26 @@ end
 -- the low foliage here -- it hides you without stopping a shot.
 local function grassClump(parent, p, s, color)
 	local turn = rand(0, math.pi * 2)
-	-- Five blades, not six: an even number puts opposite pairs in one plane through the middle of the
-	-- clump, which is 288 z-fighting pairs on a map's worth of grass (measured). Each blade also stands
-	-- a little off the centre and differs in thickness, so no two share a plane where they cross.
-	for index = 1, 4 do
+	-- FIVE blades, an odd number: six put opposite pairs in one plane through the middle of the clump,
+	-- which measured 288 z-fighting pairs on a map's worth of grass. At 72 degrees apart no two blades
+	-- in a clump come within 0.6 radians of parallel, jitter included, so the clump is safe by
+	-- construction. Each blade also rolls a few degrees on its own long axis, which is what stops two
+	-- blades in DIFFERENT clumps having parallel side faces by luck: measured, that was the last
+	-- Grass-against-Grass pair on Sahur Springs, two vertical faces 0.029 apart.
+	-- A per-clump sink as well, because every blade in a clump has its FOOT at the same depth by
+	-- construction (the offset below is height/2, so the bottom sits at -0.35 whatever the blade's
+	-- height), and neighbouring clumps stand on terrain that renders on 4-stud voxel boundaries --
+	-- so two clumps' feet were landing in one plane. Buried either way: nothing of this shows.
+	local sink = rand(0, 0.55)
+	for index = 1, 5 do
 		local height = rand(3.2, 4.8) * s
 		soft(block(parent, "Grass", Vector3.new(0.55 * s, height, 0.12 + (index % 2) * 0.03),
-			CFrame.new(p) * CFrame.Angles(0, turn + index * 1.27 + rand(-0.22, 0.22), 0) * CFrame.Angles(math.rad(rand(8, 26)), 0, 0)
-				* CFrame.new(rand(-0.3, 0.3) * s, height / 2 - 0.35, rand(0.1, 0.45) * s),
+			CFrame.new(p) * CFrame.Angles(0, turn + index * 1.2566 + rand(-0.22, 0.22), 0)
+				* CFrame.Angles(math.rad(rand(8, 26)), 0, rand(-0.16, 0.16))
+				-- 0.13 a blade, not 0.012: ZFight calls a pair flush within 0.045, so the step I put
+				-- between the blades' feet was six times too small to be a step at all. Measured, those
+				-- feet were the flush pairs left in the grass -- three of them 0.000 apart.
+				* CFrame.new(rand(-0.3, 0.3) * s, height / 2 - 0.35 - sink + index * 0.13, rand(0.1, 0.45) * s),
 			color:Lerp(rgb(0, 0, 0), rand(0, 0.14)), Enum.Material.Grass))
 	end
 end
@@ -1620,11 +1686,30 @@ end
 --------------------------------------------------------------------------------
 
 function MapWilds.Build(map, ctx)
-	local started = os.clock()
+	-- Wall clock, not os.clock: a build that yields spends most of its life not on the CPU, and
+	-- os.clock() reported 0.35s for a build the harness timed at 0.50s. Callers reading `seconds`
+	-- want the time the map generator actually spent here.
+	local started = DateTime.now().UnixTimestampMillis
 	rng = Random.new(ctx.seed or 1)
 	partCount = 0
 
 	local preset, radius, centers, townSpread, space = ctx.preset, ctx.radius, ctx.centers, ctx.townSpread, ctx.space
+	-- The five arguments this cannot be built without, checked here and named in the error. A map
+	-- generator is about to call this for the first time, and a missing field would otherwise show
+	-- up as an arithmetic error 200 lines in, or as a half-built Wilds -- neither of which says
+	-- which argument the CALLER left out. Everything else is optional and defaults quietly:
+	-- roads (no verges or corridor veto), river (no bank planting), avoid (nothing kept clear),
+	-- groundAt (the second ground veto; this module casts its own ray regardless), seed (1).
+	for _, need in ipairs({
+		{ "preset", preset }, { "radius", radius }, { "centers", centers }, { "townSpread", townSpread }, { "space", space },
+	}) do
+		if need[2] == nil then
+			error(string.format("MapWilds.Build: ctx.%s is required (see the argument list at the top of this file)", need[1]), 2)
+		end
+	end
+	if type(space.IsFree) ~= "function" then
+		error("MapWilds.Build: ctx.space must be a MapSpace (it needs IsFree)", 2)
+	end
 	local profile = PROFILES[preset.terrainMaterial] or PROFILES[Enum.Material.Grass]
 	autumnShare = profile.autumn or 0
 	snowCover = false
@@ -1662,12 +1747,24 @@ function MapWilds.Build(map, ctx)
 	-- Ground and what it's made of, or nil over water, off the map's own veto, or on paving.
 	-- Cast from far above anything the map builds: a ray that starts inside terrain (a mountain top
 	-- over the old 500) never reports that terrain.
+	-- Counted, because "the veto never fires" and "the veto fires and nothing is out there" look
+	-- identical in a part count. THIS is the ground veto: it does not wait on GroundHeightAt's nil
+	-- contract, which is a breaking change across 47 sites in 10 modules and is not this module's
+	-- to make. The ray here answers the same question -- no hit is no ground, and water is not
+	-- ground -- so the counts are honest today and will not move when that contract lands.
+	local vetoed = { nothing = 0, water = 0, mapSaysNone = 0, corridor = 0 }
 	local function sample(x, z)
 		local hit = workspace:Raycast(Vector3.new(x, 2000, z), Vector3.new(0, -4000, 0), rayParams)
-		if not hit or hit.Material == Enum.Material.Water then
+		if not hit then
+			vetoed.nothing += 1
+			return nil
+		end
+		if hit.Material == Enum.Material.Water then
+			vetoed.water += 1
 			return nil
 		end
 		if ctx.groundAt and ctx.groundAt(x, z) == nil then
+			vetoed.mapSaysNone += 1
 			return nil
 		end
 		return hit.Position.Y, hit.Material
@@ -1748,6 +1845,33 @@ function MapWilds.Build(map, ctx)
 		if x * x + z * z > limit * limit then
 			return false
 		end
+		-- Never inside a road's corridor: the carriageway, its 3-stud shoulders and the 8-stud flat
+		-- apron the road grades round itself. That whole band is the road's own ground -- a trunk in
+		-- it is standing in the road, and on a rocky map the apron's outer studs are not even flat
+		-- (the roads tab measures 9-11% of samples 13-19 studs out off by more than 0.25, worst
+		-- 1.17). The claims in `space` cover the road's PARTS, not that graded band, so this is a
+		-- different question from IsFree; and the roads' own query answers it correctly on a curve,
+		-- where a distance from the centre line reads a trunk in the apron as clear (claude-79).
+		-- NOT a burial fix: the hook goes in after the second RestoreRoadGround, so the ground read
+		-- here is already the road's final ground. It would become one if the hook ever moved up.
+		-- `ignore` means the caller is on that road on purpose: a bus shelter stands on its verge.
+		if not ignore and ctx.roads and ctx.roads.WithinCorridor then
+			if ctx.roads:WithinCorridor(x, z) then
+				vetoed.corridor += 1
+				return false
+			end
+			-- And nothing whose footprint reaches into it either, checked at the four compass points:
+			-- a shelter clear at its middle can still have a corner post in the apron.
+			local edge = math.min(reach or 0, 26)
+			if edge > 2 then
+				for _, at in ipairs({ { edge, 0 }, { -edge, 0 }, { 0, edge }, { 0, -edge } }) do
+					if ctx.roads:WithinCorridor(x + at[1], z + at[2]) then
+						vetoed.corridor += 1
+						return false
+					end
+				end
+			end
+		end
 		for _, spot in ipairs(avoid) do
 			local dx, dz = spot.X - x, spot.Z - z
 			if dx * dx + dz * dz < (50 + reach) ^ 2 then
@@ -1762,8 +1886,16 @@ function MapWilds.Build(map, ctx)
 		return factor > 0 and rng:NextNumber() < factor ^ (exponent or 1)
 	end
 
+	-- Which phase ran out of budget, and how often it asked after that. Without this a density
+	-- number can only be raised by guesswork: parts stop growing whether the attempts ran out or
+	-- the share did, and the fix for those two is not the same one.
+	local capped = {}
 	local function overBudget(share)
-		return partCount >= budget * share
+		if partCount >= budget * share then
+			capped[share] = (capped[share] or 0) + 1
+			return true
+		end
+		return false
 	end
 
 	local function treeKindFor(material, preferred)
@@ -2047,6 +2179,11 @@ function MapWilds.Build(map, ctx)
 		end
 		local at = Vector3.new(x, y, z)
 		local s = rand(0.8, 1.25)
+		-- Ankle-to-knee foliage casts no shadow: at this size a cast shadow is a grey smear on the
+		-- ground rather than the shape of a fern, and there are more of these parts in a build than
+		-- of anything else. Shrubs are the exception -- they are chest-high cover, and a player reads
+		-- cover by its shadow.
+		noShadow = kind ~= "shrub"
 		if kind == "fern" then
 			fern(parent, at, s)
 		elseif kind == "flowers" then
@@ -2059,6 +2196,7 @@ function MapWilds.Build(map, ctx)
 			local color = material == Enum.Material.Snow and rgb(170, 170, 150) or groundColor.tuft
 			tuft(parent, at, s, color)
 		end
+		noShadow = false
 		counts.undergrowth += 1
 		return true
 	end
@@ -2125,7 +2263,7 @@ function MapWilds.Build(map, ctx)
 		end
 
 		local planted = {}
-		local attempts = math.floor(R * R / 34)
+		local attempts = math.floor(R * R / 26)
 		for _ = 1, attempts do
 			if overBudget(SHARE.woods - 0.04) then
 				break
@@ -2232,7 +2370,7 @@ function MapWilds.Build(map, ctx)
 	end
 
 	-- 4. Woods, placed where there's room for a real stand rather than squeezed in round the props.
-	local wantedWoods = math.max(3, math.floor(22 * area * profile.woods + 0.5))
+	local wantedWoods = math.max(4, math.floor(40 * area * profile.woods + 0.5))
 	local builtWoods = 0
 	for _ = 1, wantedWoods * 12 do
 		if builtWoods >= wantedWoods or overBudget(SHARE.woods - 0.06) then
@@ -2258,7 +2396,7 @@ function MapWilds.Build(map, ctx)
 	end
 
 	-- 5. Single trees, small groups and ground clutter between everything else.
-	local singles = math.floor(240 * area * profile.scattered)
+	local singles = math.floor(460 * area * profile.scattered)
 	local singlesModel = named("Trees")
 	local clutterModel = named("Clutter")
 	for index = 1, singles do
@@ -2490,7 +2628,7 @@ function MapWilds.Build(map, ctx)
 	task.wait()
 
 	-- 7. Meadows and scattered ground cover last: they claim nothing, so nothing waits on them.
-	local wantedMeadows = math.floor(12 * area * (profile.meadows or 0) + 0.5)
+	local wantedMeadows = math.floor(20 * area * (profile.meadows or 0) + 0.5)
 	for _ = 1, wantedMeadows * 6 do
 		if wantedMeadows <= 0 or overBudget(SHARE.meadows) then
 			break
@@ -2517,7 +2655,7 @@ function MapWilds.Build(map, ctx)
 	end
 
 	local groundModel = named("GroundCover")
-	for index = 1, math.floor(240 * area * (profile.coverScale or 1)) do
+	for index = 1, math.floor(380 * area * (profile.coverScale or 1)) do
 		if overBudget(1) then
 			break
 		end
@@ -2536,15 +2674,32 @@ function MapWilds.Build(map, ctx)
 		end
 	end
 
+	-- Named against the share table, so the report reads "woods(0.52) x431" rather than a number.
+	local cappedAt = {}
+	for share, hits in pairs(capped) do
+		local name, nearest = "?", math.huge
+		for phase, value in pairs(SHARE) do
+			if math.abs(value - share) < nearest then
+				name, nearest = phase, math.abs(value - share)
+			end
+		end
+		table.insert(cappedAt, { phase = name, share = share, hits = hits })
+	end
+	table.sort(cappedAt, function(a, b)
+		return a.share < b.share
+	end)
+
 	sampler = nil
 	autumnShare, snowCover, footDrop = 0, false, 0
 	return {
 		model = root,
 		parts = partCount,
 		budget = budget,
-		seconds = os.clock() - started,
+		seconds = (DateTime.now().UnixTimestampMillis - started) / 1000,
 		counts = counts,
 		paintedPatches = paintedPatches,
+		cappedAt = cappedAt,
+		vetoed = vetoed,
 		plannedRoutes = plannedRoutes,
 		corridors = #corridors,
 	}

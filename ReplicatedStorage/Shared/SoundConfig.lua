@@ -905,21 +905,29 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.1, WetLevel = -9, DryLevel = 0 } } },
 	},
 
+	-- A click is a tenth of a second: `clickfast` pitched up for the tick, a whisper of `switch` for
+	-- the release. (#120: this was `button` at 1.1 -- 0.53 s per click at 24 sites, so every menu in
+	-- the game felt sluggish at once.) Audible length 0.15 s.
 	UiClick = {
 		volume = 0.4,
 		pitch = 1,
 		category = "Interface",
-		layers = { { id = BUTTON, volume = 1, pitch = 1.1 } },
+		layers = {
+			{ id = CLICK, volume = 1, pitch = 2.0 },
+			{ id = SWITCH, volume = 0.35, pitch = 1.8, delay = 0.02 },
+		},
 	},
 
+	-- A boot on a ball: one short thump with a little body under it. (#120: this was `collide`, the
+	-- brick-collision crash, 0.96 s for a kick.) Audible length 0.56 s.
 	BallKick = {
 		volume = 0.5,
 		pitch = 1,
 		maxDistance = 90,
 		category = "Effects",
 		layers = {
-			{ id = COLLIDE, volume = 1, pitch = 1.25 },
-			{ id = LAND, volume = 0.5, pitch = 0.9 },
+			{ id = LAND, volume = 1, pitch = 0.75 },
+			{ id = BASS, volume = 0.55, pitch = 1.8 },
 		},
 	},
 
@@ -1143,6 +1151,8 @@ SoundConfig.Sounds = {
 	-- Death effects, positional at the body (DeathFxService picks one per gun)
 	--------------------------------------------------------------------------------
 
+	-- A body meeting the floor: the landing thud with a short low body. (#120: the bass layer ran at
+	-- 0.55, a 1.84 s drum for a thud.) Audible length 0.78 s.
 	BodyFall = {
 		volume = 0.55,
 		pitch = 1,
@@ -1150,7 +1160,7 @@ SoundConfig.Sounds = {
 		category = "Effects",
 		layers = {
 			{ id = LAND, volume = 1, pitch = 0.62 },
-			{ id = BASS, volume = 0.5, pitch = 0.55 },
+			{ id = BASS, volume = 0.45, pitch = 1.3 },
 		},
 	},
 
@@ -1314,7 +1324,9 @@ SoundConfig.Sounds = {
 		},
 	},
 
-	-- A quick hop over something: a light push-off and a thump on the far side.
+	-- A quick hop over something: a light push-off, cloth over the sill, a thump on the far side.
+	-- (#120: the middle layer was `collide`, the brick-collision crash, 1.09 s for a hop; a vault is
+	-- about half a second.) Audible length 0.51 s.
 	Vault = {
 		volume = 0.48,
 		pitch = 1,
@@ -1322,7 +1334,7 @@ SoundConfig.Sounds = {
 		category = "Effects",
 		layers = {
 			{ id = JUMP, volume = 0.9, pitch = 1.2 },
-			{ id = COLLIDE, volume = 0.35, pitch = 1.1, delay = 0.03 },
+			{ id = GETUP, volume = 0.5, pitch = 1.4, delay = 0.03 },
 			{ id = LAND, volume = 0.7, pitch = 0.95, delay = 0.24 },
 		},
 	},

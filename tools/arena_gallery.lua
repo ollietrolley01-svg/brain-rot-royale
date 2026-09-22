@@ -126,29 +126,43 @@ local function waitForBody(site, timeout)
 	return nil
 end
 
--- The lowest point of a part, whatever way it is turned.
+-- The lowest point of a part, whatever way it is turned — by its SHAPE. The first two runs took the
+-- box-AABB of every part's OBB, which for the head (a Ball, 1.4 across) tilted at rest over-reports
+-- its downward reach by up to half a stud, and read "0.37 into the marble" for a corpse the picture
+-- showed lying on it. A ball reaches its radius straight down whatever its rotation; a cylinder
+-- reaches |axis.y|·L/2 + sqrt(1−axis.y²)·r; only a box reaches its full OBB extent.
 local function bottomOf(part)
 	local frame, size = part.CFrame, part.Size
+	if part:IsA("Part") and part.Shape == Enum.PartType.Ball then
+		return part.Position.Y - math.min(size.X, size.Y, size.Z) / 2
+	elseif part:IsA("Part") and part.Shape == Enum.PartType.Cylinder then
+		local axisY = math.abs(frame.RightVector.Y)
+		local r = math.min(size.Y, size.Z) / 2
+		return part.Position.Y - (axisY * size.X / 2 + math.sqrt(math.max(0, 1 - axisY * axisY)) * r)
+	end
 	local reach = (math.abs(frame.RightVector.Y) * size.X + math.abs(frame.UpVector.Y) * size.Y + math.abs(frame.LookVector.Y) * size.Z) / 2
 	return part.Position.Y - reach
 end
 
--- Samples a corpse every tenth of a second: its lowest point and its fastest part.
+-- Samples a corpse every tenth of a second: its lowest point (and which part it is), its fastest part.
 local function watchCorpse(body, seconds)
 	local samples = {}
 	task.spawn(function()
 		local started = os.clock()
 		while os.clock() - started < seconds and body.Parent do
-			local lowest, fastest, any = math.huge, 0, false
+			local lowest, lowestName, fastest, any = math.huge, "?", 0, false
 			for _, p in ipairs(partsOf(body)) do
 				any = true
-				lowest = math.min(lowest, bottomOf(p))
+				local bottom = bottomOf(p)
+				if bottom < lowest then
+					lowest, lowestName = bottom, p.Name
+				end
 				fastest = math.max(fastest, p.AssemblyLinearVelocity.Magnitude)
 			end
 			if not any then
 				break
 			end
-			table.insert(samples, { t = os.clock() - started, lowest = lowest, fastest = fastest })
+			table.insert(samples, { t = os.clock() - started, lowest = lowest, lowestName = lowestName, fastest = fastest })
 			task.wait(0.1)
 		end
 	end)
@@ -371,16 +385,16 @@ add("ragdoll_at_rest", function(_, camera)
 	-- The lowest point AT REST: a limb hitting the floor at forty studs a second dips a third of a
 	-- stud for an instant before the solver pushes it out (the first run measured that instant),
 	-- and the picture shows it lying on the surface. What matters is where it lies.
-	local lowestEver, lowestAtRest, fastest = math.huge, math.huge, 0
+	local lowestEver, lowestAtRest, lowestPart, fastest = math.huge, math.huge, "?", 0
 	for _, sample in ipairs(samples) do
 		lowestEver = math.min(lowestEver, sample.lowest)
 		fastest = math.max(fastest, sample.fastest)
-		if rest and sample.t >= rest then
-			lowestAtRest = math.min(lowestAtRest, sample.lowest)
+		if rest and sample.t >= rest and sample.lowest < lowestAtRest then
+			lowestAtRest, lowestPart = sample.lowest, sample.lowestName
 		end
 	end
-	note(string.format("corpse over %.1f s (%d samples): fastest part %.1f studs/s, lowest point ever %.2f, lowest at rest %.2f (marble top %.2f), at rest after %s s",
-		samples[#samples] and samples[#samples].t or 0, #samples, fastest, lowestEver, lowestAtRest, MARBLE_TOP, rest and string.format("%.1f", rest) or "never"))
+	note(string.format("corpse over %.1f s (%d samples): fastest part %.1f studs/s, lowest point ever %.2f, lowest at rest %.2f = %s (marble top %.2f), at rest after %s s",
+		samples[#samples] and samples[#samples].t or 0, #samples, fastest, lowestEver, lowestAtRest, lowestPart, MARBLE_TOP, rest and string.format("%.1f", rest) or "never"))
 	check(rest ~= nil and rest <= 2.0, "the corpse comes to rest within 2 s")
 	check(lowestAtRest >= MARBLE_TOP - 0.15, "the corpse lies on the marble, not in it (lowest point at rest within 0.15 of the top)")
 	check(fastest > 1.0, "the corpse actually moved (physics ran)")

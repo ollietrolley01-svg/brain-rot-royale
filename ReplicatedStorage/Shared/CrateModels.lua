@@ -224,7 +224,7 @@ function CrateModels.Crate(tier, options)
 		-- A ring of eight lights hung over the lid, touching nothing (floating on purpose).
 		for index = 0, 7 do
 			local angle = index / 8 * math.pi * 2
-			local light = piece("HaloLight", V(0.32, 0.32, 0.32), V(math.cos(angle) * 2.5, 4.2, math.sin(angle) * 2.5), color, Enum.Material.Neon, Enum.PartType.Ball)
+			local light = piece("HaloLight", V(0.32, 0.32, 0.32), V(math.cos(angle) * 1.7, 4.55, math.sin(angle) * 1.7), color, Enum.Material.Neon, Enum.PartType.Ball)
 			light:SetAttribute("IntentionalFloat", true)
 			table.insert(tinted, light)
 		end

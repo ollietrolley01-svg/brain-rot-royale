@@ -23,6 +23,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local VehicleDynamics = require(Shared:WaitForChild("VehicleDynamics"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 local VehicleWreckFx = require(Shared:WaitForChild("VehicleWreckFx"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 local player = Players.LocalPlayer
@@ -48,6 +49,9 @@ local ENGINE_IDLE_VOLUME = 0.45
 -- The dial says KM/H, so it shows km/h: a stud is 0.28 m, so studs/s * 0.28 * 3.6 is almost exactly
 -- the speed itself. A car at 100 studs/s reads 101, and a sprinting player would read 26.
 local DISPLAY_SCALE = 1.008
+-- #84 jolt reporting: see the Stepped connection below for the reasoning behind the number.
+local JOLT_THRESHOLD = 20
+local JOLT_REPORT_EVERY = 1
 
 local rigs = {}          -- model -> rig (false while its parts are still streaming in)
 local driving = nil      -- { model, rig, seat }
@@ -461,6 +465,23 @@ RunService.Stepped:Connect(function(_, dt)
 	speedLabel.Text = tostring(math.floor(speed * DISPLAY_SCALE + 0.5))
 	fill.Size = UDim2.fromScale(math.clamp(speed / rig.handling.topSpeed, 0, 1), 1)
 	updateHealthWarning(model)
+
+	-- #84: measured on the runtest harness (no client, no network ownership) flat road is 0.00
+	-- vertical velocity and even the worst seam-at-speed case peaked at 3.14 studs/s -- so a jump
+	-- past JOLT_THRESHOLD in one step, on a REAL driving client, is either something the harness
+	-- could already see (a bug worth fixing anyway) or the one thing it structurally cannot: a
+	-- network ownership handoff. Reported so Oliver's next session produces a number, not an
+	-- impression, per claude-43's ask -- the same shape as this project's other after-the-fact
+	-- counters. ServerControl is sent along because a handoff is exactly what that attribute marks.
+	local vy = rig.chassis.AssemblyLinearVelocity.Y
+	if driving.lastVerticalVel then
+		local jump = math.abs(vy - driving.lastVerticalVel)
+		if jump > JOLT_THRESHOLD and (not driving.lastJoltReport or tick() - driving.lastJoltReport > JOLT_REPORT_EVERY) then
+			driving.lastJoltReport = tick()
+			Remotes.Event("VehicleJolt"):FireServer(jump, speed, model:GetAttribute("ServerControl") == true)
+		end
+	end
+	driving.lastVerticalVel = vy
 end)
 
 --------------------------------------------------------------------------------

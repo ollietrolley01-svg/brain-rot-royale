@@ -486,6 +486,74 @@ _reveal = re.search(r"-- The crate OPENS:(.*?)local fade = ", menu, re.S)
 if _reveal and "CFrame.Angles" in _reveal.group(1):
     problems.append("MenuClient's crate reveal computes its own lid rotation; the swing belongs to Shared/CrateOpen")
 
+# The codex: one entry per brainrot, keyed by name, inside the length the panel can show.
+#
+# Nothing draws it yet -- wiring waits on Oliver's sort answer -- but the DATA can be wrong now and
+# only discovered the day it is wired, so it is checked now. An entry keyed to a brainrot that does
+# not exist is invisible until someone opens that page and finds nothing.
+_codex_src = read("ReplicatedStorage/Shared/BrainrotCodex.lua")
+_codex_names = set(re.findall(r'\n\t\["([^"]+)"\] = "', _codex_src))
+_type_names = set(re.findall(r'\{ name = "([^"]+)", rarity = ', read("ReplicatedStorage/Shared/BrainrotData.lua")))
+if not _type_names:
+    problems.append("BrainrotData: no brainrot names matched; the codex check cannot run")
+else:
+    _orphans = sorted(_codex_names - _type_names)
+    if _orphans:
+        problems.append("BrainrotCodex has entries for brainrots that don't exist: " + ", ".join(_orphans[:5]))
+    _missing = sorted(_type_names - _codex_names)
+    if _missing:
+        problems.append("BrainrotCodex is missing %d of %d brainrots (e.g. %s)"
+                        % (len(_missing), len(_type_names), ", ".join(_missing[:3])))
+    _limit_m = re.search(r"BrainrotCodex\.MaxLength = (\d+)", _codex_src)
+    _limit = int(_limit_m.group(1)) if _limit_m else 0
+    if _limit <= 0:
+        problems.append("BrainrotCodex.MaxLength is missing, so nothing bounds the entries")
+    else:
+        _longest, _longest_name = 0, ""
+        for _name, _text in re.findall(r'\n\t\["([^"]+)"\] = "([^"]*)"', _codex_src):
+            if len(_text) > _longest:
+                _longest, _longest_name = len(_text), _name
+            if len(_text) > _limit:
+                problems.append("BrainrotCodex entry for %s is %d characters, over MaxLength %d"
+                                % (_name, len(_text), _limit))
+            # The file's own house rules, the two a checker can actually judge.
+            if "!" in _text:
+                problems.append("BrainrotCodex entry for %s has an exclamation mark; the house voice has none" % _name)
+            if _name.split(" ")[0] in _text:
+                problems.append("BrainrotCodex entry for %s says its own name; the row above already shows it" % _name)
+        print("codex: %d entries, longest %d/%d chars (%s)" % (len(_codex_names), _longest, _limit, _longest_name))
+
+# The defense cap is one number, and the player can read it.
+#
+# It used to be a literal in DefenseService that nothing told the player about: a fourth wall
+# silently collapsed their oldest. The number now lives in ItemData, the three structures' own
+# descriptions are composed from it, and DefenseService reads it from there. Each half of that is
+# checked, because either half alone puts the game back where it was -- a number nobody sees, or a
+# sentence that can drift from what the server does.
+_item_src = read("ReplicatedStorage/Shared/ItemData.lua")
+_def_src = read("ServerScriptService/Modules/DefenseService.lua")
+if not re.search(r"ItemData\.MaxStructuresPerPlayer = (\d+)", _item_src):
+    problems.append("ItemData.MaxStructuresPerPlayer is gone; the defense cap has no shared source")
+else:
+    if "local MAX_PER_PLAYER = ItemData.MaxStructuresPerPlayer" not in _def_src:
+        problems.append("DefenseService: MAX_PER_PLAYER must come from ItemData.MaxStructuresPerPlayer, not a second literal")
+    # The sentence has to be composed from the constant, never typed out: a digit in the prose is a
+    # copy that nothing keeps in step with the server.
+    # `capRule` is a field of its own, not a sentence glued onto `description`: joining two fields
+    # is a line of code, while splitting one requires parsing English. And it is COMPOSED from the
+    # constant -- a split is exactly the moment someone types "three" by hand.
+    _rule = _item_src.split('].capRule = string.format(')
+    if len(_rule) < 2 or 'MaxStructuresPerPlayer' not in _rule[-1][:300]:
+        problems.append("ItemData: the structures' capRule must be composed from MaxStructuresPerPlayer")
+    elif re.search(r'\b(one|two|three|four|\d+)\b of your own can stand', _item_src):
+        problems.append("ItemData: the cap number is typed into capRule instead of composed from the constant")
+    for _id in ("RotBarricade", "PopupBunker", "BrainrotFortress"):
+        if _id not in _item_src.split("for _, id in ipairs({")[-1][:200]:
+            problems.append("ItemData: %s no longer gets the cap sentence" % _id)
+    # And the player has to be told when it fires, or the cap is still a surprise in the moment.
+    if "StateSync.Notify" not in _def_src.split("while #mine >= MAX_PER_PLAYER do")[-1][:600]:
+        problems.append("DefenseService: nothing tells the player when the cap collapses their oldest defense")
+
 # The brainrot shop.
 if 'Monetization.RegisterGrantHandler("Brainrot"' not in boot or "BrainrotShopService.Grant(" not in boot: problems.append("Bootstrap doesn't handle Brainrot receipts through BrainrotShopService.Grant")
 if 'Remotes.Function("BuyBrainrot").OnServerInvoke = guard(' not in boot: problems.append("Bootstrap: BuyBrainrot remote missing or unguarded")
@@ -1160,6 +1228,236 @@ if os.path.exists(os.path.join(root, _gm_path)):
                         "disagreement — it is testing nothing")
     print(f"game modes: {len(_gm_seams) - len(_gm_missing)}/{len(_gm_seams)} MatchService seams, "
           f"BattleRoyale noops present, {len(_gm_planted)} planted description drift caught")
+
+# A VOTE SNAPSHOT IS NOT AN EVENT (#107, "game choosing menu pulls up randomly mid match").
+#
+# VoteService.Resolve caches its pick until the next Open(), so from the moment a match starts until
+# the next lobby countdown VoteService.Snapshot() reads `open = false` with a `winner` still set --
+# and that pair is exactly the cue VoteDropClient reads as "reveal the result". Broadcast is
+# FireAllClients, so ONE ungated call (Bootstrap's player-join re-broadcast) popped the mode/map
+# reveal onto every player's screen for three seconds every time anybody joined mid-match.
+#
+# The invariant, which outlives the bug: every VoteService.Broadcast() call OUTSIDE VoteService
+# itself must sit inside an `if VoteService.IsOpen() then` guard. Inside VoteService the unguarded
+# calls are deliberate -- Open() and Close() are the two transitions that SHOULD reach everyone.
+def _vote_broadcast_sites(text):
+    # Comment- and string-stripped: this looks for CODE, so the pipeline is right for it. A call
+    # sitting in a comment must not satisfy the check, and must not trip it either.
+    code = _strip_lua(text)
+    examined, ungated = 0, 0
+    for _m in re.finditer(r"VoteService\.Broadcast\s*\(", code):
+        examined += 1
+        before = code[max(0, _m.start() - 160):_m.start()]
+        if re.search(r"if\s+VoteService\.IsOpen\s*\(\s*\)\s+then\s*\Z", before):
+            continue
+        ungated += 1
+    return examined, ungated
+
+_vote_callers = []
+for _vdir in ("ServerScriptService", "StarterPlayerScripts", "ReplicatedStorage"):
+    for _vroot, _, _vfiles in os.walk(os.path.join(root, _vdir)):
+        for _vf in _vfiles:
+            if not _vf.endswith(".lua") or _vf == "VoteService.lua":
+                continue
+            _vpath = os.path.relpath(os.path.join(_vroot, _vf), root).replace("\\", "/")
+            _vexamined, _vungated = _vote_broadcast_sites(read(_vpath))
+            if _vexamined:
+                _vote_callers.append((_vpath, _vexamined, _vungated))
+            if _vungated:
+                problems.append(f"vote rebroadcast: {_vpath} calls VoteService.Broadcast() "
+                                f"{_vungated}x without an `if VoteService.IsOpen() then` guard — between a match "
+                                f"starting and the next countdown that snapshot still carries a winner, and every "
+                                f"client reads it as a fresh reveal (#107)")
+
+# NAME THE INPUT THAT CARRIES THE BUG AND ASSERT IT ENTERED THE COMPARISON. A count of sites alone
+# is satisfied by the wrong sites: if Bootstrap's call were renamed or moved out of the walk, this
+# whole check would pass by examining nothing.
+_vote_bootstrap = [c for c in _vote_callers if c[0].endswith("Bootstrap.server.lua")]
+if not _vote_bootstrap:
+    problems.append("vote rebroadcast: Bootstrap.server.lua's VoteService.Broadcast() call was not examined "
+                    "at all — the check is looking at the wrong files and would pass whatever Bootstrap did")
+
+# PERMANENT PLANTED NEEDLE, through the same pipeline as the real input, and TWO-SIDED: a check that
+# flags everything proves as little as one that flags nothing, so the gated call must come back clean
+# in the same pass that catches the ungated one.
+_vote_needle_examined, _vote_needle_ungated = _vote_broadcast_sites(
+    "\tif VoteService.IsOpen() then\n\t\tVoteService.Broadcast()\n\tend\n\tVoteService.Broadcast()\n")
+if _vote_needle_examined != 2 or _vote_needle_ungated != 1:
+    problems.append(f"vote rebroadcast: the guard check did NOT behave on its planted pair — examined "
+                    f"{_vote_needle_examined} (want 2), flagged {_vote_needle_ungated} (want 1: the ungated call "
+                    f"caught, the gated one left alone). It is testing nothing.")
+
+print(f"vote rebroadcast: {len(_vote_callers)} file(s) outside VoteService call Broadcast, "
+      f"{sum(c[1] for c in _vote_callers)} call site(s) examined, {sum(c[2] for c in _vote_callers)} ungated; "
+      f"planted pair {_vote_needle_ungated}/1 caught")
+
+# --- GUNS: #97 hit registration, #106 pickups ----------------------------------
+# Four invariants, each with a TWO-SIDED planted needle fed through the same pipeline as the real
+# source. Every one is written as "this must never happen" rather than "the bug is still there", so
+# landing a fix can never quietly kill its own check.
+
+# COMMENTS ONLY -- NEVER STRINGS, and never the other way round either. _strip_lua above blanks
+# string literals, which is right for finding CODE and fatal for reading what a line SAYS. These
+# checks must also not be satisfied (or tripped) by the explanatory comments the fixes themselves
+# added, which mention IgnoreWater, lastShotAt and Clear by name. Quotes and long brackets are
+# tracked so a `--` inside a string survives.
+def _guns_decomment(src):
+    out, i, n, quote = [], 0, len(src), None
+    while i < n:
+        c = src[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(src[i + 1]); i += 2; continue
+            if c == quote:
+                quote = None
+            i += 1; continue
+        if c in "\"'":
+            quote = c; out.append(c); i += 1; continue
+        if src.startswith("--[[", i):
+            j = src.find("]]", i); i = n if j == -1 else j + 2; continue
+        if src.startswith("--", i):
+            j = src.find("\n", i); i = n if j == -1 else j; continue
+        out.append(c); i += 1
+    return "".join(out)
+
+# A function body: from its header to the next top-level function in the file. Good enough to keep
+# one function's statements away from its neighbours', which is all these checks need.
+def _guns_body(src, header):
+    i = src.find(header)
+    if i == -1:
+        return None
+    ends = [x for x in (src.find("\nlocal function ", i + len(header)),
+                        src.find("\nfunction ", i + len(header))) if x != -1]
+    return src[i:min(ends)] if ends else src[i:]
+
+# A DEAD SELF-TEST IS A CHECK PROVING NOTHING, so the summary counts needles that actually fired
+# rather than asserting a number. Each needle is derived from the real source (RULE 7: a plant must
+# travel the same pipeline as the real input), which means that on genuinely broken source the
+# "clean" half is broken too and the pair correctly reports itself degenerate instead of passing.
+_gun_needles = 0
+
+_gun_cc = _guns_decomment(read("StarterPlayerScripts/CombatClient.client.lua"))
+_gun_cs = _guns_decomment(read("ServerScriptService/Modules/CombatService.lua"))
+_gun_rs = _guns_decomment(read("ServerScriptService/Modules/RangeService.lua"))
+
+# INVARIANT 1. Every raycast that decides where a shot goes agrees about terrain water. The client's
+# crosshair trace picks the aim POINT and the server fires head->point, so if one stops at water and
+# the other passes through it, the shot leaves the crosshair line entirely. They disagreed until
+# 2026-09-21 (#97) and a comment in CombatService asserted the opposite, which is why it survived.
+def _guns_water(bodies):
+    examined, flagged = 0, []
+    for label, body in bodies:
+        if body is None:
+            continue
+        examined += 1
+        if not re.search(r"^\s*params\.IgnoreWater\s*=\s*true\s*$", body, re.M):
+            flagged.append(label)
+    return examined, flagged
+
+_gun_water_real = [
+    ("CombatClient.crosshairPoint (picks the aim point)", _guns_body(_gun_cc, "local function crosshairPoint()")),
+    ("CombatService.buildRaycastParams (fires the shot)", _guns_body(_gun_cs, "local function buildRaycastParams(")),
+]
+for _label, _body in _gun_water_real:
+    if _body is None:
+        problems.append(f"guns/water: could not find {_label} — the check is examining nothing")
+_gun_water_examined, _gun_water_flagged = _guns_water(_gun_water_real)
+for _label in _gun_water_flagged:
+    problems.append(f"guns/water (#97): {_label} does not set params.IgnoreWater = true. The aim trace "
+                    f"and the shot ray must agree about water or the shot leaves the crosshair line.")
+
+# Two-sided needle: the real pair must come back clean in the same pass that catches a stripped one.
+_gun_water_clean = _gun_water_real[0][1] or ""
+_gun_water_broken = re.sub(r"^\s*params\.IgnoreWater\s*=\s*true\s*$", "", _gun_water_clean, flags=re.M)
+_gw_n, _gw_bad = _guns_water([("planted-broken", _gun_water_broken), ("planted-clean", _gun_water_clean)])
+if _gw_n != 2 or _gw_bad != ["planted-broken"]:
+    problems.append(f"guns/water (#97): the planted pair did NOT fire — examined {_gw_n} (want 2), "
+                    f"flagged {_gw_bad} (want exactly ['planted-broken']). This check is testing nothing.")
+else:
+    _gun_needles += 1
+
+# INVARIANT 2. The client's shot clock advances by a WHOLE INTERVAL and is never merely reset to the
+# current time on a fired shot. tryFire runs on Heartbeat, so resetting quantises the fire rate down
+# to the frame rate: 14/s delivered 12.00/s at 60 fps and 10.00/s at 30 fps before this (#97).
+def _guns_cadence(body):
+    return body is not None and re.search(r"lastLocalShot\s*\+=\s*interval", body) is not None
+
+_gun_tryfire = _guns_body(_gun_cc, "local function tryFire()")
+if _gun_tryfire is None:
+    problems.append("guns/cadence: could not find CombatClient tryFire — the check is examining nothing")
+elif not _guns_cadence(_gun_tryfire):
+    problems.append("guns/cadence (#97): tryFire no longer advances lastLocalShot by a whole interval. "
+                    "Resetting it to `now` throws the remainder away and quantises every weapon's fire "
+                    "rate down to the player's frame rate.")
+_gc_broken = re.sub(r"lastLocalShot\s*\+=\s*interval", "lastLocalShot = now", _gun_tryfire or "")
+if _guns_cadence(_gc_broken) or not _guns_cadence(_gun_tryfire or ""):
+    problems.append("guns/cadence (#97): the planted pair did NOT fire — the reset-only body was accepted "
+                    "or the real body was rejected. This check is testing nothing.")
+else:
+    _gun_needles += 1
+
+# INVARIANT 3. The server never gates shots on a strict inter-shot interval, and there is real slack.
+# The client sends on frame boundaries, so consecutive sends are one interval give or take a frame,
+# and jitter compresses arrivals further; a strict gate drops those SILENTLY, with the shooter's
+# camera already kicked. Both fire paths share ONE budget rather than keeping a copy of the rule.
+def _guns_strict_gate(src):
+    return [m.group(0).strip() for m in re.finditer(r"[^\n]*lastShotAt\s*<[^\n]*", src)]
+
+_gun_gate_sites = {"CombatService": _guns_strict_gate(_gun_cs), "RangeService": _guns_strict_gate(_gun_rs)}
+for _where, _hits in _gun_gate_sites.items():
+    for _hit in _hits:
+        problems.append(f"guns/rategate (#97): {_where} compares lastShotAt against a threshold "
+                        f"(`{_hit}`). Shots are budgeted, not spaced — use CombatService.ShotCredit, "
+                        f"or an honest early shot gets dropped with no tracer and no ammo spent.")
+_gun_burst = re.search(r"^local FIRE_BURST\s*=\s*(\d+)", _gun_cs, re.M)
+if not _gun_burst:
+    problems.append("guns/rategate (#97): CombatService has no FIRE_BURST — the shot budget is gone")
+elif int(_gun_burst.group(1)) < 2:
+    problems.append(f"guns/rategate (#97): FIRE_BURST is {_gun_burst.group(1)}; below 2 there is no slack "
+                    f"at all and a shot one frame early is refused.")
+if "CombatService.ShotCredit" not in _gun_rs:
+    problems.append("guns/rategate (#97): RangeService no longer shares CombatService.ShotCredit. The "
+                    "range is where a player learns how a gun feels; a second copy of the rule drifts.")
+_gg_broken = "\tif now - loadout.lastShotAt < interval * 0.9 then\n"
+if len(_guns_strict_gate(_gg_broken)) != 1 or _guns_strict_gate("\tlocal credit = ShotCredit(loadout)\n"):
+    problems.append("guns/rategate (#97): the planted pair did NOT fire — the old strict gate was not "
+                    "caught, or the budgeted form was flagged. This check is testing nothing.")
+else:
+    _gun_needles += 1
+
+# INVARIANT 4. A range stop never destroys a loadout it did not create. WeaponService.Clear sets
+# loadouts[player] = nil and GiveWeapon then refuses every pickup with "Not in a match." — a message
+# LootService only shows on SUCCESS, so the player saw nothing at all (#106). The guard is an IDENTITY
+# check rather than an ordering fix, so it survives the callers being rearranged.
+def _guns_stop_guarded(src):
+    body = _guns_body(src, "local function stop(player, message)")
+    if body is None:
+        return None, None
+    clears = [m.start() for m in re.finditer(r"WeaponService\.Clear\s*\(", body)]
+    guard = body.find("WeaponService.Get(player) == ours")
+    return len(clears), (guard != -1 and all(c > guard for c in clears))
+
+_gun_clears, _gun_guarded = _guns_stop_guarded(_gun_rs)
+if _gun_clears is None:
+    problems.append("guns/rangestop: could not find RangeService stop() — the check is examining nothing")
+elif not _gun_guarded:
+    problems.append(f"guns/rangestop (#106): RangeService stop() calls WeaponService.Clear ({_gun_clears} "
+                    f"site(s)) without first proving the loadout is the one the range created. A stop that "
+                    f"lands after MatchService has handed out the match loadout deletes it, and every "
+                    f"pickup for the rest of the match is refused silently.")
+_grs_broken = _gun_rs.replace("if WeaponService.Get(player) == ours then", "if true then")
+_, _grs_bad = _guns_stop_guarded(_grs_broken)
+if _grs_bad or not _gun_guarded:
+    problems.append("guns/rangestop (#106): the planted pair did NOT fire — an unguarded Clear was accepted, "
+                    "or the guarded one was rejected. This check is testing nothing.")
+else:
+    _gun_needles += 1
+
+print(f"guns: water {_gun_water_examined} shot-raycast site(s) examined, {len(_gun_water_flagged)} "
+      f"disagreeing; rate gates {sum(len(v) for v in _gun_gate_sites.values())} strict comparison(s) in 2 "
+      f"fire paths, FIRE_BURST {_gun_burst.group(1) if _gun_burst else '?'}; range stop {_gun_clears} "
+      f"Clear site(s), guarded {_gun_guarded}; {_gun_needles}/4 planted pairs fired")
 
 print("\n".join(problems) if problems else "OK: no problems")
 sys.exit(1 if problems else 0)

@@ -29,7 +29,21 @@ BotNav.Stats = {
 }
 local STATS = BotNav.Stats
 
-local MAX_CONCURRENT_PATHS = 4
+-- How many PathfindingService computes run at once; the rest wait in Pump's priority queue. A bot
+-- whose route is waiting does not freeze: BotNav.Follow's direct-line fallback walks it,
+-- floor-checked, until the route lands, so the cap trades route freshness for frame time. Each
+-- ComputeAsync costs 77-120 ms of server time, and Oliver's complaint is lag (#126/#131). Measured
+-- (tools/bot_probe.lua free roam; the A/B on ONE map build, 40 bots, 110 s a pass, 2026-09-22):
+--   cap 4 : worst tick 43.0 ms, think 53 us/bot-update, route wait avg 0.20 s max 1.35 s, 0 rejected
+--   cap 6 : worst tick 40.9 ms, think 64 us/bot-update, route wait avg 0.18 s max 1.36 s, 0 rejected
+--   cap 16: that A/B pass was lost (Studio closed itself at 292 s); its only figure is run 14 on
+--           another seed, worst tick 116 ms / 87 us, against 36-64 ms for cap 4 over four earlier runs.
+-- 15 is Oliver's call ("make it 15", 2026-09-22, after "cap it at 10"), one under the 16 that cost
+-- frames on the other seed. Measured at 15 on its own build (run 15a, 40 bots, 150 s free roam, a
+-- third seed): worst tick 32.4 ms, think 38 us/bot-update, route wait max 0.24 s, 0 rejected, 2% of
+-- paths failed. Change it only with an A/B on one snapshot; BotNav.Stats.queueWaitMax and
+-- BotService.Stats.maxTick are the numbers to read.
+local MAX_CONCURRENT_PATHS = 15
 
 -- A destination this close to where the current route already ends keeps the route.
 local REUSE_RADIUS = 10
@@ -485,7 +499,14 @@ local function directSafe(bot, root, goal, now)
 	end
 	-- The check looked DIRECT_LOOKAHEAD studs ahead; a sprinting bot covers more than that in
 	-- DIRECT_RECHECK seconds, so it's redone once the bot has moved a few studs, not only on the timer.
-	if now - (nav.directCheckedAt or 0) < DIRECT_RECHECK and nav.directGoal and (nav.directGoal - goal).Magnitude < 2
+	-- A wall's distance goes stale the moment the bot steps toward it: parkourAcross walks up to the
+	-- wall between checks, and an approach aimed with the old figure lands inside the wall, fails its
+	-- own step check, and navigate abandoned the goal (the 9-stud course in run 14: closest approach
+	-- 1.7 studs, the bot never asked to climb; run 15b with this line: over the wall at 2.3 s). Walls
+	-- are re-measured every think; the cache serves the open-ground, drop and water answers, which
+	-- don't change while the bot stands still.
+	if now - (nav.directCheckedAt or 0) < DIRECT_RECHECK and nav.directReason ~= "wall" and nav.directGoal
+		and (nav.directGoal - goal).Magnitude < 2
 		and nav.directCheckedFrom and flatDistance(root.Position, nav.directCheckedFrom) < DIRECT_MOVED_RECHECK then
 		return nav.directOk, nav.directReason, nav.directWallDistance
 	end

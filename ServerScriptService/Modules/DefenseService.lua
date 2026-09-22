@@ -35,7 +35,9 @@ local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
 local DefenseService = {}
 
-local MAX_PER_PLAYER = 3
+-- One source of truth, shared with the client: ItemData states it in the three structures' own
+-- descriptions, so the number a player reads is the number enforced here.
+local MAX_PER_PLAYER = ItemData.MaxStructuresPerPlayer
 local RISE_TIME = 0.6
 local COLLAPSE_LINGER = 3.5
 -- How long a kit may fly or roll before it builds where it is. The steepest site allowed and how far a
@@ -234,7 +236,7 @@ local function buildFortress(model, origin, color)
 	for _, x in ipairs({ -10.15, 10.15 }) do
 		decor(piece(model, Vector3.new(0.5, 0.15, 17.4), origin * CFrame.new(x, 8.445, 0), color, Enum.Material.Neon))
 	end
-	decor(piece(model, Vector3.new(0.3, 7, 0.3), origin * CFrame.new(9, 15, -9), IRON, Enum.Material.Metal))
+	decor(piece(model, Vector3.new(0.3, 7, 0.3), origin * CFrame.new(9.2, 15, -9), IRON, Enum.Material.Metal))
 	decor(piece(model, Vector3.new(0.1, 2.2, 3.2), origin * CFrame.new(9, 17.2, -7.4), color, Enum.Material.Fabric))
 end
 
@@ -469,8 +471,18 @@ function DefenseService.Deploy(owner, character, itemId, centre, facing)
 		mine = {}
 		owned[owner] = mine
 	end
+	-- At the cap the oldest comes down. SAY SO: it used to happen silently, so a player who had
+	-- carefully placed three walls watched one fall over for no reason they could see.
 	while #mine >= MAX_PER_PLAYER do
-		collapse(mine[1])
+		local oldest = mine[1]
+		local oldestItem = oldest and ItemData.Get(oldest.Name)
+		collapse(oldest)
+		-- Tested the way CompanionService tests an owner rather than by requiring Combatants: a bot
+		-- owns defenses too and has nobody to tell.
+		if typeof(owner) == "Instance" and owner:IsA("Player") then
+			StateSync.Notify(owner, string.format("Only %d of your defenses can stand at once - your oldest %s came down.",
+				MAX_PER_PLAYER, (oldestItem and oldestItem.name) or "defense"))
+		end
 	end
 
 	local model = DefenseService.Build(itemId, origin, owner)
@@ -518,10 +530,12 @@ local function throwKit(player, itemId, aimPoint)
 	end
 	local head = character:FindFirstChild("Head") or root
 	local look = root.CFrame.LookVector
-	local flatLook = Vector3.new(look.X, 0, look.Z)
-	flatLook = flatLook.Magnitude > 0.01 and flatLook.Unit or Vector3.new(0, 0, -1)
 
-	local from = head.Position + flatLook * 2 + Vector3.new(0, 0.5, 0)
+	-- Clipped against whatever is between the head and the spawn point: pressed against a wall, the
+	-- old unclipped two studs put the kit on the wall's INNER face, where it settled and built or
+	-- armed inside a building nobody could reach. Shared with the client's ghost so both show the
+	-- same throw (DefensePlacement.ThrowOrigin).
+	local from = DefensePlacement.ThrowOrigin(character, head.Position, look)
 	-- A client's aim can be NaN or infinite in any component, and either would become a NaN velocity
 	-- on a server-owned physics body below; anything but a sane point throws straight ahead instead.
 	-- Guarded here rather than only at the remote, so every caller is covered.
@@ -546,16 +560,39 @@ local function throwKit(player, itemId, aimPoint)
 	body.AssemblyLinearVelocity = velocity
 	body.AssemblyAngularVelocity = Vector3.new(math.random(-6, 6), math.random(-6, 6), math.random(-6, 6))
 
+	-- It builds where the kit FIRST TOUCHES, not where it finishes rolling. Measured over 72 throws on
+	-- a real map, the roll from first contact to rest is mean 5.6, p90 11.9 studs -- a lottery between
+	-- the site you aimed at and one somewhere downhill, and the reason "place it anywhere" reads as
+	-- broken (Oliver, #128). The arc is still the server's, so nothing about where it MAY land changed;
+	-- only the roll is gone. Kept as a fallback: a kit that never touches anything (thrown off a cliff)
+	-- still settles the old way.
+	local contact = nil
+	local touched
+	touched = body.Touched:Connect(function(hit)
+		if contact or not hit.CanCollide then
+			return
+		end
+		if hit:IsDescendantOf(kit) or (character and hit:IsDescendantOf(character)) then
+			return
+		end
+		contact = body.Position
+		body.AssemblyLinearVelocity = Vector3.zero
+		body.AssemblyAngularVelocity = Vector3.zero
+		body.Anchored = true
+		touched:Disconnect()
+	end)
+
 	task.spawn(function()
 		local started = os.clock()
 		repeat
-			task.wait(0.1)
+			task.wait(0.05)
 			local flying = os.clock() - started
-		until not body.Parent or (flying > 0.4 and body.AssemblyLinearVelocity.Magnitude < 3) or flying > THROW_TIMEOUT
+		until contact or not body.Parent or (flying > 0.4 and body.AssemblyLinearVelocity.Magnitude < 3) or flying > THROW_TIMEOUT
+		touched:Disconnect()
 		if not body.Parent then
 			return
 		end
-		local landed = body.Position
+		local landed = contact or body.Position
 		kit:Destroy()
 		if not player.Parent then
 			LootService.DropItem(itemId, landed, 1)

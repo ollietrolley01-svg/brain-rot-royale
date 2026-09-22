@@ -389,7 +389,15 @@ local function livingCharacters()
 		if model:IsA("Model") and model ~= player.Character then
 			local humanoid = model:FindFirstChildOfClass("Humanoid")
 			local root = model:FindFirstChild("HumanoidRootPart")
-			if humanoid and root and humanoid.Health > 0 then
+			-- #102: only THIS match's combatants, alive right now. The match test is the `InMatch`
+			-- attribute MatchService writes on every Player (true for the match's players, false for
+			-- lobby idlers, mid-match joiners and anyone who has left); bots have no Player and fall
+			-- through the nil. An ABSENT attribute counts as in, so wherever the server has not written
+			-- this reads as today's behaviour -- never as "bots only". The alive test is separate:
+			-- InMatch is not cleared on death, so a dead spectator still cycles to the living.
+			local owner = Players:GetPlayerFromCharacter(model)
+			local inMatch = owner == nil or owner:GetAttribute("InMatch") ~= false
+			if humanoid and root and humanoid.Health > 0 and inMatch then
 				table.insert(found, { model = model, humanoid = humanoid })
 			end
 		end
@@ -448,7 +456,10 @@ local function setSpectating(value)
 	spectateLabel = Instance.new("TextLabel")
 	spectateLabel.AnchorPoint = Vector2.new(0.5, 1)
 	spectateLabel.Position = UDim2.new(0.5, 0, 1, -24)
-	spectateLabel.Size = UDim2.fromOffset(460, 44)
+	-- Wide enough for "Spectating <name>   •   [E] next   •   [L] leave" at GothamBold 16, and wrapped
+	-- rather than spilling past the rounded plate when the name is long (#102).
+	spectateLabel.Size = UDim2.fromOffset(620, 48)
+	spectateLabel.TextWrapped = true
 	spectateLabel.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
 	spectateLabel.BackgroundTransparency = 0.2
 	spectateLabel.BorderSizePixel = 0
@@ -464,8 +475,8 @@ local function setSpectating(value)
 
 	local name = applySpectateTarget()
 	spectateLabel.Text = name
-		and string.format("Spectating %s   •   [%s] next", name, Settings.KeyLabel("SpectateNext"))
-		or "Waiting for the next match…"
+		and string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave"))
+		or string.format("No one left to watch   •   [%s] back to the lobby", Settings.KeyLabel("SpectateLeave"))
 end
 
 local function cycleSpectate(step)
@@ -476,8 +487,8 @@ local function cycleSpectate(step)
 	local name = applySpectateTarget()
 	if spectateLabel then
 		spectateLabel.Text = name
-			and string.format("Spectating %s   •   [%s] next", name, Settings.KeyLabel("SpectateNext"))
-			or "Waiting for the next match…"
+			and string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave"))
+			or string.format("No one left to watch   •   [%s] back to the lobby", Settings.KeyLabel("SpectateLeave"))
 	end
 end
 
@@ -486,6 +497,18 @@ spectateRemote.OnClientEvent:Connect(setSpectating)
 Settings.Bind("BRR_SpectateNext", "SpectateNext", function(_, inputState)
 	if inputState == Enum.UserInputState.Begin and spectating then
 		cycleSpectate(1)
+	end
+	return Enum.ContextActionResult.Pass
+end)
+
+-- #102: the way OUT. The server owns the decision (MatchService.LeaveSpectate refuses anyone who is
+-- not spectating, and the remote is rate-limited) and answers with Spectate(false) BEFORE the new body,
+-- so the camera is handed back first; nothing is torn down here on the press.
+local leaveSpectateRemote = Remotes.Event("LeaveSpectate")
+Settings.Bind("BRR_SpectateLeave", "SpectateLeave", function(_, inputState)
+	if inputState == Enum.UserInputState.Begin and spectating then
+		Sfx.Play("UiClick", 0.08)
+		leaveSpectateRemote:FireServer()
 	end
 	return Enum.ContextActionResult.Pass
 end)
@@ -546,6 +569,12 @@ local function crosshairPoint()
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
+	-- Terrain water doesn't stop a bullet, and THIS TRACE DECIDES WHERE THE SHOT IS AIMED, so it has
+	-- to pass through water exactly like the server's shot ray (CombatService.buildRaycastParams) and
+	-- the launcher rounds (ProjectileService). Left at its default FALSE it stopped at the surface, so
+	-- aiming across a river snapped the aim point onto the water and the server then fired
+	-- head->surface and diverged from the crosshair line beyond it -- #97.
+	params.IgnoreWater = true
 	params.FilterDescendantsInstances = filter
 
 	local result = workspace:Raycast(ray.Origin, ray.Direction * 1500, params)
@@ -606,15 +635,30 @@ local function tryFire()
 		return
 	end
 
-	-- Mirror the server's rate limit and raise time so we don't send shots it will reject.
+	-- Mirror the server's raise time so we don't send shots it will reject.
 	local now = os.clock()
 	if now < localEquipReadyAt then
 		return
 	end
-	if now - lastLocalShot < 1 / def.fireRate then
+	local interval = 1 / def.fireRate
+	if now - lastLocalShot < interval then
 		return
 	end
-	lastLocalShot = now
+	-- ADVANCE BY A WHOLE INTERVAL; NEVER RESET TO `now`. This runs on Heartbeat, so a shot lands on
+	-- the first frame at or after the interval. Resetting to `now` threw the leftover away and
+	-- quantised the fire rate down to the FRAME RATE: computed across all 27 weapons in WeaponData,
+	-- the 14/s Glitch SMG delivered 12.00/s at 60 fps (-14.3%) and 10.00/s at 30 fps (-28.6%), so a
+	-- 30 fps player's SMG did 28.6% less damage than a 60 fps player's for no reason anyone could
+	-- see. Carrying the remainder forward holds the average at fireRate whatever the frame rate.
+	--
+	-- This is only safe together with the server's shot BUDGET (CombatService.ShotCredit): sends now
+	-- land one interval apart give or take a frame, which the old strict `interval * 0.9` server gate
+	-- would have rejected outright. Landing either change without the other makes #97 worse.
+	lastLocalShot += interval
+	if now - lastLocalShot > interval then
+		-- Coming off a pause or a frame hitch: start fresh rather than banking credit for a burst.
+		lastLocalShot = now
+	end
 
 	local target = aimPoint()
 	if target then
@@ -998,6 +1042,12 @@ for index = 1, SLOT_COUNT do
 end
 
 -- The next-slot key steps through the slots that have something in them.
+--
+-- Also on the right shoulder, because a controller has no number row: with this bound, every slot is
+-- reachable by cycling, and without it a controller player could not change weapon at all for a whole
+-- match. The numbered BRR_Slot1..N bindings below are deliberately left keyboard-only for the same
+-- reason. R1 is free across the tree; L1 is the vehicle handbrake (VehicleClient:327), so binding
+-- previous-slot there would fight a control while driving.
 Settings.Bind("BRR_NextSlot", "NextSlot", function(_, inputState)
 	if inputState ~= Enum.UserInputState.Begin or not inCombat() or not loadout or player:GetAttribute("MenuOpen") then
 		return Enum.ContextActionResult.Pass
@@ -1011,7 +1061,7 @@ Settings.Bind("BRR_NextSlot", "NextSlot", function(_, inputState)
 		end
 	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.ButtonR1)
 
 -- THE WHEEL IS THE HOTBAR, AND ZOOM IS A KEY (Z). It used to be the other way round.
 --

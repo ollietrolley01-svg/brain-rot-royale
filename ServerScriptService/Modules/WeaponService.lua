@@ -1475,6 +1475,13 @@ function WeaponService.GiveWeapon(player, weaponId, ammo)
 	loadout.slots[target] = newSlot
 	selectSlot(player, loadout, target)
 	WeaponService.Push(player)
+	-- Names what was given up, not just what was taken: the old gun is dropped where the new one lay
+	-- (LootService.DropSlot, from the caller), and a player who swapped by accident otherwise has to
+	-- work out what is missing from an empty hotbar slot.
+	local old = replaced and replaced.kind == "weapon" and WeaponData.Get(replaced.id)
+	if old then
+		return true, string.format("Swapped %s for %s", old.name, def.name), replaced
+	end
 	return true, "Swapped to " .. def.name, replaced
 end
 
@@ -1683,18 +1690,43 @@ end
 -- so pickups can't stockpile forever, and a pickup never reduces ammo already held.
 local AMMO_CAP_MULTIPLIER = 2
 
+-- How many rounds a refill of `fraction` would actually add to one slot: zero when the slot holds no
+-- gun, and zero when its reserve is already at (or above) the cap. Pure and exported as
+-- `WeaponService.AmmoGrant` so the decision can be tested directly -- nothing in the Studio harness can
+-- hold a loadout, since that needs a real Player to push to.
+local function ammoGrant(slot, fraction)
+	local def = slot and slot.kind == "weapon" and WeaponData.Get(slot.id)
+	if not def then
+		return 0
+	end
+	local grant = math.ceil(def.reserveAmmo * fraction)
+	local cap = def.reserveAmmo * AMMO_CAP_MULTIPLIER
+	-- Never takes rounds away: a reserve already past the cap stays where it is and grants nothing.
+	return math.max(0, math.min(cap, slot.reserve + grant) - slot.reserve)
+end
+WeaponService.AmmoGrant = ammoGrant
+
+-- Returns true only if rounds actually arrived. It used to return true for any live loadout, so
+-- VendorService's "Nothing to reload." refusal (VendorService:105) was unreachable and a player with no
+-- gun -- or with every reserve already at the cap -- was charged 150 SahurCoins for nothing and toasted
+-- success. Callers that charge money read this, so it must describe what happened, not that it ran.
+-- Deliberately true/false rather than the count: 0 is truthy in Lua, so a count would walk straight
+-- through the `if not WeaponService.GiveAmmo(...)` at the call site that matters.
 function WeaponService.GiveAmmo(player, fraction)
 	local loadout = loadouts[player]
 	if not loadout then
 		return false
 	end
+	local added = 0
 	for _, slot in pairs(loadout.slots) do
-		local def = slot.kind == "weapon" and WeaponData.Get(slot.id)
-		if def then
-			local grant = math.ceil(def.reserveAmmo * fraction)
-			local cap = def.reserveAmmo * AMMO_CAP_MULTIPLIER
-			slot.reserve = math.max(slot.reserve, math.min(cap, slot.reserve + grant))
+		local grant = ammoGrant(slot, fraction)
+		if grant > 0 then
+			slot.reserve += grant
+			added += grant
 		end
+	end
+	if added <= 0 then
+		return false
 	end
 	WeaponService.Push(player)
 	return true

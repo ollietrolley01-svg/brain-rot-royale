@@ -25,6 +25,9 @@ local TextService = game:GetService("TextService")
 local UserInputService = game:GetService("UserInputService")
 
 local MapData = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("MapData"))
+-- What is drawn and what holds the mouse, in one place. See VoteCursor for why they are not the same
+-- answer, and for why this screen could never free the cursor before (Oliver's #100).
+local VoteCursor = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VoteCursor"))
 
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
 local UiParts = require(script.Parent:WaitForChild("UiParts"))
@@ -89,13 +92,47 @@ local Screen = {}
 Screen.__index = Screen
 
 -- `onVote(candidateId)` is called on a tap or a number key. `parent` is a ScreenGui.
+-- `onMenuOpen(open)` is called with the INTERACTIVE vote's state, and it is the caller's job to write
+-- the player attribute: a module a gallery can render has no player to set attributes on. Same split
+-- as DropPicker.
 function VoteScreen.new(options)
 	local self = setmetatable({}, Screen)
 	self.parent = options.parent
 	self.onVote = options.onVote
+	self.onMenuOpen = options.onMenuOpen
 	self.zIndex = options.zIndex or 36
 	self.touch = options.touch
+	self.forcedInputKind = options.inputKind
+	self.menuOpenHeld = false
 	self.state = { open = false, candidates = {}, seconds = 0, ready = false }
+
+	-- THE CURSOR FIX FOR #100, half one, and the only half that actually unlocks the mouse. A VISIBLE
+	-- GuiButton with Modal = true frees the cursor for as long as it is up, which is the one thing
+	-- that beats `CameraMode.LockFirstPerson` — Roblox's own camera relocks the mouse EVERY FRAME, so
+	-- no one-shot MouseBehavior write survives it. Transparent, exactly like the inventory's overlay
+	-- and MenuCursor's flag: a Modal button has to be Visible, it does not have to be seen, and the
+	-- vote screen is not gaining a dim it was never designed with.
+	--
+	-- It follows the INTERACTIVE vote, not the screen's visibility — see VoteCursor.Screen.
+	-- `options.noModal` exists for one reason: the gallery builds a deliberately broken screen with it
+	-- to prove the check that reads these properties can actually fail.
+	if not options.noModal then
+		self.modal = create("TextButton", {
+			Name = "VoteOverlay",
+			Size = UDim2.fromScale(1, 1),
+			Position = UDim2.fromScale(0, 0),
+			BackgroundTransparency = 1,
+			AutoButtonColor = false,
+			Modal = true,
+			Selectable = false,
+			Active = true,
+			Text = "",
+			Visible = false,
+			ZIndex = (options.zIndex or 36) - 1,
+			Parent = options.parent,
+		})
+	end
+
 	self.root = create("Frame", {
 		Name = "VoteScreen",
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -119,7 +156,42 @@ function Screen:isTouch()
 	return ok and touch or false
 end
 
+-- Which WORDS to use -- "touch", "gamepad" or "keyboard" -- as distinct from which layout. isTouch
+-- decides the shape (safe area, insets, the phone banner) and is rightly about the screen; this is
+-- about the hands. The two-device test alone sent a console player down the keyboard branch, "Press
+-- 1, 2 or 3" on a machine with no keys, because a console is neither touch nor keyboard (the
+-- coordinator's sweep; HudClient's tips use the same three-way test). `options.inputKind` lets a
+-- gallery or a probe force one.
+function Screen:inputKind()
+	if self.forcedInputKind then
+		return self.forcedInputKind
+	end
+	if self:isTouch() then
+		return "touch"
+	end
+	local ok, kind = pcall(function()
+		local last = UserInputService:GetLastInputType()
+		if string.find(last.Name, "Gamepad", 1, true)
+			or (UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled) then
+			return "gamepad"
+		end
+		return "keyboard"
+	end)
+	return ok and kind or "keyboard"
+end
+
 function Screen:Destroy()
+	-- Release BEFORE the instances go. A screen torn down while holding the cursor leaves its claim
+	-- outstanding with nothing left alive to release it, and the mouse stays free for the session.
+	if self.menuOpenHeld then
+		self.menuOpenHeld = false
+		if self.onMenuOpen then
+			self.onMenuOpen(false)
+		end
+	end
+	if self.modal then
+		self.modal:Destroy()
+	end
 	self.root:Destroy()
 end
 
@@ -134,14 +206,30 @@ end
 -- server is a handful of redraws of nine text labels — measured against the alternative of an
 -- update path that can disagree with the tally it is drawing, that is the right trade.
 --
--- state = { open, candidates = { { id, mode, map, votes, mine } }, decided = id, seconds, ready }
+-- state = { open, candidates = { { id, mode, map, votes, mine } }, decided = id, seconds, ready, readyKey }
 function Screen:Render(state)
 	if state then
 		self.state = state
 	end
 	state = self.state
-	local visible = state.open == true or state.decided ~= nil
+	-- One definition of "drawn" and "holds the mouse", shared with VoteDropClient. The reveal is
+	-- visible WITHOUT wanting the cursor: its cards are built inert (`Active = enabled and not
+	-- decided`), so there is nothing to click, and claiming for it would switch combat off.
+	local visible, wantsCursor = VoteCursor.Screen(state.open, state.decided, state.ready)
 	self.root.Visible = visible
+	if self.modal then
+		self.modal.Visible = wantsCursor
+	end
+	-- ON A CHANGE ONLY. Render runs on every redraw — a snapshot arrives each time anyone in the
+	-- lobby taps a card — and a callback fired per redraw would claim and release the cursor once per
+	-- tap. Treating a repeat as a transition is the exact bug class this fix exists for; it is not
+	-- being reintroduced two files from where it was found.
+	if wantsCursor ~= self.menuOpenHeld then
+		self.menuOpenHeld = wantsCursor
+		if self.onMenuOpen then
+			self.onMenuOpen(wantsCursor)
+		end
+	end
 	if not visible then
 		return
 	end
@@ -483,13 +571,30 @@ function Screen:Layout()
 			or "Building the map…"
 		hintColour = Role.Positive
 	elseif not enabled then
-		hint = "Ready up to vote — only players who are in the next match choose it."
+		-- The vote takes neither the cursor nor the overlay from an unready player (VoteCursor.Screen),
+		-- so both ways to ready up work from right here; say which they are, in the hands' own words.
+		local kind = self:inputKind()
+		if kind == "touch" then
+			hint = "Not in the next match yet — tap READY UP at the top to vote."
+		elseif kind == "gamepad" then
+			hint = "Not in the next match yet — step on the ready pad on the airship, or READY UP at the top, to vote."
+		elseif state.readyKey then
+			hint = string.format("Not in the next match yet — press [%s] or click READY UP at the top to vote.", state.readyKey)
+		else
+			hint = "Ready up to vote — only players who are in the next match choose it."
+		end
 		hintColour = Role.Accent
-	elseif touch then
-		hint = "Tap a card to vote. Most votes wins; a tie is drawn at random."
-		hintColour = Role.TextMuted
 	else
-		hint = "Press 1, 2 or 3, or click a card. Most votes wins; a tie is drawn at random."
+		-- Worded for the hands, not the screen: a console is neither touch nor keyboard, and the
+		-- pad has no 1, 2 or 3.
+		local kind = self:inputKind()
+		if kind == "touch" then
+			hint = "Tap a card to vote. Most votes wins; a tie is drawn at random."
+		elseif kind == "gamepad" then
+			hint = "Pick a card. Most votes wins; a tie is drawn at random."
+		else
+			hint = "Press 1, 2 or 3, or click a card. Most votes wins; a tie is drawn at random."
+		end
 		hintColour = Role.TextMuted
 	end
 	UiParts.text(panel, Type.Caption, hint, hintColour, {

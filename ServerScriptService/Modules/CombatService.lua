@@ -472,9 +472,13 @@ local function buildRaycastParams(character, shooterToken)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	-- Terrain water doesn't stop a bullet. Left at its default, a raycast HITS water, so a shot
-	-- across a river or over the sea on the sand maps died at the surface — while the client's own
-	-- trace (CombatClient) and the launcher rounds (ProjectileService) both ignore water, so the
-	-- shooter saw the shot go through and simply got no hit.
+	-- across a river or over the sea on the sand maps died at the surface.
+	--
+	-- This comment used to say the client's own trace ignored water too. IT DID NOT:
+	-- CombatClient.crosshairPoint left IgnoreWater at its default FALSE, so the crosshair stopped at
+	-- the surface while the shot passed through it, and the two disagreed about where the player was
+	-- aiming. Fixed 2026-09-21 (#97). verify.py now checks the two sites AGREE, because a comment
+	-- asserting the opposite of the code is the reason nobody re-checked this for so long.
 	params.IgnoreWater = true
 
 	local filter = { character }
@@ -625,6 +629,41 @@ function CombatService.IsDriving(player)
 	return seat ~= nil and seat ~= false and seat:IsA("VehicleSeat")
 end
 
+-- SHOTS ARE BUDGETED, NOT SPACED.
+--
+-- This gate used to be `now - lastShotAt < interval * 0.9`: a shot had to arrive at least 90% of an
+-- interval after the last one or it was dropped, and dropped SILENTLY -- no BroadcastShot, so no
+-- tracer, no muzzle flash, no report, and no ammo spent, while the shooter's own client had already
+-- kicked the camera and the viewmodel. A shot that costs you your aim and does nothing is exactly
+-- what "the hit registration feels bad" is made of (#97).
+--
+-- Two things legitimately compress the gap between two shots, and neither is cheating:
+--   * the client sends on FRAME boundaries, so consecutive sends are one interval give or take a
+--     frame -- at 30 fps that is 33 ms of honest earliness on the Glitch SMG's 71 ms interval;
+--   * network jitter bunches packets in flight.
+-- Measured against the old gate: once the client's fire rate was made accurate (CombatClient), the
+-- Glitch SMG had 7.1 ms of tolerance left, which ordinary jitter clears without trying.
+--
+-- So: refill at exactly fireRate and allow FIRE_BURST shots of slack. Momentary compression is
+-- absorbed, and the SUSTAINED rate -- the thing actually worth enforcing -- is still fireRate
+-- exactly, because the bucket cannot refill faster than that. RateLimit's Fire budget still caps the
+-- remote itself, so this is not the only thing between the server and a modified client.
+local FIRE_BURST = 2
+
+-- How many shots the shooter may take right now; >= 1 means fire. Deliberately does NOT spend
+-- anything, so a shot refused for ammo immediately afterwards doesn't burn the budget.
+function CombatService.ShotCredit(loadout, def, now)
+	local interval = 1 / def.fireRate
+	local since = now - (loadout.lastShotAt or 0)
+	return math.min(FIRE_BURST, (loadout.fireCredit or FIRE_BURST) + since / interval)
+end
+
+-- Commits the shot ShotCredit approved.
+function CombatService.SpendShot(loadout, credit, now)
+	loadout.fireCredit = credit - 1
+	loadout.lastShotAt = now
+end
+
 -- `aimPoint` is the world position under the client's crosshair. Direction is derived here
 -- from the server's own view of the head, so the client never supplies the vector itself.
 function CombatService.Fire(player, aimPoint)
@@ -660,15 +699,15 @@ function CombatService.Fire(player, aimPoint)
 	end
 
 	local now = os.clock()
-	local interval = 1 / def.fireRate
-	if now - loadout.lastShotAt < interval * 0.9 then
+	local credit = CombatService.ShotCredit(loadout, def, now)
+	if credit < 1 then
 		return
 	end
 
 	if not WeaponService.ConsumeAmmo(player) then
 		return
 	end
-	loadout.lastShotAt = now
+	CombatService.SpendShot(loadout, credit, now)
 
 	local head = character:FindFirstChild("Head")
 	local origin = head and head.Position or character:GetPivot().Position

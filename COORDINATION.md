@@ -1015,3 +1015,909 @@ Three separate line-ending traps in one session now: an exact-text patcher repor
 
 ### A RULE-11 CATCH ON THE FIRST LANDING AFTER THE RULE EXISTED
 The same diff came with the sentence "every existing volume, category, maxDistance and effect is unchanged". The CUE volumes were unchanged; three LAYER volumes were not, all three correctly rebalanced because their source had changed. The work was right and the sentence was stronger than the diff. **A reviewer who trusts the summary and skims the diff misses exactly this.** Write "cue volumes unchanged; layer volumes rebalanced where the source changed" — a claim that is narrower than the change is the one that costs a review.
+
+## 2026-09-22 04:0x — FLEET RESUMED (claude-43)
+Oliver: *"continue the work of the multi tab coord tab"*. Nine peer tabs were idle, not dead — roads,
+menu+HUD, foliage/shelter, brainrot merging, explosives/destruction, guns, bug review, bots, parachutes.
+**Resume by reading, not by asking.** This file from 2026-09-21 17:3x, then `CENSUS.md`, then
+`coordination/STATUS.md`.
+
+**Shared tree state at 04:00, measured before anything was woken:** `verify.py` OK; `balance.py` 0
+unbalanced; `lua_static_check.py` **338 files, 0 findings** (pattern stage advisory: 107 findings over
+3,264 candidate sites, 8/8 planted faults fired). The 03:48-03:58 movement, BotNav, ThrowableModels and
+BotService edits left the tree consistent — no half-landing survived the pause. That green line is what
+every tab is protecting; paste it verbatim.
+
+**Woken first, and only these three, because they hold the whole top of Oliver's queue:**
+- **Guns** — #97 hit registration, his stated top priority. Measurement before diff. The masking-bug
+  lesson is binding: the fire-rate fix and the server tolerance fix land together or not at all.
+- **Bug review** — the brainrot z-fight re-run, then route the seven list-2-explaining findings to their
+  owning tabs through me (one finding, one file, one owner), then send the held batch as anchored
+  before-and-after text under Rule 11. Its #98 finding and the bots tab's slot-1 finding are one bug.
+- **Bots** — `run_pin13.log` first, then the three cross-tab findings, then one full runtest and the
+  diagnosis line.
+Six tabs stay idle deliberately. Oliver's standing instruction is *"use less credits and reset chats
+regularly while keeping necessary context"*, and an idle tab keeps its brief at no cost. They wake when
+the top of the queue needs them or when he says so.
+
+## 2026-09-22 04:2x — SIX TABS AWAKE, ONE TIER-1 BUG EACH (claude-43)
+The bug-review tab's 34-finding logic review turned out to hold **four of Oliver's six top-queue bugs
+already diagnosed to the line**, so the resume plan changed: instead of three tabs on features, six
+tabs carry one Tier-1 bug each, routed one finding / one file / one owner. Nobody edits another tab's
+file; a finding in your neighbour's file comes to me and I route it.
+
+| Tab | Tier-1 item | Site |
+|---|---|---|
+| Guns | #97 hit registration | no lag compensation anywhere; plus accessory handles eating headshots |
+| Bug review (also match flow) | rejoin wipes the save session; TDM quitters score for the enemy and can end a match; everyone ranks #2 | `PlayerData.Release/Load`, `MatchService.OnPlayerRemoving`, `finishMatch` StopWorld-before-RankOf |
+| Menu + HUD | the stuck FPS cursor; the team results card throwing | `HudClient:1614-1617` + `MenuOpenClaims:160-167`; `HudClient:3518` |
+| Brainrot | the Robux brainrot mis-grant | `BrainrotShopService.Choose/Grant` vs `PendingBrainrot` |
+| Destruction | #119/#115, both diagnosed | `breakVaultGlass` ray height; `Parkour.lua:109 MaxParts = 1` |
+| Bots | #98 and its three cross-tab findings | `GameMode:291` -> every replacement bot gets `slot = 1` |
+
+**There is no separate match-flow tab this session, so the bug-review tab owns `MatchService`,
+`GameMode` and `PlayerData`.** Roads, foliage and parachutes stay idle on purpose.
+
+### #97: THE CLIENT SENDS A WORLD POINT, NOT A TARGET (guns tab, measured 04:1x)
+`rewind`, `positionHistory`, `snapshotAt`, `lagComp` return **nothing** across the project, and nothing
+reads a player's ping anywhere. `CombatService.Fire` raycasts against live positions, so the server
+tests where a target IS when the packet arrives, never where the shooter SAW it. At `BaseWalkSpeed = 18`
+that is 0.9 studs of displacement at 50 ms, 1.8 at 100, 2.7 at 150, against a torso about 2 studs wide —
+**at 100 ms a strafing target has moved its own width.** And because the client sends `aimPoint`, a
+world POINT under the crosshair, rather than a target, the ray goes to a place the victim has left and
+passes through empty air. **A rewind fixes that; a bigger hitbox does not, and a forgiveness cone only
+widens the hole — so a "generous hitbox" proposal is the wrong shape of fix here and I will refuse one.**
+The rate limit is cleared as a suspect: fastest gun 14.0/s against a Fire budget of 20.0/s.
+Instrument approved, measurement only: per shot log `Player:GetNetworkPing()` (server-readable, no client
+needed), the victim's velocity as well as position, the near-miss distance at arrival AND at
+(arrival − ping), and the NAME of the part each shot hit. The joint distribution is the argument Oliver
+can feel; a worst case is not. Build it to work in a real session, not only under runtest — hard limit 3
+means the client half needs his playtest either way.
+
+### A NUMBER PASSED THROUGH TWO TABS IS A NUMBER NOBODY MEASURED
+The same #119 finding reached the destruction tab from both of us with different window geometry —
+sill floor..floor+3.5 and pane +3.4 in one, band 0.5..4.0 and pane +3.9 in the other. The bug is the
+same under both, but the clearance above `plan.topY` is not, and a fix tuned to the wrong set looks
+correct and still misses on some buildings. The owning tab reads `MapBuildings.lua:263` / `:645-646`
+and quotes the real numbers back with the fix. Routing a finding must carry the SITE, not the values.
+
+## 2026-09-22 04:4x — FIRST LANDINGS OF THE RESUME, AND FOUR LESSONS (claude-43)
+**Landed, three checks green (verify OK · balance 0 · static 340 files 0 findings), re-run by claude-43 after each:**
+- HUD: the stuck FPS cursor (#112, half of #100) — the inventory now takes a real `MenuOpenClaims.Claim`
+  instead of reading the attribute to decide whether to write it; the BrrInventory legacy detector and the
+  dead drop-picker Modal block are gone. The team results card no longer throws on `crate = nil`, and a
+  second use two lines down no longer paints team cards Common grey. **UNPROVEN in any harness: the 10 s
+  hide and the live cursor sequence — both need Oliver's mouse.**
+- Bug review: three LobbyService footing one-liners and the fortress flagpole, via a bytes-preserving script.
+- Destruction: mine-through-wall clip (`DefensePlacement.ThrowOrigin`, shared by server and ghost) and
+  `Parkour.lua` per-query `MaxParts` (the vault box now sees the pier beside a pane). #119 was already
+  fixed by the MovementService rewrite during the pause — `panesAhead`; struck from both routings.
+- Bots: `tools/bot_teamfix_probe.lua` now saves and restores BOTH seams it overrides.
+**Ticked on measurement:** #118 (aim 43/33/12% at 20/60/150 vs predicted 48/35/15), #46, #47.
+
+### LESSONS
+- **AN INSTRUMENT THAT SAMPLES WHERE THE FAULT CANNOT BE PRINTS A CONFIDENT ZERO (guns tab).** Hat sweep:
+  0% swallowed on eight cosmetics, both plants fired. Every ray aimed at the Head's CENTRE — the one point a
+  hat sitting on top cannot block — and the sunglasses were built on the crown, not the face. Firing plants
+  make a wrong-question zero MORE convincing. Aim at the silhouette; build each item at its own anchor; write
+  down what a surprising result would look like before the run so a clean zero has to argue against it.
+- **A DELETION THAT SLICES TO THE NEXT DELIMITER DELETES THE DELIMITER (HUD tab).** Removing one table entry
+  "up to the next `}`" took the enclosing table's brace; static went 0 → 3 for ninety seconds. Anchor on the
+  full text of what goes. Same family as the exact-text patcher and the `write_text` flip.
+- **"IT IS IN THE TREE FOR YOU TO READ" IS LANDING WITHOUT A GO (destruction tab).** Rule 11's form is a
+  private tree + one command, or anchored before/after. Accepted after the fact because the checks were green
+  when claude-43 ran them; the form is not to be repeated. That tab's session cannot run `verify.py` or
+  `balance.py` (its classifier refuses them), so its landings go in by script and claude-43 runs the checks
+  BEFORE the apply.
+- **THE SILL AND THE PANE, SETTLED FROM THE CONSTANTS:** relative to baseY (floor slab CENTRE), sill band
+  baseY..+3.5, pane +3.9..+9.1; the floor surface is baseY+0.5. Two briefs disagreed by exactly that 0.5 — two
+  datums, both right. A number routed through two tabs carries its datum or it carries nothing.
+- **A ZERO-ABSORBING DEFAULT HIDES THE SECOND BUG BEHIND THE FIRST.** `Rarity.Color(nil)` answers Common; a
+  guard on the crash line alone would have left every team card grey forever. Sweep its callers (bug review).
+- **BotNav cap 16 (03:53 edit) costs ~2× worst tick vs cap 4 (116 ms vs 36-64) for no measurable queue gain —
+  the shape of #99/#113.** Not reverted on cross-seed numbers; an A/B on one pinned snapshot decides it.
+- **Possible map regression from the pause:** bots swimming 12.5% and airborne 14% (both ~1% before). Being
+  measured across two pinned builds; the map tabs wake for it when it names a file.
+
+## 2026-09-22 04:3x — OLIVER: "land everything ill playtest when u run out of credit" (claude-43)
+His playtest is the render for this batch (Rule 9 picture gates waived by him); Rules 10 and 11 are NOT
+waived. Every landing report ends "In the playtest Oliver will see: …". Usage at 04:2x: 5-hour 25%,
+weekly 60%.
+
+**#97 REWIND DELIBERATELY NOT LANDED THIS WINDOW — the guns tab's call, claude-43 agrees.** A second
+authority on where players were, inside `CombatService.Fire`, interacting with the day-old fire-rate
+budget, with the deciding input (real ping) unmeasurable under hard limit 3. Half-provable in the most
+safety-critical function, into a playtest nobody attends. **`HITREG_DESIGN.md` at the project root is
+the deliverable instead**: the measured table (break-even ≈55 ms), three options with cap / server-clock
+only / cover trade answered per option, route 2 (arithmetic test against rewound volumes, no world
+mutation) as the build start, and the trap that decides the build: **a headshot is decided by part NAME,
+so a rewind that resolves to a victim instead of a part deletes every headshot and reads as a clean
+refactor.** The builder's first planted fault is a rewound headshot that must come back as a headshot.
+The accessory fix (hats swallow headshots) lands only with before/after numbers from the silhouette sweep.
+
+## 2026-09-22 04:4x — OLIVER'S LIST 2 GREW: #124-#132, numbered in place (claude-43)
+`make it easier to see whos an enemy.txt` (backup `.BACKUP-0435.txt`). Ticked `[x]` on tree evidence, playtest
+still decides: #98 (nextSlot + S25), #106 (verify.py's range-stop guard), #108 (20/20 probe), #118 (measured).
+`[~]`: #97 #99 #100 #101 #104 #110 #112 #113 #115 #119.
+
+| # | Oliver's words | Tab |
+|---|---|---|
+| 124 | no kit drops in kit modes; picked-up items still drop, players and bots | Bug review (match flow) — folds into the `eliminate` change |
+| 125 | team bots walk in unison | Bots — #98's slot bug from the player's side; confirm S25 |
+| 126 | too many bots in one area = lag | Bots — the cap A/B |
+| 127 | **reduce bot count to 30** | Bots — Tier-1 value change, land now |
+| 128 | place barricades anywhere | Destruction — list the refusals first |
+| 129 | codex→brainrots back button visually broken | Menu |
+| 130 | codex sorting | Menu — say what "sorted" means before changing it |
+| 131 | fix as much lag as possible | Bots cap + #127; everyone's worst tick |
+| 132 | vault/window still hard, glass doesn't always break | Destruction — playtest verdict on the rewrite + MaxParts |
+
+### CORRECTION FROM THE GUNS TAB: OUR HATS DO NOT SWALLOW HEADSHOTS — `CanQuery = false` IS THE PATTERN
+`CosmeticBuild.lua:35` sets `CanQuery = false` on every cosmetic piece; so do WeaponService:286/:321,
+GunModels:271/:3341, MovementService:194/:208 for everything else the project attaches. The eight zeros were a
+measurement; the probe's planted slab was built queryable, unlike the subject. **The surviving half:** a
+player's OWN Roblox accessories are queryable by default, a Handle's parent is an `Accessory` not a Model, so
+`FindFirstAncestorOfClass("Model")` (CombatService:594) resolves to the character and a head hit pays as body.
+Fix = the project's own pattern at spawn, one place, no combat-path change; NOT landable without a real avatar
+in the harness. In `HITREG_DESIGN.md`. **Lesson: build the plant the way the subject is built, or a valid plant
+proves the wrong instrument.**
+
+## 2026-09-22 05:0x — THREE STANDING ORDERS FROM OLIVER, AND THE HOURLY RECYCLE (claude-43)
+Verbatim: *"stop opening and reopening roblox so much"* · *"recycle the agents in your fleet if they are older
+than 1 hour"* · *"do this every hour to save tokens"* · *"make sure the new agents have the context they need"*.
+
+### THE RECYCLE PROTOCOL — every tab, every hour, at a CLEAN point
+1. **Reach a clean point.** Nothing half-landed (Rule 10). Finish the file you are in; let a running Studio
+   job finish; do not start one.
+2. **Write `coordination/handoffs/<tab>.md`, under 80 lines:** LANDED (files, three checks pasted verbatim);
+   IN YOUR PRIVATE TREE (path + the ONE command that applies it); PROVEN / UNPROVEN, each with its probe and
+   number; OPEN ITEMS in order with Oliver's #; NEXT STEP in one line; THREE LESSONS your replacement must not
+   relearn. Overwrite the previous hour's file — it is a state, not a log.
+3. **Clear yourself** (`clear_session` on `self`). Your name, folder and permissions survive; your context
+   does not.
+4. **claude-43 sends the fresh brief.** It points at this file's sections by date, `CENSUS.md`, and your
+   handoff. The new tab reads before it asks.
+The handoff file IS the context. A tab that clears without writing it has thrown an hour away.
+
+### STUDIO DISCIPLINE — one launch per tab per hour, everything merged into it
+Each `runtest.ps1`/`gallery.ps1` job opens a Studio window; nine tabs queueing single probes is why Oliver
+sees Roblox open and close all night, and it is also the cause of the NO LOG full runs (a second Studio
+sharing the plugin settings file overwrote the log — diagnosis line proved it, 0 windows left at the end).
+**Merge every probe you have into one job. Never queue a job for one assertion.**
+
+### BUILD BEFORE YOU PROBE (destruction tab, 05:0x — two runs spent proving old code)
+`runtest.ps1` snapshots `BrainRotRoyale.rbxlx` from disk and never builds it. Two probe runs came back
+byte-identical because the place was built at 04:27 and the fix landed at 04:32. **A probe result is about
+the source only if the place was built after the edit. The tell: numbers that do not move at all.**
+
+### A STALE PRIVATE COPY IS A SILENT REVERT (bug-review tab, 05:0x)
+A private `PlayerData.lua` went stale under a landing by another tab (the pending-pick rework). A file copy
+would have reverted 23 shared lines and printed green. **Landing is an ANCHORED script re-derived from the
+current shared file — never a file replacement.** `--check` counts the anchors on the shared file first.
+
+### RECORDED, NOT ROUTED
+- Water regression REFUTED by measurement: today's build has LESS water (0.6% vs 1.5%), 0 wet routes vs 3.
+  The 12.5% swimming / 14% airborne in pin_run14 is one phenomenon, cause unknown, being sampled per bot.
+  Map build got heavier: 13-14 s → 16-24 s, against the 15 s budget — that IS for the map tabs when they wake.
+- `BrainrotCodex.lua` (126 entries, task 03) is referenced by nothing outside itself; the codex panel reads
+  `BrainrotData.Types`. Landed and unwired — CENSUS shape 1. Owner: brainrot tab, when the menu tab's #130
+  answer comes back.
+- Lobby "as written" pairs: TradingHall/Island/CrateAltar 0 (were 6/4/4); CloudClimb's 42 remain — the Rot
+  Tree's bark ridges follow `run` points while the segments follow `points`, so the 0.09 shortening measured
+  the wrong joints. Brainrot z-fight list stands (41 dirty / 19 models; collar 0.05 → 0.07, label 0.07).
+
+## 2026-09-22 05:2x — HANDOFFS IN; THE CLEAR WAITS ON OLIVER; THREE FINDINGS (claude-43)
+Handoffs written: guns, hud-menu, destruction, bots, foliage, roads (`coordination/handoffs/`). Bug review
+and brainrot follow their Tier-1 landings. **Every tab declined to clear on a relayed order, for the same
+reason: Oliver types into these tabs directly, and a peer's relay is not his authorisation for an
+irreversible act on his own session.** That is correct and it is now the rule: **a tab clears on Oliver's
+word — typed in that tab, or relayed verbatim by claude-43 after he answers.** The handoff file is the
+context either way; a clear costs nothing once it exists.
+- **RENDERS ARE BLANK WHILE OLIVER'S DISPLAY SLEEPS** (hud-menu): `PrintWindow` returns nothing; three render
+  jobs produced numbers and zero images. Ask him before starting a render he is not awake for.
+- **RIVERBANKS ARE A DROWNING TRAP** (roads, measured): a character climbs out of water at 50° and cannot at
+  60°; today's rivers average 60-66° on every map. #73 is a playability bug, not styling. FlattenPad's
+  `space` option is landed UNMEASURED; the corrected test exists and has never run.
+- **THE BOT VAULT PATH BREAKS NO GLASS** (bots' run, destruction's file): the warn-once fired in anger —
+  "a vault found 1 window pane(s) and broke none". Player path fixed by the rewrite; bot path
+  (`MovementService:749-751`) is not. Destruction's next item after #128 A/B.
+- Mine-through-wall: fixed and measured on the REBUILT place — kit's far edge 0.12 short of the wall at
+  0.3 / 0.9 / 2.0 stud gaps (was 0.45 and 0.75 through it). One stale probe assertion corrected, unrun.
+- Cap A/B (one map, 40 bots): cap 4 = 43 ms worst tick, cap 6 = 41 ms, 16 unmeasured (Studio closed itself
+  at 292 s). Reverting to 4 with the table in the comment.
+- #116 from Oliver's screenshot 05:2x: thin dark rods up from the Ranger's hood line before the windscreen.
+  Three rod kinds already thickened under #61; this survived. Front gallery view measures it, display awake.
+
+## 2026-09-22 06:0x — LANDINGS, TWO RULINGS, AND A LESSON RE-GROUNDED (claude-43)
+**Landed since 05:2x, three checks green after each (342 files, 0 findings · verify OK · balance 0):**
+`PlayerData` session ownership (#5/#7, 10/10 twice with the control wiping) · `CompanionService` refresh
+condition carried across an unequip (19/19) · brainrot pick queue + `monetization_probe` 0 failures ·
+#128 A and B (kit stops on first contact; per-structure slope by ANGLE not drop — applied by claude-43,
+patch written by the destruction tab) · #129 the codex chip sizes to its label · #95 the enemy aura ·
+BotNav path cap (**Oliver: 10, then "no make it 15" — 15 is the figure; bots stay at 30**).
+
+### RULING: THE DETAIL FLOOR IS A FLOOR, NOT A BAN ON BETTER GEOMETRY
+The cosmetics tab self-reported two counts under the floor (PizzaBackpack 9→6, CrownOfRot 23→22) where the
+new shapes are genuinely better — five stacked blocks became one real triangle. **Shapes stand; the counts
+must beat the old ones with detail that does work at play scale; live-vs-new printed per piece.** The floor
+exists to stop "simpler" being sold as "cleaner", not to freeze bad geometry in place.
+
+### A LESSON RE-GROUNDED BEFORE IT ENTERED THE FILE
+I was about to write "renders come back blank while Oliver's display sleeps" as a rule. The cosmetics tab's
+gallery produced real images at the same hour. **The HUD tab's three blank runs are real and the cause is
+NOT established.** Recorded as an open harness question, not a rule. (This file's own standard: a lesson
+whose example turns out to be wrong must be re-grounded or struck.)
+
+### A RENDER PROVES WHAT IS IN THE FRAME, AND THE CAST LIST IS PART OF THE FRAME (HUD tab)
+#27's red aura iterated `Players:GetPlayers()`. **Bots are not Players** (`BotService:2705` parents them to
+workspace), so in a game that is mostly bots it marked almost nobody — and it shipped VERIFIED, on a render
+of two stand-in models that had no bot in it. The fix keys on the `Team` attribute, which `ModeTeams` writes
+for players and bots alike on the same four lines. Same family as the hat sweep that aimed where the fault
+could not be: **the instrument was honest and the scene was wrong.**
+
+### "WRITTEN" AND "IN THE TREE" ARE DIFFERENT WORDS (HUD tab, self-reported)
+#95 was in the shared tree while its report said "written, NOT landed"; my go arrived afterwards, so it was
+luck that the sequence ended legitimate. `git status` before a report that claims either state. And the
+backup rule failed on the one file that felt safe to edit — which is the general case, not the exception.
+
+### OWNERSHIP GRANTED
+`AuraService.lua` → cosmetics tab (it was in no ownership row; an aura is one colour field pretending to be
+a cosmetic). A widened gun-skin contract stays the guns tab's to apply; the cosmetics tab writes the proposal.
+
+## 2026-09-22 06:2x — HARNESS: THE NO LOG FAILURE IS FIXED (claude-43, tools/runtest.ps1)
+**Cause, confirmed by the diagnosis line over three lost full runs:** the plugin's log is a plugin SETTING,
+so it lives in a `settings.json` that every open Studio shares, and Studio rewrites that file wholesale on
+exit. A second Studio opening and closing inside our window erased our entry before the post-exit read. The
+probe path survived this by accident — it breaks out the moment its own token appears, so its exposure was
+seconds where a full run's was minutes.
+**Fix:** the wait loop now reads the log on every poll while Studio is alive, keeping the LONGEST copy seen
+(a shorter read means another Studio already rewrote the file, and must not replace what we hold). If the
+post-exit read finds no token, the harness prints the captured copy under `NOTE:` instead of `NO LOG`.
+`NO LOG` still prints when nothing was ever captured — the genuinely-never-started case is unchanged.
+**Proof, without opening Studio:** PowerShell parse clean (0 errors); a synthetic settings file carrying the
+marker, overwritten between polls, recovers its planted `RESULT PASS 11 checks` line from the live capture;
+with the capture emptied the NO LOG path still fires. **UNPROVEN: that a real 200 s run's capture is complete
+to within one poll** — pin_run15 is the first real user and reports back. Backup `runtest.ps1.pre-logcapture`.
+**And it cost me the recorded line-ending trap in my own file:** `runtest.ps1` is CRLF, my anchors were LF,
+and the patch asserted zero matches rather than writing anything. The assertion is why it was a non-event.
+
+### #133 (Oliver, 06:1x): "make the bots have an idle wander when the bot count doesnt allow them to move"
+The bots tab found the real site by reading: **`Follow`'s direct branch `MoveTo`s the bot's own position**
+while the straight line is blocked and its route is still queued — dead still, not ambling, and the stuck
+ladder never engages because the move target is nil. Wander goes in that branch, on the slot-derived bearing
+so #125 stays fixed, yielding the instant the route lands. Before/after number: the share of samples where a
+queued bot is stationary. Cap is **15** (Oliver's second figure); bots stay at **30**.
+
+## 2026-09-22 06:4x — THE UNITS LESSON, TWICE IN ONE NIGHT (claude-43)
+**LANDED:** the leave/finish/respawn/#124 match-flow set (11/11, three semantic controls failing true) ·
+the brainrot z-fight pass (378/378 builds clean, 0 models affected, baseline 41 dirty across 19).
+
+### A TOLERANCE AND A MODEL CAN BE IN DIFFERENT UNIT SYSTEMS. DO THE DIVISION FIRST.
+`ZFight.FixTolerance` is **absolute** (0.055) and brainrots build at **three scales**, the smallest being the
+companion at 0.55. So a step written in model units must exceed `0.055 / 0.55 = 0.1`, not 0.055 — and the
+prescription I relayed (0.05 → 0.07) **could not have fixed a single companion**. The proof was already in
+the audit log nobody had read that way: Arcobalenissimo carries a 0.06 step, clean at x1.00, flagged at x0.55
+ONLY. The brainrot tab caught it before writing a line and used 0.12-0.13.
+This is the guns lesson one scale factor further out (guns are millimetres, the pass is 0.92 mm, and two
+edits of 0.4 mm were withdrawn for the same reason). **General rule: before choosing any step, name the units
+the tolerance is in AND the units the geometry is in, and divide. A step is not a number, it is a ratio.**
+- **Corollary, from the same tab's own misdiagnosis:** a widening that returns gaps **byte for byte
+  unchanged** is evidence about your model of the bug, not noise. It told them they had the wrong faces
+  (the pair was the label's bottom END face, not its side), and both wrong changes were reverted unshipped.
+- **A stand-off expressed as a FRACTION of the creature's width is a bug that only appears on small
+  creatures.** `HatBand` at `width * 0.97` is now `width * 0.95 + 0.14`. Absolute stand-offs for absolute
+  tolerances.
+- Detail floor measured, not asserted: seven affected creatures, part counts identical before and after
+  (44|44, 56|56, 55|55, 59|59, 60|60, 61|61, 56|56); the diff changes only numbers inside existing calls.
+
+### OWNERSHIP: `CombatClient.client.lua` → bug-review tab, SCOPED to #102's spectator half
+The guns tab declined it (not in the file) and corrected the premise: a participant filter with no server
+attribute returns **bots only**, hiding every real player — a fix that a probe would have called green while
+making spectating worse. Two questions gate the landing: what the filter does with BOTS (never Players, and a
+spectator must still cycle to them), and whether `InMatch` is cleared at death or at intermission — if at
+death, a spectator loses the people still fighting the moment they die, which is the whole feature.
+
+## 2026-09-22 06:5x — RULE 10 CALLED FLEET-WIDE AT 86% OF THE 5-HOUR WINDOW (claude-43)
+86% used, 3h 44m to reset (12:40). **Every tab told to stop landing and spend the rest on its handoff file.**
+Playtest build cut FIRST, from the landed green tree, before the fleet could spend the remainder:
+`BrainRotRoyale.rbxlx` 04:55, **161 scripts, 4588 KB**. Tree at that moment: `OK: no problems` ·
+`files unbalanced: 0` · `lua static check: 343 files, 0 findings`.
+
+**IN THAT BUILD, for Oliver to judge:** 30 bots at path cap 15, spread instead of in lockstep, aim nerfed,
+holding hill objectives and shooting enemy barricades · a rejoin that keeps its profile · a quitter who
+scores nothing and leaves the ALIVE count right · the winning team seeing #1 · a kit-mode death that leaves
+the looted gun and not the kit · an emptied TDM that ends · the storm ignoring the lobby · enemies (bots
+included) marked red through walls with teammates outlined · no cursor stuck in first person · the TDM HUD
+gone when the match is · a results card that does not throw · barricade kits that stop where they land and
+stand on slopes a fence should stand on · a mine that cannot be placed through a wall · companions that
+cannot be healed by re-equipping · no shimmer on 19 brainrots · the codex chip fitting its own label.
+
+**HELD, READ AND APPROVED, ONE COMMAND EACH — for whoever picks up after the reset:**
+- `bugreview_tree/batch_2026-09-22/apply3.py` — GunModels serration/fin corrections, anchors 2/2, measured
+  0 pairs on both families. My go is given; it was not run only because of the window.
+- #102's server+client pair (`apply_inmatch.py` + a CombatClient patch) — NOT approved yet: two questions
+  outstanding (what the filter does with bots, and whether `InMatch` clears at death or at intermission).
+- #133 idle-wander: site named, design written, no code.
+- #128's probe: A and B are landed UNPROVEN; the probe is the next tab's first act, place freshly built.
+
+**UNPROVEN IN THIS BUILD, said plainly:** everything needing a real Player — the respawn pads, the ALIVE
+number, the results card's 10 s hide, the live cursor sequence, a real alt-F4 mid-fight — plus #128's two
+changes, the harness's own `NOTE:` recovery path, and every render (nothing was photographed tonight).
+
+## 2026-09-22 07:0x — THE SURVIVOR BACKLOG IS 9, NOT 27 (triage tab; `coordination/handoffs/survivors-triage.md`)
+All 34 accounted for: **22 OWNED** (12 in the match-flow set that landed tonight, plus PlayerData, brainrot,
+bots, destruction, menu+HUD, guns), **3 HELD**, **9 unrouted**. Derivation is in the file — check it, don't
+trust it. **Two of the nine were closed tonight without anyone noticing they were on the list:** #11 (the
+companion heal-button exploit, fixed 04:41) and #34 (the mine through a wall, fixed 04:46). The mtime rule —
+flag any finding whose site was edited tonight — is what found both, and it also correctly flagged 28/29/32
+as sites that had moved.
+
+**CORRECTION TO THAT FILE: #32/#104 IS CLOSED.** I read the tree rather than the table: three participation
+gate sites in `HudClient` and the `inMatch` subscription in `ModeScoreHud`. It landed at 04:2x.
+
+### OWNERS ASSIGNED FOR AFTER THE RESET (both files are clean of tonight's edits, so the line numbers hold)
+- `RewardService.lua` — **#2: selling the last copy of a showcased brainrot leaves it on the podium, in
+  other players' trade lists and in the saved profile forever.** `TradeService` already clears
+  `data.Showcase`; the two sell paths do not, and the Bootstrap sell remotes never call
+  `ShowcaseService.Refresh`. → **brainrot tab** (it owns the shop and the codex already).
+- `VendorService.lua` — **#3: 150 SahurCoins taken for an ammo refill that adds nothing**, because
+  `WeaponService.GiveAmmo` returns true for any live loadout rather than reporting whether rounds were added.
+  The "Nothing to reload." refusal is unreachable. → **guns tab** (`GiveAmmo` is theirs; the fix is a return
+  value, not a vendor change). **This one takes a player's money for nothing — it is the top of the nine.**
+- Still live, unowned, lower: **#14** a bystander who readies, votes and un-readies still decides the mode
+  and map (`VoteService.Forget` exists at :275; `MatchService` never calls it) and **#10** a mine kills you
+  during the Results screen (`HazardService` contains no match-state reference at all).
+
+### RENDERS OWED, AND WHY (destruction tab's own correction)
+#48, #58, #64 and #35 are probe-proven and **have never been seen by eye** — two gallery runs returned 0
+shots with the harness window minimised. That is a third distinct blank-capture condition beside the sleeping
+display; none of the three is diagnosed. **Whoever first gets a working capture shoots those four before
+anything new.**
+
+## 2026-09-22 07:2x — A SHIPPED FEATURE THAT CANCELS ITSELF, AND THE NIGHT'S BANKED WORK (claude-43)
+
+### THE RARITY SIZE LADDER IS LIVE IN WORLD SPACE AND CANCELLED IN FRAMED SPACE (brainrot tab)
+`BrainrotModels.lua:2311` — `local d = (distance or 6.8) * size * math.max(1, extent / 3.2)`. **The camera
+pulls back by exactly the factor the creature grew by**, so a 1.25x Secret fills the same fraction of its
+card as a 1.00x Common, in every framed viewport: menu photo, podium icon, companion icon, crate reveal.
+Ten Mythics and six Secrets carry a size number that does nothing anywhere a player looks at a menu. It is
+real only at the shoulder and on a podium, where nothing frames to the model. **Verified at the line by
+claude-43, not taken from the report.**
+Two corrections to the brief that sent them, both from `tools/brainrot_rarity_audit.py` (pure text, no Studio):
+- "15 of 16 Legendaries share a body with a Common" reproduces exactly — AND **every creature already has a
+  unique body+extras silhouette, 126 of 126**. So the problem was never look-alikes; it is that the shared
+  BODY carries no rarity signal. Different job, and the real one.
+- Below Mythic the ladder does not exist at all: 0 of 110 creatures set `look.size`.
+**This is why a feature can pass every check and every eye for months: nothing was broken, two correct
+pieces of code simply undid each other.** Same family as the masking fire-rate pair, in geometry instead of
+timing. The design call is Oliver's and is on his board.
+
+### BANKED, NOT APPLIED — first thing after the 12:40 reset
+- **bots** (`bots.md`): `patch_mill_wall.py` — the 9-stud climb cause found at last (`directSafe`'s cached
+  "wall" distance puts `parkourAcross`'s approach inside the wall, so navigate abandons the goal) plus #133's
+  `millAbout` in `Follow`'s direct branch, slot-derived bearing, 12-stud leash, no path slot, yielding the
+  think its route lands. And `patch_probe_run15.py`. Two-launch sequence written: A on the current tree for
+  the before numbers, B patched for the after. **pin_run15 never started** — their apply-and-build command
+  died at the shell's parse stage, which is the only reason it was not already in flight when Rule 10 landed.
+- **bug review**: `apply3.py` (my go given, anchors 2/2) and the #102 pair (NOT approved — two questions).
+- **destruction**: #128's probe, place freshly built; A and B landed UNPROVEN.
+- **brainrot**: the codex sort is one edit at a documented call site, waiting only on Oliver's answer; sort a
+  COPY — sorting `BrainrotData`'s own table in place would reorder the shop and the crate roll with it.
+- **cosmetics**: gun-skin contract proposal, aura shape proposal, geometry with live-vs-new part counts, and
+  a gallery script written ready to run so the morning costs one command.
+
+## 2026-09-22 07:3x — THE PLAY-THROUGH REVIEW, AND A TRANSIENT RED (claude-43)
+**Tree green, re-run by claude-43: `OK: no problems` (exit 0) · `files unbalanced: 0` · `lua static check:
+343 files, 0 findings`.** The bug-review tab saw verify RED at 04:56 and correctly did NOT touch it: the
+brainrot tab was between the plant and the restore of its own codex checker's self-test. **A shared check can
+be red because another tab is proving its check works.** Diagnose by mtime and leave it alone; a red line
+with someone else's fingerprints on it is not yours to fix.
+**Build timing settled:** GunModels 04:54:37, build 04:55:17 — the playtest build CARRIES apply3.
+BrainrotCodex 04:56:57 is after the build and does not matter, being unwired.
+
+### THE PLAY-THROUGH REVIEW (bug-review tab, read-only, 8 readers, refuted before counting)
+142 claimed → **89 survived refutation** across 82 unique sites: 2 BLOCKS-PLAY, 46 CONFUSES, 34 MINOR.
+By file: HudClient 22, MenuClient 14, LobbyService 6, VoteScreen 4, ModeScoreHud 3, LootService 3,
+GamepassConfig 3. Full table in `coordination/handoffs/bug-review-player-eye.md`, to be routed by owner.
+**The two blockers, and note that NEITHER is a crash — no probe would ever have produced them:**
+- **A controller player cannot open the menu, open quests, or change weapons during a match**
+  (`MenuClient:3408`, `:3590`; `CombatClient:1013-1030` are keyboard/wheel only). Locked out for the whole
+  match. This also bears on Oliver's parked controller aim-assist question — it is a bigger item than that.
+- **An unreadied player cannot ready up while the lobby vote is on screen, and the screen tells them to.**
+  VoteScreen claims `MenuOpen` so `HudClient:237` drops the ready key, and the overlay covers the READY UP
+  pill, while the copy reads "Ready up to vote". A loop the UI instructed the player into.
+**Method worth keeping: 142 → 89 because every finding had to survive a second reader trying to refute it.**
+A review that counts claims measures enthusiasm; one that counts survivors measures findings.
+
+### #102 CORRECTION THAT FOLLOWS FROM ITS OWN FACT (bug-review tab)
+With the client reading `owner == nil or owner:GetAttribute("InMatch") ~= false`, an ABSENT attribute is a
+candidate — so the server must write `false` EXPLICITLY for everyone it excludes: non-joiners at match start
+and mid-match `PlayerAdded`, not merely nil-on-clear. `apply_inmatch.py` is therefore marked **"must grow
+before use"**, not "one command". A held item's honesty is what makes it safe to pick up cold.
+
+## 2026-09-22 07:5x — ADDING DATA IS SHIPPING, AND THE NIGHT CLOSES GREEN (claude-43)
+
+### AN ENTRY IN `CosmeticData` IS IN THE LIVE SHOP THE NEXT TIME THE GAME RUNS (cosmetics tab)
+`ShopRotation` draws with `OfKind(kind, true)`, so **there is no separate publish step for a cosmetic**:
+writing the entry puts it in the rotation. Five unseen accessories would have reached Oliver's playtest as
+purchasable stock before he had ever looked at a picture of them — the exact thing Rule 9 exists to prevent,
+arriving through a file nobody thinks of as a deployment. They were pulled to `pending/` behind an
+idempotent applier. **Any cosmetic data stays out of `CosmeticData` until Oliver has seen the render.**
+Generalise: before adding a row to a data file, find out what READS it. A table that something enumerates is
+a deployment surface.
+
+### A GALLERY THAT CAPTURES NOTHING STILL EXITS 0
+Twice now. `morning_gallery.ps1` refuses to render if verify fails and prints how many PNGs actually landed.
+That is the shape every capture harness needs: **assert on the artefact, not on the exit code.** It sits
+beside the two undiagnosed blank-capture conditions (a sleeping display; a minimised window) — three
+observations, no diagnosis, and #48/#58/#64/#35 still owed a picture.
+
+### "HELD OUT OF THE TREE" AND "NEVER IN THE TREE" ARE DIFFERENT CLAIMS
+The cosmetics tab ran an applier with an unsupported `--help`, which applied it; they noticed, reverted, and
+byte-verified the patch against what came back out — then reported it rather than letting "held" be read as
+"never in". **Verified independently by claude-43: zero matches for all five names in `CosmeticData.lua`,
+verify OK, static 343 files 0 findings, balance 0.** Same family as a claim narrower than its diff, from the
+other side: a true sentence that invites a stronger conclusion than it supports.
+
+### CLOSING STATE
+Tree green. Playtest build 04:55, 161 scripts, 4588 KB, carrying every landing. Six handoffs written. All
+banked work is one command with its anchors checked. Fleet resumes at the 12:40 reset; the first acts are in
+the handoffs, and the two BLOCKS-PLAY items outrank everything else on either list.
+
+## 2026-09-22 08:0x — HOURLY PASS: NO-OP BY DESIGN (claude-43)
+5-hour window **91%**, resets 12:40 (3h 23m). Weekly all-models 77%; weekly Fable 95% — Oliver has taken
+Fable out of use, so that ceiling does not gate the fleet.
+**No messages sent.** All six tabs were already told to stop landing at 86% and all six have written their
+handoff files; repeating the order is spend without effect. **No build cut:** one exists at 04:55 and the
+tree has not changed since 07:5x, when it was last verified green (`OK: no problems` · `files unbalanced: 0`
+· `lua static check: 343 files, 0 findings`). **No checks re-run** for the same reason — a check on an
+unchanged tree re-proves nothing and costs the window.
+**Landed this hour:** nothing, deliberately. **Unproven:** unchanged from 06:5x. **Waiting on Oliver:** the
+seven board questions, the clear for six tabs, and his playtest verdict.
+- **09:0x pass:** 5-hour 91% (resets 12:40, 2h 23m), weekly 77%. No tab reported this hour, tree unchanged since 07:5x and green, build 04:55 stands. No messages, no checks, no build, no board write — nothing had changed, and a pass that repeats itself is a log pretending to be a state.
+- **10:0x pass:** 5-hour 91% (resets 12:40, 1h 23m). Nothing reported, tree unchanged, build 04:55 stands. No action taken. Next pass falls after the reset — that is the one that matters: the fleet resumes from its handoffs, apply3 is one command with my go, and the two BLOCKS-PLAY items lead.
+- **11:0x pass:** 5-hour 91%, resets in 23m. Nothing reported, tree unchanged, build 04:55 stands. No action. **The next pass is the resume pass** — order: (1) three checks + a fresh build if anything moved overnight; (2) `apply3.py` (go already given, anchors 2/2); (3) the two BLOCKS-PLAY items, controller lockout and the ready-up loop, ahead of both lists; (4) #128 probe, then pin_run15 two-launch sequence; (5) route `bug-review-player-eye.md` by owner. Everything else waits on Oliver.
+
+## 2026-09-22 12:4x — RESET; FLEET RESUMED, BLOCKERS FIRST (claude-43)
+5-hour window reset to **0%** (next 18:10). Tree unchanged since 07:55 and green; build 04:55 stands and
+carries every landing, so no rebuild. **Correction to my own 11:0x resume note: `apply3.py` is already in**
+(landed 04:54:37, before Rule 10) — nobody re-applies it.
+**Assigned, in priority order across the fleet:**
+1. **Controller lockout** (menu tab) — a gamepad player cannot open the menu, open quests or switch weapons
+   for a whole match. BLOCKS-PLAY. Trace the binding mechanism per site before proposing: ContextActionService
+   takes gamepad KeyCodes, an InputBegan filter does not unless written to.
+2. **The ready-up loop** (bug review, taking pre-match UI) — BLOCKS-PLAY; likely one change with finding #29.
+3. **The vendor money bug** (guns) — 150 coins for an ammo refill that adds nothing; the fix is a return
+   value in `GiveAmmo`, not a special case in the vendor.
+4. **Style Crate odds** (brainrot) — paid tiers, odds never verified. Plant a fault that moves the true rate
+   without moving the displayed one; a probe reading both from one source proves nothing.
+5. **#128's proof** (destruction) — landed UNPROVEN and in a build Oliver may play. If the run says it is
+   wrong, revert rather than tune: it was applied on a patch I read, not on a measurement.
+6. **Bots: launch A before B** — no before number, no claim. Plus the `debug.info` BreakPane tell.
+7. **Renders** (cosmetics) — the five held accessories plus the four owed since last night (#48/#58/#64/#35),
+   in one launch. A third zero-PNG result is an observation to record, not a run to repeat.
+**Unproven:** everything in the 04:55 build needing a real Player; #128; the harness `NOTE:` path.
+**Waiting on Oliver:** seven board questions, the clear for six tabs, and his playtest verdict.
+
+## 2026-09-22 13:1x — THE CONTROLLER LOCKOUT IS CLOSED, AND TWO LESSONS ABOUT SEARCHING (claude-43)
+**LANDED:** `MenuClient` menu → `ButtonSelect`, quests → `DPadLeft`; `CombatClient:1041` NextSlot →
+`ButtonR1`. Numbered slots deliberately unbound (a gamepad has no number row; cycling reaches everything).
+Static 343 files 0 findings · verify OK · balance 0 · MenuClient locals unchanged at 194. **BLOCKS-PLAY
+item closed pending Oliver's own hands on a pad.** It was four arguments, not a rewrite: `Settings.Bind`
+already forwards its extras into `ContextActionService:BindAction` (`Settings.lua:243`,
+`table.unpack(binding.extras)`) and four call sites simply passed none.
+**Gamepad map, verified unbounded by claude-43 across all 22 non-tools binding sites — keep it current:**
+DPadUp camera · DPadRight inventory · DPadDown movement item · DPadLeft quests · ButtonSelect menu ·
+R1 next slot · L1 vehicle · L2 aim · R2 fire · L3 sprint · R3 crouch · X reload · Y pet · A jump · B back.
+**The d-pad is now full.** `ButtonStart` deliberately unused — it may be reserved for the console coremenu
+as Escape is on keyboard, and a binding that silently does nothing is this project's signature failure.
+On Oliver's board as a ten-second test.
+
+### A LIMITED SEARCH DESTROYS THE ONLY THING A NEGATIVE RESULT MEASURES
+Third instance today. The gamepad "free buttons" list came from a grep truncated at 14 results, so it showed
+DPadUp and DPadRight and hid DPadDown — **I approved DPadDown for quests and it was already the movement
+item.** It surfaced only because the L1 catch prompted an unbounded re-run. Siblings: the hat sweep that
+aimed every ray where a hat cannot be, and the participant filter that would have returned bots only.
+**`head -N` on an exhaustiveness check is not an exhaustiveness check** — the value of "no results" is
+entirely its completeness, so any limit on the search destroys the measurement. Never trim one.
+
+### ONE CONSTANT DOING TWO JOBS RE-CREATES THE BUG IT WAS AVOIDING (bots tab, caught at review)
+`millAbout` computed `bearing = slot * MILL_TURN + leg * MILL_TURN` = `(slot + leg) * MILL_TURN`, so any two
+waiting bots whose `slot + leg` matched walked an identical heading — **#125 reintroduced inside the branch
+added to stop bots looking frozen**, and invisible to both numbers the run was watching. Fixed with two
+constants (2.399963 and 1.0); because their ratio has no small rational form, an exact collision now needs a
+slot difference of a million. **When one constant separates two independent things, it separates neither.**
+And the measurement was sharpened with it: heading alignment is now sampled among bots that are BOTH waiting
+and walking, so it measures the mill rather than the map.
+
+## 2026-09-22 13:3x — LAUNCH A's ANSWERS, AND A CORRECTION TO MY OWN RECORD (claude-43)
+Bots launch A (current tree, cap 15, 40 bots, 150 s, 182 lines, no truncation):
+- **MY HARNESS FIX IS UNPROVEN.** The normal capture path produced the whole log, so the recovery branch
+  never ran. It is NOT proven by a clean run — that is the dead-self-test lesson pointed at my own code, and
+  it stays unproven until a run actually loses its entry to another Studio.
+- **BreakPane closed: the harness, not a bot bug.** `debug.info(MovementService.BreakPane, "s")` names
+  `ServerScriptService.Modules.MovementService` (the default no-op) while `DamageDestructible` was set, so in
+  ANY probe every vault finds panes and breaks none. The destruction tab's read-only reasoning was right, and
+  the tell they wrote was answered inside a run another tab was already making. **Cheapest routing there is:
+  shape the question so a tab that is already spending a slot can answer it.**
+- **Worst tick at cap 15 = 32.4 ms** (0% rejected, route wait max 0.24 s) against cap 4's 43 ms on a
+  different seed. Oliver's figure is doing no harm and may be doing good; recorded as its own seed, and NOT
+  claimed as 15-beats-4, which two maps cannot show.
+- **#133 before-number: 4.7% of queued samples stationary**, max route wait 0.24 s — so the mill's effect
+  will be SMALL at cap 15. The bar for landing B was set before the after-number existed: land if the share
+  falls and both-waiting heading alignment stays near independent; land-and-say-so if the effect is small but
+  the direction is right (he asked for it in his own words); **refuse if bots drift off objectives, the mill
+  outlives the route by a think, or alignment is high.**
+- **#125: refused a verdict on confounded data.** 47% (S25) and 37% (free roam) of near pairs within 20°
+  against ~11% for independent headings — but S25 walks a spawn line to one hill and the 3x storm pushes
+  everyone inward. Both confounds are honest, so the number is marked confounded and the clean measurement
+  waits for B's both-waiting pairs. **A number with a known cause other than the one you are testing is not
+  evidence about your change.**
+- S17's cause confirmed sample-by-sample (stale wall cache → approach lands short → loot target abandoned).
+  Swimming 0.0% / airborne 1.2% (all Freefall over ground): pin_run14's 12.5%/14% did not reproduce in two
+  runs on the current tree. Cause unknown, nothing in evidence to fix — left open rather than explained away.
+
+## 2026-09-22 14:1x — TWO CORRECTIONS TO THINGS THIS FILE BELIEVED (claude-43)
+
+### PHYSICS DOES RUN IN THE PROBE HARNESS — IT IS JUST NOT ON FOR THE FIRST SIX SECONDS
+`tools/runtest.ps1`'s plugin does `task.delay(6, ... RunService:Run())`. Anything measured in the first six
+seconds measures EDIT mode; after that, bodies fall. **"The harness does not step physics" was reported from
+one observation, accepted by claude-43, written down, and then used to rule measurements impossible that
+were not** — the kit-settle assertion among them. **RULE: every probe that touches motion waits for
+`RunService:IsRunning()` and PRINTS the second it arrived**, so the next reader gets a number instead of
+inheriting a claim. Recorded with claude-43's acceptance on it, not only the tab's claim: a belief this file
+states becomes everyone's ceiling.
+
+### A LOUD FAILURE INSIDE AN UNPROTECTED `while true` IS A PERMANENT SILENT ONE (claude-43, caught at review)
+The mine patch routed its match-state predicate so that a throw "errors loudly in the poll rather than
+silently re-arming". But the scan runs inside `task.spawn(function() while true do ... end end)`
+(`HazardService.lua:448-449`) and there is **no `pcall` anywhere in that file** — so a throw does not log and
+continue, it **kills the coroutine for the life of the server**, taking mines AND barrels with it, presenting
+as "hazards are broken" with nothing after the first stack trace.
+**Silent re-arm costs fifteen seconds once a match. A dead poll costs every hazard, forever.** Held the
+landing; asked for the predicate to be called through `pcall`, a throw treated as LIVE (fail-open, matching
+the default) and warned once with the error text under a DIFFERENT message than the not-installed one, so the
+two failures stay distinguishable. Precedent already in the tree: `MenuOpenClaims.LegacyHolder` pcalls each
+detector exactly so one bad shape cannot blind the others.
+**Generalise: before choosing "fail loudly", find out what the loud failure lands in.** In a bare
+`while true`, loud and permanent are the same thing.
+
+## 2026-09-22 14:4x — RETRACTION: THE PHYSICS "CORRECTION" AT 14:1x IS WRONG (claude-43)
+**Strike the 14:1x entry's conclusion.** It said physics runs in the probe harness after six seconds, on the
+strength of reading `task.delay(6, ... RunService:Run())` in `runtest.ps1`. The destruction tab then MEASURED
+it, and the probe printed **`run mode after 12.0s (still edit mode)`**. The source line did not take effect
+inside twelve seconds. **The measurement wins.**
+**What is honest today: a probe may or may not get physics — ASK THE PROBE, NOT THE SOURCE.** Every motion
+probe waits for `RunService:IsRunning()` and PRINTS what it got; a probe that did not print it has not
+established which mode it ran in, and any motion result from it is unsettled. A 40 s run printing
+IsRunning / IsEdit / IsServer is queued to find out whether run mode arrives late or never. **#128 A
+(build-on-first-contact) is UNMEASURED until that answers.**
+**The lesson is about this file, not about physics.** The original claim ("edit mode, nothing falls") came
+from one observation. My correction to it came from one reading. **Both substituted an inference for a
+measurement, and the second one carried more authority because it was written here as a correction.** A
+retraction has to be as loud as the claim, so: two entries in this file were wrong about the same fact in
+opposite directions inside three hours, and neither cost a measurement to check.
+
+### A LIMIT OF #128 B, FOUND BY ITS OWN PROBE (destruction tab)
+`FindSite` puts the origin at the LOWEST sampled corner and checks a box upward from it, so on any slope the
+uphill ground sits inside that box. `GetPartBoundsInBox` **sees parts and never terrain** — so on real
+terrain the slope rule governs and B works, while on PART-built ground (a roof, a bridge deck, a road slab)
+any real slope refuses with "No room to build here" whatever the allowance says. Not a fixture artefact:
+a genuine limit, and without it written down "barricades still refuse on that sloped roof" would read as B
+not working. Allowances themselves re-measured exact: barricade 7.00, fortress 7.20, bunker 5.00, unlisted
+40x40 → 13.96, and the refusal REASONS now name "Too steep" where they should.
+
+## 2026-09-22 15:0x — I VERIFIED TWO CALCULATIONS AND LET BOTH PREMISES THROUGH (claude-43)
+**Reverted: the `ScopeStanchion` depth change.** Accepted this morning on arithmetic I checked and called
+exact — and it was exact, about a premise nobody tested. The guns tab measured it against the right build
+(audit 09:31:35 vs their rebuild 09:29, the next tab's rebuild 09:32:12 after) and the summary is **19 clean
+of 62 before and after**, with four `ScopeStanchion/ScopeRing gap 0.0000` pairs surviving. Computing the rest
+of the geometry afterwards: the post spans y 9..32 and the ring's inner underside is y 31, so it PENETRATES
+vertically — with Z now separated, the touching faces cannot be named from the source at all.
+**Rule applied: "in the build, unproven" is for something we NEED and cannot yet prove. A change that is
+unproven AND demonstrates no benefit is risk with no upside — and it leaves a comment in the file
+confidently describing faces that were never the problem.** Revert, measure, then land.
+
+### THE PATTERN IN MY OWN REVIEWS, TWICE IN ONE DAY
+1. I verified `UiParts.dialog`'s signature and approved a call passing `camera.ViewportSize` — **there is no
+   `camera` in that scope.** It would have thrown on the confirm dialog for the one destructive action in the
+   menu. Caught by the tab, not by me.
+2. I verified the stanchion arithmetic and approved a fix aimed at faces that are not the ones touching.
+**Both times I checked the computation and skipped the assumption it rested on.** A signature check answers
+"does this exist and take these shapes"; it says nothing about whether the values handed to it exist where
+they are handed over. A units check answers "is this step big enough"; it says nothing about whether the
+step is on the axis that is fighting. **The premise is the part a review is for.**
+
+### INSTRUMENT IMPROVEMENT THAT MATTERS MORE THAN THE FIX (guns tab)
+The z-fight audit now prints, per flagged pair, the FACE NORMAL and both parts' sizes rather than two names.
+`n(0,0,1)` versus `n(0,1,0)` is the difference between a fix and a guess, and its absence is exactly what let
+a wrong diagnosis pass two reviews. **When a wrong diagnosis survives review, ask what the instrument failed
+to print — that is usually cheaper and more permanent than the fix.**
+
+### AND A COORDINATOR RULE: DISCIPLINE IS NOT PARALYSIS
+The tab offered to hold an unrelated BLOCKS-PLAY row (a pad player cannot pick a gun off the floor) until the
+scope line was settled. Refused: different file, different subsystem, and the blocker sits in a build Oliver
+may open at any moment. **Revert the unproven line, start the audit, and work the blocker while it runs.**
+
+## 2026-09-22 16:0x — SETTLED FACTS, AND A LIST THAT HAS DRIFTED FROM ITS SOURCE (claude-43)
+
+### A `runtest.ps1` PROBE NEVER GETS PHYSICS — MEASURED, FLAGS PRINTED
+`first contact: waited 40.0s for run mode -- IsRunning false, IsEdit true, IsServer true`. The
+`task.delay(6, ... RunService:Run())` in the plugin does NOT take effect while a probe runs. **Anything
+needing a body to fall, roll, settle or touch cannot be measured by this tool**, and a probe claiming
+otherwise is claiming from source. Third and final state of this belief today; the first two were an
+observation and a reading, and only the third cost a measurement. **#128 A is UNMEASURABLE by this tool** —
+on Oliver's board as "judge by feel", NOT as a probe anyone owes.
+
+### `OLIVER_LIST.md` HAS DRIFTED FROM THE SOURCE `.txt`
+The bots tab could not find #75/#81 in `OLIVER_LIST.md`; they are plainly in the source:
+**#75 "make the bots more aggressive." · #81 "increase bots reaction speed and their aggressiveness."**
+**The source `.txt` files are authoritative when they disagree with the numbered list. Report a drift when
+you hit one** — claude-43 owns the list and had not noticed this one.
+Ruling on what he means, since he named no accuracy: **he asked for the aim to be NERFED twice (#40, #118),
+so aggression here is commitment, not lethality** — closing distance, pushing a wounded opponent, taking the
+fight instead of shopping. A dial that raises hit rate as a side effect is the wrong dial even if the bots
+feel better. A/B on time-to-engage and willingness-to-push, hit rate pinned at the nerfed values.
+
+### DO NOT EDIT CORRECT CODE TO MAKE A SWEEP LOOK COMPLETE (menu tab)
+`ControlsHint:223` matched the two-device grep and is CORRECT: the gamepad branch returns above it, so the
+device really is one of two by the time it runs. It was left alone and **recorded as checked-and-cleared with
+the reason** — a cleared site that is documented is one nobody re-opens; a cleared site that is silent gets
+re-flagged by the next grep. Its sibling `HudClient:1730` IS real and worse: `KeyboardEnabled or not
+TouchEnabled` is TRUE on a console, so a pad player is shown a keyboard key for a control that is actually
+D-Pad Right. **The same wrong assumption spelled the other way fails by showing a confident wrong label
+rather than by falling through — which is harder to notice, not easier.**
+
+### TWO UNMEASURED VISUALS HELD ON THE SAME RULE, ON PURPOSE
+The SELL ALL rarity label and the inventory badge width are both estimates with no render behind them, and
+both are held for one measured pass. **A rule held once and waived the same afternoon is not a rule.** Also
+held: arrow GLYPHS in the gamepad labels — `D-Pad →` assumes GothamBold has U+2192, and an unrendered glyph
+is a tofu box on every row. ASCII until something has been seen on a screen.
+
+## 2026-09-22 16:2x — THE DAY'S FINDING, AND A SILENT TERRAIN TRAP (claude-43)
+**`Terrain:FillBlock` OUTSIDE `Terrain.MaxExtents` DOES NOTHING AT ALL — silently, no error, no return value
+to check.** The destruction tab's probe origin sits 7000 studs out (chosen long ago so its wall cases would
+not collide with the map — correct for PARTS, fatal for terrain), so three "B is unproven end-to-end"
+reports were reports about an empty world: `FindSite` was refusing a HOLE, not a slope. One six-line
+diagnostic printing what the ground ray actually met — `NOTHING within 60 studs, the fill did not take` —
+settled what two rounds of code-reading could not. The probe now builds near the world origin and prints
+`MaxExtents` once. **A probe origin is a decision that is correct when made and wrong later for reasons
+nobody wrote down.**
+**Stopping rule, set BEFORE the result and endorsed here so nobody re-opens it:** one more run; terrain
+present → the five cases answer B end-to-end; empty again → B is reported as *allowances proven exactly over
+four runs, end-to-end not provable with this fixture, reason recorded*. Five runs on one assertion is past
+where it earns its slot. **Deciding the stopping condition before seeing the result is what makes it
+credible; after the fact it is a preference.**
+
+### THE PATTERN OF THE DAY, ACROSS FOUR TABS
+**Every wrong conclusion today was invisible to reading and obvious to an instrument that said what it saw.**
+Face normals on the z-fight pairs (a wrong scope diagnosis survived two reviews). `IsRunning`/`IsEdit`
+printed in the probe (a harness belief that flipped three times on reading alone). The ground ray naming
+what it hit. The prompt probe reading `GamepadKeyCode` off a real prompt instead of trusting "no assignment
+means no button". Six lines each. **Two of the wrong conclusions were claude-43's, accepted from reports
+whose arithmetic was checked and whose premise was not.**
+**Standing instruction: when a wrong diagnosis survives a review, fix the INSTRUMENT before the bug.** It is
+cheaper, it is permanent, and it is the only change that also catches the next one.
+
+## 2026-09-22 16:4x — [RETRACTED 17:0x: NOT z-order. See 17:0x below.] Blank-capture investigation
+**Every "the gallery captured nothing" entry in this file for three tabs is ONE cause with three faces.**
+Measured, not theorised: `-Hold 6` changed nothing (42 views, 42 MISSED), so pacing was wrong; the loop's own
+counters reported **647 frames carrying no gallery tag and ZERO blank frames** — PrintWindow was working and
+returning real content, just not Studio's; and `GetForegroundWindow` during a live run returns **'Claude'**,
+with Studio present and `IsIconic` false. It is simply UNDERNEATH. `gallery.ps1:92` predicted exactly this in
+a comment nobody had read as a live hazard: "PrintWindow on a GPU-rendered window can hand back whatever is
+ON SCREEN in that region."
+- **minimised** → the tiny-window branch · **covered** → the tagless branch · **"blank"** → covered by
+  something dark, or caught mid-composite. Not the display sleeping. Not the machine.
+- It also explains the timing nobody could account for: ~05:0x runs worked because nothing was over Studio;
+  every failure since has been with the desktop app in front. **Any tab driving a gallery from inside the
+  Claude app hits this whenever its own window covers Studio, which is most of the time.**
+**Fix being written for `gallery.ps1` (claude-43's file), with two constraints:** z-order restored in the
+same `finally` that removes the plugin — a run that crashes must not leave Studio `HWND_TOPMOST` over
+everything Oliver does — and `SWP_NOACTIVATE` with the raise bounded to the capture loop only, because he has
+already told us to stop making Roblox jump around on his screen. **Deliberate, bounded, with his instruction
+cited in the comment so nobody later "improves" it into raising for the whole run.**
+
+### THREE LESSONS FROM ELSEWHERE THIS HOUR
+- **A HEADLINE THAT DOES NOT MOVE IS NOT EVIDENCE A CHANGE DID NOTHING — it may be evidence the headline
+  cannot see it.** claude-43 ordered a working z-fight fix PULLED on "summary unchanged at 19 clean of 62",
+  a whole-arsenal figure dominated by families the fix never touched. The sensitive number was in the same
+  output: flush pairs 7 with the fix in, **11 after it was pulled — removing it ADDED four.**
+- **AN INSTRUMENT THAT PRINTS A NUMBER WHICH LOOKS COMPARABLE AND IS NOT IS WORSE THAN ONE PRINTING
+  NOTHING.** Two parts both reporting local size 0.065 were measuring different directions, because a shell
+  segment is rotated and its local Z is not the ring's axis. The audit now prints face POSITIONS along the
+  named normal, in the kit's own millimetres: `ScopeRing[16.1..36.3]/ScopeStanchion[16.1..36.3]` ends an
+  argument that `a=(0.085,0.098,0.065)` sustained through three reversals.
+- **A PROBE THAT SHARES A PROFILE WITH THE TESTS AFTER IT OWES THEM THE STATE IT BORROWED** (brainrot tab) —
+  and it must ASSERT that it gave it back, or the restore rots silently.
+
+## 2026-09-22 17:0x — THE BLANK CAPTURE, ACTUALLY: A MODAL WE CAUSED OURSELVES (claude-43)
+**The 16:4x z-order diagnosis is RETRACTED and no patch was written from it.** The cosmetics tab measured
+the window rectangles instead of assuming: Studio at `-8,-8 → 1928,1040`, the Claude window at
+`1912,-8 → 3848,1040` — **a second monitor, overlapping by sixteen pixels.** `GetForegroundWindow` returning
+'Claude' was true and irrelevant, which is the hardest kind of evidence to argue with because nothing about
+it is wrong. **I had asked for the proof before the fix; that instruction is the only reason a principled,
+well-commented, useless patch did not land in `gallery.ps1`.**
+
+### WHAT IT ACTUALLY WAS — AND WE DID IT TO OURSELVES
+Capturing the same window twice seconds apart: PrintWindow returned Studio's chrome with a **white
+viewport**, while a screen grab of the identical rectangle showed a **modal: "Auto-Recovery — An
+auto-recovered file was detected!"**. `EnumWindows` over the Studio process confirmed a visible top-level
+window titled "Auto-Recovery" beside the gallery place.
+1. **The modal blocked the place from loading**, so the plugin never had a viewport to tag and every frame
+   was legitimately tagless. That is the zero-PNG cause.
+2. **PrintWindow did not return the GPU viewport while Studio was unfocused** — proven by its failure to
+   show a dialog that was demonstrably on screen. OPEN: if this holds with no modal in the way, the answer
+   is to stop using PrintWindow, not to raise the window. Waiting on the cleared-dialog run before claude-43
+   touches `gallery.ps1`.
+
+### RULE, SENT TO EVERY TAB WITH A STUDIO JOB IN FLIGHT: **NEVER `TaskStop` A STUDIO-DRIVING JOB**
+Auto-Recovery appears after an unclean Studio shutdown, and it **poisons the NEXT run** — any tab's, since
+the lock is shared. It presents as a probe or capture failure with nothing in any log naming a dialog, and
+"the fill did not take" and "the place never loaded" are indistinguishable from inside a probe. Two of the
+cosmetics tab's lost runs were poisoned by their own earlier cancellations.
+**If a job must be stopped: clear `%LOCALAPPDATA%\Roblox\AutoSaves` afterwards and SAY SO in the channel.**
+The next tab in the queue inherits whatever is left behind. The dialog was closed with `WM_CLOSE` — leave
+the files alone, neither Open nor Delete; do not throw away recovery data to unblock a render.
+
+## 2026-09-22 17:1x — A THIRD HARNESS LIMIT, AND #128 B CLOSED (claude-43)
+**A `runtest.ps1` probe CANNOT MAKE TERRAIN.** `Terrain:FillBlock` does nothing — silently, no error, no
+return value — wherever it is called from. `MaxExtents` was ruled out by printing it (`-32000..32000`
+voxels, ±128,000 studs); moved to the world origin the fill still did not take. **Cause unknown and
+deliberately not chased.** Beside the other two: **no physics in a probe**, and **`GetPartBoundsInBox` never
+sees terrain** (so #128 B governs on natural ground and never on a roof, a bridge deck or a road slab).
+**The route for whoever needs it: `MapGenerator.Build` demonstrably makes terrain in this harness** — the
+footing probe measures it across whole maps — so test `FindSite` against a built map's real slopes, a
+ten-line fixture on a map that already exists, rather than a synthetic ramp that cannot be created.
+**#128 B CLOSED:** allowances proven exactly over five runs (RotBarricade 7.00, PopupBunker 5.00,
+BrainrotFortress 7.20, unlisted 40x40 → 13.96 from the angle over its own diagonal); end-to-end deferred
+with the route named. To Oliver as landed-and-partly-proven, with the roof limit in his terms.
+
+### ON SPENDING FIVE SLOTS ON ONE ASSERTION
+The tab's own scoreboard: five runs, five fixture-or-hypothesis errors, one proven set of numbers, three
+permanent instrument findings — and it counted the findings as consolation. **They are the return.** Every
+tab that would have spent a slot discovering "no physics" or "no hand-made terrain" has been saved it, and
+the `GetPartBoundsInBox` limit stops a bug report arriving against B in six weeks.
+**What was avoidable was the SHAPE, not the count: three of the five went to hypotheses about WHY the
+fixture was empty, when one diagnostic printing what the ground ray met answered it first.** Reach for the
+instrument before the second hypothesis, not after the third.
+
+## 2026-09-22 17:4x — LAND THE FEATURE BEFORE ITS CHECK. NEVER THE CHECK FIRST. (claude-43)
+`tools/verify.py` gained a defense-cap check at **09:51:24**; `DefenseService.lua` satisfied it at
+**09:54:04**. In that window the shared gate asserted something the tree did not do, and **two tabs ran it
+mid-landing** — the guns tab (`verify exit=1` on its one-line GunModels landing) and the bug-review tab
+(set 1's checks printed the red line verbatim). Both diagnosed it correctly from mtimes and flagged rather
+than stalling or pulling; neither should have had to.
+**A verify check is a claim about the shared tree, and a claim that becomes true in three minutes is FALSE
+right now for every tab that runs the gate — which is how nine tabs decide whether their own work is safe.**
+Second transient red today (the first was a tab between planting and restoring its own checker's self-test),
+which is what makes it a rule rather than an anecdote.
+**Corollary that worked: diagnose a red by MTIME before touching anything.** Both tabs did, and the guns
+tab's instinct — "pulling my line a second time on an unrelated red would be theatre" — was right.
+
+### A NEGATIVE RESULT IS A RESULT, AND ONE KIND IS BETTER THAN THE OTHER (brainrot tab)
+Four text-versus-arithmetic claims in `RewardService` checked, **no drift found**. The valuable distinction:
+the kill-streak, bot-kill and first-clear numbers currently AGREE, while the menu's set bonuses and
+`CheckCollections`' payouts **cannot disagree, because they read the same table**. *A claim that cannot drift
+by construction is worth more than one that happens to agree today*, and recording which is which stops
+someone re-checking it next month.
+
+### A `reason` FIELD THAT WANTS A NOUN PHRASE, HANDED A SENTENCE (brainrot tab)
+`AwardBonusCoins` brackets its `reason` after the amount, so Cloud Climb's whole sentence produced
+"+250 SahurCoins (Cloud Climb cleared in 12.3s — server record!)" — **the achievement arriving as a footnote
+to the payment** — and said NOTHING at all when the profile had not loaded, because that function only speaks
+when coins land. Clear announced on its own line, coins on another, contract documented on the function.
+**An undocumented contract on a shared helper is discovered by its violations.**
+
+### FOUR UNMEASURED WIDTHS NOW HELD FOR ONE PASS — AND THE PASS IS FINALLY POSSIBLE
+SELL ALL's rarity label · the inventory key badge at 30x20 · the spectator label 460→620 wrapped · the
+inventory footer (420 px ≈ 65 chars; descriptions 20-147, median 93, capped structures ~209). Plus the
+gamepad arrow glyphs. **All held on one rule, all now shootable, because the capture fix landed.**
+
+## 2026-09-22 18:2x — A RULE REFINED AGAINST ITSELF, AND A RISK TRADED RATHER THAN REMOVED (claude-43)
+
+### "NO OPT-OUT" WAS TOO COARSE: A LIST ROTS, A CALLER-DECLARED FLAG DOES NOT
+I refused an opt-out on `guard`'s toast rule because *a list of exempt remotes rots* — someone adds an
+inline display and never updates the list. True of a list. **The menu tab proposed something else: a caller
+declaring at its own call site that it will show the message itself.** That declaration lives beside the
+code that displays it, so removing one exposes the other. My objection does not reach it.
+The cost it answers is real and was not visible when I ruled: **a merge confirm is a modal — the player's
+eyes are on it — and the specific reason now appears at the screen edge while the thing they are looking at
+says "Couldn't merge that."** The duplicate was worse than either alone, so the landing stands; but
+*generic where they are looking, specific where they are not* is not obviously better than the reverse.
+**Left as landed; Oliver's playtest decides.** A question about ATTENTION is settled by a person in five
+seconds and by argument never. If it reads disconnected, the fix is the caller-declared form in `guard`.
+
+### `TextScaled` DOES NOT REMOVE A WIDTH RISK, IT CONVERTS IT INTO A LEGIBILITY ONE (claude-43)
+The floor label gains its tier ("Legendary Bonker Double Barrel", 30 chars against 20). `label()` builds a
+BillboardGui at `fromScale(3.2, 0.64)` with `TextScaled = true`, so it **cannot clip** — which is why this is
+not the fifth unmeasured width. But text that shrinks to fit gets ~a third smaller at `MaxDistance = 60`,
+**so the change could make the tier legible and the name not, at exactly the range where a player decides
+whether to walk over.** Landed anyway — the gain is unambiguous, the loss speculative — with one frame in the
+render batch and **the fallback named in advance**: if it reads too small the rarity goes on its own line in
+a taller billboard, never dropped.
+**The reason it is worth the risk:** the tier was carried ONLY in colour, so judging a floor gun required
+having learnt seven shades — and excluded anyone who cannot tell two of them apart. Clearest colour-only
+finding in the game.
+
+### A TEXT FIX THAT NEEDS TO KNOW A BEHAVIOUR IS NOT A TEXT FIX (guns tab)
+Picking a gun up also grants 25% reserve ammo and nothing says so — but an honest "and 15 rounds" must know
+whether rounds ARRIVED, which only the new `GiveAmmo` return can answer. **Split out rather than bundled**:
+a behaviour-dependent string inside a text change is how a text change acquires a bug.
+
+## 2026-09-22 18:4x — STOPPING POINT (Oliver: "land everything so far and find a stopping point")
+**All seven tabs stood down. Tree green, nothing queued, no Studio job running, nothing half-landed,
+nothing in a private tree that is not named in a handoff.**
+Handoffs in `coordination/handoffs/`: bots · brainrot · bug-review · bug-review-player-eye · cosmetics ·
+destruction · foliage · guns · hud-menu · roads · survivors-triage.
+
+### THE RENDER PIPELINE IS FIXED — TWO FAULTS, EACH USELESS ALONE
+**19 PNGs on the first chain after four tabs failed all day, including the first ever images of #48/#58/#64.**
+`030_blast_rocket_t006.png` was opened and checked by eye rather than counted: rocket blast at t=0.06,
+shockwave dome, smoke column, scorch ring, figure for scale.
+1. **PrintWindow cannot see Studio's GPU viewport while unfocused** — 1 distinct colour against
+   CopyFromScreen's 68, and it failed to show a modal that was demonstrably on screen. Replaced at both
+   call sites.
+2. **The Auto-Recovery dialog re-armed itself every run** — a blocked run cannot exit cleanly, which writes
+   a new auto-recovery file, which opens the modal, which blocks the place, which blocks the exit. Clearing
+   `AutoSaves` beforehand could not break it. Now dismissed automatically (WM_CLOSE only — never Open, never
+   Delete; Studio decides what happens to the files, the harness only stops the asking) in BOTH
+   `gallery.ps1` and `runtest.ps1`, so no tab has to know it exists.
+**Each fix alone produced zero, so each looked like a failure when applied.** That is why three correct-
+sounding diagnoses (pacing, z-order, the display) all failed, and why this had been costing renders for days.
+**New caveat, recorded not solved:** a screen grab captures whatever is in that rectangle, so a notification
+toast lands in an image with a perfectly valid tag. The tag check stays as it is — an untagged frame is
+never written to disk, which is now load-bearing rather than incidental. **Take the shot when nothing is
+popping up; never relax the tag check.**
+
+### OPEN, DELIBERATELY, AND NAMED AS OPEN
+- The floor label's legibility: the render showed **no BillboardGui at all**, so it answered nothing. Two
+  candidates, neither confirmed — a BillboardGui may not draw in an edit-mode capture (a fifth harness
+  limit), or `DropWeapon` may reach a path that never calls `label()`. **The second would be a real bug.**
+- The bots' watch list (time-to-first-gun 90th 14→34 s, fixations 1→5, armed 33→30, worst tick 32.4→42.6 ms):
+  one run each way, deliberately unresolved, fixation timeout rather than revert if it holds.
+- #133 held with BOTH claude-43's bar and the tab's own failing numbers, so nobody re-proposes it blind.
+- Cloud Climb's 26 jumps never re-measured since the twig fix; #95's friendly outline never seen.
+- #128 B's end-to-end: fixture WRITTEN and switched off (`RUN_GROUND_CASES = false`) with the MapGenerator
+  route beside it. **One slot finishes it. Do not rebuild the fixture.**
+
+### HARNESS LIMIT 5: A BillboardGui DOES NOT DRAW IN AN EDIT-MODE VIEWPORT CAPTURE (guns tab, 18:5x)
+Standing explanation, with the alternative RULED OUT by source in thirty seconds: `LootService.DropWeapon:724`
+→ `spawnGroundWeapon` → `label()` at `:250`, so floor guns ARE labelled on the path the gallery used and no
+bug hides behind the blank frame. Not positively confirmed (that needs a frame with a BillboardGui known to
+be visible), so it is the standing explanation and not established.
+**The general form is worth more than the label: ANYTHING WHOSE PROOF IS A BillboardGui CANNOT BE PROVEN BY A
+GALLERY HERE** — floor labels, chest captions (`LootService:341`, `:421`), nameplates. **A tab that shoots one
+and sees nothing should read the harness, not a missing widget; a tab that shoots one and reports it fine has
+photographed a blank.** Fifth limit, beside no-Player, no-LocalScript, no-synthetic-input, no-fresh-terrain.
+
+## 2026-09-22 19:0x — CORRECTION TO MY OWN 17:4x ENTRY, AND A NEAR-MISS ON RULE 9 (claude-43)
+
+### THE 17:4x CAUSE WAS WRONG. THE REAL ONE IS WORSE: PLANTING FAULTS IN THE SHARED TREE.
+I diagnosed the transient reds as "a check landed before its feature". The timestamps say otherwise —
+RewardService 09:50:06, verify 09:51:24, **ItemData 09:53:26 and DefenseService 09:54:04 were a
+planted-fault script RESTORING files it had deliberately broken.** So the red two tabs saw was a plant:
+a shared file broken on purpose for a few seconds **while every tab's gate was live.**
+**RULE: PLANT IN A COPY, NEVER IN THE SHARED TREE.** `tools/plant_check.py` now copies the tree, plants in
+the copy, and reports CAUGHT/MISSED without the real files ever being written. The tab had done it that way
+once before and stopped for convenience, twice. **A plant is a deliberate breakage, and the shared tree is
+read by nine tabs and cut into playtest builds.**
+**The check-order rule STILL STANDS — it happened ninety seconds later**, when the `capRule` split wrote
+ItemData and the matching verify patch failed on a bad anchor, leaving the gate asserting the sentence still
+lived in the description. Reported by the tab against itself, including that it happened after being warned.
+**Both rules survive; one had the wrong example attached, and a lesson whose example is wrong must be
+re-grounded or struck.**
+
+### NEAR-MISS: FIVE UNAPPROVED COSMETICS SAT IN THE LIVE SHOP ROTATION WHILE THE LOG SAID CLEAN
+Caught by the cosmetics tab's own end-of-run check, not by the harness. **Cause: the `finally` ignored the
+removal script's exit code, so a REFUSAL read as a success.** The refusal itself was correct — both pending
+patches insert before the same marker, so removing accessories first would have sliced the auras out too,
+and the script declined rather than discard another block's data. **A correct refusal reported as a success
+is worse than a crash**, because the run continues and every downstream statement is false.
+Fixed: removals run auras-first so each slice contains only its own block, and the `finally` throws — "they
+are in the live shop rotation until they are taken out". Round trip proved both ways.
+**Verified independently by claude-43: 0 matches for all five names in `CosmeticData.lua`, 0 `aura = {`
+entries, verify OK.** This is the failure Rule 9 exists to prevent — writing a cosmetic's data IS shipping
+it — and it was one ignored exit code away from reaching a playtest.
+
+- **19:1x hourly pass:** 5-hour 27% (resets 18:10), **weekly all-models 84% — the ceiling to watch now**, Fable 100% and out of use. No messages sent: every tab stood down on Oliver's "find a stopping point" and none has cleared. **No rebuild and no checks re-run — the only file changed since the 10:11 build is a handoff**, and a check on an unchanged tree re-proves nothing. LANDED this hour: the soda-pill countdown (server clock, falls back to no number rather than a wrong one), the `capRule` split, `tools/bot_probe.lua`'s new traces, five unapproved cosmetics REMOVED from the shop rotation and independently verified gone. UNPROVEN: everything needing a real Player or a picture — #95's friendly outline, Cloud Climb's 26 jumps, the six render-batch widths, #58 and #64 still unphotographed. WAITING ON OLIVER: nine board questions, the clear for seven tabs, and his playtest verdict.

@@ -16,6 +16,32 @@
 local DefensePlacement = {}
 
 DefensePlacement.MaxSlope = 5
+-- How much drop a site may have across the footprint, per structure. One number for all three made
+-- the limit an accident of size: the five sampled points are the centre and the corners inset 0.5, so
+-- 5 studs of drop is ~24 degrees across a barricade's 11-stud span, ~14 across a bunker's 19.8 and
+-- only ~10 across a fortress's 28.3 -- the biggest thing in the game was also the fussiest, which
+-- nobody chose. A barricade is a fence and tolerates more; the fortress is held to the bunker's ANGLE
+-- (14.2 degrees) over its own diagonal, which is 7.2 studs. Anything not listed keeps that angle too,
+-- never stricter than MaxSlope.
+DefensePlacement.MaxSlopeFor = {
+	RotBarricade = 7,
+	PopupBunker = 5,
+	BrainrotFortress = 7.2,
+}
+DefensePlacement.SlopeAngle = math.rad(14.2)
+
+-- The drop a footprint of `size` may have. Sizes are shared table values, so the structure is
+-- recognised by identity; an unknown footprint gets the angle over its own sampled diagonal.
+function DefensePlacement.SlopeAllowance(size)
+	for id, known in pairs(DefensePlacement.Sizes) do
+		if known == size then
+			return DefensePlacement.MaxSlopeFor[id] or DefensePlacement.MaxSlope
+		end
+	end
+	local halfX, halfZ = size.X / 2 - 0.5, size.Z / 2 - 0.5
+	local span = 2 * math.sqrt(halfX * halfX + halfZ * halfZ)
+	return math.max(DefensePlacement.MaxSlope, span * math.tan(DefensePlacement.SlopeAngle))
+end
 -- How far a kit can be thrown.
 DefensePlacement.ThrowRange = 60
 -- Where a kit comes to rest is lifted this far before the site checks (DefenseService.landKit).
@@ -48,6 +74,45 @@ function DefensePlacement.ThrowTarget(from, look, aimPoint)
 	local facing = Vector3.new(offset.X, 0, offset.Z)
 	facing = facing.Magnitude > 0.5 and facing.Unit or flatLook
 	return from + offset, facing, offset
+end
+
+-- Where a thrown kit actually leaves the hand: ThrowLead in front of the head and ThrowLift up,
+-- unless something solid is nearer than that. Pressed against a building wall, the unclipped point
+-- sat on the FAR side of it, so the kit settled, built or armed inside the building: a 95-damage Rot
+-- Mine nobody could reach. ProjectileService.handOrigin already clips a grenade's origin the same
+-- way; this is that clip, in the shared module so the server's throw and the client's ghost cannot
+-- drift apart. Solid geometry only (RespectCanCollide), so a bush or a decal doesn't shorten a throw.
+DefensePlacement.ThrowLead = 2
+DefensePlacement.ThrowLift = 0.5
+-- The kit is a stud and a half across at its throw scale; half of that, and a little margin, is how
+-- far short of the wall the kit's CENTRE has to start so no part of it is inside the wall.
+DefensePlacement.ThrowSkin = 0.9
+
+function DefensePlacement.ThrowOrigin(character, headPosition, look, extraExclude)
+	local flatLook = Vector3.new(look.X, 0, look.Z)
+	flatLook = flatLook.Magnitude > 0.01 and flatLook.Unit or Vector3.new(0, 0, -1)
+	local wanted = headPosition + flatLook * DefensePlacement.ThrowLead + Vector3.new(0, DefensePlacement.ThrowLift, 0)
+	local params = DefensePlacement.GroundParams(character, nil, extraExclude)
+	params.RespectCanCollide = true
+	local delta = wanted - headPosition
+	if delta.Magnitude < 1e-4 then
+		return wanted
+	end
+	-- Cast ThrowSkin PAST the spawn point, not just to it: a wall standing exactly at the spawn point
+	-- is not "between" head and point, so a ray that stops there reports nothing and the kit is left
+	-- centred on the wall's face with half of itself inside (measured at a 2.0 gap,
+	-- tools/defense_throw_probe.lua).
+	local direction = delta.Unit
+	local hit = workspace:Raycast(headPosition, delta + direction * DefensePlacement.ThrowSkin, params)
+	if not hit then
+		return wanted
+	end
+	-- Pulled back so the kit's whole width clears the wall. Where there isn't room in front of the
+	-- head for that -- pressed against a wall closer than the kit is wide -- it goes BEHIND the head
+	-- rather than into the wall: inside the thrower's own body, which physics resolves against the
+	-- thrower, on their side of the wall. Never further back than the kit is deep.
+	local keep = math.clamp(hit.Distance - DefensePlacement.ThrowSkin, -DefensePlacement.ThrowSkin, delta.Magnitude)
+	return headPosition + direction * keep
 end
 
 -- The lob itself, in one place: DefenseService throws the kit on this arc and the client's preview
@@ -135,7 +200,7 @@ function DefensePlacement.FindSite(character, size, centre, flat, defenses, extr
 		end
 		low, high = math.min(low, hit.Position.Y), math.max(high, hit.Position.Y)
 	end
-	if high - low > DefensePlacement.MaxSlope then
+	if high - low > DefensePlacement.SlopeAllowance(size) then
 		return nil, "Too steep to build there."
 	end
 

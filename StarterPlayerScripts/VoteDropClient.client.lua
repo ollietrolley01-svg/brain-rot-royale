@@ -26,6 +26,12 @@ local DropPicker = require(script.Parent:WaitForChild("DropPicker"))
 -- The cursor is claimed, never simply switched on and off: see MenuOpenClaims for the two ways a
 -- bare SetAttribute strands it, both of which Oliver has reported.
 local MenuOpenClaims = require(script.Parent:WaitForChild("MenuOpenClaims"))
+-- The two decisions this script used to make inline. They live in Shared because this is a
+-- LocalScript and NOTHING IN THIS HARNESS CAN RUN ONE — a rule left here is a rule no probe can ever
+-- check, which is how #100 stayed unreachable-by-construction without anybody noticing.
+local VoteCursor = require(Shared:WaitForChild("VoteCursor"))
+local VoteReveal = require(Shared:WaitForChild("VoteReveal"))
+local Settings = require(script.Parent:WaitForChild("Settings"))
 
 local matchChanged = Remotes.Event("MatchChanged")
 local voteChanged = Remotes.Event("VoteChanged")
@@ -52,12 +58,36 @@ local matchState = { state = "Waiting", countdown = 0, dropSelect = false }
 local voteState = { open = false, candidates = {}, votes = {} }
 local revealUntil = 0
 local revealId = nil
+-- The LAST VoteChanged snapshot, so the reveal can fire on a TRANSITION instead of on an arrival.
+-- The server's `winner` is a standing field for the whole match (VoteService caches `resolved` until
+-- the next Open), and Bootstrap re-broadcasts the snapshot on every join — so without this, every
+-- mid-match join replayed the reveal on everybody's screen. That is Oliver's #107.
+local previousVote = nil
 -- The picker's outstanding claim on the cursor, held while its window is up.
 local dropCursorClaim = nil
+-- The vote screen's, held while the INTERACTIVE vote is up. Not during the reveal: see VoteCursor.
+local voteCursorClaim = nil
 
 local vote = VoteScreen.new({
 	parent = gui,
 	zIndex = 36,
+	-- THE CURSOR FIX FOR #100, half two. Half one is the Modal overlay inside VoteScreen, which is
+	-- what actually unlocks the mouse; this is the half that stops a click on a card also firing the
+	-- gun, because CombatClient reads MenuOpen at five sites in inCombat().
+	--
+	-- Through MenuOpenClaims, never by writing the attribute: one boolean cannot say "two things want
+	-- this", and a bare SetAttribute here would strand the menu's cursor exactly the way the drop
+	-- picker's first version did.
+	onMenuOpen = function(open)
+		if open then
+			if not voteCursorClaim then
+				voteCursorClaim = MenuOpenClaims.Claim(VoteCursor.ClaimName)
+			end
+		elseif voteCursorClaim then
+			voteCursorClaim()
+			voteCursorClaim = nil
+		end
+	end,
 	onVote = function(candidateId)
 		-- Nothing waits on the answer: the tally comes back to everyone through VoteChanged, and a
 		-- refusal is already unreachable from here — the cards are disabled and the header says
@@ -122,7 +152,14 @@ local function renderVote()
 	-- above every one of them (DisplayOrder 30). A vote panel sitting on top of the menu somebody
 	-- opened is a worse bug than a vote panel they have to close the menu to see, so it stands aside
 	-- and comes straight back — the attribute's own changed signal re-renders below.
-	local menuUp = player:GetAttribute("MenuOpen") == true
+	--
+	-- IT ASKS WHO IS HOLDING THE CURSOR, NOT WHETHER THE ATTRIBUTE IS SET, and that is the whole of
+	-- #100. Reading the raw attribute counted THIS SCREEN'S OWN CLAIM as somebody else's, so a vote
+	-- that took the cursor immediately hid itself: the two conditions could never hold at once, and
+	-- the set "vote on screen AND mouse free" was empty by construction. Excluded BY NAME, from the
+	-- holder set, never from a count — see VoteCursor.ShouldStandAside.
+	local menuUp = VoteCursor.ShouldStandAside(
+		MenuOpenClaims.Holders(), MenuOpenClaims.LegacyHolder(), VoteCursor.ClaimName)
 	local open = voteState.open == true and matchState.state == "Countdown" and not menuUp
 	if menuUp then
 		decided = nil
@@ -148,13 +185,21 @@ local function renderVote()
 		seconds = matchState.countdown or 0,
 		total = MatchConfig.LobbyCountdown,
 		ready = isReady(),
+		-- Named on the "ready up to vote" line, so the panel that asks for it says which key it is.
+		readyKey = Settings.KeyLabel("Ready"),
 	})
 end
 
 voteChanged.OnClientEvent:Connect(function(state)
 	voteState = state or { open = false, candidates = {}, votes = {} }
-	-- Close() broadcasts the winner; that broadcast is the reveal's cue.
-	if state and state.winner and not state.open then
+	-- A SNAPSHOT, NOT AN EVENT. `winner` stands in every snapshot for the whole match, and Bootstrap
+	-- re-broadcasts on every join, so the old test (`state.winner and not state.open`) replayed the
+	-- reveal over live gameplay each time somebody joined — Oliver's #107, and the state that made
+	-- his mouse unfreeable in #100. The decision now compares against the PREVIOUS snapshot and lives
+	-- in Shared/VoteReveal, where tools/prematch_ui_probe.lua runs a truth table over it.
+	local shouldReveal = VoteReveal.ShouldReveal(previousVote, state)
+	previousVote = state
+	if shouldReveal then
 		revealId = state.winner
 		-- tick(), not os.clock(): os.clock() is process CPU time in Roblox, so a clock that
 		-- spends its time waiting would never reach the deadline.

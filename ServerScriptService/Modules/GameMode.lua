@@ -90,6 +90,12 @@ GameMode.BattleRoyale = setmetatable({
 
 local current = GameMode.BattleRoyale
 
+-- Whether a combatant is dead and waiting for a respawn pad. MatchService.IsAlive says no for them:
+-- a corpse cannot fire, cannot drop its kit at its own feet, and its companion does not fight.
+function GameMode.IsDowned(token)
+	return ModeTeams.IsDowned(token)
+end
+
 function GameMode.Current()
 	return current
 end
@@ -303,6 +309,9 @@ local function spawnReplacementBot(team)
 		-- Forced onto the side that just lost one, so the sides stay level. Assign deals onto the
 		-- smaller side and cannot be asked for a particular one, so this says which.
 		ModeTeams.AssignTo(bot, team)
+		-- The gun SpawnLoadout just issued: a death drops the held gun only if it is a different one
+		-- (MatchService.dropPickedUp, Oliver's #124).
+		bot.issuedWeaponId = bot.weapon and bot.weapon.id or nil
 		host.AddCombatant(bot, humanoid)
 		-- Through the same placer players use, so a replacement can never come back on the enemy's
 		-- pad, underground, or on top of somebody. Three in a row used to land on the same point.

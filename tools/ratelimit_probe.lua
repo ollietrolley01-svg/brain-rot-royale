@@ -170,15 +170,19 @@ RateLimit.Clear(player)
 -- THE CLOCK ITSELF, on a real wall clock.
 --
 -- Everything above runs on the virtual clock, which is what makes a 30-second stream instant — and
--- which is exactly why none of it could ever catch the bug this section exists for. Swapping the
--- clock out proves the ARITHMETIC and says nothing about which real clock ships. `RateLimit.Now`
--- was `os.clock` — process CPU time — while every budget in the table is written in wall-clock
--- terms, so a server that spends its time yielding refilled every bucket slowly and refused
--- legitimate shots the client had already drawn a tracer for.
+-- which is exactly why none of it can say anything about which real clock ships. Swapping the clock
+-- out proves the ARITHMETIC only. The budgets are written in wall-clock terms, so this measures
+-- that the shipped clock really does track the wall.
 --
--- This measures the shipped clock against the wall, and then plants the bug itself: `os.clock` put
--- back deliberately, which must FAIL the same measurement. If it ever passes, the check has stopped
--- being able to tell the two apart and the number it prints is worthless.
+-- IT ALSO PRINTS `os.clock` BESIDE IT, and that number is worth reading. This section was first
+-- written to prove that `os.clock` (the clock this file used to ship with) FAILED the check,
+-- because it is defined as CPU time. Measured, it does not fail: over a second spent yielding in
+-- `task.wait` both clocks tracked the wall to within 0.4%. So the change to `tick` fixed nothing
+-- anyone could feel, and this section keeps measuring both rather than asserting a difference that
+-- is not there. If a future engine build ever does make them diverge, the numbers below say so.
+--
+-- The planted fault is therefore a clock that is KNOWN to be wrong — one running at half speed —
+-- because a fault has to be something that genuinely fails.
 --------------------------------------------------------------------------------
 
 local WALL_SECONDS = 1.0
@@ -231,16 +235,28 @@ local wanted = math.min(budget.burst, budget.rate * waited)
 expect("a bucket refills at its budget's rate in WALL seconds", math.abs(refilled - wanted) <= math.max(1, wanted * 0.35),
 	string.format("%s: drained %d, %.2fs later got %d back, expected about %.1f", key, drained, waited, refilled, wanted))
 
--- PLANTED FAULT, every run: the clock this file was shipped with. It must fail the measurement
--- above, and what it prints is the size of the bug.
-RateLimit.Now = os.clock
-local cpuAdvance, cpuWall = advanceOverOneSecond(RateLimit.Now)
+-- The other clock, measured beside it rather than assumed about. No assertion either way: this is
+-- the number that decides whether the two are interchangeable, and it belongs in the log.
+local cpuAdvance, cpuWall = advanceOverOneSecond(os.clock)
 local cpuRatio = cpuAdvance / cpuWall
+print(string.format("[RateProbe] NOTE os.clock advanced %.3fs over %.3fs of wall time, ratio %.3f (tick was %.3f) -- %s",
+	cpuAdvance, cpuWall, cpuRatio, shippedRatio,
+	math.abs(cpuRatio - 1) <= TOLERANCE and "the two agree; swapping them changes nothing measurable"
+		or "THEY DIVERGE: os.clock is not tracking the wall on this build, so budgets counted on it would be wrong"))
+
+-- PLANTED FAULT, every run: a clock that is known to be wrong — half speed. It must fail the
+-- wall-clock check above, or that check has stopped being able to tell a bad clock from a good one.
+-- (The fault is a synthetic clock and not `os.clock` on purpose: os.clock does NOT fail here, and a
+-- planted fault that passes is worse than none.)
+local halfSpeed = function()
+	return tick() * 0.5
+end
+local slowAdvance, slowWall = advanceOverOneSecond(halfSpeed)
+local slowRatio = slowAdvance / slowWall
+expect("planted fault: a half-speed clock FAILS the wall-clock check", math.abs(slowRatio - 1) > TOLERANCE,
+	string.format("advanced %.3fs over %.3fs of wall time, ratio %.3f -- a bucket would refill at %.0f%% of its budget",
+		slowAdvance, slowWall, slowRatio, slowRatio * 100))
 RateLimit.Now = realNow
-expect("planted fault: os.clock FAILS the wall-clock check, so the check can tell them apart",
-	math.abs(cpuRatio - 1) > TOLERANCE,
-	string.format("os.clock advanced %.3fs over %.3fs of wall time, ratio %.3f -- a bucket would refill at %.0f%% of its budget",
-		cpuAdvance, cpuWall, cpuRatio, cpuRatio * 100))
 
 RateLimit.Clear(player)
 print(string.format("[RateProbe] finished: %d passed, %d failed", passes, failures))

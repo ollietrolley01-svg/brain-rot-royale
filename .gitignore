@@ -24,3 +24,6 @@ scratchpad/
 # Renders and probe output.
 *.png
 *.log
+
+# Scratch backups the tabs write before an edit (the fleet writes .pre-, not .pre_).
+*.pre-*

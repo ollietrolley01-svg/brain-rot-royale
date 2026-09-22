@@ -93,6 +93,9 @@ local function measure(tier, index)
 		end
 	end
 	local hinge = lid and lid:GetAttribute("Hinge")
+	-- The model says which tier it is (CrateTier), so a gallery or a reveal can tell a crate's tier
+	-- from the model alone; this is that attribute's reader, and it must agree with what was asked for.
+	check(model:GetAttribute("CrateTier") == tier, string.format("%-14s model carries CrateTier = %s", tier, tostring(model:GetAttribute("CrateTier"))))
 	check(written == 0 and moved == 0, string.format("%-14s %2d parts; written flush pairs %d, parts the pass changed %d", tier, #partsOf(model), written, moved))
 	check(lid ~= nil and lid:IsA("BasePart") and lid.Name == "Lid" and typeof(hinge) == "CFrame" and lid.PivotOffset == hinge,
 		string.format("%-14s lid is a Part named Lid, pivot at its hinge (%s)", tier, tostring(hinge)))

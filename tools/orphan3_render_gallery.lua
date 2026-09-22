@@ -185,9 +185,20 @@ do
 		return ok
 	end
 
+	-- CompanionService keeps its own internal registry keyed on `owner`, separate from the gallery's
+	-- per-view folder -- a first render left the "before" companion attached, and the "after" shot
+	-- showed BOTH (caught by opening the actual PNG before sending it, not trusting "captured").
+	-- Shared so the next view can despawn whatever the previous one left running, not relying on each
+	-- view to clean up perfectly after itself.
+	local lastOwner = nil
+
 	table.insert(views, {
 		name = "companion_before_right",
 		setup = function(folder, camera)
+			if lastOwner then
+				pcall(CompanionService.AttachBot, lastOwner, nil)
+				lastOwner = nil
+			end
 			stage(folder)
 			local rig = ownerRig(folder)
 			local root = rig and rig:FindFirstChild("HumanoidRootPart")
@@ -198,6 +209,7 @@ do
 			end
 			thirdPersonCamera(camera, root, humanoid)
 			local owner = { isBot = true, character = rig }
+			lastOwner = owner
 			pcall(CompanionService.AttachBot, owner, def)
 			local model = CompanionService.ModelOf(owner)
 			if model then
@@ -218,6 +230,10 @@ do
 	table.insert(views, {
 		name = "companion_after_left",
 		setup = function(folder, camera)
+			if lastOwner then
+				pcall(CompanionService.AttachBot, lastOwner, nil)
+				lastOwner = nil
+			end
 			stage(folder)
 			local rig = ownerRig(folder)
 			local root = rig and rig:FindFirstChild("HumanoidRootPart")

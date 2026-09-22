@@ -758,6 +758,30 @@ local function tryParkour(now)
 			return false
 		end
 	end
+	-- In the air, a vault only takes over where the jump itself would NOT clear the obstacle (the same
+	-- rule as the climb above): a knee-high rail you jumped at early stays a free hop, no stamina, no
+	-- pose. A window always takes over: its pane is in the plan's clearance box, and a body cannot fit a
+	-- window at the top of a jump anyway. Cleared means the feet are still above the top, with margin,
+	-- both where the body reaches the near edge and where it leaves the far one.
+	if plan.kind == "vault" and not grounded and not (plan.panes and #plan.panes > 0) then
+		local feet = root.Position.Y - humanoid.HipHeight - root.Size.Y / 2
+		local velocity = root.AssemblyLinearVelocity
+		local toward = flat(velocity):Dot(plan.forward)
+		if toward > 1 then
+			local near = math.max((flat(plan.points[2]) - flat(root.Position)):Dot(plan.forward), 0)
+			local far = near + plan.depth + root.Size.Z + 0.6
+			local clears = true
+			for _, distance in ipairs({ near, far }) do
+				local t = distance / toward
+				if feet + velocity.Y * t - 0.5 * workspace.Gravity * t * t < plan.topY + 0.3 then
+					clears = false
+				end
+			end
+			if clears then
+				return false
+			end
+		end
+	end
 	if not predictSpend(plan.cost, plan.kind == "mantle") then
 		plan = Parkour.Find(character, direction, { groundY = lastGroundY, speed = speed, allowVault = false,
 			exhausted = MovementState.exhausted })

@@ -54,6 +54,14 @@ function RewardService.AwardKill(player, wasBot)
 	QuestService.Progress(player, "kills", 1)
 end
 
+-- Coins for something that just happened, with a line saying what. `reason` goes in brackets after
+-- the amount, so it wants to be a SHORT NOUN PHRASE -- "Gold Rush", "bounty on Steve", "found the
+-- Sahur statue". A whole sentence in there reads as an afterthought to the coins, which inverts
+-- which of the two the player cares about; announce the event yourself and pass a short reason.
+--
+-- Note the message only goes out when coins actually landed. That is right for a reward line, and it
+-- is the reason an event worth announcing should not rely on this function to announce it: a player
+-- whose profile has not loaded gets silence.
 function RewardService.AwardBonusCoins(player, amount, reason)
 	local granted = RewardService.AddCoins(player, amount)
 	if granted > 0 then
@@ -284,6 +292,28 @@ function RewardService.MergeBrainrot(player, name, fromStars)
 		BrainrotData.StarText(stars + 1), math.floor((BrainrotData.StarBonus(stars + 1) - 1) * 100 + 0.5)), stars + 1
 end
 
+-- Anything the profile POINTS AT that is no longer in the collection. Two things do: the companion
+-- following the player around, and the brainrot on their lobby podium.
+--
+-- The podium is the one that leaks outward. A showcase left pointing at a sold brainrot keeps
+-- rendering on the podium, stays in other players' showcase and trade lists, and persists in the
+-- saved profile indefinitely -- so it is not "a stale field", it is other people seeing something
+-- the owner does not own. TradeService already clears both this way after a swap; selling is the
+-- other path that can take the last copy, and SELL 1 has no confirmation step.
+--
+-- Returns whether the SHOWCASE changed, because that is the only one the caller has to tell the
+-- world about (ShowcaseService.Refresh rebuilds every podium, so it is not run for nothing).
+local function dropOrphanedDisplays(data)
+	if data.Companion and not table.find(data.Brainrots, data.Companion) then
+		data.Companion = nil
+	end
+	if data.Showcase and not table.find(data.Brainrots, data.Showcase) then
+		data.Showcase = nil
+		return true
+	end
+	return false
+end
+
 function RewardService.SellBrainrot(player, name)
 	local data = PlayerData.Get(player)
 	if not data then
@@ -306,14 +336,12 @@ function RewardService.SellBrainrot(player, name)
 	end
 
 	table.remove(data.Brainrots, index)
-	-- Selling your last copy of your companion sends it home.
-	if data.Companion == name and not table.find(data.Brainrots, name) then
-		data.Companion = nil
-	end
+	-- Selling your last copy sends your companion home and takes it off your podium.
+	local showcaseChanged = dropOrphanedDisplays(data)
 	local coins = RewardService.AddCoins(player, def.coinValue, "sell")
 
 	StateSync.Push(player)
-	return true, string.format("Sold %s for %d SahurCoins.", name, coins)
+	return true, string.format("Sold %s for %d SahurCoins.", name, coins), showcaseChanged
 end
 
 function RewardService.SellAllOfRarity(player, rarity)
@@ -342,14 +370,12 @@ function RewardService.SellAllOfRarity(player, rarity)
 	end
 
 	data.Brainrots = kept
-	if data.Companion and not table.find(kept, data.Companion) then
-		data.Companion = nil
-	end
+	local showcaseChanged = dropOrphanedDisplays(data)
 	local coins = RewardService.AddCoins(player, total, "sell")
 
 	StateSync.Push(player)
 	return true, string.format("Sold %d %s brainrots for %d SahurCoins.%s", sold, rarity, coins,
-		next(spared) and " Kept one copy of each merged one." or "")
+		next(spared) and " Kept one copy of each merged one." or ""), showcaseChanged
 end
 
 -- Sells every copy beyond the first of each brainrot, so a collector can cash in doubles without

@@ -53,6 +53,9 @@ RateLimit.Budgets = {
 	SetCrouching = { burst = 10, rate = 10, peak = "crouch toggles, including a held key repeating" },
 	SetReady = { burst = 5, rate = 2, peak = "the lobby ready button" },
 	SetReplicationFocus = { burst = 6, rate = 4, peak = "cycling spectator targets" },
+	-- Take, not Latest: this is a door, not a state. A dropped press costs one more press, whereas
+	-- a queued one would fire a respawn after the player had already given up and the match moved on.
+	LeaveSpectate = { burst = 3, rate = 1, peak = "the LEAVE button on the spectator hud, pressed once" },
 	ChooseDrop = { burst = 5, rate = 3, peak = "picking a landing spot on the drop map" },
 	-- One request per player per match, plus a retry if the first lands in the moment between
 	-- the window opening and the map existing. The answer is the largest payload any remote here
@@ -70,6 +73,11 @@ RateLimit.Budgets = {
 	Prestige = { burst = 3, rate = 0.5, peak = "a prestige is a once-in-a-while decision behind a confirm" },
 	ClaimIndex = { burst = 8, rate = 3, peak = "claiming Rot Index rewards, several in a row" },
 	BuyCellOffer = { burst = 6, rate = 2, peak = "buying from the Cell Shop" },
+	-- #84: Oliver may still feel bumpiness once the road-joint fixes land, and the one remaining
+	-- suspect (network ownership handoff) has no harness that can see it -- only a real driving
+	-- client can. VehicleClient self-limits to about once a second already; this is the floor under
+	-- that, not the real limiter.
+	VehicleJolt = { burst = 6, rate = 1, peak = "one per genuine jolt while driving, client-detected" },
 }
 
 -- What an unknown budget falls back to. A remote asking for a key that doesn't exist is a wiring
@@ -86,16 +94,18 @@ RateLimit.Exempt = {
 
 -- The clock, as a field so tools/ratelimit_probe.lua can run a 30-second stream in an instant.
 --
--- `tick`, NOT `os.clock`. Every budget in the table above is written in wall-clock terms — `Fire`
--- is sized as a 1.4x margin over the fastest gun's rounds per SECOND — but `os.clock()` in Roblox
--- is process CPU time, which runs slower than the wall while the server is doing anything that
--- yields. The refill below is `(now - bucket.at) * rate`, so a slow clock refills a bucket slowly
--- and legitimate held-trigger shots are refused after the client has already drawn the tracer.
--- Nothing in the table changes; it just gets counted in the units it was written in.
+-- `tick` rather than `os.clock`, and the reason is INTENT, not a bug — said carefully, because the
+-- obvious-sounding version of this comment turned out to be false when it was measured. Every
+-- budget in the table above is written in wall-clock terms (`Fire` is sized as a margin over the
+-- fastest gun's rounds per SECOND) and the refill below is `(now - bucket.at) * rate`, so the clock
+-- this reads should be the wall clock by construction rather than by luck. `tick()` is that;
+-- `os.clock()` is defined as CPU time and only happens to track the wall here.
 --
--- The probe could never have caught this on its own: it replaces this field with a virtual clock,
--- which proves the arithmetic and says nothing about which real clock ships. So it now also
--- measures this one against a wall-clock second, and carries `os.clock` back as its planted fault.
+-- MEASURED, in a runtest, over a real second spent yielding in `task.wait` (ratelimit_probe's clock
+-- section prints this every run): `tick` advanced 1.017s over 1.013s of wall, ratio 1.004;
+-- `os.clock` advanced 1.033s over 1.030s, ratio 1.003. THEY AGREE. So this change moves nothing
+-- that anyone could feel, no shot was ever being dropped by it, and anybody reading this later
+-- should not go looking for a fix that landed here. What it removes is the question.
 RateLimit.Now = tick
 
 -- [player] = { [key] = { tokens, at, pending, hasPending, thread } }

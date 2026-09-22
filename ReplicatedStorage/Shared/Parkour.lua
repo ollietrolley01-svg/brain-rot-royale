@@ -106,7 +106,8 @@ local function queryParams(character)
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 	overlapParams.FilterDescendantsInstances = { character }
 	overlapParams.RespectCanCollide = true
-	overlapParams.MaxParts = 1
+	-- MaxParts is set per query in boxClear: one part answers "is anything in the way", but the
+	-- breakable check has to see every part in the box.
 	return rayParams, overlapParams
 end
 
@@ -129,6 +130,13 @@ local function boxClear(overlapParams, from, to, bottom, top, width, forward, br
 	local mid = (flat(from) + flat(to)) / 2
 	local center = Vector3.new(mid.X, (bottom + top) / 2, mid.Z)
 	local cframe = CFrame.lookAt(center, center + forward)
+	-- A plain clearance check only needs to know whether anything is there at all, so one part
+	-- answers it and the query stops early. The breakable check must see them ALL: capped at one,
+	-- a box straddling a window pane and the solid pier beside it reported CLEAR whenever Roblox
+	-- happened to hand back the pane, and the client then CFramed the body straight through the
+	-- pier (#115) -- a wall clip a modified client could aim by lining up 1.6-3.5 studs off the
+	-- window's centre. Unlimited here: the box is one body wide and a few studs deep.
+	overlapParams.MaxParts = breakable and 0 or 1
 	local parts = workspace:GetPartBoundsInBox(cframe, Vector3.new(width, top - bottom, math.max(length, 0.2)), overlapParams)
 	if not breakable then
 		return #parts == 0, parts[1]
@@ -227,9 +235,17 @@ function Parkour.Find(character, direction, options)
 	local feetY = body.feetY
 	local groundY = options.groundY or feetY
 	local speed = options.speed or 0
+	-- Where the obstacle is measured from. On the ground, the feet. In the air within JumpGrace of the
+	-- ground last stood on, that ground: VaultMaxRise describes an obstacle, and measured from rising feet
+	-- it described the obstacle minus the jump (a sill 4.0 above the ground read 1.5 at feet+2.5 and
+	-- nothing at all at feet+3.5). Climbs keep the feet: a jump reaches higher, by design.
+	local baseY = feetY
+	if options.grounded == false and feetY - groundY > 0.05 and feetY - groundY <= CFG.JumpGrace then
+		baseY = groundY
+	end
 
 	-- 1. The face.
-	local lowY = feetY + CFG.MinRise - 0.25
+	local lowY = baseY + CFG.MinRise - 0.25
 	local highY = feetY + CFG.HandReach
 	local centerY = (lowY + highY) / 2
 	local slabOrigin = Vector3.new(origin.X, centerY, origin.Z)
@@ -277,8 +293,10 @@ function Parkour.Find(character, direction, options)
 		return nil, "unclimbable top"
 	end
 	local topY = top.Position.Y
+	-- `rise` is from the feet (climbs); `vaultRise` from the base (vaults; see baseY above).
 	local rise = topY - feetY
-	if rise < CFG.MinRise then
+	local vaultRise = topY - baseY
+	if vaultRise < CFG.MinRise then
 		return nil, "a step"
 	end
 	if rise > CFG.HandReach then
@@ -295,8 +313,8 @@ function Parkour.Find(character, direction, options)
 	local depth, deep = measureDepth(rayParams, edge, forward, topY, CFG.VaultMaxDepth, topInset)
 
 	-- 4a. A vault: thin, low, taken at speed, with somewhere to land.
-	if options.allowVault ~= false and not options.exhausted and not deep and rise >= CFG.VaultMinRise
-		and rise <= CFG.VaultMaxRise and speed >= CFG.VaultMinSpeed then
+	if options.allowVault ~= false and not options.exhausted and not deep and vaultRise >= CFG.VaultMinRise
+		and vaultRise <= CFG.VaultMaxRise and speed >= CFG.VaultMinSpeed then
 		local farEdge = edge + forward * (depth + 0.3)
 		local landXZ = farEdge + forward * (body.halfDepth + 1.1)
 		local land = workspace:Raycast(Vector3.new(landXZ.X, topY + 0.5, landXZ.Z), Vector3.new(0, -(CFG.VaultMaxDrop + 0.5), 0), rayParams)
@@ -325,10 +343,13 @@ function Parkour.Find(character, direction, options)
 					duration += t
 				end
 				return {
-					kind = "vault", rise = rise, depth = depth, topY = topY, forward = forward, part = top.Instance,
+					kind = "vault", rise = vaultRise, depth = depth, topY = topY, forward = forward, part = top.Instance,
 					points = points, times = times, duration = duration, landY = landY,
 					exitVelocity = forward * pathSpeed * 0.95 + Vector3.new(0, -4, 0),
 					cost = STAMINA.VaultCost,
+					-- The window panes inside the clearance box: exactly the ones the body passes through, for
+					-- whoever runs the plan to break (MovementService does, for bots). nil when there are none.
+					panes = panes,
 				}
 			end
 		end
@@ -337,6 +358,10 @@ function Parkour.Find(character, direction, options)
 	-- 4b. A climb onto the top.
 	if options.allowMantle == false then
 		return nil, "no climb"
+	end
+	-- From the feet: a jump already carrying them past this top lands on it, no climb needed.
+	if rise < CFG.MinRise then
+		return nil, "a step"
 	end
 	if not deep and depth < 0.9 then
 		return nil, "too thin to stand on"

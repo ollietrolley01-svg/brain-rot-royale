@@ -50,7 +50,12 @@ end
 
 local DESKTOP = {
 	{ name = "Banner", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 10 }, size = { 0, 440, 0, 56 } },
+	{ name = "Ready pill", anchor = { 0, 0 }, pos = { 0.5, 232, 0, 8 }, size = { 0, 230, 0, 60 } },
 	{ name = "Crosshair", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, 0 }, size = { 0, 64, 0, 64 }, group = "centre" },
+	{ name = "Hitmarker", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, 0 }, size = { 0, 80, 0, 40 }, group = "centre" },
+	{ name = "Zone warning", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.68, 0 }, size = { 0, 520, 0, 40 } },
+	{ name = "Streak label", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 180 }, size = { 0, 520, 0, 60 } },
+	{ name = "Entering label", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 130 }, size = { 0, 600, 0, 44 } },
 	{ name = "Health", anchor = { 0, 0 }, pos = { 0, 16, 1, -96 }, size = { 0, 280, 0, 80 } },
 	{ name = "Companion status", anchor = { 0, 0 }, pos = { 0, 16, 1, -166 }, size = { 0, 300, 0, 62 } },
 	{ name = "Speed pill", anchor = { 0, 0 }, pos = { 0, 16, 1, -202 }, size = { 0, 150, 0, 28 } },
@@ -65,6 +70,7 @@ local DESKTOP = {
 	{ name = "Toast", anchor = { 0.5, 1 }, pos = { 0.5, 0, 1, -140 }, size = { 0, 460, 0, 36 } },
 	{ name = "Drop banner", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 128 }, size = { 0, 480, 0, 30 } },
 	{ name = "Damage indicator", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, -170 }, size = { 0, 4, 0, 150 }, group = "centre" },
+	{ name = "Vignette", anchor = { 0, 0 }, pos = { 0, 0, 0, 0 }, size = { 1, 0, 1, 0 }, group = "overlay" },
 }
 local MODE_SCORE = { anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 72 }, size = { 0, 420, 0, 44 }, group = "stormSlot" }
 local CH_W, CH_ROW, CH_ROWS, CH_HEADER = 228, 22, 8, 44
@@ -158,6 +164,9 @@ local function buildElements(vw, menuOpen)
 			add("Toast", offsetRect(vw.x / 2 - 142.6, spots.toast.y, 285.2, 22.32))
 		end
 		add("Drop banner", offsetRect(vw.x / 2 - 148.8, 128 * 0.62, 297.6, 18.6))
+		add("Zone warning", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.68, 0 }, { 0, 520 * 0.7, 0, 40 * 0.7 }, vw))
+		add("Streak label", udimRect({ 0.5, 0 }, { 0.5, 0, 0, 180 }, { 0, 520 * 0.7, 0, 60 * 0.7 }, vw))
+		add("Entering label", udimRect({ 0.5, 0 }, { 0.5, 0, 0, 130 }, { 0, 600 * 0.7, 0, 44 * 0.7 }, vw))
 		local hbSpot = spots.hotbar
 		if hbSpot then
 			local pad = 6
@@ -184,7 +193,9 @@ local function buildElements(vw, menuOpen)
 			add("Cam icon", offsetRect(spots.cam.x, spots.cam.y, spots.cam.w, spots.cam.h))
 		end
 		add("Crosshair", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.5, 0 }, { 0, 64, 0, 64 }, vw), "centre")
+		add("Hitmarker", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.5, 0 }, { 0, 80, 0, 40 }, vw), "centre")
 		add("Damage indicator", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.5, -170 }, { 0, 4, 0, 150 }, vw), "centre")
+		add("Vignette", offsetRect(0, 0, vw.x, vw.y), "overlay")
 		for _, key in ipairs({ "jump", "stick", "fire", "aim", "reload", "run", "pet", "slide", "move" }) do
 			local s = spots[key]
 			if s then
@@ -210,7 +221,8 @@ local function overlappers(elements)
 			local a, b = elements[i], elements[j]
 			local bothReserved = a.group == "reserved" and b.group == "reserved"
 			local sameExcludedGroup = a.group and a.group == b.group and EXCLUDE_GROUPS[a.group]
-			if not bothReserved and not sameExcludedGroup and not isCompassScorePair(a, b) then
+			local anyOverlay = a.group == "overlay" or b.group == "overlay"
+			if not bothReserved and not sameExcludedGroup and not isCompassScorePair(a, b) and not anyOverlay then
 				local ox = math.min(a.r.x + a.r.w, b.r.x + b.r.w) - math.max(a.r.x, b.r.x)
 				local oy = math.min(a.r.y + a.r.h, b.r.y + b.r.h) - math.max(a.r.y, b.r.y)
 				if ox > 0 and oy > 0 then

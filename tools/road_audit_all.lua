@@ -621,7 +621,7 @@ for _, run in ipairs(RUNS) do
 
 	local function denseGround(edges, report, curves)
 		local result = { samples = 0, expected = 0, poke = 0, float = 0, missed = 0, over = 0, under = 0,
-			apron = 0, apronOff = 0, apronWorst = 0 }
+			apron = 0, apronOff = 0, apronWorst = 0, apronAt = nil }
 		for index, spot in ipairs(roadPoints(edges, curves or {}, 2)) do
 			if not spot.bridge then
 				local function groundAt(lateral)
@@ -629,13 +629,19 @@ for _, run in ipairs(RUNS) do
 					return p, workspace:Raycast(Vector3.new(p.X, spot.ground + 500, p.Z), Vector3.new(0, -1000, 0), terrainParams)
 				end
 				for _, lateral in ipairs({ -19, -17, -15, -13, 13, 15, 17, 19 }) do
-					local _, hit = groundAt(lateral)
+					local p, hit = groundAt(lateral)
 					if hit then
 						result.apron += 1
 						local error = math.abs(hit.Position.Y - spot.ground)
 						if error > TOLERANCE then
 							result.apronOff += 1
-							result.apronWorst = math.max(result.apronWorst, error)
+							-- WHERE, not just how much. A count with a worst case and no location is a
+							-- number nobody can act on: RotRidge reported 935 samples off and a worst of
+							-- 1.17 with no way to go and look at it.
+							if error > result.apronWorst then
+								result.apronWorst = error
+								result.apronAt = string.format("(%.0f, %.0f), %s, %d out", p.X, p.Z, spot.what, lateral)
+							end
 						end
 					end
 				end
@@ -674,9 +680,9 @@ for _, run in ipairs(RUNS) do
 	end
 	local dense = denseGround(roads and roads.edges or {}, true, roads and roads:Curves() or {})
 	local densePoke, denseFloat = dense.poke, dense.float
-	out("  dense ground: %d of %d samples found terrain (every 2 studs along and across, off bridges), %d found none; terrain more than %.2f above road ground %d (worst %.2f), more than %.2f below %d (worst %.2f); flat past the shoulders (13..19 out, for information): %d samples, %d off by more than %.2f (worst %.2f)",
+	out("  dense ground: %d of %d samples found terrain (every 2 studs along and across, off bridges), %d found none; terrain more than %.2f above road ground %d (worst %.2f), more than %.2f below %d (worst %.2f); flat past the shoulders (13..19 out, for information): %d samples, %d off by more than %.2f (worst %.2f%s)",
 		dense.samples, dense.expected, dense.missed, TOLERANCE, dense.poke, dense.over, TOLERANCE, dense.float, dense.under,
-		dense.apron, dense.apronOff, TOLERANCE, dense.apronWorst)
+		dense.apron, dense.apronOff, TOLERANCE, dense.apronWorst, dense.apronAt and (" at " .. dense.apronAt) or "")
 
 	-- (3) Water under any road without a bridge deck over it.
 	-- `report` files examples; the self-test calls this again after taking a bridge's deck away.
@@ -717,6 +723,56 @@ for _, run in ipairs(RUNS) do
 	end
 	local waterSamples, waterCovered, waterUncovered = waterUnderRoads(roads and roads.edges or {}, true, roads and roads:Curves() or {})
 	out("  water: %d samples; over water with a deck %d, over water with NO deck %d", waterSamples, waterCovered, waterUncovered)
+
+	-- Anything the wilds planted standing in the road. The foliage tab counts the spots its veto
+	-- REFUSED; this counts what got through, which is the other half of the same question and the only
+	-- half that can be a fault. Their number being high and this one being zero is agreement, not
+	-- disagreement. Three bands, so a disagreement says which one we read differently: inside the
+	-- corridor (carriageway, shoulders and the flat apron -- the road's own ground), inside the 8 studs
+	-- of blend beyond it (allowed, but the ground there moves by up to a stud), and clear.
+	-- The zero is only worth printing if there was something to find, so this says which zero it is.
+	local wilds = map:FindFirstChild("Wilds")
+	if not roads then
+		out("  wilds in the road: no road network, nothing to measure")
+	elseif not wilds then
+		out("  wilds in the road: NO WILDS IN THIS BUILD (MapWilds is not called yet) -- this is a zero because there is nothing there, not because nothing is wrong")
+	else
+		local inCorridor, inBlend, clear, worst, worstAt = 0, 0, 0, nil, nil
+		local parts = 0
+		for _, part in ipairs(wilds:GetDescendants()) do
+			if part:IsA("BasePart") then
+				parts += 1
+				-- The middle and the four compass points at the footprint's edge, capped at 26 studs:
+				-- a trunk clear at its centre can still have a canopy post in the apron.
+				local reach = math.min(26, math.max(part.Size.X, part.Size.Z) / 2)
+				local worstHere = nil
+				for _, offset in ipairs({ Vector3.new(0, 0, 0), Vector3.new(reach, 0, 0), Vector3.new(-reach, 0, 0),
+					Vector3.new(0, 0, reach), Vector3.new(0, 0, -reach) }) do
+					local p = part.Position + offset
+					if roads:WithinCorridor(p.X, p.Z) then
+						worstHere = "corridor"
+					elseif worstHere ~= "corridor" and roads:GroundAt(p.X, p.Z, 8) then
+						worstHere = "blend"
+					end
+				end
+				if worstHere == "corridor" then
+					inCorridor += 1
+					if not worst then
+						worst, worstAt = part.Name, part.Position
+					end
+					-- Unconditionally: `report` is a parameter of the sampling passes, not a name in scope
+					-- here, and `if report then` would have read as nil and filed nothing, for ever.
+					example("wilds", string.format("%s at (%.1f, %.1f) stands in the road corridor", part.Name, part.Position.X, part.Position.Z))
+				elseif worstHere == "blend" then
+					inBlend += 1
+				else
+					clear += 1
+				end
+			end
+		end
+		out("  wilds in the road: %d parts measured; in the corridor %d%s, in the 8-stud blend beyond it %d, clear %d",
+			parts, inCorridor, worst and string.format(" (first: %s at (%.0f, %.0f))", worst, worstAt.X, worstAt.Z) or "", inBlend, clear)
+	end
 		acceptance = string.format("build warnings %d, contacts failing %d, ground off by >%.2f %d/%d, no terrain found %d, water without deck %d",
 		warnings, contactFailures, TOLERANCE, densePoke, denseFloat, dense.missed, waterUncovered)
 

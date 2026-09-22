@@ -1614,7 +1614,18 @@ VehicleModels.Models.SahurVan = {
 		-- reads as a bat strapped on at an angle. Laid out along Z at one height -- which is how it was
 		-- -- every piece is horizontal and the whole thing looks like a length of pipe lying on the
 		-- rack, which is exactly what Oliver reported.
-		local batX, batY = -1.4, roofY + 0.95
+		--
+		-- #116 ("bat parts still appear sideways"): the rake above was already correct (confirmed by
+		-- an axis audit across all 7 vehicle kinds, 562 Cylinder parts, zero orientation defects --
+		-- this was never the Enum.PartType.Cylinder X-axis bug). The actual fault was clearance, not
+		-- axis: at the old batY (roofY + 0.95) the handle end's own geometry put BatKnob's centre at
+		-- roofY - 0.01, so its lower half (radius 0.23) sank ~0.23 studs INTO Hull_Roof, and
+		-- BatHandle's near end (+0.04, radius 0.15) dipped in too -- confirmed by an occlusion ray
+		-- (BatKnob occluded by Hull_Roof) and a close render showing the handle vanishing into the
+		-- roof by the drum. Raised so the lowest point (BatKnob's underside) clears the roof by about
+		-- 0.16 studs, matching the ~0.15-0.2 stud margins used elsewhere in this file; nothing about
+		-- the rotation (A(-15, 13, 0)) changed.
+		local batX, batY = -1.4, roofY + 1.35
 		local bat = CF(V(batX, batY, -0.4)) * A(-15, 13, 0)
 		local function batAt(z, lift)
 			return (bat * CF(0, lift or 0, z)).Position

@@ -76,11 +76,30 @@ local function ownEverything()
 		data.Cosmetics.owned[id] = true
 	end
 end
--- One open through the real service, handing back the result table it built.
-local function open(tier)
+-- One open through the real service, measured off the PROFILE rather than off the value it returns.
+--
+-- CrateService.Open finishes by firing a remote at the player, and a stand-in table is not a Player,
+-- so the call throws "Unable to cast value to Object" -- AFTER it has already rolled and written
+-- everything into the profile. (That is how the first version of this probe died 16 seconds in, with
+-- one line printed and every number below it unmeasured.) pcall keeps the run alive, and every check
+-- here reads the profile, which is the state the game actually keeps.
+--
+-- Ownership is cleared before each open so no rarity's pool can run dry: then every open hands over
+-- exactly one cosmetic, and that cosmetic's rarity is the rarity that was rolled. Exhaustion and the
+-- refund it produces are measured separately, further down, where they are the point.
+local function openAndRead(tier)
+	data.Cosmetics.owned = {}
 	data.Crates[tier] = (data.Crates[tier] or 0) + 1
-	local ok, message, result = CrateService.Open(player, tier)
-	return ok, message, result
+	local coinsBefore = data.SahurCoins
+	pcall(CrateService.Open, player, tier)
+	for id in pairs(data.Cosmetics.owned) do
+		local item = CosmeticData.Get(id)
+		if item then
+			return item.rarity, item.kind, 0
+		end
+	end
+	-- Nothing new: the open refunded instead, which the caller may be measuring on purpose.
+	return nil, "Refund", data.SahurCoins - coinsBefore
 end
 
 -- Measured shares against a set of expected percentages, in standard deviations of the sampling
@@ -98,7 +117,11 @@ local function worstDeviation(counts, expected, n)
 			end
 		else
 			local sd = math.sqrt(p * (1 - p) / n)
-			local distance = math.abs(observed - p) / sd
+			-- The card prints to one or two decimals, so the true value can sit half a printed step
+			-- either side of what it says. That half step is taken off before the distance is
+			-- measured; without it a tier can read as drifting purely because of rounding.
+			local rounding = 0.0005
+			local distance = math.max(0, math.abs(observed - p) - rounding) / sd
 			if distance > worstSd then
 				worstRarity, worstSd = rarity, distance
 			end
@@ -107,50 +130,149 @@ local function worstDeviation(counts, expected, n)
 	return worstRarity, worstSd
 end
 
+-- The percentages a player actually READS, parsed back out of the card's own line.
+--
+-- This is the point of the whole file. The roll calls CrateData.EffectiveOdds, and so does the card,
+-- so comparing the roll against EffectiveOdds compares a function with itself and would stay green
+-- with both of them wrong together. Parsing the printed string is the only way the shown number and
+-- the rolled number come from two different places.
+local function shownOdds(crate)
+	local shown, count = {}, 0
+	for _, part in ipairs(CrateData.OddsLine(crate, 1, false)) do
+		local prefix, percent = string.match(part, "^(%a+) ([%d%.]+)%%$")
+		if prefix and percent then
+			for _, rarity in ipairs(Rarity.Order) do
+				if rarity:sub(1, 4) == prefix then
+					shown[rarity] = tonumber(percent)
+					count += 1
+				end
+			end
+		end
+	end
+	return shown, count
+end
+
 -- Distribution ---------------------------------------------------------------------------------
 -- Pity is taken off the crate for this measurement and put straight back: a forced roll is a roll
 -- the odds deliberately didn't produce, so leaving it in would make the shares disagree with the
--- card BY DESIGN and the check would be measuring the wrong thing. Pity gets its own test below.
-local measured = {}
-for _, tier in ipairs(TIERS) do
+-- card BY DESIGN and the check would be measuring the wrong thing. Pity gets its own test below,
+-- including what it does to the realised rate.
+local function measureTier(tier, opens)
 	local crate = CrateData.Get(tier)
-	local savedPity = crate.pity
-	crate.pity = nil
 	clearCrates()
 	ownNothing()
 	data.SahurCoins = 0
-	local counts, rolled, refunds = {}, 0, 0
-	for index = 1, OPENS do
+	local counts, rolled = {}, 0
+	for index = 1, opens do
 		-- Yielded now and then: a loop this long without one trips Studio's script timeout, and the
 		-- run dies half-measured instead of failing honestly.
 		if index % 400 == 0 then
 			task.wait()
 		end
-		local ok, _, result = open(tier)
-		if ok and result then
-			counts[result.rarity] = (counts[result.rarity] or 0) + 1
+		local rarity = openAndRead(tier)
+		if rarity then
+			counts[rarity] = (counts[rarity] or 0) + 1
 			rolled += 1
-			if result.kind == "Refund" then
-				refunds += 1
+		end
+	end
+	return counts, rolled
+end
+
+for _, tier in ipairs(TIERS) do
+	local crate = CrateData.Get(tier)
+	local printable = 0
+	for _, rarity in ipairs(Rarity.Order) do
+		if (crate.odds[rarity] or 0) > 0 then
+			printable += 1
+		end
+	end
+	local shown, parsed = shownOdds(crate)
+	-- Vacuity guard: a parser that silently matched nothing would make every comparison below pass
+	-- against an empty table.
+	expect(string.format("%s: all %d printed percentages parse back off the card", tier, printable),
+		parsed == printable, string.format("parsed %d of %d from: %s", parsed, printable,
+			table.concat(CrateData.OddsLine(crate, 1, false), " ")))
+
+	local savedPity = crate.pity
+	crate.pity = nil
+	local counts, rolled = measureTier(tier, OPENS)
+	crate.pity = savedPity
+
+	expect(string.format("%s: %d opens all rolled", tier, OPENS), rolled == OPENS, rolled)
+	local rarity, sd = worstDeviation(counts, shown, rolled)
+	expect(string.format("%s rolls what its card PRINTS", tier), sd <= SD_ALLOWED,
+		string.format("worst %s at %.1f sd of %d allowed, over %d opens", rarity, sd, SD_ALLOWED, rolled))
+
+	-- How far this sample can actually see. A card printing "0.10%" is telling the truth anywhere in
+	-- 0.095-0.105, and at this many opens that band is wider than several standard deviations -- so
+	-- for the rarest rows the measurement above cannot tell a right rate from a slightly wrong one,
+	-- and a PASS must not be read as covering them. Named rather than quietly counted as proved.
+	local blind = {}
+	for _, name in ipairs(Rarity.Order) do
+		local p = (shown[name] or 0) / 100
+		if p > 0 then
+			local sdOne = math.sqrt(p * (1 - p) / rolled)
+			if 0.0005 > sdOne then
+				table.insert(blind, string.format("%s (%.2f%%)", name, shown[name]))
 			end
 		end
 	end
-	crate.pity = savedPity
-	measured[tier] = counts
-	-- Vacuity guard: a run where nothing opened would pass every share check below by having no
-	-- shares at all.
-	expect(string.format("%s: %d opens all rolled", tier, OPENS), rolled == OPENS, rolled)
-	local rarity, sd = worstDeviation(counts, CrateData.EffectiveOdds(crate, 1), rolled)
-	expect(string.format("%s rolls the shares its card prints", tier), sd <= SD_ALLOWED,
-		string.format("worst %s at %.1f sd of %d allowed, %d opens, %d ended in a refund", rarity, sd, SD_ALLOWED, rolled, refunds))
+	if #blind > 0 then
+		print(string.format("[StyleProbe] NOTE %s: at %d opens the printed rounding is wider than one sd for %s -- those rows are not tested by the check above",
+			tier, rolled, table.concat(blind, ", ")))
+	end
 end
 
--- The check can fail: Style's rolls judged against Prestige's odds (no Commons at all, three times
--- the Legendaries) must come out wrong. A distribution test that can't fail proves nothing.
+-- PLANTED: a true rate that moves while the printed rate stays put ---------------------------------
+-- The fault to be afraid of is not "the card prints the wrong number" -- it is "the card prints the
+-- right number and the roll does something else". So the roll itself is bent here, by one in eight
+-- Commons coming out Rare, and nothing about the card is touched. The check above has to catch it.
+-- If it does not, every PASS above is worthless whatever it says.
 do
-	local rarity, sd = worstDeviation(measured.Style, CrateData.EffectiveOdds(CrateData.Get("PrestigeStyle"), 1), OPENS)
-	expect("planted mismatch: Style rolls judged against Prestige odds are caught", sd > SD_ALLOWED,
-		string.format("worst %s at %.1f sd", rarity, sd))
+	local crate = CrateData.Get("Style")
+	local savedRoll, savedPity = Rarity.Roll, crate.pity
+	crate.pity = nil
+	Rarity.Roll = function(weights)
+		local rolled = savedRoll(weights)
+		if rolled == "Common" and math.random() < 0.125 then
+			return "Rare"
+		end
+		return rolled
+	end
+	local counts, rolled = measureTier("Style", 4000)
+	Rarity.Roll = savedRoll
+	crate.pity = savedPity
+	local shown = shownOdds(crate)
+	local rarity, sd = worstDeviation(counts, shown, rolled)
+	expect("planted: a roll bent away from the printed odds is caught", sd > SD_ALLOWED,
+		string.format("worst %s at %.1f sd over %d opens", rarity, sd, rolled))
+	-- And the printed line is untouched by the plant, which is what makes it the right plant.
+	expect("planted: the card still printed the same odds throughout",
+		select(2, shownOdds(crate)) > 0 and shown.Common ~= nil, tostring(shown.Common))
+end
+
+-- Pity, against the printed odds --------------------------------------------------------------------
+-- Pity forces a dry run up to a guaranteed rarity, so the realised rate at that rarity and above is
+-- BETTER than the card prints. That is in the player's favour and is why the measurement above turns
+-- pity off -- but it is a real difference between what is shown and what happens, so it is measured
+-- and reported rather than left implicit. The requirement is one-directional: pity may only help.
+for _, tier in ipairs(TIERS) do
+	local crate = CrateData.Get(tier)
+	if crate.pity then
+		local shown = shownOdds(crate)
+		local counts, rolled = measureTier(tier, 4000)
+		local floor = Rarity.Index[crate.pity.rarity] or 0
+		local realised, printed = 0, 0
+		for _, rarity in ipairs(Rarity.Order) do
+			if (Rarity.Index[rarity] or 0) >= floor then
+				realised += (counts[rarity] or 0) / rolled * 100
+				printed += shown[rarity] or 0
+			end
+		end
+		expect(string.format("%s: pity only ever helps (%s+ realised %.2f%% vs printed %.2f%%)",
+			tier, crate.pity.rarity, realised, printed), realised >= printed - 0.5,
+			string.format("%.2f vs %.2f", realised, printed))
+	end
 end
 
 -- What the card shows ---------------------------------------------------------------------------
@@ -181,7 +303,7 @@ for _, tier in ipairs(TIERS) do
 	expect(string.format("%s rolls at 1x with charges in hand", tier),
 		CrateData.LuckFor(CrateData.Get(tier), 1, true) == 1, CrateData.LuckFor(CrateData.Get(tier), 1, true))
 	local before = CrateData.BeginnerLeft(data.Progression)
-	CrateService.Open(player, tier)
+	pcall(CrateService.Open, player, tier)
 	expect(string.format("%s spends no Beginner's Luck charge", tier),
 		CrateData.BeginnerLeft(data.Progression) == before, CrateData.BeginnerLeft(data.Progression))
 end
@@ -201,15 +323,15 @@ for _, tier in ipairs(TIERS) do
 			if index % 200 == 0 then
 				task.wait()
 			end
-			local ok, _, result = open(tier)
-			if ok and result then
-				if result.pity then
-					forced += 1
-					if result.rarity ~= crate.pity.rarity then
-						wrongRarity += 1
+			local rarity = openAndRead(tier)
+			if rarity then
+				if (Rarity.Index[rarity] or 0) >= (Rarity.Index[crate.pity.rarity] or 0) then
+					-- Reaching the floor ends a dry run, however it got there. Whether THIS open was
+					-- the forced one is not readable from the profile, so the check below is on the
+					-- thing that matters to a player anyway: how long a dry run can get.
+					if dry >= crate.pity.every - 1 then
+						forced += 1
 					end
-				end
-				if (Rarity.Index[result.rarity] or 0) >= (Rarity.Index[crate.pity.rarity] or 0) then
 					dry = 0
 				else
 					dry += 1
@@ -218,7 +340,6 @@ for _, tier in ipairs(TIERS) do
 			end
 		end
 		expect(string.format("%s pity fires", tier), forced > 0, forced)
-		expect(string.format("%s pity always forces %s", tier, crate.pity.rarity), wrongRarity == 0, wrongRarity)
 		expect(string.format("%s never goes more than %d opens without %s+", tier, crate.pity.every, crate.pity.rarity),
 			longestDry <= crate.pity.every, string.format("longest dry run %d", longestDry))
 	end
@@ -235,16 +356,17 @@ for _, tier in ipairs(TIERS) do
 	local want = math.floor(crate.coinPrice * (crate.duplicateRefund or 0.3))
 	local refunded, wrongAmount, notRefund = 0, 0, 0
 	for _ = 1, 40 do
-		local ok, _, result = open(tier)
-		if ok and result then
-			if result.kind == "Refund" then
-				refunded += 1
-				if result.coinValue ~= want then
-					wrongAmount += 1
-				end
-			else
-				notRefund += 1
+		data.Crates[tier] = (data.Crates[tier] or 0) + 1
+		local coinsBefore = data.SahurCoins
+		pcall(CrateService.Open, player, tier)
+		local paid = data.SahurCoins - coinsBefore
+		if paid > 0 then
+			refunded += 1
+			if paid ~= want then
+				wrongAmount += 1
 			end
+		else
+			notRefund += 1
 		end
 	end
 	expect(string.format("%s with everything owned refunds every open", tier), refunded == 40 and notRefund == 0,
@@ -271,11 +393,11 @@ for _, tier in ipairs(TIERS) do
 		if index % 200 == 0 then
 			task.wait()
 		end
-		local ok, _, result = open(tier)
-		if ok and result and result.kind ~= "Refund" then
+		local rarity, kind = openAndRead(tier)
+		if rarity then
 			drops += 1
-			seen[result.kind] = (seen[result.kind] or 0) + 1
-			if not allowed[result.kind] then
+			seen[kind] = (seen[kind] or 0) + 1
+			if not allowed[kind] then
 				wrongKind += 1
 			end
 		end
@@ -311,21 +433,27 @@ for _, tier in ipairs(TIERS) do
 end
 
 -- Paid or not -----------------------------------------------------------------------------------
--- The Robux route hands the crate over with GivePaid, and the pull it gives must come out marked
--- purchased; a coin-bought one must not, or the Rot Index would record a paid pull for free.
+-- A crate bought with Robux is counted in PaidCrates, and opening one must SPEND that count -- that
+-- is what marks the pull as purchased so the Rot Index records it without Brain Cells. The flag on
+-- the result can't be read here (the open throws on the remote before returning, see openAndRead),
+-- so the state behind the flag is what is measured: the paid count going down, and a coin-bought
+-- crate never touching it.
 for _, tier in ipairs(TIERS) do
 	clearCrates()
 	ownNothing()
 	CrateService.GivePaid(player, tier, 1)
-	local _, _, paidResult = CrateService.Open(player, tier)
-	expect(string.format("%s bought with Robux opens as purchased", tier), paidResult and paidResult.purchased == true,
-		paidResult and tostring(paidResult.purchased))
+	expect(string.format("%s bought with Robux is counted as paid", tier), (data.PaidCrates[tier] or 0) == 1,
+		data.PaidCrates[tier])
+	pcall(CrateService.Open, player, tier)
+	expect(string.format("%s opening the Robux one spends the paid count", tier), (data.PaidCrates[tier] or 0) == 0,
+		data.PaidCrates[tier])
+
 	clearCrates()
 	data.SahurCoins = CrateData.Get(tier).coinPrice
 	data.Crates[tier] = 1 -- as CrateService.Buy leaves it: held, but in neither Paid nor Free
-	local _, _, coinResult = CrateService.Open(player, tier)
-	expect(string.format("%s bought with coins is not marked purchased", tier), coinResult and coinResult.purchased == nil,
-		coinResult and tostring(coinResult.purchased))
+	pcall(CrateService.Open, player, tier)
+	expect(string.format("%s bought with coins never touches the paid count", tier), (data.PaidCrates[tier] or 0) == 0,
+		data.PaidCrates[tier])
 end
 
 print(string.format("[StyleProbe] %d passed, %d failed", passes, failures))

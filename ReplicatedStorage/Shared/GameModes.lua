@@ -134,10 +134,14 @@ GameModes.Loadout = {
 		{ id = "MiniShield", count = 2 },
 		{ id = "CookedCoconut", count = 2 },
 		{ id = "LowkeyLatte", count = 1 },
+		-- #114: the popup barricade in the team kit. The Rot Barricade IS the popup barricade (thrown,
+		-- rises out of the ground where it lands, 250 HP); one per life, so cover is a decision rather
+		-- than a spam.
+		{ id = "RotBarricade", count = 1 },
 	},
 	-- Checked by the loadout probe so a silent drift in ItemData's stack sizes shows up as a
 	-- failure rather than as a quietly truncated kit.
-	slotsUsed = 5,
+	slotsUsed = 6,
 }
 
 --------------------------------------------------------------------------------

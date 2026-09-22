@@ -503,7 +503,11 @@ function BrainrotModels.Build(def, options)
 		column("Body", 0.7, 3, 0, -0.25, 0, accent, material)
 		add("Dome", Vector3.new(1.8, 1.4, 1.8), CFrame.new(0, 0.2, 0), color, material, "Sphere")
 		column("Rim", 0.24, 3.08, 0, -0.3, 0, accent:Lerp(BLACK, 0.25), material)
-		column("DomeCollar", 0.18, 2.05, 0, 0.06, 0, accent:Lerp(BLACK, 0.12), material)
+		-- 0.32 tall, not 0.18: the collar's top face stood 0.05 proud of the body's top, and any step
+		-- under ZFight.FixTolerance (0.055) is treated as flush and reshaped on every build. The extra
+		-- height goes downward INSIDE the body, so the collar reads exactly as before and the step is
+		-- now 0.12 -- which still clears the tolerance at the companion scale of 0.55 (0.066).
+		column("DomeCollar", 0.32, 2.05, 0, 0.06, 0, accent:Lerp(BLACK, 0.12), material)
 		column("Underside", 0.3, 2.7, 0, -0.55, 0, shade(0.2), material)
 		add("DomeLight", Vector3.new(1.5, 1.1, 1.5), CFrame.new(0, 0.38, 0.06), lit(0.14), material, "Sphere")
 		ring("Stud", 8, 1.55, -0.3, 0.2, accent:Lerp(WHITE, 0.25), Enum.Material.Metal)
@@ -557,7 +561,13 @@ function BrainrotModels.Build(def, options)
 		for _, y in ipairs({ -1.1, 1.1 }) do
 			column("Rim", 0.2, 2.08, 0, y, 0, accent:Lerp(WHITE, 0.3), Enum.Material.Metal)
 		end
-		column("Label", 0.7, 2.03, 0, -0.62, 0, accent, material)
+		-- The label wraps the can from -0.87 up to -0.27. Its stand-off (2.03 across a 2.00 can) was
+		-- never the problem: the flush pair was its BOTTOM end face against the can's, which sat
+		-- 0.03 apart -- under ZFight.FixTolerance (0.055), so the pass grew the can on every build.
+		-- Shortened from the bottom only (0.7 tall centred -0.62 -> 0.6 centred -0.57), so the top
+		-- edge stays exactly where LabelEdge marks it and the gap below becomes 0.13 -- which still
+		-- clears the tolerance at the companion scale of 0.55 (0.072).
+		column("Label", 0.6, 2.03, 0, -0.57, 0, accent, material)
 		-- A lid with a pull tab and a recessed base. The highlight down one side is laid on later.
 		add("Lid", Vector3.new(1.82, 0.12, 1.82), CFrame.new(0, 1.2, 0), lit(0.2), Enum.Material.Metal, "Sphere")
 		add("Tab", Vector3.new(0.5, 0.08, 0.26), CFrame.new(0.2, 1.25, 0), accent:Lerp(WHITE, 0.4), Enum.Material.Metal, "Sphere")
@@ -1298,8 +1308,14 @@ function BrainrotModels.Build(def, options)
 		elseif extra == "TopHat" then
 			local width = math.min(halfW, 1.1)
 			column("HatBrim", 0.1, width * 1.5, 0, crownY + 0.02, 0, BLACK)
-			column("HatCrown", 1.0, width * 0.95, 0, crownY + 0.55, 0, BLACK)
-			column("HatBand", 0.18, width * 0.97, 0, crownY + 0.2, 0, accent)
+			-- Taller and set lower so the crown passes THROUGH the brim rather than resting a hair
+			-- inside it: its underside now sits 0.12 below the brim's, and its top is where it always
+			-- was (crownY + 1.05), so the hat's silhouette is unchanged.
+			column("HatCrown", 1.2, width * 0.95, 0, crownY + 0.45, 0, BLACK)
+			-- The band's stand-off is ABSOLUTE, not a fraction of `width`. It was width * 0.97 against a
+			-- crown of width * 0.95, so how far it stood proud depended on how big the creature was --
+			-- and on a small one it fell under the tolerance. 0.14 clears it at every size and scale.
+			column("HatBand", 0.18, width * 0.95 + 0.14, 0, crownY + 0.2, 0, accent)
 		elseif extra == "Headphones" then
 			local x = sideX(ey, 0)
 			for _, side in ipairs({ -1, 1 }) do

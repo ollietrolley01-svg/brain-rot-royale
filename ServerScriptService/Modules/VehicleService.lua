@@ -44,6 +44,8 @@ local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 -- the way they would survive anything else, and a bot is a valid victim/attacker the same way.
 local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
+local RateLimit = require(script.Parent:WaitForChild("RateLimit"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
 
 local VehicleService = {}
 
@@ -97,6 +99,7 @@ local ROADKILL_DEBOUNCE = 0.5     -- seconds, per victim
 local active = {}
 local byModel = {}
 local started = false
+local joltCount = 0 -- #84: how many VehicleJolt reports this server has seen; see VehicleService.Start
 
 --------------------------------------------------------------------------------
 -- Seats and prompts
@@ -893,6 +896,23 @@ function VehicleService.Start()
 		watchPlayer(player)
 	end
 	Players.PlayerAdded:Connect(watchPlayer)
+	-- #84: client-detected jolts, reported so a real playtest produces a number instead of an
+	-- impression (claude-43's ask, 2026-09-21). Measured baseline this harness CAN see: flat road
+	-- 0.00 vertical velocity, worst seam-at-speed case 3.14 studs/s -- VehicleClient's threshold
+	-- (20) is well clear of both, so anything that arrives here is either a bug this harness missed
+	-- or the one thing it structurally cannot see, a network ownership handoff (ServerControl marks
+	-- exactly that). Counted, not just printed, so "how often" is answerable at a glance.
+	Remotes.Event("VehicleJolt").OnServerEvent:Connect(function(player, jump, speed, serverControl)
+		if not RateLimit.Take(player, "VehicleJolt") then
+			return
+		end
+		if not SafeValue.Number(jump, 500) or not SafeValue.Number(speed, 500) then
+			return
+		end
+		joltCount += 1
+		warn(string.format("[VehicleJolt] #%d %s: %.1f studs/s vertical jump at %.0f studs/s forward speed, ServerControl %s",
+			joltCount, player.Name, jump, speed, tostring(serverControl == true)))
+	end)
 	RunService.Stepped:Connect(function(_, dt)
 		-- Wall clock, not os.clock() (which is process CPU time in Roblox -- a measured lesson
 		-- elsewhere in this project): serverHoldUntil, airCheckIn and hoverFor are real-time holds

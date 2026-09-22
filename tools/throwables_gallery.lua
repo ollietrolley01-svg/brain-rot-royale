@@ -592,9 +592,13 @@ local function splatView(name, options, limbName, direction)
 	end)
 end
 
-splatView("splat_body", {}, "UpperTorso", V(1.2, 0.8, -4.5))
-splatView("splat_body_far", {}, "UpperTorso", V(2, 1, -9))
-splatView("splat_head", { headshot = true }, "Head", V(0.8, 0.5, -3.2))
-splatView("splat_shield", { shield = true }, "UpperTorso", V(1.2, 0.8, -4.5))
+-- Every splat carries the RANK COLOUR of the gun that dealt it (#64) -- there is no blood in this
+-- game. A view that passes no colour photographs ExplosiveFx's own dead fallback rather than
+-- anything the game draws, so each of these names its tier, and the four together show three of them.
+local RarityColors = require(Shared:WaitForChild("Rarity"))
+splatView("splat_body", { color = RarityColors.Color("Rare") }, "UpperTorso", V(1.2, 0.8, -4.5))
+splatView("splat_body_far", { color = RarityColors.Color("Legendary") }, "UpperTorso", V(2, 1, -9))
+splatView("splat_head", { headshot = true, color = RarityColors.Color("Mythic") }, "Head", V(0.8, 0.5, -3.2))
+splatView("splat_shield", { shield = true, color = RarityColors.Color("Common") }, "UpperTorso", V(1.2, 0.8, -4.5))
 
 return views

@@ -6,9 +6,11 @@
 --   ExplosiveFx.Impact(position, normal)                     a round that only hits (no blast)
 --   ExplosiveFx.Cloud(position, spec, elapsed)               a smoke cloud `elapsed` seconds into
 --                                                            its life; returns its handle
---   ExplosiveFx.Splat(limb, position, normal, options)       blood on a body part; options.headshot
---                                                            (bigger), options.shield (blue chips),
---                                                            options.color (the gun's rank colour)
+--   ExplosiveFx.Splat(limb, position, normal, options)       a hit mark on a body part in the firing
+--                                                            gun's RANK COLOUR (options.color, which
+--                                                            every caller must pass -- there is no
+--                                                            blood in this game); options.headshot
+--                                                            (bigger), options.shield (blue chips)
 --   ExplosiveFx.Trail(part)                                  a rocket's exhaust and glow on a model
 --   ExplosiveFx.Loop(cueName, part)                          a looping cue following a part (whoosh)
 --   ExplosiveFx.Advance(dt)                                  one frame of every live effect
@@ -77,8 +79,13 @@ local FIRE = Color3.fromRGB(255, 168, 56)
 local FIRE_DEEP = Color3.fromRGB(255, 96, 24)
 local FIRE_DONE = Color3.fromRGB(96, 30, 18)
 local SMOKE_DARK = Color3.fromRGB(52, 48, 46)
-local BLOOD = Color3.fromRGB(148, 16, 16)
-local BLOOD_DARK = Color3.fromRGB(96, 10, 10)
+-- There is no blood in this game: a splat is drawn in the RANK COLOUR of the gun that dealt the hit
+-- (HitSplatService sends the rank, HitSplatClient turns it into Rarity.Color). This is only what a
+-- caller that forgot to pass one gets -- Common's own grey, matching Rarity.Colors.Common -- and
+-- forgetting is warned about rather than quietly coloured. The old red constants are deliberately
+-- gone: an unreferenced red is a trap for the next caller.
+local SPLAT_DEFAULT = Color3.fromRGB(178, 184, 196)
+local warnedColourless = false
 local SHIELD = Color3.fromRGB(120, 200, 255)
 
 local function clamp01(t)
@@ -848,7 +855,7 @@ local function splatParticles(position, normal, color, count, shield)
 				Texture = TEXTURE.glow,
 				LightEmission = 0,
 				LightInfluence = 1,
-				Color = CS(BLOOD),
+				Color = CS(SPLAT_DEFAULT),
 				Lifetime = NumberRange.new(0.3, 0.6),
 				Speed = NumberRange.new(6, 14),
 				SpreadAngle = Vector2.new(50, 50),
@@ -862,7 +869,7 @@ local function splatParticles(position, normal, color, count, shield)
 				Texture = TEXTURE.glow,
 				LightEmission = 0,
 				LightInfluence = 1,
-				Color = CS(BLOOD_DARK),
+				Color = CS(SPLAT_DEFAULT),
 				Lifetime = NumberRange.new(0.45, 0.8),
 				Speed = NumberRange.new(3, 7),
 				SpreadAngle = Vector2.new(40, 40),
@@ -875,7 +882,7 @@ local function splatParticles(position, normal, color, count, shield)
 				Texture = TEXTURE.smoke,
 				LightEmission = 0,
 				LightInfluence = 1,
-				Color = CS(BLOOD_DARK),
+				Color = CS(SPLAT_DEFAULT),
 				Lifetime = NumberRange.new(0.2, 0.4),
 				Speed = NumberRange.new(1.5, 4),
 				SpreadAngle = Vector2.new(70, 70),
@@ -931,8 +938,12 @@ function ExplosiveFx.Splat(limb, position, normal, options)
 	local parts = {}
 	local seed = Random.new()
 	-- The blood's colour: the rank of the gun that dealt the hit (options.color), else plain red.
-	local blood = options.color or BLOOD
-	local dark = options.color and options.color:Lerp(Color3.new(0, 0, 0), 0.35) or BLOOD_DARK
+	if not options.color and not options.shield and not warnedColourless then
+		warnedColourless = true
+		warn("[ExplosiveFx] a splat was drawn with no rank colour: every caller must pass options.color (the firing gun's Rarity.Color). Drawn in Common grey.")
+	end
+	local blood = options.color or SPLAT_DEFAULT
+	local dark = (options.color or SPLAT_DEFAULT):Lerp(Color3.new(0, 0, 0), 0.35)
 
 	if options.shield then
 		-- Chips: thin light-blue discs bursting outward along the surface, fading fast.

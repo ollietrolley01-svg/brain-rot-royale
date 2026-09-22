@@ -55,21 +55,43 @@ end
 
 -- Takes the gun back and tells the client to leave range mode.
 local function stop(player, message)
-	if not active[player] then
+	local ours = active[player]
+	if not ours then
 		return
 	end
 	active[player] = nil
-	WeaponService.Clear(player)
-	-- Clearing the loadout empties the inventory, which is not the same as taking the gun out of
-	-- your hands: the mounted model is welded to the character and survives on its own. It is a
-	-- child of the character named HeldGun, the same handle BotService uses when it swaps a bot's
-	-- weapon. Without this the range gun stayed visible after the rack had taken it back.
-	local character = player.Character
-	local held = character and character:FindFirstChild("HeldGun")
-	if held then
-		held:Destroy()
+
+	-- ONLY TAKE BACK GEAR THE RANGE HANDED OUT -- #106, "players often can't pick weapons up,
+	-- especially after holding a gun from the trial area in the lobby".
+	--
+	-- `WeaponService.Clear` does `loadouts[player] = nil`, and `GiveWeapon` then refuses outright
+	-- with "Not in a match." -- a message LootService only ever shows on SUCCESS, so the player
+	-- pressed a pickup prompt and watched absolutely nothing happen. This function is driven by the
+	-- 0.4s poll at the bottom of this file, which cannot be sequenced against match start, and BOTH
+	-- of its triggers (combat enabled; player no longer on the terrace) come true AFTER
+	-- MatchService has created the match loadout. So it deleted the loadout the match had just
+	-- made, and the player could not pick anything up for the rest of the match. Team modes hid it
+	-- by calling Reset again on every respawn; battle royale has no respawn, which is why Oliver
+	-- saw it as "often" rather than "always".
+	--
+	-- The guard is an IDENTITY check rather than an ordering fix, so it holds however the callers
+	-- are later rearranged: Reset installs a NEW loadout table, so if the table the player holds is
+	-- not the one the range created, the range does not own it and touches nothing -- not the
+	-- loadout, and not the HeldGun welded to the character either.
+	if WeaponService.Get(player) == ours then
+		WeaponService.Clear(player)
+		-- Clearing the loadout empties the inventory, which is not the same as taking the gun out of
+		-- your hands: the mounted model is welded to the character and survives on its own. It is a
+		-- child of the character named HeldGun, the same handle BotService uses when it swaps a bot's
+		-- weapon. Without this the range gun stayed visible after the rack had taken it back.
+		local character = player.Character
+		local held = character and character:FindFirstChild("HeldGun")
+		if held then
+			held:Destroy()
+		end
+		WeaponService.Push(player)
 	end
-	WeaponService.Push(player)
+
 	if player.Parent then
 		rangeState:FireClient(player, false)
 		if message then
@@ -100,7 +122,10 @@ function RangeService.Give(player, weaponId)
 	if not ok then
 		return false, "Couldn't hand you that."
 	end
-	active[player] = true
+	-- The loadout TABLE we just created, not a bare flag: `stop` compares it against whatever the
+	-- player holds later, so a loadout MatchService has since replaced is never mistaken for ours
+	-- and deleted out from under the match. #106
+	active[player] = WeaponService.Get(player)
 	rangeState:FireClient(player, true)
 	return true, "Range gun: " .. WeaponData.Get(weaponId).name .. ".  Walk off the terrace to hand it back."
 end
@@ -128,12 +153,15 @@ function RangeService.Fire(player, aimPoint)
 	local direction = aimPoint - origin
 	if direction.Magnitude < 0.5 then return end
 	local now = os.clock()
-	if now - loadout.lastShotAt < (1 / def.fireRate) * 0.9 then return end
+	-- The SAME budget the match path uses (CombatService.ShotCredit), not a second copy of the rule:
+	-- the range is where a player learns how a gun feels, so it has to feel identical. #97
+	local credit = CombatService.ShotCredit(loadout, def, now)
+	if credit < 1 then return end
 	-- Real ammo, so reloading at the range behaves exactly like reloading in a match.
 	if not WeaponService.ConsumeAmmo(player) then
 		return
 	end
-	loadout.lastShotAt = now
+	CombatService.SpendShot(loadout, credit, now)
 
 	local targets = CollectionService:GetTagged("PracticeDummy")
 	local params = RaycastParams.new()

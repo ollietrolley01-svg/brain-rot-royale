@@ -83,11 +83,17 @@ end
 MovementService.SetCrouching = function()
 	return false
 end
--- Set by Bootstrap to CombatService.BreakGlassAlong (claude-4a's), which breaks the window panes on a
--- line and is what a bullet uses. Vaulting through a window takes the pane with it, with the same
--- shatter everyone else sees. A no-op by default so this module still runs standalone in a probe —
--- and tools/movement_probe.lua plants its fault by swapping this back to a no-op.
-MovementService.BreakGlassAlong = function() end
+-- Set by Bootstrap to break one window pane the way a bullet does (CombatService.DamageDestructible,
+-- through DestructibleService, with the same shatter everyone else sees): BreakPane(token, pane, from)
+-- -> true if it broke. Vaulting through a window takes the pane with it. A no-op by default so this
+-- module still runs standalone in a probe — and tools/movement_probe.lua plants its fault by swapping
+-- this back to a no-op. What the last vault found and broke is kept in LastGlass for the probes, and a
+-- vault that finds panes with nothing wired to break them says so once, rather than leaving the window
+-- standing in silence.
+MovementService.BreakPane = function()
+	return false
+end
+MovementService.LastGlass = nil
 -- Set by whoever owns equipped parachutes: the ParachuteModels design id a character's canopy should
 -- use (the drop-in and the Rot Glider alike), or nil for the stock Rot Glider wing.
 MovementService.ParachuteFor = function()
@@ -419,22 +425,115 @@ end
 -- Takes out the window panes a vault goes through.
 --
 -- THE SERVER FINDS THEM ITSELF. A player's vault is run by their own client, which only ever tells us
--- "I vaulted" — it never names a window, and it never could: this casts along the character's OWN facing
--- from where the body actually is, and breaks only panes physically in front of it inside a vault's
--- reach. So the worst a modified client can do is claim a vault while standing in front of a window it
--- was free to walk up to and shoot anyway.
+-- "I vaulted" — it never names a window, and it never could: this looks along the character's OWN
+-- facing from where the body actually is, and breaks only panes physically in front of it inside a
+-- vault's reach. So the worst a modified client can do is claim a vault while standing in front of a
+-- window it was free to walk up to and shoot anyway.
+--
+-- WHERE IT LOOKS: the window band, never the body's centre. A standing body's root is ~3 studs above
+-- its feet and a MapBuildings sill is 3.5 above the floor (4.0 above the ground outside), so a ray from
+-- the root centre ran 0.3-0.8 studs UNDER the sill, met the wall band below the window, and the bullet
+-- path's line-breaker returned on that first non-glass hit: 15 of 16 bot vaults and 17 of 19 player
+-- vaults through real windows left the pane standing (#119, tools/window_vault_probe.lua). A vaulting
+-- body passes its obstacle between the top and VaultClearance above it, and the top is somewhere from
+-- VaultMinRise to VaultMaxRise above the feet, so every pane a vault can go through lies in the box
+-- swept here: the body's width, from feet + VaultMinRise up to feet + VaultMaxRise + VaultClearance,
+-- forward by GLASS_REACH and squared onto the wall the way Parkour.Find squares the move. Only
+-- WindowGlass in it is touched; the wall bands round the window are in the box too and are not glass.
+-- A bot's plan already carries the exact panes Parkour.Find saw in its clearance box, so a bot breaks
+-- those and nothing else.
 local GLASS_REACH = MovementConfig.Parkour.VaultMaxDepth + 2.5
+local GLASS_BAND_BOTTOM = MovementConfig.Parkour.VaultMinRise
+local GLASS_BAND_TOP = MovementConfig.Parkour.VaultMaxRise + MovementConfig.Parkour.VaultClearance
+local warnedUnwired = false
 
-local function breakVaultGlass(token, character, from, to)
+-- The window panes in the band in front of `root`, nearest first.
+local function panesAhead(character, root)
+	local map = workspace:FindFirstChild("Map")
+	local body = Parkour.Metrics(character)
+	if not map or not body then
+		return {}
+	end
+	local look = flatLook(root)
+	-- Measured from the ground under the body when that is lower than the feet (a vault begun a beat
+	-- early, or a body its client has already lifted by the time we hear of it), else from the feet: the
+	-- window band is where it is whatever the feet are doing. Nothing extra is taken from the client.
+	local baseY = body.feetY
+	local groundParams = RaycastParams.new()
+	groundParams.FilterType = Enum.RaycastFilterType.Exclude
+	groundParams.FilterDescendantsInstances = { character }
+	groundParams.RespectCanCollide = true
+	local under = workspace:Raycast(root.Position, Vector3.new(0, -(body.stand + MovementConfig.Parkour.JumpGrace + 0.5), 0), groundParams)
+	if under and under.Position.Y < baseY then
+		baseY = under.Position.Y
+	end
+	local bottom, top = baseY + GLASS_BAND_BOTTOM, baseY + GLASS_BAND_TOP
+	local width, height = body.halfWidth * 1.8, top - bottom
+	local at = Vector3.new(root.Position.X, (bottom + top) / 2, root.Position.Z)
+	-- Square onto the wall, as Parkour.Find turns a move onto the face it meets: a body that ran at a
+	-- window from an angle still goes through the pane straight in front of the opening.
+	local forward = look
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Include
+	rayParams.FilterDescendantsInstances = { map }
+	rayParams.RespectCanCollide = true
+	local face = workspace:Blockcast(CFrame.lookAt(at, at + look), Vector3.new(width, height, 0.2), look * GLASS_REACH, rayParams)
+	-- The box reaches no further than the obstacle the body is vaulting can be deep: a pane sits at most
+	-- 0.7 behind its wall's face, while a window standing behind a fence the body vaults is not on the
+	-- path and must stand (measured: with the full reach a fence 3 studs before a window took the pane).
+	local reach = GLASS_REACH
+	if face then
+		reach = math.min(GLASS_REACH, face.Distance + MovementConfig.Parkour.VaultMaxDepth + 0.5)
+		if math.abs(face.Normal.Y) < MovementConfig.Parkour.WallNormal then
+			local square = Vector3.new(-face.Normal.X, 0, -face.Normal.Z)
+			if square.Magnitude > 0.2 and square.Unit:Dot(look) > math.cos(math.rad(60)) then
+				forward = square.Unit
+			end
+		end
+	end
+	local centre = at + forward * (reach / 2)
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Include
+	overlap.FilterDescendantsInstances = { map }
+	local panes = {}
+	local found = workspace:GetPartBoundsInBox(CFrame.lookAt(centre, centre + forward), Vector3.new(width, height, reach), overlap)
+	for _, part in ipairs(found) do
+		if Parkour.IsBreakable(part) then
+			table.insert(panes, part)
+		end
+	end
+	table.sort(panes, function(a, b)
+		return (a.Position - root.Position).Magnitude < (b.Position - root.Position).Magnitude
+	end)
+	return panes
+end
+
+-- `plan` (optional): a server-run plan, whose own panes are broken instead of searching. Returns how
+-- many panes broke.
+local function breakVaultGlass(token, character, plan)
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if not root then
-		return
+		return 0
 	end
-	if not from then
-		from = root.Position
-		to = from + flatLook(root) * GLASS_REACH
+	local panes
+	if plan then
+		panes = plan.panes or {}
+	else
+		panes = panesAhead(character, root)
 	end
-	MovementService.BreakGlassAlong(token, from, to)
+	local from = root.Position
+	local broken = 0
+	for _, pane in ipairs(panes) do
+		if pane.Parent and MovementService.BreakPane(token, pane, from) then
+			broken += 1
+		end
+	end
+	MovementService.LastGlass = { found = #panes, broken = broken, at = os.clock() }
+	if #panes > 0 and broken == 0 and not warnedUnwired then
+		warnedUnwired = true
+		warn(string.format("[MovementService] a vault found %d window pane(s) and broke none: is BreakPane wired?", #panes))
+	end
+	return broken
 end
 
 -- `lift` (optional): an upward speed the client applies first, for a glider opened near the ground.
@@ -747,8 +846,8 @@ function MovementService.TryParkour(character, forward, options)
 	MovementService.SetCrouching(token, false)
 	running[character] = true
 	if kind == "vault" then
-		-- A bot's plan is ours, so the panes are broken along the path it will actually take.
-		breakVaultGlass(token, character, plan.points[1], plan.points[#plan.points])
+		-- A bot's plan is ours, so exactly the panes Parkour.Find saw in its clearance box are broken.
+		breakVaultGlass(token, character, plan)
 	end
 	MovementService.SetParkourPose(character, kind, plan.duration + 0.1)
 	local started = os.clock()

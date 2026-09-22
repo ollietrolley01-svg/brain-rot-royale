@@ -409,10 +409,15 @@ function Builder:rounded(name, size, at, radius, look)
 	for _, sy in ipairs(SIGNS) do
 		self:box(name .. "Cap", V(size.X - 2 * r, r, size.Z), frame * CF(0, sy * (size.Y - r) / 2, 0), look)
 		for _, sx in ipairs(SIGNS) do
-			-- Where the slab is thin its corner rods overlap, and their end discs would share a plane; one
-			-- diagonal pair is cut FINE shorter at each end than the other to keep them apart.
-			local trim = sx * sy > 0 and 0 or FINE
-			self:cyl(name .. "Round", size.Z - 2 * RELIEF - 2 * trim, 2 * r, frame * CF(sx * (size.X / 2 - r), sy * (size.Y / 2 - r), 0), look)
+			-- Where the slab is thin its corner rods overlap in plan, and any two whose end discs share a
+			-- plane fight there. Each rod is cut a different amount at each end — fronts 0/1/2/3 × FINE,
+			-- backs 3/2/1/0 — so no two rods end in the same plane at either end, and every rod loses the
+			-- same 3 × FINE overall (the earlier two-length scheme left the two untrimmed rods, and the two
+			-- trimmed ones, coplanar whenever the slab was thin in both axes).
+			local front = (sx > 0 and 1 or 0) + (sy > 0 and 2 or 0)
+			local back = 3 - front
+			self:cyl(name .. "Round", size.Z - 2 * RELIEF - (front + back) * FINE, 2 * r,
+				frame * CF(sx * (size.X / 2 - r), sy * (size.Y / 2 - r), (back - front) * FINE / 2), look)
 		end
 	end
 	return main
@@ -737,7 +742,12 @@ function Builder:scope(at, kind)
 			end
 		end)
 		for _, z in ipairs({ -body * 0.3, body * 0.32 }) do
-			self:box("ScopeStanchion", V(20, h - tube / 2 - 10 + 2, 18), CF(0, 10 + (h - tube / 2 - 10) / 2, z), F.anodizedDark)
+			-- The post is FINE shorter than the ring at each end. Measured, not derived: the audit reports
+			-- both spanning 16.1..36.3 mm along the bore at a scope station -- the same two planes, both
+			-- facing the same way -- and dropping the post to 18 - 2 * FINE takes TouchGrassScout from 11
+			-- written flush pairs to 7. (Local part sizes cannot be compared here: a shell segment is
+			-- rotated, so its local Z is not the ring's axis. Face positions are the only readable unit.)
+			self:box("ScopeStanchion", V(20, h - tube / 2 - 10 + 2, 18 - 2 * FINE), CF(0, 10 + (h - tube / 2 - 10) / 2, z), F.anodizedDark)
 			self:shell("ScopeRing", 18, tube + 8, 4, CF(0, h, z), F.anodizedDark, sides)
 			self:detail(function()
 				for _, sx in ipairs(SIGNS) do
@@ -838,7 +848,7 @@ function Builder:weaponLight(at)
 		self:cyl("TorchBezel", 22, 30, CF(12, 0, -64), F.anodized)
 		self:detail(function()
 			for index = 0, 5 do
-				self:box("TorchFin", V(26, 2.4, 40), CF(12, 0, -20) * CFrame.Angles(0, 0, index / 6 * math.pi), F.anodizedDark)
+				self:box("TorchFin", V(26, 2.4, 40), CF(12, 0, -20 - index * FINE) * CFrame.Angles(0, 0, index / 6 * math.pi), F.anodizedDark)
 			end
 			self:cyl("TorchTail", 12, 20, CF(12, 0, 42), F.rubber)
 		end)
@@ -1555,7 +1565,7 @@ STYLES.pistol = function(g)
 		g:prism("Slide", V(25.5, 4, serrationEnd - 40), CF(0, 10, (serrationEnd + 40) / 2), 3, slideFinish, "top")
 		local ridges = math.floor((serrationEnd - 40) / 4)
 		for index = 0, ridges - 1 do
-			g:box("SlideSerration", V(25.5, 18, 2), CF(0, -1, 42 + index * 4), slideFinish)
+			g:box("SlideSerration", V(25.5, 15, 2), CF(0, -1, 42 + index * 4), slideFinish)
 		end
 		g:prism("Slide", V(25.5, 22, 5), CF(0, 1, back - 2.5), 3, slideFinish, "top")
 		-- Sights: a dovetailed front post and a notched rear, both with dots.

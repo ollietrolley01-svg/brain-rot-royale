@@ -450,7 +450,7 @@ local function wallCourse(padIndex, height)
 	LootService.DropWeapon("SahurPistol", c + Vector3.new(0, 1, 40), nil, c + Vector3.new(0, 1, 40))
 	local bot = spawnBot(CFrame.lookAt(c + Vector3.new(0, 3.2, 0), c + Vector3.new(0, 3.2, 40)))
 	return { bot = bot, c = c, height = height, moves = 0, wasMoving = false, overAt = nil, backAt = nil,
-		armedAt = nil, closest = 1e9, reason = "never within reach", tried = 0 }
+		armedAt = nil, closest = 1e9, reason = "never within reach", tried = 0, trace = {} }
 end
 local courses = { wallCourse(24, 6), wallCourse(25, 9) }
 
@@ -545,6 +545,11 @@ local function s25Occupancy()
 	return counts
 end
 local s25 = { samples = 0, onHill = 0, noObjective = 0, kinds = {} }
+-- #125 (bots walking in unison): teammates within 30 studs, both walking, heading within 20 degrees.
+local s25Prev, s25Pairs, s25Aligned = {}, 0, 0
+-- The real seam is a FUNCTION, not nil: it must be put back afterwards, not cleared. Clearing it
+-- (as the first version did) deleted the seam and every bot crashed on it for the rest of the run.
+local realModeState = BotService.ModeState
 if BotService.ModeState then
 	BotService.ModeState = function(bot)
 		local team = s25Team[bot]
@@ -761,6 +766,30 @@ while os.clock() - scenarioStart < 24 do
 			end
 		end
 		s25.onHill += counts[1] + counts[2]
+		local moves = {}
+		for _, bot in ipairs(s25Bots) do
+			local at = posOf(bot)
+			if at and alive(bot) then
+				local previous = s25Prev[bot]
+				if previous then
+					local step = flat(at - previous)
+					if step.Magnitude > 1 then
+						moves[bot] = { at = at, dir = step.Unit }
+					end
+				end
+				s25Prev[bot] = at
+			end
+		end
+		for a, ma in pairs(moves) do
+			for b, mb in pairs(moves) do
+				if a ~= b and s25Team[a] == s25Team[b] and flat(ma.at - mb.at).Magnitude < 30 then
+					s25Pairs += 1
+					if ma.dir:Dot(mb.dir) > 0.94 then
+						s25Aligned += 1
+					end
+				end
+			end
+		end
 	end
 
 	if not s18.movedAt and t >= 6 then
@@ -847,6 +876,16 @@ while os.clock() - scenarioStart < 24 do
 					groundY = at.Y - 3,
 				})
 				course.reason = kind or tostring(why)
+			end
+			-- The bot's own state on the approach, so "never asked" has a reason next to it.
+			if gap < 8 and #course.trace < 14 then
+				local nav = course.bot.nav or {}
+				local refusal = course.bot.character:GetAttribute("BotParkourRefusal")
+				table.insert(course.trace, string.format("%.1fs g%.1f %s/%s %s%s%s%s", t, gap,
+					tostring(nav.directReason), nav.directWallDistance and string.format("%.1f", nav.directWallDistance) or "-",
+					course.bot.branch or "?", course.bot.lootTarget and " loot" or " NOLOOT",
+					(nav.request or nav.computing) and " pending" or "",
+					refusal and (" ref=" .. tostring(refusal)) or ""))
 			end
 		end
 	end
@@ -976,7 +1015,9 @@ if BotService.ModeState then
 	end
 	say("S25 team mode (faked hill, 3v3): bots on the hill averaged %.1f per sample over %d samples (want well above 0), objectives seen: %s; samples with NO objective while wandering %d (want 0, that is the circling); %d of 6 alive at the end",
 		s25.samples > 0 and s25.onHill / (s25.samples / math.max(1, living)) or 0, s25.samples, table.concat(parts, ", "), s25.noObjective, living)
-	BotService.ModeState = nil
+	say("S25 teammates within 30 studs and both walking: %d pair-samples, %.0f%% heading within 20 degrees of each other (#125 unison; independent headings would give about 11%%)",
+		s25Pairs / 2, s25Pairs > 0 and 100 * s25Aligned / s25Pairs or 0)
+	BotService.ModeState = realModeState
 	BotService.IsHostile = nil
 else
 	say("S25 team mode: skipped, this build has no BotService.ModeState")
@@ -1002,6 +1043,8 @@ for index, course in ipairs(courses) do
 		course.closest, course.tried, course.reason)
 	say("   S%d the bot's OWN last refusal (not the probe's question): %s", 15 + index,
 		tostring(course.bot.character:GetAttribute("BotParkourRefusal")))
+	say("   S%d approach trace (t gap directReason/wallDist branch loot pending refusal): %s", 15 + index,
+		#course.trace > 0 and table.concat(course.trace, " | ") or "never within 8 studs")
 end
 do
 	local BotNavModule = require(modules:WaitForChild("BotNav"))
@@ -1056,6 +1099,14 @@ task.wait(1)
 --------------------------------------------------------------------------------
 -- Free roam
 --------------------------------------------------------------------------------
+
+-- The vault/pane warning's harness tell: BreakPane is a no-op inside MovementService until
+-- Bootstrap.server wires it, so its source file says whether a probe could ever break a pane.
+do
+	local okInfo, source = pcall(debug.info, MovementService and MovementService.BreakPane or function() end, "s")
+	say("harness tell for the vault/pane warning: MovementService.BreakPane comes from %s (MovementService = the default no-op, Bootstrap.server = wired); CombatService.DamageDestructible set = %s",
+		okInfo and tostring(source) or "?", tostring(CombatService.DamageDestructible ~= nil))
+end
 
 local spots = info.dropSpots or {}
 local roam = BotService.Spawn(FREE_ROAM_BOTS, function(index)
@@ -1114,6 +1165,14 @@ do
 end
 
 local unarmedDeaths = 0
+-- Where and in what a bot is when it reads as swimming or airborne: pin_run14 showed 12.5% / 14% of
+-- samples in those states on a map that is 0.6% water, so the cause is not "more water". Each such
+-- sample records the terrain material under the root, the humanoid state, crouch, and a coarse cell.
+local wetSamples = { count = 0, materials = {}, states = {}, crouched = 0, cells = {} }
+local wetParams = RaycastParams.new()
+wetParams.FilterType = Enum.RaycastFilterType.Include
+wetParams.FilterDescendantsInstances = { workspace.Terrain }
+wetParams.IgnoreWater = false
 local deaths = { storm = 0, shot = 0, fall = 0, other = 0 }
 local diedAt = {}
 for _, bot in ipairs(roam) do
@@ -1148,6 +1207,7 @@ local roamStart = os.clock()
 local R = {
 	samples = 0, grind = 0, outside = 0, swimming = 0, airborne = 0, engaged = 0, idle = 0, looting = 0,
 	stationaryNoReason = 0,
+	queued = 0, queuedStill = 0, nearPairs = 0, alignedPairs = 0, queuedPairs = 0, queuedAligned = 0,
 	unarmed = 0, unarmedLooting = 0, unarmedNoTarget = 0, unarmedUnderFire = 0,
 }
 local firstArmed = {}
@@ -1164,6 +1224,7 @@ local history = {}
 while os.clock() - roamStart < FREE_ROAM_SECONDS do
 	task.wait(0.5)
 	local now = os.clock()
+	local roamMoves = {}
 	for _, bot in ipairs(roam) do
 		if alive(bot) then
 			local root = rootOf(bot)
@@ -1184,6 +1245,19 @@ while os.clock() - roamStart < FREE_ROAM_SECONDS do
 				if humanoid.FloorMaterial == Enum.Material.Air then
 					R.airborne += 1
 				end
+				if state == Enum.HumanoidStateType.Swimming or humanoid.FloorMaterial == Enum.Material.Air then
+					wetSamples.count += 1
+					local under = workspace:Raycast(root.Position, Vector3.new(0, -12, 0), wetParams)
+					local material = under and under.Material.Name or "nothing within 12 studs"
+					wetSamples.materials[material] = (wetSamples.materials[material] or 0) + 1
+					local stateName = state.Name
+					wetSamples.states[stateName] = (wetSamples.states[stateName] or 0) + 1
+					if bot.crouching then
+						wetSamples.crouched += 1
+					end
+					local cell = string.format("(%d,%d)", math.floor(root.Position.X / 100) * 100, math.floor(root.Position.Z / 100) * 100)
+					wetSamples.cells[cell] = (wetSamples.cells[cell] or 0) + 1
+				end
 				if engaged then
 					R.engaged += 1
 				end
@@ -1202,8 +1276,21 @@ while os.clock() - roamStart < FREE_ROAM_SECONDS do
 					end
 				end
 				local previous = lastSeenAt[bot]
+				-- Waiting on a route with none in hand: the state Oliver sees as bots that cannot move.
+				local nav = bot.nav
+				local queuedNow = nav and (nav.request or nav.computing) and not nav.waypoints
+				if queuedNow then
+					R.queued += 1
+					if previous and flat(root.Position - previous).Magnitude < 0.5 then
+						R.queuedStill += 1
+					end
+				end
 				if previous then
 					travelled[bot] = (travelled[bot] or 0) + flat(root.Position - previous).Magnitude
+					local step = flat(root.Position - previous)
+					if step.Magnitude > 1 then
+						roamMoves[bot] = { at = root.Position, dir = step.Unit, queued = queuedNow }
+					end
 				end
 				lastSeenAt[bot] = root.Position
 				if bot.weapon and not firstArmed[bot] then
@@ -1241,6 +1328,24 @@ while os.clock() - roamStart < FREE_ROAM_SECONDS do
 			end
 		end
 	end
+	for a, ma in pairs(roamMoves) do
+		for b, mb in pairs(roamMoves) do
+			if a ~= b and flat(ma.at - mb.at).Magnitude < 30 then
+				R.nearPairs += 1
+				local aligned = ma.dir:Dot(mb.dir) > 0.94
+				if aligned then
+					R.alignedPairs += 1
+				end
+				-- Both waiting on a route: this is the mill's own heading spread, not the map's.
+				if ma.queued and mb.queued then
+					R.queuedPairs += 1
+					if aligned then
+						R.queuedAligned += 1
+					end
+				end
+			end
+		end
+	end
 end
 
 local elapsed = os.clock() - roamStart
@@ -1266,10 +1371,32 @@ say("free roam %.0fs, storm x%d: %d/%d alive at end; deaths storm %d, shot %d, f
 	elapsed, STORM_SPEED, BotService.Count(), #roam, deaths.storm, deaths.shot, deaths.fall, deaths.other)
 say("free roam behaviour (%% of living bot-samples): grinding %.1f, outside storm %.1f, swimming %.1f, airborne %.1f, engaged %.1f, chasing loot %.1f, stationary with no reason %.1f",
 	pct(R.grind), pct(R.outside), pct(R.swimming), pct(R.airborne), pct(R.engaged), pct(R.looting), pct(R.stationaryNoReason))
+say("free roam while a route is queued: %d bot-samples queued with no route in hand, %.1f%% of them stationary (under 0.5 studs in 0.5 s: the frozen look), mill legs %s; near pairs both walking %d, %.0f%% heading within 20 degrees (#125; independent headings would give about 11%%); near pairs BOTH WAITING and walking %d, %.0f%% aligned (the mill's own spread)",
+	R.queued, R.queued > 0 and 100 * R.queuedStill / R.queued or 0, tostring((mod("BotNav").Stats or {}).mills), R.nearPairs / 2,
+	R.nearPairs > 0 and 100 * R.alignedPairs / R.nearPairs or 0, R.queuedPairs / 2,
+	R.queuedPairs > 0 and 100 * R.queuedAligned / R.queuedPairs or 0)
 say("free roam loot: %d/%d armed; time to first gun median %s, 90th %s; loot fixations >25 s: %d",
 	#armedTimes, #roam, armedTimes[1] and string.format("%.1fs", armedTimes[math.max(1, math.ceil(#armedTimes * 0.5))]) or "-",
 	armedTimes[1] and string.format("%.1fs", armedTimes[math.max(1, math.ceil(#armedTimes * 0.9))]) or "-", lootFixations)
 say("free roam combat: %d shots, %.0f damage dealt by bots", shots, damage)
+do
+	local function top(map, n)
+		local rows = {}
+		for key, count in pairs(map) do
+			table.insert(rows, { key = key, count = count })
+		end
+		table.sort(rows, function(a, b)
+			return a.count > b.count
+		end)
+		local parts = {}
+		for index = 1, math.min(n, #rows) do
+			table.insert(parts, string.format("%s %d", rows[index].key, rows[index].count))
+		end
+		return table.concat(parts, ", ")
+	end
+	say("free roam swimming/airborne samples %d: under the root %s; humanoid state %s; crouched in %d; top 100-stud cells %s",
+		wetSamples.count, top(wetSamples.materials, 4), top(wetSamples.states, 4), wetSamples.crouched, top(wetSamples.cells, 5))
+end
 say("free roam unarmed: %d bot-samples (heading for loot %d, NO LOOT TARGET %d -- that is the wandering-while-unarmed case, under fire %d); %d bots died unarmed",
 	R.unarmed, R.unarmedLooting, R.unarmedNoTarget, R.unarmedUnderFire, unarmedDeaths)
 do
@@ -1293,4 +1420,10 @@ StormService.Stop()
 LootService.Clear()
 MapGenerator.Clear()
 say("shots fired by a bot mid-climb or mid-vault: %d (want 0)", shotsMidParkour)
+-- The harness keeps the last 5,000 output lines. If this run produced more (an error storm, say),
+-- the earliest results were evicted and a reader would take their absence for "not printed". Say so
+-- in the last line, where a reader looks first, rather than leaving it to be inferred.
+if #lines >= 4990 then
+	say("LOG TRUNCATED: %d lines kept of more than that, earliest results evicted -- results VOID, fix the spam and re-run", #lines)
+end
 say("probe finished")
