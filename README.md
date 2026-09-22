@@ -887,8 +887,9 @@ puts the camera exactly there (the viewmodel's aim frame is
 `camera * CFrame.new(0, 0, -EyeRelief) * KP_Sight:Inverse()`), so the line of sight lands on the
 crosshair by construction. Nothing is searched for by part name or guessed.
 
-What can still go wrong is the gun itself, and the build check measures that on all 27 (see
-*Checking a build*): the front post's top, the bead's top or the dot has to sit on the line to half
+What can still go wrong is the gun itself, and the build check measures that on every gun merged
+into `WeaponData.Weapons` — the original 27 and every arsenal pack merged into it since (`verify.py`'s
+`weapon ids:` line has the current total) — (see *Checking a build*): the front post's top, the bead's top or the dot has to sit on the line to half
 a millimetre and parallel to the bore, and nothing opaque may stand between the eye and the target.
 That rules out a rear blade with no notch, a heat shield, a top lever or a carry handle. Some
 conventions follow from it:
