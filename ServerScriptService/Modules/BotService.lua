@@ -294,7 +294,8 @@ local LOOT_SEEK_RANGE = 200
 
 -- Supply drops pull bots in from further away, but only nearby ones — a map-wide radius would
 -- send all 29 bots stampeding toward every drop.
-local SUPPLY_SEEK_RANGE = 300
+-- Oliver 15:27: bots weren't going for supply drops; they are rare and worth a long walk (was 300).
+local SUPPLY_SEEK_RANGE = 900
 
 --------------------------------------------------------------------------------
 -- Other modules, reached lazily
@@ -2415,6 +2416,20 @@ local function updateBot(bot)
 		end
 		if not item and underArmed then
 			item = findLoot(bot, root.Position, empty and LOOT_SEEK_RANGE * 1.6 or LOOT_SEEK_RANGE, false, center, circleRadius, now)
+		end
+		-- Oliver 15:27: "bots dont open crates or supply drops". An armed bot now also opens the nearest
+		-- unopened chest in range, not just a bot that is short of guns.
+		if not item then
+			local bestDistance = LOOT_SEEK_RANGE
+			for _, entry in ipairs(lootItems(now)) do
+				local chest = entry.item
+				if chest.Name == "Chest" and chest.Parent and not chest:GetAttribute("Claimed") then
+					local distance = (entry.position - root.Position).Magnitude
+					if distance < bestDistance and lootAllowed(bot, chest, distance, center, circleRadius, now) then
+						item, bestDistance = chest, distance
+					end
+				end
+			end
 		end
 		-- Empty-handed with nothing inside that sweep: walk to the nearest gun ANYWHERE rather than
 		-- wandering. A bot that lands in a corner of a 1280-stud map had nothing within 320 studs and

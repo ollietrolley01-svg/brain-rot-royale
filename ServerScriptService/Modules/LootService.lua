@@ -162,8 +162,37 @@ end
 
 -- The part players and bots interact with. Invisible and upright, so the model on it turns
 -- around the vertical when AmbientClient spins it.
+-- The newest pickup base made, so the Drop* functions below can hand what they just spawned to the
+-- dropped-item cap without every spawner having to return it.
+local lastPickup = nil
+
+-- Oliver, 2026-09-22 15:26: at most 50 DROPPED items on the ground at once (death drops, chest spills,
+-- thrown-away slots); past that the oldest is deleted. Loot the map spawns at the start is not counted.
+local MAX_DROPPED = 50
+local dropped = {}
+
+local function trackDrop(base)
+	if not base or not base.Parent then
+		return
+	end
+	table.insert(dropped, base)
+	-- Forget ones already picked up or cleared, then trim the oldest down to the cap.
+	local live = {}
+	for _, item in ipairs(dropped) do
+		if item.Parent then
+			table.insert(live, item)
+		end
+	end
+	dropped = live
+	while #dropped > MAX_DROPPED do
+		local oldest = table.remove(dropped, 1)
+		oldest:Destroy()
+	end
+end
+
 local function pickupBase(name, position)
 	local base = Instance.new("Part")
+	lastPickup = base
 	base.Name = name
 	base.Size = Vector3.new(2.4, 0.4, 2.4)
 	base.Transparency = 1
@@ -707,7 +736,9 @@ function LootService.DropWeapon(weaponId, position, ammo, from)
 		return
 	end
 	ensureContainer()
+	lastPickup = nil
 	spawnGroundWeapon(scatter(position, from), def, ammo)
+	trackDrop(lastPickup)
 end
 
 -- A random heal or shield, for bots' death drops.
@@ -716,7 +747,9 @@ function LootService.DropHeal(position)
 		return
 	end
 	ensureContainer()
+	lastPickup = nil
 	spawnConsumable(scatter(position), ItemData.RollRecovery().id)
+	trackDrop(lastPickup)
 end
 
 function LootService.DropItem(itemId, position, amount, from)
@@ -724,7 +757,9 @@ function LootService.DropItem(itemId, position, amount, from)
 		return
 	end
 	ensureContainer()
+	lastPickup = nil
 	spawnConsumable(scatter(position, from), itemId, amount)
+	trackDrop(lastPickup)
 end
 
 -- Whatever was in an inventory slot, back on the floor: a gun with its ammo, or the whole stack.
