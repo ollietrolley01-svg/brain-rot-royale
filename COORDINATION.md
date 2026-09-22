@@ -917,3 +917,101 @@ Source: `C:\Users\oliver\Downloads\make it easier to see whos an enemy.txt`, now
 **#97 (hit registration) is the single highest-value item on either list** — it is how the game FEELS. Guns tab: measure before designing. Client-predicted hit vs server ruling, the lag-compensation window, the hitbox the server actually tests, and the rate limit. Numbers first.
 
 **Outside contributors: NOTHING HAS ARRIVED.** `git ls-remote` shows only `refs/heads/main` at our own `e0b3aa6` — no branches, no PR refs, no forks. bimjomplays and snodes have not accepted yet. The four briefs in `tasks/` remain unclaimed.
+
+## 2026-09-21 22:5x — FIVE LESSONS FROM THE RESTART, AND AN OUTSIDE CONTRIBUTOR LANDED (claude-43)
+
+- **A MASKING BUG: FIXING ONE FAULT ALONE CAN MAKE THE SYMPTOM WORSE (guns tab, #97).** The client quantises fire rate down to the frame rate (a reset, not an accumulator), and the server's re-check drops shots inside a 10% tolerance with NO tracer, NO flash and NO ammo spent while the client has already kicked the viewmodel. Measured: the quantisation is what buys the jitter slack. Glitch SMG has 19.0 ms of slack today and only 7.1 ms with an accurate fire rate. **So fixing the fire rate alone starts eating shots to ordinary network bunching, and every number in that change looks like an improvement.** They land together or not at all. Generalise: before landing one of two interacting faults, measure what the OTHER one is currently absorbing.
+- **~7,900 LINES OF FINISHED MAP WORK HAVE NO PRODUCTION CALLER (map tab and foliage tab, independently, minutes apart).** TownThemes (4,856 lines), TownKinds (484) and MapWilds (2,553) have zero requirers outside `tools/`; `VehicleService.ParkInTowns` has no production caller at all. Oliver has asked for more foliage three times and each ask was answered by a module nothing calls. **The hook IS the item.** Build budget is now spent on hooking up what exists before anything gets bigger: BR radius is held, the free team-arena widening (x0.62) goes ahead because it costs no build time.
+- **CORRECTION TO AN EARLIER LESSON IN THIS FILE.** The "ParkInTomns refused a bay and only warned" lesson was built on a false premise. `ParkInTowns` returns 0 at `if #bays == 0` before its loop on every map and every seed, so the warn can never fire and "3 of 6 bays parked" was never a refusal. The surfacing-refusals rule still stands on its own merits; the example does not. **A lesson whose example turns out to be wrong must be re-grounded or struck, or it becomes folklore.**
+- **OFFERING A MEASURABLY BROKEN OPTION IS WORSE THAN OFFERING ONE OPTION (menu tab).** A gallery was about to present Oliver two menu layouts for the landscape phone; option B is 252 px in a 204 px nav and clips regardless. A choice where one entry cannot work is not a choice, it is a trap with the owner's name on the outcome. Measure every option before it reaches him.
+- **COUNT NAMES, NOT `local` STATEMENTS (menu tab).** MenuClient is at **194** top-level locals, not the 191 I briefed: two lines declare five names between them. Warn is 195, hard limit 200. **There is ONE local of headroom.** Any menu work must be net-negative on locals.
+
+### OUTSIDE CONTRIBUTOR: Jacob Shadowen (snodes) — FOUR PRs REVIEWED AND MERGED (claude-43, 22:4x)
+Merged at `380a591`. Reviewed for unsafe calls first (subprocess/network/filesystem/eval across every added line: zero matches), then run.
+- **Task 01 — eight bug-pattern rules in `tools/lua_static_check.py`, with 16 fixtures.** 320 files, 8 rules, 3,170 candidate sites, 105 findings, **8/8 planted faults fired and 8/8 correct fixtures stayed clean**. Separates EXACT rules (CLOCK_WALL_TIME, WEAK_TABLE) from HEURISTIC, prints candidates examined beside findings, and holds back concatenated attribute names (`KP_`, `Parent_`) exactly as the brief required.
+- **THE CANONICAL GREEN LINE IS UNCHANGED: `lua static check: 320 files, 0 findings`.** The pattern rules are advisory and do not set the exit code without `--patterns-strict`. Keep pasting the same line. Run `--patterns-only` to see the 105.
+- **Task 02 slice — two achievements over already-tracked lifetime stats** (additive, no new save field) plus `tools/achievement_check.py` with a permanent planted fault that fires on every run.
+- He triaged before sending (30 findings down to 26 by removing a `self:Method()` resolution shortcut that produced four false positives) and stated the false-negative he traded for it. That is the standard the brief asked for.
+- **DO NOT REBUILD WHAT IT DOES.** Its CLOCK_WALL_TIME rule (EXACT, 434 candidates, 34 flagged) overlaps the bug-hunt tab's sweep. Its 105 findings are a triage queue, not a backlog.
+- Its WEAK_TABLE note text still uses the superseded "a cache is fine, state is not" wording; the rule's own description is correct. A better sentence goes back to him through `coordination/`.
+
+### THE MAILBOX (`coordination/`)
+There is no live channel to a Claude on another machine. `coordination/README.md` sets the protocol: **one message is one new file** under `coordination/messages/`, never an edit to a shared file, so two contributors never conflict. `coordination/STATUS.md` is claude-43's to keep current.
+
+## 2026-09-21 23:0x — #108 LANDED: the storm asks the match before it hurts anyone (eggs/storm tab)
+- **Bug:** `MatchService.OnCharacterAdded` registers EVERY body into `Combatants` (the lobby body included) and both storm damage ticks tested only `Health > 0 and IsOutside(root.Position)` — a flat XZ test. The lobby is at (0, 500, 0), inside the circle only while the circle still covers the origin; from phase 3–4 the pier was outside and the storm killed whoever stood on it, then the body the lobby respawn handed them, in a loop until the match ended. Team modes' `StartStatic` (4 dps) had the same hole.
+- **Fix:** `StormService.SetEligibility(fn)` — an injected token->bool, same seam pattern as `GameMode.Bind`; both ticks add `eligible(token)`. MatchService installs `alive[token] == true` (match-flow's three lines, landing after this). **Default with nothing installed is fail-OPEN (everyone damaged), deliberately:** fail-closed would make a decorative storm that survives playtests unnamed; instead `Start`/`StartStatic` WARN once when they begin unwired. Rejected: a Y/position test (behaviour keyed on geometry), un-registering lobby bodies (every `Combatants.All()` consumer).
+- **Proof:** `tools/storm_lobby_probe.lua` — two REAL matches through MatchService's own state machine (MinPlayers 0 in the probe VM), tokens enrolled by startMatch's callback, lobby body registered as OnCharacterAdded does; invariant "a token MatchService does not hold alive never loses health to the storm tick" on BOTH ticks; plants everyone/unwired/nobody on both; the warn fires exactly once unwired and never wired; a player-shaped token killed in TDM stays IsAlive and its new body is hit next tick, while the BR death flips it false. 20/20.
+- **LESSON: `Combatants.All()` means "every registered body"; five other callers read it as "everyone in the match"** (CombatService:443, CompanionService:481/624, ModeKingOfTheHill:60, ModeTeams:547) — routed to the bug-hunt tab as one pattern.
+- **LESSON: a Studio window has no Player, but a PLAYER-SHAPED token (isBot=false, not a Player) handed through the real enrolment callback reaches the real `eliminate` ordering** — the one half no probe can drive (LoadCharacter) is said, not claimed.
+
+## 2026-09-21 23:5x — THE THIRD HARNESS LIMIT, AND NINE LESSONS FROM THE NIGHT (claude-43)
+
+### HARD LIMIT 3: THERE IS NO PLAYER OBJECT IN EITHER HARNESS MODE (match-flow tab)
+`tools/runtest.ps1` has no `Player` in `-Probe` (edit mode, plugin thread) OR in a full run (server-only Run mode). Its own comment at :318 says so. **So `player.RespawnLocation`, `player:LoadCharacter()` and every other Player method are unreachable from any job we can queue.** This sits beside the two limits already recorded — no synthetic input, and no LocalScript can run — and it is the reason the respawn bug has survived three correct fixes.
+**The tab refused a Studio slot I had already granted it** rather than spend it discovering this. That is the behaviour to copy: a slot that cannot answer the question is worse than no slot, because it returns a confident nothing.
+**Corollary that saved the fix:** when a probe cannot settle an unknown, look for a design that REMOVES the unknown. `RespawnLocation` set explicitly for EVERY player means nobody is left for Roblox to place, so "does Roblox honour a disabled SpawnLocation" stops mattering — it only ever governed the fallback.
+
+### A PLUGIN'S `require` GETS ITS OWN MODULE INSTANCE, SO A PROBE CANNOT SEE BOOTSTRAP'S WIRES (destruction tab)
+A probe that checks whether Bootstrap wired something will find it UNWIRED, every time, even when Bootstrap ran and the Lobby exists in workspace. At least two tabs have reported "not wired" and then wired it themselves without knowing why. Only Bootstrap's own line proves Bootstrap's wiring.
+
+### NOBODY COPIES `tools/verify.py` WHOLESALE. EVER. (match-flow tab)
+The shared file was THREE MINUTES newer than a tab's copy because another tab had appended its block. Landing the copy would have silently deleted that check **and everything would still have printed green**. `verify.py` is the most collided-on file in the project precisely because it is where every tab puts its proof, and a silent deletion there removes PROOF rather than code, which is the hardest loss to notice. **Only ever append your own block to the live file.** The scratchpad lesson was about `-PlaceFile`; this is the same hazard on the landing side.
+
+### LINE ENDINGS IN THIS REPO ARE GENUINELY MIXED (guns tab, destruction tab)
+`CombatClient.client.lua` is 100% CRLF; `ServerScriptService/Modules/*.lua` are 100% LF; `Bootstrap` is LF while `MovementService`/`Parkour` are CRLF — all despite `.gitattributes` saying `* text=auto eol=lf`. An exact-text patcher reports "anchor not found" and looks like a stale anchor. **The obvious Git Bash test (`grep -c $'\r'`) gives a confidently WRONG answer in both directions; only a byte count settles it.** Normalise for matching, write back in each file's own ending. This may also be why the outside contributors see a `verify.py` failure on pristine main that does not reproduce here.
+
+### A MASKING BUG: FIXING ONE OF TWO INTERACTING FAULTS CAN MAKE THE SYMPTOM WORSE (guns tab, #97)
+The client quantised fire rate to the frame rate; the server dropped shots inside a 10% tolerance, silently. **The quantisation was what bought the jitter slack.** Measured end to end over a 60 s held trigger: fixing the fire rate ALONE takes the Lag Switch SMG at 30 fps from -17.5% to **-40.4%**, and the Patapim at 60 fps loses a further 18.7%. Every line of that diff reads as an improvement. **Before landing one of two interacting faults, measure what the other one is currently absorbing.**
+
+### A PATTERN RULE FINDS A SHAPE, AND A SHAPE AT THE RIGHT LINE IS NOT A CAUSE (bug-hunt tab, #106)
+`RETURN_IGNORED` flagged `RangeService.lua:99` — the exact line the guns tab was also on — and the bug-hunt tab read it as the cause. It is not: line 98 calls `WeaponService.Reset` first, so nothing can be displaced. The real cause was one call further out (`stop()` -> `Clear` deleting the loadout). **Both tabs were right about the line. One followed it out of the function.** Every rule in the new pattern stage reports a SITE, and a site is a place to start reading, not a verdict. The tab wrote this against its own rule and discounted its other 24 findings accordingly.
+
+### THE DETAIL FLOOR (brainrot models A, from Oliver's rejection)
+Oliver rejected replacement art with: "no its not, its terrible do better on all of them." The measurable thing behind it: the new art ran 42 parts to 23, 61 to 22, 52 to 15. **Rule: part count per creature must not drop, and for thin ones it must rise. Print the live count beside the new one per creature; a creature that lost a part is a fail, not a tradeoff.**
+**Guard on it, because a rule that counts things can be fed:** a hidden part, or one part split into three, satisfies the count and improves nothing. The count is a FLOOR that can fail a creature; the render is what says it improved.
+
+### MEASURE TERRAIN A FRAME AFTER YOU WRITE IT (roads tab)
+A fresh terrain write is not raycastable for a frame or so. A gallery measuring immediately reported **38 studs of spread on a pad the next screenshot showed dead flat**. The picture was right and the number was taken too early. The tab held the report rather than sending a contradiction.
+
+### `BrainrotModels.Metrics(def)` RETURNS THE SHARED `BODIES` TABLE BY REFERENCE (brainrot models B)
+Not a copy. Three map and lobby callers read `metrics.bottom` for footing. **Mutating it in place corrupts every other brainrot of that body and floats statues across the map.** Any per-entry proportion work must return a copy. Found before a line was written.
+
+### AND THE ONE THAT KEEPS PAYING: THE FILE OFTEN ALREADY SAYS IT
+`WeaponData.lua` lines 18-22 state outright that a hitscan shot has no falloff, so **"a shotgun's feel is spread and range, NOT its burst... don't buff a shotgun's paper damage"** — and a damage-based balance proposal was written anyway, in that same file, breaking the rule in the mirror direction. Two other findings tonight came from comments nobody had read as decisions. **Read the header of the file you are editing.**
+
+## RULES 10 AND 11 — OLIVER, 2026-09-21 23:5x. THESE OVERRIDE ANYTHING ABOVE THEM.
+Verbatim: *"make some rules for the bots to work with like you run out of credits dont land anything in the actual game and always check their work here before landing any of their work"*
+
+### RULE 10 — NEVER LAND WHEN YOU MIGHT NOT SURVIVE THE LANDING
+**If you are low on context, near a usage limit, or otherwise might stop mid-task, you land NOTHING in the shared tree.** Not a one-line fix, not an "invisible" change, not a comment.
+
+Why this is a hard rule and not advice: a landing is not one write. It is a backup, an anchored edit per file, three checks, a re-read to confirm the edits took, and a report. **A tab that dies between the second file and the third leaves the shared tree in a state nobody knows about, and playtests are built FROM THE SHARED TREE.** That reaches Oliver. Two tabs have already died mid-session on this project and both times the recovery cost more than the work.
+
+What to do instead, in this order:
+1. Stop before you start writing, not part way through.
+2. Leave the work in your own named private tree, complete and applied by ONE idempotent script, so whoever picks it up spends one command rather than an afternoon.
+3. Send claude-43 a handoff: what is built, where, what is proven, what is not, and the exact next step.
+4. Say plainly that you stopped because of the limit. A tab that goes quiet looks like a tab that failed.
+
+**If you are already mid-landing when you notice: finish the file you are in, run the three checks, and report. A half-applied edit is worse than either a complete one or none.**
+
+### RULE 11 — CLAUDE-43 READS THE ACTUAL WORK BEFORE IT LANDS, NOT JUST THE REPORT
+Rule 9 gated landings on a report and a render. **Rule 11 tightens it: claude-43 reads the change itself.** A report is an account of the work; it is not the work. Two tabs tonight sent accurate-sounding reports containing a claim that was arithmetically false — one would have nerfed a weapon class Oliver had explicitly protected, and it was caught by checking the arithmetic rather than by reading the summary.
+
+So, for every landing:
+- **Send the diff, or the exact anchored before-and-after text, or the path to a private tree and the one command that applies it.** Not a description of what you changed.
+- Name every file you will touch and every file you DID touch. These must match.
+- claude-43 reads it and gives the go. **A go given on a plan is not a go to land.**
+- **This applies to "invisible" fixes too.** The invisible ones are where an unread change hides best.
+
+**Neither rule slows honest work down.** Both of them exist because the failures on this project have been silent ones: a check that passed while proving nothing, a claim that sounded right and was not, a tree left in a state nobody had read. Work continues at full speed in your own tree. The gate is on the shared tree only, and it always was.
+
+### LINE ENDINGS, THE THIRD TRAP TONIGHT: `Path.write_text` ON WINDOWS FLIPS A FILE TO CRLF (eggs/storm tab)
+A 45-line change landed as **all 1,476 lines changed**, because a Python landing script used `write_text` and Windows silently converted the file to CRLF. Under Rule 11 that is fatal rather than cosmetic: **a diff that size cannot be reviewed, so it cannot land, and the real change hides inside it.**
+**Any landing script must read and write BYTES, detect the file's own convention and keep it.** The tree is genuinely mixed and `.gitattributes` does not describe it: `LobbyService.lua` and `CombatClient.client.lua` are CRLF, `SoundConfig.lua`, `MatchService.lua` and the other server modules are LF.
+The tab found it in its own landing, reported it unprompted, restored LF in place and byte-verified the restore (content identical ignoring CR, 45 content lines against the backup, 278 CR bytes to 0, then the three checks). That is the correct handling and it is why the landing stood.
+Three separate line-ending traps in one session now: an exact-text patcher reporting "anchor not found"; `grep -c $'\r'` in Git Bash answering confidently wrong in BOTH directions so only a byte count settles it; and this one.
+
+### A RULE-11 CATCH ON THE FIRST LANDING AFTER THE RULE EXISTED
+The same diff came with the sentence "every existing volume, category, maxDistance and effect is unchanged". The CUE volumes were unchanged; three LAYER volumes were not, all three correctly rebalanced because their source had changed. The work was right and the sentence was stronger than the diff. **A reviewer who trusts the summary and skims the diff misses exactly this.** Write "cue volumes unchanged; layer volumes rebalanced where the source changed" — a claim that is narrower than the change is the one that costs a review.
