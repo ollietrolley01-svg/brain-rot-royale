@@ -3424,12 +3424,14 @@ end)
 -- Open / close
 --------------------------------------------------------------------------------
 
--- Compact (Oliver 14:01: "small enough to fit on the screen without taking too much space"): five
--- 56 x 30 buttons in a 296 px row, inside the left stack's 300 px.
-local HUD_BUTTON_W = 56
+-- Compact (Oliver 14:01: "small enough to fit on the screen without taking too much space") and
+-- stacked top to bottom (14:06): five 100 x 28 buttons, 4 px apart, y 130-286. The bundle nudge and the
+-- quest tracker below were moved down by the same 114 px to make room.
+local HUD_BUTTON_W = 100
+local HUD_BUTTON_H = 28
 local menuButton = create("TextButton", {
 	Position = UDim2.new(0, 16, 0, 130),
-	Size = UDim2.new(0, HUD_BUTTON_W, 0, 30),
+	Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
 	BackgroundColor3 = C.Accent,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
@@ -3473,7 +3475,7 @@ for index, spec in ipairs({
 	{ "SETTINGS", "Settings" },
 }) do
 	local button = create("TextButton", {
-		Position = UDim2.new(0, index * (HUD_BUTTON_W + 4), 0, 0),
+		Position = UDim2.new(0, 0, 0, index * (HUD_BUTTON_H + 4)),
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundColor3 = C.Accent,
 		BorderSizePixel = 0,
@@ -3552,7 +3554,7 @@ end
 local TRACKER_WIDTH = 250
 
 local tracker = create("TextButton", {
-	Position = UDim2.new(0, 16, 0, 224),
+	Position = UDim2.new(0, 16, 0, 338),
 	Size = UDim2.fromOffset(TRACKER_WIDTH, 40),
 	AutomaticSize = Enum.AutomaticSize.Y,
 	BackgroundColor3 = C.Background,
@@ -3735,7 +3737,7 @@ end)
 -- A pulsing shortcut under the menu button to the best deal still open to you: the Starter Bundle
 -- until it's been bought, then the Pro Bundle. Only for products whose ID is set (or in Studio).
 local bundleNudge = create("TextButton", {
-	Position = UDim2.new(0, 16, 0, 180),
+	Position = UDim2.new(0, 16, 0, 294),
 	Size = UDim2.new(0, 210, 0, 34),
 	BackgroundColor3 = C.Green,
 	BorderSizePixel = 0,
