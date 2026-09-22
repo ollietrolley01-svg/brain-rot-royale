@@ -137,16 +137,18 @@ local function buildObjective(index, position)
 	light.Color = NEUTRAL
 	light.Parent = beam
 
-	-- The letter, drawn through walls and at any distance.
+	-- The letter over the objective (Oliver, 16:40: the icons were too big and always on screen; "just
+	-- the big pillar and a smaller gui"). Small, hidden by walls like anything else in the world, and only
+	-- drawn within MARKER_RANGE: from further off the pillar is what you steer by.
 	local anchor = part("HillMarker", folder)
 	anchor.Size = Vector3.new(1, 1, 1)
 	anchor.Transparency = 1
 	anchor.CFrame = CFrame.new(position + Vector3.new(0, height() + 8, 0))
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "ObjectiveMarker"
-	gui.AlwaysOnTop = true
-	gui.Size = UDim2.fromOffset(64, 64)
-	gui.MaxDistance = 100000
+	gui.AlwaysOnTop = false
+	gui.Size = UDim2.fromOffset(30, 30)
+	gui.MaxDistance = 260
 	gui.LightInfluence = 0
 	gui.Parent = anchor
 	local label = Instance.new("TextLabel")
@@ -162,7 +164,7 @@ local function buildObjective(index, position)
 	corner.CornerRadius = UDim.new(0.5, 0)
 	corner.Parent = label
 	local stroke = Instance.new("UIStroke")
-	stroke.Thickness = 3
+	stroke.Thickness = 2
 	stroke.Color = NEUTRAL
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	stroke.Parent = label
@@ -291,6 +293,16 @@ function ModeKingOfTheHill.Position(team)
 		end
 	end
 	return objectives[1].position
+end
+
+-- Every objective as { position, owner, status }, for the bots to split themselves across (they all
+-- used to take Position(team), so a whole team walked to the same one -- Oliver, 16:40).
+function ModeKingOfTheHill.Objectives()
+	local list = {}
+	for index, objective in ipairs(objectives) do
+		list[index] = { position = objective.position, owner = objective.owner, status = objective.status }
+	end
+	return list
 end
 
 function ModeKingOfTheHill.Positions()

@@ -1099,8 +1099,14 @@ end
 -- street edge, and beach umbrellas on sand maps. Each piece checks `space` before it's built and
 -- claims its footprint after, so nothing ends up inside a building, a car or another prop.
 -- `streets` are { a, b, width, entry } from MapGenerator. Returns loot spots beside some of it.
-function MapDecor.Town(town, center, preset, spread, streets, townName, groundHeightAt, space)
+function MapDecor.Town(town, center, preset, spread, streets, townName, groundHeightAt, space, furniture)
 	local spots = {}
+	-- How many of each piece (TownKinds' `furniture`); nil is the default town's counts.
+	furniture = furniture or {}
+	local function count(key, default)
+		local value = furniture[key]
+		return type(value) == "number" and math.clamp(math.floor(value), 0, 12) or default
+	end
 
 	-- A point `beyondKerb` studs outside one side of a random street's kerb (negative is out in
 	-- the road), away from the street's ends.
@@ -1145,26 +1151,26 @@ function MapDecor.Town(town, center, preset, spread, streets, townName, groundHe
 	end
 
 	-- Lamps just off the kerb, arms reaching out over the road.
-	alongStreets(6, 1.3, 1.2, function(position, _, side)
+	alongStreets(count("lamps", 6), 1.3, 1.2, function(position, _, side)
 		streetLamp(town, position, -side)
 		return position - side * 2.6
 	end)
 
 	-- Benches on the pavement, facing the road: wholly on it, so none stands half on the pavement
 	-- and half on the ground behind.
-	alongStreets(4, 0.4, 3.4, function(position, _, side)
+	alongStreets(count("benches", 4), 0.4, 3.4, function(position, _, side)
 		bench(town, position, yawFacing(-side))
 		-- In front of the bench, still on the pavement.
 		return position - side * 1.6
 	end)
 
-	alongStreets(3, 1.8, 1.6, function(position)
+	alongStreets(count("bins", 3), 1.8, 1.6, function(position)
 		bin(town, position)
 	end)
 
 	-- Cars parked along the edge of the street, facing the way traffic would go. Checked as two
 	-- circles along the car's length, which fits its long shape far better than one big circle.
-	for _ = 1, #streets > 0 and 4 or 0 do
+	for _ = 1, #streets > 0 and count("cars", 4) or 0 do
 		for _ = 1, 16 do
 			local flat, direction, side, entry, surface = besideStreet(-5.9)
 			if flat then
@@ -1197,11 +1203,11 @@ function MapDecor.Town(town, center, preset, spread, streets, townName, groundHe
 			end
 		end
 	else
-		alongStreets(2, 1.2, 1, function(position)
+		alongStreets(count("hydrants", 2), 1.2, 1, function(position)
 			hydrant(town, position)
 		end)
 		-- Planters run along the pavement, wholly on it.
-		alongStreets(3, 0.9, 3.4, function(position, direction)
+		alongStreets(count("planters", 3), 0.9, 3.4, function(position, direction)
 			planter(town, position, math.atan2(-direction.Z, direction.X))
 		end)
 	end

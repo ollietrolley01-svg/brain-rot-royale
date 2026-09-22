@@ -85,6 +85,21 @@ end
 -- Called when a companion is placed for `player`. Safe to call twice: the second call clears the
 -- first, so a respawn cannot stack two health grants.
 function CompanionBoons.Apply(player, def)
+	-- SAME COMPANION, SAME BOON: LEAVE IT ALONE. `CompanionService.Refresh` respawns the companion
+	-- through `spawnFor` for reasons that have nothing to do with the boon -- and `RefreshAll` calls it
+	-- for EVERY player the moment any trade completes. Without this guard each of those would Clear and
+	-- re-Apply: Clear takes MaxHealth down and clamps Health under the lower ceiling, Apply puts the
+	-- ceiling back but must not heal, so a player carrying a health boon would quietly lose that bonus
+	-- every time somebody, anybody, finished a trade.
+	--
+	-- This runs INSIDE spawnFor, which is before Refresh re-applies the companion's own carried health
+	-- fraction and lastAttackAt -- and it touches the OWNER's humanoid, never the companion entry, so it
+	-- cannot disturb that carry. The toggle exploit that carry closes stays closed.
+	local existing = active[player]
+	if existing and existing.def == def then
+		return
+	end
+
 	CompanionBoons.Clear(player)
 
 	local boon = boonOf(def)

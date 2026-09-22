@@ -4341,11 +4341,13 @@ end
 -- A flat floor under a set piece: the rectangle `sizeX` by `sizeZ` round `site` (its Y the level
 -- wanted, its rotation the set piece's), topped with `material`. The pad API's contract (claude-79):
 -- the floor height as a number, or nil and a reason. Returns the same (an error counts as a refusal).
-local function requestPad(site, sizeX, sizeZ, material)
+local function requestPad(site, sizeX, sizeZ, material, space)
 	if not canPad() then
 		return nil, "no pad API"
 	end
-	local ok, level, reason = pcall(MapTerrain.FlattenPad, site, Vector3.new(sizeX, 0, sizeZ), { margin = PAD_MARGIN, material = material })
+	-- `space`: the pad's graded edge leaves alone any ground something else has claimed (a street, a
+	-- building's lot, the river's banks), so levelling a set piece never regrades a neighbour.
+	local ok, level, reason = pcall(MapTerrain.FlattenPad, site, Vector3.new(sizeX, 0, sizeZ), { margin = PAD_MARGIN, material = material, space = space })
 	if not ok then
 		return nil, "error: " .. tostring(level)
 	end
@@ -4420,7 +4422,7 @@ local function findSite(ctx, width, depth, material)
 		end
 		diag.padsAsked += 1
 		local site = CFrame.new(found.candidate.at.X, (found.low + found.high) / 2, found.candidate.at.Z) * CFrame.Angles(0, found.yaw, 0)
-		local floor, reason = requestPad(site, width, depth, material)
+		local floor, reason = requestPad(site, width, depth, material, ctx.space)
 		if not floor then
 			diag.padsRefused += 1
 			diag.lastRefusal = reason

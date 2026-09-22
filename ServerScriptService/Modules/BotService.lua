@@ -656,6 +656,12 @@ local function coverBetween(bot, head, targetRoot)
 	if not structure or structure.Name ~= "RotBarricade" or bot.ownStructures[structure] then
 		return nil
 	end
+	-- Nor a TEAMMATE's (DefenseService.OwnerOf existed for exactly this and nothing asked it): in a
+	-- team mode a bot would otherwise shoot down the cover its own side is fighting from.
+	local owner = DefenseService.OwnerOf and DefenseService.OwnerOf(structure) or nil
+	if owner and owner ~= bot and not hostile(bot, owner) then
+		return nil
+	end
 	return structure, hit.Position
 end
 
@@ -827,8 +833,36 @@ function BotService.ModeState(bot)
 		state.arena = teams.Arena()
 	end
 	local koth = lazy("ModeKingOfTheHill")
-	-- Objective Capture: the objective this bot's team should go for (one it does not own yet).
-	local hill = koth and koth.Position and koth.Position(state.team) or nil
+	-- Objective Capture: which objective THIS bot goes for. Every bot used to take Position(team), the
+	-- first objective its team didn't own, so the whole team walked to the same one and left the other
+	-- to the enemy (Oliver, 16:40: "all the bots only go for one objective"). Now the team splits by
+	-- each bot's slot: a third hold what the team owns (the contested one first), the rest spread
+	-- across the ones it doesn't. Stable per bot, so nobody flips back and forth between them.
+	local hill = nil
+	local objectives = koth and koth.Objectives and koth.Objectives() or {}
+	if #objectives > 0 then
+		local mine, theirs, contested = {}, {}, nil
+		for _, objective in ipairs(objectives) do
+			if objective.owner == state.team then
+				table.insert(mine, objective)
+				if objective.status == "Contested" then
+					contested = contested or objective
+				end
+			else
+				table.insert(theirs, objective)
+			end
+		end
+		local seat = math.floor(bot.slot or 0)
+		if #theirs == 0 or (#mine > 0 and seat % 3 == 0) then
+			hill = (contested or mine[seat % #mine + 1]).position
+		else
+			-- Alternate seats when nobody is holding; skip the holders' seats (multiples of 3) otherwise.
+			local pick = #mine == 0 and seat or math.floor(seat / 3) + seat % 3
+			hill = theirs[pick % #theirs + 1].position
+		end
+	elseif koth and koth.Position then
+		hill = koth.Position(state.team)
+	end
 	if hill then
 		state.hill = hill
 		local counts = koth.Occupancy and koth.Occupancy(hill) or { 0, 0 }

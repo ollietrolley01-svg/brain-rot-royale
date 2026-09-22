@@ -25,6 +25,10 @@ local MapDecor = require(script.Parent:WaitForChild("MapDecor"))
 local MapSpace = require(script.Parent:WaitForChild("MapSpace"))
 local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
 local MapWilds = require(script.Parent:WaitForChild("MapWilds"))
+-- #32, hooked 2026-09-22: what kind of place each town name is (street layout, buildings, palette)
+-- and its themed set piece, flags and street props.
+local TownKinds = require(script.Parent:WaitForChild("TownKinds"))
+local TownThemes = require(script.Parent:WaitForChild("TownThemes"))
 local RoadNetwork = require(script.Parent:WaitForChild("RoadNetwork"))
 local VehicleService = require(script.Parent:WaitForChild("VehicleService"))
 local VendorService = require(script.Parent:WaitForChild("VendorService"))
@@ -80,6 +84,29 @@ function MapGenerator.GroundHeightAt(x, z)
 	return result and result.Position.Y or 0
 end
 
+-- The ground contract TownThemes was written against: the solid height, plus the water's surface
+-- where water lies over it, and nil where there is no ground at all. GroundHeightAt above can't say
+-- either (it ignores water and ends `or 0`), and a theme must never stand in a lake or over a hole.
+function MapGenerator.SolidGroundAt(x, z)
+	local solid = RaycastParams.new()
+	solid.FilterType = Enum.RaycastFilterType.Include
+	solid.FilterDescendantsInstances = { workspace.Terrain }
+	solid.IgnoreWater = true
+	local ground = workspace:Raycast(Vector3.new(x, 2000, z), Vector3.new(0, -4000, 0), solid)
+	if not ground then
+		return nil
+	end
+	local wet = RaycastParams.new()
+	wet.FilterType = Enum.RaycastFilterType.Include
+	wet.FilterDescendantsInstances = { workspace.Terrain }
+	wet.IgnoreWater = false
+	local surface = workspace:Raycast(Vector3.new(x, 2000, z), Vector3.new(0, -4000, 0), wet)
+	if surface and surface.Material == Enum.Material.Water and surface.Position.Y > ground.Position.Y + 0.05 then
+		return ground.Position.Y, surface.Position.Y
+	end
+	return ground.Position.Y, nil
+end
+
 --------------------------------------------------------------------------------
 -- Buildings
 --------------------------------------------------------------------------------
@@ -114,13 +141,14 @@ local ALLEY_MIN, ALLEY_MAX = 5, 10
 --
 -- A building's claim already carries 1.5 studs each side, so even a zero here leaves a 3-stud
 -- gap between walls -- a narrow alley, not two buildings fused together.
-local function alleyAt(along, primary)
-	if primary and along < 70 then
-		return math.random(0, 2)
-	elseif along < 140 then
-		return math.random(2, 6)
+local function alleyAt(along, primary, bands)
+	-- `bands` is the town kind's { near, mid, far } (TownKinds); nil is the default town.
+	local near, mid, far = { 0, 2 }, { 2, 6 }, { ALLEY_MIN, ALLEY_MAX }
+	if bands then
+		near, mid, far = bands.near or near, bands.mid or mid, bands.far or far
 	end
-	return math.random(ALLEY_MIN, ALLEY_MAX)
+	local band = (primary and along < 70) and near or (along < 140 and mid or far)
+	return math.random(band[1], math.max(band[1], band[2]))
 end
 -- Main-street buildings are at most 44 deep and their yards run 11 further back; the back streets
 -- sit just behind that.
@@ -233,9 +261,27 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	town:SetAttribute("TownSpread", spread)
 	town.Parent = parent
 
+	-- The town's kind (#32): TownKinds.For never returns nil, and an unknown name is exactly the
+	-- default town. Only the parts of a profile that stay inside the footprint the road planner was
+	-- given (townShape) are read: streets may be shorter than planned, never longer, and a street a
+	-- road leaves along always runs its full length to meet it. The district yard, cul-de-sacs and
+	-- parking bays in the profiles have no builder yet and are not read.
+	local profile = TownKinds.For(townName or "")
+	town:SetAttribute("TownKind", profile.kind)
+	town:SetAttribute("TownBlurb", profile.blurb)
+	local setback = math.clamp(profile.setback or SETBACK, 0, 16)
+	local sideStreet = math.clamp(profile.sideStreetWidth or SIDE_STREET, 10, 18)
+
 	local c = Vector3.new(center.X, 0, center.Z)
 	local shape = townShape(spread)
 	local half, crossHalf = shape.half, shape.cross
+	-- A street's planned end, pulled in by the kind's reach unless a road leaves along it.
+	local function reachEnd(full, fraction, mouth)
+		if mouth then
+			return full
+		end
+		return PLAZA_HALF + (full - PLAZA_HALF) * fraction
+	end
 
 	-- Streets are laid out (and claimed) first; they're drawn once we know how far out the
 	-- buildings actually go. `primary` streets run out of the square, where the town is densest.
@@ -258,7 +304,7 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	local main = {}
 	for _, name in ipairs({ "E", "W" }) do
 		local direction = name == "E" and Vector3.new(1, 0, 0) or Vector3.new(-1, 0, 0)
-		main[name] = planStreet(c + direction * PLAZA_HALF, c + direction * half, MAIN_STREET, true)
+		main[name] = planStreet(c + direction * PLAZA_HALF, c + direction * reachEnd(half, profile.mainReach, mouths[name]), MAIN_STREET, true)
 	end
 	-- The cross street runs out of the square to a junction with the back street and on past it to
 	-- the edge of town, and the back street runs both ways out of that junction. The cross street is
@@ -267,16 +313,21 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	for _, name in ipairs({ "N", "S" }) do
 		local side = name == "N" and 1 or -1
 		local jc = Vector3.new(c.X, 0, c.Z + side * BACK_STREET_OFFSET)
+		-- The junction stays where the road planner expects the cross street to be (BACK_STREET_OFFSET
+		-- is in townShape); a kind with no back streets just has no east/west arms, and the cross
+		-- street runs straight through. The outer cross street is pulled in by crossReach, but never
+		-- short of the junction, and never at all where a road leaves along it.
+		local outerEnd = math.max(BACK_STREET_OFFSET + sideStreet / 2 + 12, reachEnd(crossHalf, profile.crossReach, mouths[name]))
 		junctions[name] = {
 			name = name,
 			center = jc,
-			inner = planStreet(c + Vector3.new(0, 0, side * PLAZA_HALF), jc - Vector3.new(0, 0, side * SIDE_STREET / 2), MAIN_STREET, true),
-			outer = planStreet(jc + Vector3.new(0, 0, side * SIDE_STREET / 2), c + Vector3.new(0, 0, side * crossHalf), MAIN_STREET, false),
-			east = planStreet(jc + Vector3.new(MAIN_STREET / 2, 0, 0), Vector3.new(c.X + half * 0.8, 0, jc.Z), SIDE_STREET, false),
-			west = planStreet(jc - Vector3.new(MAIN_STREET / 2, 0, 0), Vector3.new(c.X - half * 0.8, 0, jc.Z), SIDE_STREET, false),
+			inner = planStreet(c + Vector3.new(0, 0, side * PLAZA_HALF), jc - Vector3.new(0, 0, side * sideStreet / 2), MAIN_STREET, true),
+			outer = planStreet(jc + Vector3.new(0, 0, side * sideStreet / 2), c + Vector3.new(0, 0, side * math.min(crossHalf, outerEnd)), MAIN_STREET, false),
+			east = profile.backStreets ~= false and planStreet(jc + Vector3.new(MAIN_STREET / 2, 0, 0), Vector3.new(c.X + half * 0.8 * profile.mainReach, 0, jc.Z), sideStreet, false) or nil,
+			west = profile.backStreets ~= false and planStreet(jc - Vector3.new(MAIN_STREET / 2, 0, 0), Vector3.new(c.X - half * 0.8 * profile.mainReach, 0, jc.Z), sideStreet, false) or nil,
 		}
 		-- The junction and its corners, where lights or signs may stand.
-		space:AddRect(jc.X, jc.Z, MAIN_STREET / 2 + SIDEWALK + 1, SIDE_STREET / 2 + SIDEWALK + 1)
+		space:AddRect(jc.X, jc.Z, MAIN_STREET / 2 + SIDEWALK + 1, sideStreet / 2 + SIDEWALK + 1)
 	end
 
 	-- The square.
@@ -293,17 +344,17 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	end
 
 	local placed = {}
-	local target = math.random(preset.buildingsPerTown[1], preset.buildingsPerTown[2]) + 3
+	local target = math.floor(math.random(preset.buildingsPerTown[1], preset.buildingsPerTown[2]) * (profile.buildings or 1) + 0.5) + 3
 
 	local function placeNext(frontage)
 		local street = frontage.street
 		local sideVector = Vector3.new(-street.direction.Z, 0, street.direction.X) * frontage.side
 		local yaw = math.atan2(sideVector.X, sideVector.Z)
-		local frontDistance = street.width / 2 + SIDEWALK + SETBACK
+		local frontDistance = street.width / 2 + SIDEWALK + setback
 
 		while frontage.cursor < street.length - 10 do
 			local along = frontage.cursor
-			local plan = rollPlan(street.primary and along < 70)
+			local plan = rollPlan(street.primary and along < 70, profile.plan)
 			local span = plan.width + 3
 			if along + span > street.length - 4 then
 				frontage.cursor = street.length
@@ -317,11 +368,20 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 
 			if rectFree(space, claimCenter.X, claimCenter.Z, yaw, claimX, claimZ, street.entry) then
 				space:AddRect(claimCenter.X, claimCenter.Z, claimX, claimZ, yaw)
+				-- Dead flat at 0 under the building, its doorstep and its back yard (the crates stand up to
+				-- depth/2 + dock + 9.7 behind the lot centre). The relief only fades to exactly 0 within
+				-- spread + 40 of the square, and a town's outer lots -- more of them now that some kinds set
+				-- their houses further back (TownKinds) -- stood on the fade, a corner hanging or buried.
+				-- Where the terrain says no (a road's corridor), the building goes up as it always has.
+				local front, back = plan.depth / 2 + 6, plan.depth / 2 + (plan.dock and 5 or 0) + 10
+				local padCenter = lot + CFrame.Angles(0, yaw, 0) * Vector3.new(0, 0, (back - front) / 2)
+				pcall(MapTerrain.FlattenPad, CFrame.new(padCenter.X, 0, padCenter.Z) * CFrame.Angles(0, yaw, 0),
+					Vector3.new(plan.width + 4, 0, front + back), { height = 0, margin = 1, space = space, ignore = nil })
 				paintFootprint(claimCenter, yaw, claimX * 2 + 2, claimZ * 2 + 2)
 				buildBuilding(town, Vector3.new(lot.X, 0, lot.Z), preset, chestSpots, lootSpots, plan, yaw)
 				table.insert(placed, { lot = lot, plan = plan, yaw = yaw })
 				street.used = math.max(street.used, along + span)
-				frontage.cursor = along + span + alleyAt(along, street.primary)
+				frontage.cursor = along + span + alleyAt(along, street.primary, profile.alley)
 				-- A town is a few thousand parts; spread the cost so the server doesn't stall.
 				task.wait()
 				return true
@@ -386,13 +446,17 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 		local outward = junction.name
 		local inward = outward == "N" and "S" or "N"
 		reach[junction.outer] = mouths[outward] and junction.outer.length or builtReach(junction.outer)
-		reach[junction.east] = builtReach(junction.east)
-		reach[junction.west] = builtReach(junction.west)
+		if junction.east then
+			reach[junction.east] = builtReach(junction.east)
+		end
+		if junction.west then
+			reach[junction.west] = builtReach(junction.west)
+		end
 		local arms = {
 			[inward] = true,
 			[outward] = reach[junction.outer] > 0,
-			E = reach[junction.east] > 0,
-			W = reach[junction.west] > 0,
+			E = junction.east ~= nil and reach[junction.east] > 0,
+			W = junction.west ~= nil and reach[junction.west] > 0,
 		}
 		local armCount = 0
 		for _, present in pairs(arms) do
@@ -418,12 +482,16 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 			}
 			draw(junction.inner, { a = squareEnd, b = atJunction })
 			draw(junction.outer, { a = atJunction, b = mouths[outward] and roadEnd or nil })
-			draw(junction.east, { a = atJunction })
-			draw(junction.west, { a = atJunction })
+			if junction.east then
+				draw(junction.east, { a = atJunction })
+			end
+			if junction.west then
+				draw(junction.west, { a = atJunction })
+			end
 			local spec = {
 				center = junction.center,
 				bx = MAIN_STREET / 2,
-				bz = SIDE_STREET / 2,
+				bz = sideStreet / 2,
 				arms = arms,
 				sidewalkX = SIDEWALK,
 				sidewalkZ = SIDEWALK,
@@ -432,7 +500,7 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 			if control then
 				MapDecor.JunctionControl(town, spec, control)
 			end
-			paintFootprint(junction.center, 0, (MAIN_STREET / 2 + SIDEWALK) * 2 + 2, (SIDE_STREET / 2 + SIDEWALK) * 2 + 2)
+			paintFootprint(junction.center, 0, (MAIN_STREET / 2 + SIDEWALK) * 2 + 2, (sideStreet / 2 + SIDEWALK) * 2 + 2)
 		else
 			reach[junction.inner] = builtReach(junction.inner, 60)
 			draw(junction.inner, { a = squareEnd })
@@ -442,7 +510,11 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	-- Most squares honour an Epic or Legendary brainrot with a statue in the fountain.
 	paintFootprint(c, 0, PLAZA_HALF * 2 + 2, PLAZA_HALF * 2 + 2)
 	local statueDef = nil
-	if math.random() < 0.6 then
+	local wantStatue = profile.statue
+	if wantStatue == nil then
+		wantStatue = math.random() < 0.6
+	end
+	if wantStatue then
 		local pool = BrainrotData.OfRarity(math.random() < 0.5 and "Legendary" or "Epic")
 		statueDef = #pool > 0 and pool[math.random(1, #pool)] or nil
 	end
@@ -459,7 +531,12 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	VendorService.Build(town, CFrame.lookAt(vendorAt, Vector3.new(c.X, vendorAt.Y, c.Z)))
 
 	-- Lamps, benches, parked cars, planters and the welcome sign along the streets.
-	local decorSpots = MapDecor.Town(town, center, preset, spread, drawn, townName or "Rotville", MapGenerator.GroundHeightAt, space)
+	-- The kinds zero their kerbside cars because their cars were meant to stand in parking bays, which
+	-- have no builder yet: until they do, the kerbside cars stay, or most towns would have none.
+	local furniture = table.clone(profile.furniture or {})
+	furniture.cars = nil
+	local decorSpots = MapDecor.Town(town, center, preset, spread, drawn, townName or "Rotville", MapGenerator.GroundHeightAt, space,
+		furniture)
 	for _, spot in ipairs(decorSpots) do
 		table.insert(lootSpots[math.random() < 0.75 and "weapon" or "heal"], spot)
 	end
@@ -468,7 +545,8 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	for _, building in ipairs(placed) do
 		local plan = building.plan
 		local turn = CFrame.Angles(0, building.yaw, 0)
-		for _ = 1, math.random(1, 2) do
+		local crates = math.floor(math.random(1, 2) * (profile.crates or 1) + 0.5)
+		for _ = 1, crates do
 			for _ = 1, 6 do
 				local offset = turn * Vector3.new((math.random() - 0.5) * math.max(0, plan.width - 6), 0,
 					plan.depth / 2 + (plan.dock and 5 or 0) + 5.4)
@@ -675,6 +753,23 @@ function MapGenerator.Build(mapId)
 		table.insert(dropSpots, center)
 		task.wait()
 	end
+
+	-- Each town's theme (#32): its set piece on a lot facing a street (or round the edge of town,
+	-- facing the square), its banner at the square's corners, and themed props on the verges. Right
+	-- after the towns and before anything else claims ground near them (landmarks, eggs, lakes,
+	-- scenery, foliage), so the set piece gets its pick of the lots and everything after keeps off it
+	-- through the same MapSpace. pcall for the same reason as MapWilds below: this module had never
+	-- run in the build path before it was hooked, and a fault in decoration must not cost the match its
+	-- map. Not silent either: the failure lands on an attribute.
+	local okThemes, themes = pcall(TownThemes.Build, map, space, MapGenerator.SolidGroundAt, preset)
+	if okThemes and type(themes) == "table" then
+		map:SetAttribute("ThemeParts", themes.parts)
+		map:SetAttribute("ThemeMillis", themes.millis)
+	else
+		map:SetAttribute("ThemesFailed", tostring(themes))
+		warn("[MapGenerator] TownThemes.Build failed; towns built without themes: " .. tostring(themes))
+	end
+	task.wait()
 
 	if preset.terrainMaterial == Enum.Material.Sand then
 		MapDecor.Coast(radius)
