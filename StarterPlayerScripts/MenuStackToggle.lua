@@ -178,6 +178,7 @@ function MenuStackToggle.new(screenGui, options)
 	end)
 
 	self.stackScale = create("UIScale", { Parent = stack })
+	self.tabScale = create("UIScale", { Parent = self.tab })
 	-- Oliver 15:24: the column ran into the health / shield / stamina block on a short window, and "make
 	-- the hud scale with resolution". On desktop the whole stack (buttons, bundle, quest tracker) shrinks
 	-- to whatever height is left above that block, and re-fits when the window or the tracker changes.
@@ -225,8 +226,18 @@ function MenuStackToggle:_fitHeight()
 		return
 	end
 	local room = gui.AbsoluteSize.Y - BOTTOM_RESERVED - STACK_TOP
-	-- Never below 0.85 (Oliver 15:37: at 0.55 it was too small to read).
-	self.stackScale.Scale = math.clamp(room / bottom, 0.85, 1)
+	-- Never below 0.85 (Oliver 15:37: at 0.55 it was too small to read), and grows up to 1.25x where
+	-- there is room (Oliver 16:16: "the quest menu and buttons are still a bit too small").
+	local scale = math.clamp(room / bottom, 0.85, 1.25)
+	self.stackScale.Scale = scale
+	-- The collapse tab sits outside the stack, so it scales and moves with it.
+	if self.tabScale and math.abs(self.tabScale.Scale - scale) > 0.001 then
+		self.tabScale.Scale = scale
+		if not self.animating then
+			local position, size = self:_tabGoal(self.collapsed and COLLAPSED_TAB or EXPANDED_TAB)
+			self.tab.Position, self.tab.Size = position, size
+		end
+	end
 end
 
 function MenuStackToggle:_paintHover()
@@ -249,7 +260,11 @@ function MenuStackToggle:_tabGoal(target)
 		-- Right-aligned in its slot, so the icons beside it never shift when the tab changes width.
 		return UDim2.fromOffset(self.phoneTab.x + self.phoneTab.w - w, self.phoneTab.y), UDim2.fromOffset(w, self.phoneTab.h)
 	end
-	return UDim2.fromOffset(target.x, MENU_Y), UDim2.fromOffset(target.w, MENU_H)
+	-- Size stays in unscaled units: tabScale grows it with the stack. The position follows the scaled
+	-- button column so the tab stays snug beside it.
+	local s = self.tabScale and self.tabScale.Scale or 1
+	local x = target == EXPANDED_TAB and (MENU_X + MENU_W) * s + 3 or MENU_X * s
+	return UDim2.fromOffset(x, STACK_TOP + (MENU_Y - STACK_TOP) * s), UDim2.fromOffset(target.w, MENU_H)
 end
 
 function MenuStackToggle:_stackHome()
@@ -272,6 +287,9 @@ end
 function MenuStackToggle:SetPhone(spots, inset)
 	inset = inset or 0
 	if spots then
+		if self.tabScale then
+			self.tabScale.Scale = 1
+		end
 		self.phoneTab = { x = spots.stackTab.x, y = spots.stackTab.y - inset, w = spots.stackTab.w, h = spots.stackTab.h }
 		-- Right-aligned under the tab, and pulled up so that whatever is actually showing starts right
 		-- under it: MENU is its own icon on a phone and hidden in here, so the stack would otherwise
