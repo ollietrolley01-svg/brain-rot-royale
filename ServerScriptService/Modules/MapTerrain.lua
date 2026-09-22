@@ -35,12 +35,26 @@ local RIVER_WIDTH = 34
 local RIVER_STEP = 60
 local RIVER_TRIES = 60
 
--- Materials that read as the shore of a river on each base ground.
-local BANK_FOR = {
-	[Enum.Material.Sand] = Enum.Material.Sandstone,
-	[Enum.Material.Rock] = Enum.Material.Slate,
-	[Enum.Material.Ground] = Enum.Material.Mud,
-}
+-- The river's cross-section (Oliver, 2026-09-22 16:12: "fix riverbanks and their steep cliffs and
+-- untextured beaches"). It used to be a vertical box cut 180 studs tall, so wherever the rolling
+-- ground stood higher than the water the bank was a sheer wall, and the "shore" was a 2-stud strip of
+-- Sandstone/Slate/Mud painted under the surface where it mostly never showed. Now every column near
+-- the river is written to a profile of its distance from the centre line: a sandy bed, a shelving
+-- shore through the waterline, a proper sand beach, then a bank that climbs back to the natural
+-- ground at a walkable grade -- gentle first, never steeper than 45 degrees.
+-- Surface heights (the rendered ground), not fills: the write subtracts SurfaceLift like every other.
+local RIVER_BED = -6 -- the bed's surface; MapDecor's bridge piers go down to -9
+local RIVER_WATER_TOP = -1 -- the water's fill top, as before
+local RIVER_SHORE_IN = RIVER_WIDTH / 2 - 8 -- flat bed out to here
+local RIVER_SHORE_OUT = RIVER_WIDTH / 2 + 2 -- the shore shelves up to 0 here (waterline ~16 out)
+local RIVER_BEACH_OUT = RIVER_WIDTH / 2 + 14 -- sand beach out to here, rising to BEACH_TOP
+local RIVER_BEACH_TOP = 1.5
+local RIVER_BANK_GENTLE = 20 -- studs of gentle bank past the beach...
+local RIVER_BANK_GENTLE_GRADE = 0.55 -- ...at this grade (about 29 degrees)
+local RIVER_BANK_GRADE = 1 -- then no steeper than 45 degrees, however high the ground
+local RIVER_REACH = RIVER_BEACH_OUT + RIVER_BANK_GENTLE + 130 -- far enough to meet the highest ground
+local RIVER_BEACH = Enum.Material.Sand
+local RIVER_TOP = 148 -- above the tallest ground on a map (measured ceiling ~127)
 
 local function flatDistance(ax, az, bx, bz)
 	local dx, dz = ax - bx, az - bz
@@ -150,6 +164,8 @@ function MapTerrain.Plateaus(terrain, parent, preset, radius, centers, townSprea
 					local landing = Vector3.new(lx, ground, lz)
 					if ZiplineService.Create(parent, landing, landing, rim + Vector3.new(0, 2.6, 0)) then
 						space:AddCircle(lx, lz, 5)
+						-- The river's graded banks leave this ground alone (MapTerrain.River).
+						plateau.landing = landing
 						-- A rail post at the rim so the handle has something to hang from.
 						local post = Instance.new("Part")
 						post.Size = Vector3.new(0.8, 3, 0.8)
@@ -1118,41 +1134,211 @@ function MapTerrain.River(terrain, parent, preset, radius, centers, townSpread, 
 	local points, endsInPond = plan.points, plan.pond
 
 	local width = RIVER_WIDTH
-	local bank = BANK_FOR[preset.terrainMaterial] or Enum.Material.Sand
+	local lift = MapTerrain.SurfaceLift
+	local pondRadius = width * 1.6
+	local last = points[#points]
+
+	local function smooth(t)
+		return t * t * (3 - 2 * t)
+	end
+	-- The ground's surface height wanted at distance `d` from the centre line.
+	local function profile(d)
+		if d <= RIVER_SHORE_IN then
+			return RIVER_BED
+		elseif d <= RIVER_SHORE_OUT then
+			return RIVER_BED * (1 - smooth((d - RIVER_SHORE_IN) / (RIVER_SHORE_OUT - RIVER_SHORE_IN)))
+		elseif d <= RIVER_BEACH_OUT then
+			return RIVER_BEACH_TOP * smooth((d - RIVER_SHORE_OUT) / (RIVER_BEACH_OUT - RIVER_SHORE_OUT))
+		end
+		local e = d - RIVER_BEACH_OUT
+		if e <= RIVER_BANK_GENTLE then
+			return RIVER_BEACH_TOP + e * RIVER_BANK_GENTLE_GRADE
+		end
+		return RIVER_BEACH_TOP + RIVER_BANK_GENTLE * RIVER_BANK_GENTLE_GRADE + (e - RIVER_BANK_GENTLE) * RIVER_BANK_GRADE
+	end
+
+	-- What must not be dug out from under it: the road decks' approaches (a road keeps its own ground,
+	-- and its verges blend down into the valley instead of standing on a cut), each plateau with its ramp,
+	-- and the zipline landings off them. Anything built after this (towns, landmarks, props, lamps)
+	-- reads the ground as it is left.
+	local deckEdges, corridor = {}, 0
+	if roads and roads.edges then
+		corridor = roads:CorridorHalfWidth()
+		for _, edge in ipairs(roads.edges) do
+			if edge.bridges and #edge.bridges > 0 then
+				table.insert(deckEdges, edge)
+			end
+		end
+	end
+	-- "under" inside a bridge deck's corridor, "beside" in the open valley next to it, or nil.
+	local function nearDeck(x, z)
+		for _, edge in ipairs(deckEdges) do
+			local dx, dz = x - edge.from.X, z - edge.from.Z
+			local along = dx * edge.dir.X + dz * edge.dir.Z
+			local lateral = math.abs(dx * edge.dir.Z - dz * edge.dir.X)
+			if lateral <= corridor + 60 then
+				for _, span in ipairs(edge.bridges) do
+					if along >= span.s0 - 1 and along <= span.s1 + 1 then
+						return lateral <= corridor and "under" or "beside"
+					end
+				end
+			end
+		end
+		return nil
+	end
+	local keepOut = {}
+	for _, plateau in ipairs(plateaus or {}) do
+		local rampLength = (plateau.height or 34) / math.tan(RAMP_ANGLE)
+		table.insert(keepOut, { X = plateau.X, Z = plateau.Z, radius = plateau.radius + rampLength + 16 })
+		if plateau.landing then
+			table.insert(keepOut, { X = plateau.landing.X, Z = plateau.landing.Z, radius = 10 })
+		end
+	end
+	local function keptOut(x, z)
+		for _, circle in ipairs(keepOut) do
+			if flatDistance(circle.X, circle.Z, x, z) < circle.radius then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Distance from the river's centre line (the pond, where it ends in one, widens it).
+	local segments = {}
+	for index = 1, #points - 1 do
+		table.insert(segments, { a = points[index], b = points[index + 1] })
+	end
+	local function distanceTo(x, z, list)
+		local best = math.huge
+		for _, segment in ipairs(list) do
+			local a, b = segment.a, segment.b
+			local abX, abZ = b.X - a.X, b.Z - a.Z
+			local lengthSq = abX * abX + abZ * abZ
+			local t = lengthSq > 0 and math.clamp(((x - a.X) * abX + (z - a.Z) * abZ) / lengthSq, 0, 1) or 0
+			local distance = flatDistance(a.X + abX * t, a.Z + abZ * t, x, z)
+			if distance < best then
+				best = distance
+			end
+		end
+		if endsInPond then
+			best = math.min(best, flatDistance(last.X, last.Z, x, z) - (pondRadius - width / 2))
+		end
+		return best
+	end
+
+	-- Written in 128-stud tiles, each only where the river reaches it.
+	local TILE = 128
+	local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+	for _, point in ipairs(points) do
+		minX, maxX = math.min(minX, point.X), math.max(maxX, point.X)
+		minZ, maxZ = math.min(minZ, point.Z), math.max(maxZ, point.Z)
+	end
+	local pad = RIVER_REACH + pondRadius
+	local x0 = math.floor((minX - pad) / TILE) * TILE
+	local written = 0
+	while x0 < maxX + pad do
+		local z0 = math.floor((minZ - pad) / TILE) * TILE
+		while z0 < maxZ + pad do
+			local cx, cz = x0 + TILE / 2, z0 + TILE / 2
+			local near = {}
+			for _, segment in ipairs(segments) do
+				if distanceTo(cx, cz, { segment }) < RIVER_REACH + TILE * 0.71 then
+					table.insert(near, segment)
+				end
+			end
+			local pondNear = endsInPond and flatDistance(last.X, last.Z, cx, cz) < RIVER_REACH + pondRadius + TILE * 0.71
+			if #near > 0 or pondNear then
+				local region = Region3.new(Vector3.new(x0, RIVER_BED - lift - 12, z0), Vector3.new(x0 + TILE, RIVER_TOP, z0 + TILE)):ExpandToGrid(4)
+				local materials, occupancies = terrain:ReadVoxels(region, 4)
+				local origin = region.CFrame.Position - region.Size / 2
+				local count = region.Size / 4
+				local changed = false
+				for ix = 1, count.X do
+					local x = origin.X + (ix - 0.5) * 4
+					for iz = 1, count.Z do
+						local z = origin.Z + (iz - 0.5) * 4
+						local d = distanceTo(x, z, near)
+						if d <= RIVER_REACH then
+							-- The ground here now: its top solid voxel, read back as a surface height.
+							local ground = nil
+							for iy = count.Y, 1, -1 do
+								local was = materials[ix][iy][iz]
+								if occupancies[ix][iy][iz] > 0 and was ~= Enum.Material.Air and was ~= Enum.Material.Water then
+									ground = origin.Y + (iy - 1) * 4 + occupancies[ix][iy][iz] * 4 + lift
+									break
+								end
+							end
+							ground = ground or (origin.Y + lift)
+							local want = profile(d)
+							local target, beach = nil, d <= RIVER_BEACH_OUT
+							if d <= RIVER_SHORE_OUT then
+								target = want
+							elseif beach then
+								-- Never above the profile, never down at the waterline where the land was lower.
+								target = math.min(want, math.max(ground, 0.3))
+							elseif not keptOut(x, z) then
+								target = math.min(ground, want)
+							end
+							if target then
+								local deck = nearDeck(x, z)
+								if deck == "under" then
+									-- Under a road bridge: the channel, kept clear of the deck's underside.
+									local road = roads:GroundAt(x, z, target)
+									if road then
+										target = math.min(target, road - 2.4)
+									end
+								elseif deck == nil and roads then
+									-- A road's own ground stays; its verge blends into the valley.
+									local road = roads:GroundAt(x, z, target)
+									if road then
+										target, beach = road, false
+									end
+								end
+							end
+							local water = target and target < RIVER_WATER_TOP + lift and d <= RIVER_SHORE_OUT + 4
+							if target and (math.abs(target - ground) > 0.05 or water or beach) then
+								changed = true
+								local fill = target - lift
+								for iy = 1, count.Y do
+									local bottom = origin.Y + (iy - 1) * 4
+									local solid = math.clamp((fill - bottom) / 4, 0, 1)
+									local was = materials[ix][iy][iz]
+									if solid >= 0.5 or (solid > 0 and not (water and bottom < RIVER_WATER_TOP)) then
+										occupancies[ix][iy][iz] = solid
+										-- New ground, and the top of a beach, are sand; a cut bank keeps its own ground.
+										if was == Enum.Material.Air or was == Enum.Material.Water or (beach and bottom + 8 > fill) then
+											materials[ix][iy][iz] = beach and RIVER_BEACH or (was ~= Enum.Material.Air and was ~= Enum.Material.Water and was or preset.terrainMaterial)
+										end
+									elseif water and bottom < RIVER_WATER_TOP then
+										materials[ix][iy][iz] = Enum.Material.Water
+										occupancies[ix][iy][iz] = math.clamp((RIVER_WATER_TOP - bottom) / 4, 0, 1)
+									else
+										materials[ix][iy][iz] = Enum.Material.Air
+										occupancies[ix][iy][iz] = 0
+									end
+								end
+							end
+						end
+					end
+				end
+				if changed then
+					terrain:WriteVoxels(region, 4, materials, occupancies)
+				end
+				written += 1
+				if written % 3 == 0 then
+					task.wait()
+				end
+			end
+			z0 += TILE
+		end
+		x0 += TILE
+	end
 
 	if endsInPond then
-		local last = points[#points]
-		local pondRadius = width * 1.6
-		terrain:FillCylinder(CFrame.new(last.X, 27, last.Z), 68, pondRadius + 1, Enum.Material.Air)
-		terrain:FillCylinder(CFrame.new(last.X, -4, last.Z), 6, pondRadius, Enum.Material.Water)
-		-- The shore is a repaint, not a fill: a fill here would lift the ground round the pond.
-		local shore = pondRadius + 6
-		terrain:ReplaceMaterial(Region3.new(Vector3.new(last.X - shore, -8, last.Z - shore), Vector3.new(last.X + shore, 0, last.Z + shore)):ExpandToGrid(4),
-			4, preset.terrainMaterial, bank)
-		terrain:FillCylinder(CFrame.new(last.X, -4, last.Z), 6, pondRadius - 4, Enum.Material.Water)
 		space:AddCircle(last.X, last.Z, pondRadius + 8)
 	end
 	for index = 1, #points - 1 do
-		local a, b = points[index], points[index + 1]
-		local length = (b - a).Magnitude
-		local look = CFrame.lookAt(a:Lerp(b, 0.5), b)
-		-- Everything above the bed goes, hills included, then the water (its surface a stud under
-		-- the ground), then a shelf of shore along each side: a repaint of the top of the ground,
-		-- its fill kept the surface lift under the surface so the bank stays level with the plain.
-		-- Carved far higher than the water needs, because the ground above it is no longer flat.
-		-- This used to clear 68 studs, which was ample when every hill stood on a plane at zero.
-		-- The relief pass puts ground up to 60 under those hills and they stack on top of it, so a
-		-- 68-stud carve left a lid of land over the river wherever it ran through high ground
-		-- rather than a gorge through it. The measured ceiling across a map is about 127.
-		terrain:FillBlock(look * CFrame.new(0, 83, 0), Vector3.new(width + 2, 180, length + 6), Enum.Material.Air)
-		terrain:FillBlock(look * CFrame.new(0, -4, 0), Vector3.new(width, 6, length + 6), Enum.Material.Water)
-		for _, side in ipairs({ -1, 1 }) do
-			terrain:FillBlock(look * CFrame.new(side * (width / 2 + 3), -1 - MapTerrain.SurfaceLift, 0), Vector3.new(10, 2, length + 6), bank)
-		end
-		space:AddStrip(a, b, width / 2 + 8)
-		if index % 4 == 0 then
-			task.wait()
-		end
+		space:AddStrip(points[index], points[index + 1], width / 2 + 8)
 	end
 
 	-- Where the river runs through a hill, a crossing's ends would be inside the cliff: cut a
@@ -1163,7 +1349,9 @@ function MapTerrain.River(terrain, parent, preset, radius, centers, townSpread, 
 		-- a map measures about 127 at its ceiling, so a crossing cut through high ground came out
 		-- as a tunnel. Long enough past the crossing's ends that the smoothed cliff face can't
 		-- lean over them.
-		terrain:FillBlock(CFrame.lookAt(point + Vector3.new(0, 100, 0), point + Vector3.new(0, 100, 0) + direction),
+		-- Its floor sits 2.5 over the river's datum, above the sand beach (RIVER_BEACH_TOP), so on the
+		-- graded banks it cuts nothing and only a hill standing right at the water is notched.
+		terrain:FillBlock(CFrame.lookAt(point + Vector3.new(0, 102.5, 0), point + Vector3.new(0, 102.5, 0) + direction),
 			Vector3.new(halfWidth * 2, 200, span + 16), Enum.Material.Air)
 	end
 
