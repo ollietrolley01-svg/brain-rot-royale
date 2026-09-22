@@ -1921,3 +1921,97 @@ entries, verify OK.** This is the failure Rule 9 exists to prevent — writing a
 it — and it was one ignored exit code away from reaching a playtest.
 
 - **19:1x hourly pass:** 5-hour 27% (resets 18:10), **weekly all-models 84% — the ceiling to watch now**, Fable 100% and out of use. No messages sent: every tab stood down on Oliver's "find a stopping point" and none has cleared. **No rebuild and no checks re-run — the only file changed since the 10:11 build is a handoff**, and a check on an unchanged tree re-proves nothing. LANDED this hour: the soda-pill countdown (server clock, falls back to no number rather than a wrong one), the `capRule` split, `tools/bot_probe.lua`'s new traces, five unapproved cosmetics REMOVED from the shop rotation and independently verified gone. UNPROVEN: everything needing a real Player or a picture — #95's friendly outline, Cloud Climb's 26 jumps, the six render-batch widths, #58 and #64 still unphotographed. WAITING ON OLIVER: nine board questions, the clear for seven tabs, and his playtest verdict.
+
+## 2026-09-22 19:2x — [CLEARED 19:3x: OLIVER AUTHORISED IT. See below.] Cosmetics in the shop file
+`ReplicatedStorage/Shared/CosmeticData.lua` changed at **10:52**, after the cosmetics tab stood down, and
+**all five unapproved accessories are back in it** (`grep -c` = 5, where claude-43 verified 0 at 19:0x).
+**No Studio process is running**, so this is NOT a `-WithPending` gallery in flight with a `finally` pending
+— it is a leak, and nothing is scheduled to remove them.
+- **Oliver's playtest build (10:11) PREDATES this and does not contain them.** Nothing has reached him.
+- The risk is forward only: any build cut from the tree in this state ships five cosmetics he has never
+  seen, straight into the live shop rotation — writing the data IS shipping it.
+- Tree otherwise green: verify OK · balance 0 · lua static check 348 files, 0 findings.
+- **claude-43 is deliberately NOT removing them.** Both pending blocks insert before the same marker, and a
+  naive edit could slice the auras out with the accessories — the exact hazard the tab's own script refused
+  on an hour ago. **The person with the right tool uses it, not the person with the most urgency.**
+- Asked the owning tab to remove with its fixed script (auras-first, `finally` that throws) and confirm
+  `grep -c` = 0 plus the three checks. **This heading is cleared when they do.**
+**If it was the round-trip test of the fixed script, the test ended APPLIED rather than reverted** — a
+verification that leaves the system in the state it was verifying against, which is the failure mode that
+fix existed to close.
+Also changed and unattributed this hour: `OLIVER_LIST.md` 147 → 417 lines (10:45, claude-43's file) and
+`.gitignore` gaining `*.pre-*` (10:57).
+
+## 2026-09-22 19:3x — CLEARED: OLIVER SAID "land it all". BUILD FREELY. (claude-43)
+The five accessories and five auras in `CosmeticData.lua` were landed **on Oliver's own instruction**, typed
+in the cosmetics tab: *"land it all"*, after a session in which that tab had repeatedly told him the ten were
+held out of the shop and unmeasured. 18 accessories and 20 auras now; verify OK, balance 0. `morning_gallery`
+was run WITHOUT `-WithPending` deliberately, so nothing will strip out what he asked for. **The DO NOT BUILD
+heading above is struck.**
+**Rule 9 is satisfied, and in the right order:** he authorised the landing, and he has since SEEN them — 33
+accessory shots, 0 missed, 7 contact sheets plus a worn shot, sent to him after the render finished. **The
+rule protects him from unseen cosmetics appearing in his game; it does not stop him shipping his own.**
+**The caveat that is real and stays open: the ten are LIVE and UNMEASURED.** No probe has run on them. An
+eight-lens adversarial audit is running now — head-scale clearances, ring corners, floating pieces, the
+height ceiling, whether the new aura layer fields are ones `AuraService` actually reads, and whether
+`verify.py`'s ring regex can even see the new calls — with every finding attacked by three skeptics before
+it is believed. **If it finds a blocker the tab tells Oliver and pulls them; the pre-landing file is backed
+up and removal is one command.**
+**On claude-43's stop: the check was right and its premise was wrong.** A file changing under you with five
+names you verified gone an hour earlier is worth stopping for, and had it been the leak it looked like, the
+stop would have caught it before a build. **Refusing to edit the file myself was also right** — the tab had
+the tool that knows which block is which, and the answer came from asking rather than from acting.
+**Attribution settled:** `OLIVER_LIST.md` (147 → 417) and `.gitignore`'s `*.pre-*` are neither claude-43's
+nor the cosmetics tab's — both came from whoever cut commit `1e964ca`.
+**Renders: the throwables re-run took 54 of 56.** `splat_rarities` (#64's whole subject) and all four
+sticky-bomb views (#58) are captured at last; only `splat_head` and `splat_shield` missed.
+
+## 2026-09-22 12:2x — HOURLY PASS: **WEEKLY CREDIT AT 89%, ONE POINT FROM THE STOP LINE** (claude-43)
+**5-hour 45% (resets 18:10). Weekly all-models 89%. At 90% every tab stops landing under Rule 10** — so the
+next substantial landing may be the one that crosses it. **Any tab still working: reach a clean point NOW
+rather than at the threshold.** A landing interrupted at the ceiling is the exact failure Rule 10 exists to
+prevent, and the ceiling is one point away.
+Tree changed this hour and was re-checked: `OK: no problems` · `files unbalanced: 0` ·
+`lua static check: 349 files, 0 findings`. **Rebuilt: 161 scripts.**
+LANDED since the last pass, by tabs working to Oliver's own instructions rather than mine: `CosmeticData`
+(+96/-34, the ten cosmetics plus audit corrections), `MovementService` (+47/-…), a new
+`ServerScriptService/Modules/CompanionBoons.lua`, and `tools/cosmetic_preview_probe.lua`. **I did not brief
+any of it and have not read those diffs** — Oliver is directing tabs directly, which is his to do; recorded
+so the next reader does not mistake my silence for review.
+UNPROVEN: the ten cosmetics (audit running), everything needing a real Player or a picture, `#58`/`#64`'s two
+missing views. WAITING ON OLIVER: nine board questions, the clear for seven tabs, his playtest verdict.
+
+## 2026-09-22 13:2x — **WEEKLY CREDIT HIT 90%. RULE 10 IS IN FORCE FLEET-WIDE: LAND NOTHING.** (claude-43)
+5-hour 50% (resets in ~50m); **weekly all-models 90%** — the ceiling that governs, and it does not reset for
+almost six days. **Every tab: finish only the file you are inside, then stop.** Do not start the next change.
+Put everything else in your handoff, including anything in your own tree and the one command that applies it.
+Tree re-checked this hour: `OK: no problems` · `files unbalanced: 0` · `lua static check: 349 files, 0
+findings`. **Playtest build 12:18, 162 scripts, carries everything up to then. No rebuild this pass** —
+`CompanionService` (12:20), `verify.py` (12:24) and `CompanionBoons` (13:15) landed after it, unbriefed and
+unread by me, and **I will not cut a build from changes I have not read while the ceiling is this close.**
+Messaged: the brainrot tab (CompanionBoons/CompanionService moved under it) and **a tab I had never briefed —
+`Fleet and partner work review [d516ca]`, started ~3h ago** — with the stop, the reading order and the three
+rules. The roster has changed: explosives, foliage and roads are gone from `ListAgents`; that review tab is new.
+UNPROVEN: the ten cosmetics (audit running), `CompanionBoons` entirely, everything needing a real Player or a
+picture. WAITING ON OLIVER: nine board questions, the clear for seven tabs, his playtest verdict.
+
+## 2026-09-22 13:2x — THE 12:18 PLAYTEST DID NOT START: A REQUIRE CYCLE IN `CompanionBoons` (Claude, Oliver's session)
+**Oliver's report: no lobby, no map, HUD dead, falling to death over and over.** That is Bootstrap dying
+before `LobbyService` builds anything. Cause, found by running the server's startup against stand-in services:
+`CompanionBoons.lua` (new today) did `require(MatchService)` at the top of the file, and MatchService ->
+BotService -> CompanionService -> CompanionBoons -> MatchService is a cycle. Roblox refuses it
+("Requested module was required recursively"), so the whole server script stops at the first require.
+**None of the three gates can see this**: every file compiles, every require names a real module, and a
+cycle is only a fault at run time. 157 of 162 scripts were unchanged from main; the cycle arrived with one line.
+**Fix:** MatchService is loaded on first use inside `CompanionBoons` (`matchService()`), at both
+`SetStatusSpeed` call sites. Nothing calls them during startup. Backup `CompanionBoons.lua.pre-cyclefix`. **This is the 13:15 CompanionBoons change the entry above names** — it is only the load-order fix, nothing else in the file moved.
+**Checked:** a scan of every top-level require in the tree finds 0 cycles after the fix (1 before); the
+startup simulation now gets past every require and into the lobby build. **UNPROVEN until Oliver plays it:**
+that the lobby and HUD come back. The first thing to look at if not: Studio's Output window, first red line.
+**RULE: a server module never requires MatchService (or anything that reaches it) at top level if
+MatchService can reach it back.** Load it on first use.
+**On GitHub:** the source changed since `1e964ca` (CosmeticData, BrainrotData, MovementService, CompanionService,
+CompanionBoons, `tools/verify.py`, `tools/cosmetic_preview_probe.lua`, the cosmetics handoff, this file) is pushed to
+`main` so Jacob and Dalton see it, and the 12:18 release is replaced by a fixed build cut from exactly that code:
+`brain-rot-royale-playtest/BrainRotRoyale_Playtest_2026-09-22_1320_fixed.rbxlx`. Pushed and built on Oliver's
+instruction ("make sure github stays updated"); the tree's own `BrainRotRoyale.rbxlx` was NOT rebuilt.
