@@ -1,0 +1,39 @@
+"""PLANTED FAULT for probe_audit.py's NEVER MATCHED detector. This file must be flagged.
+
+Aimed at the invariant: a regex site in a checker that matches nothing across a whole real run
+must be reported. It cannot expire, because it does not name any pattern that is wrong today.
+
+The plant travels the same route as a real checker -- probe_audit runs it as a subprocess through
+trace_child with the instrumented re module, exactly as it runs verify.py. A fault handed to the
+detector by any other route would prove a detector nothing uses.
+
+The bug below is the one this project actually hit: the pattern was written against a shape the
+source does not use, so it parsed the two sites that already agreed and never saw the third.
+"""
+import re
+import sys
+
+root = sys.argv[1] if len(sys.argv) > 1 else "."
+problems = []
+
+SOURCE = """
+local Colours = {}
+Colours.Primary   = Color3.fromRGB(208, 149, 241)
+Colours.Secondary = Color3.fromRGB(24, 24, 24)
+Colours.Accent    = Color3.new(0.82, 0.58, 0.95)
+"""
+
+# Alive: this one parses two of the three sites and can fail.
+rgb = re.findall(r"Color3\.fromRGB\((\d+), (\d+), (\d+)\)", SOURCE)
+if len(rgb) < 2:
+    problems.append("colours: fewer than two RGB colours found")
+
+# THE PLANT. Color3.new takes floats, and this pattern demands integers, so the one site carrying
+# a colour the audit cannot read is the one it never looks at. Zero matches, every run, forever.
+floats = re.findall(r"Color3\.new\((\d+), (\d+), (\d+)\)", SOURCE)  # MUST FLAG
+for r, g, b in floats:
+    if int(r) > 255:
+        problems.append("colours: a component above 255")
+
+print("\n".join(problems) if problems else "fixture: no problems")
+sys.exit(0)

@@ -1,0 +1,30 @@
+-- The same sweep, guarded. This file must NOT be flagged.
+--
+-- One line is the whole difference: a check outside the loop that fails when the filter matched
+-- nothing. The sweep can now report a clean model only when it actually looked at something.
+
+local failures = 0
+local function check(ok, fmt, ...)
+	if not ok then
+		failures += 1
+	end
+	print(string.format((ok and "ok   " or "FAIL ") .. fmt, ...))
+end
+
+local rods = {}
+for _, part in ipairs(workspace:GetDescendants()) do
+	if part:IsA("BasePart") and part.Shape == Enum.PartType.Cylinder then
+		table.insert(rods, part)
+	end
+end
+
+-- The guard: an empty filter is itself a failure, because this model is known to have rods.
+check(#rods > 0, "the filter found %d rods to check", #rods)
+
+for _, rod in ipairs(rods) do
+	check(rod.Size.X > 0.1, "%s is thicker than 0.1", rod.Name)
+	check(rod.Anchored, "%s is anchored", rod.Name)
+end
+
+print(string.format("rods: %d checked, %d failures", #rods, failures))
+return failures

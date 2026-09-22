@@ -1,0 +1,33 @@
+-- PLANTED FAULT for probe_audit.py's ALWAYS TRUE detector. This file must be flagged.
+--
+-- Aimed at the invariant, not at any check in tools/ today: a condition that no game state can
+-- falsify must be reported. That stays true however the harness is rewritten, so this plant
+-- cannot expire the way a plant aimed at one bad probe would.
+--
+-- Every shape below carries `MUST FLAG` on its own line and the self-test requires the detector
+-- to catch all of them. Asking only whether the file was flagged at all was too coarse: with one
+-- of the four rules deleted the other three still fired and the self-test stayed green.
+
+local failures = 0
+local function check(ok, fmt, ...)
+	if not ok then
+		failures += 1
+	end
+	print(string.format((ok and "ok   " or "FAIL ") .. fmt, ...))
+end
+
+local parts = workspace:GetChildren()
+
+-- A literal. The commonest way a check gets disabled during debugging and left that way.
+check(true, "the stage built")  -- MUST FLAG
+
+-- A length is never negative, so this prints ok for an empty stage and a full one alike.
+check(#parts >= 0, "%d parts on the stage", #parts)  -- MUST FLAG
+
+-- 'or true' swallows whatever the real condition said.
+check(#parts == 12 or true, "the stage has its 12 parts")  -- MUST FLAG
+
+-- A value compared with itself.
+check(failures == failures, "no failures so far")  -- MUST FLAG
+
+return failures
