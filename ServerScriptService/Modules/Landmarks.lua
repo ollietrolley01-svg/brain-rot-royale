@@ -2501,14 +2501,65 @@ local function levelSite(spot, footprint, material, steps)
 	local terrain = workspace.Terrain
 	local top = spot.Y - MapTerrain.SurfaceLift
 	local pad = footprint + 4
-	-- Outside in, each ring a step higher than the one beyond it: on the uphill side that cuts the
-	-- slope into stairs, and on the downhill side it builds them out to meet the ground.
-	for step = steps, 1, -1 do
-		local radius = pad + step * TERRAIN_STEP_RUN
-		local ringTop = top - step * TERRAIN_STEP_RISE
-		terrain:FillCylinder(CFrame.new(spot.X, ringTop + 25, spot.Z), 50, radius, Enum.Material.Air)
-		terrain:FillCylinder(CFrame.new(spot.X, ringTop - 10, spot.Z), 20, radius, material)
+
+	-- The terraces round the pad (Oliver, 2026-09-22 16:00: "there's this ditch around them that looks
+	-- bad"). They used to be cylinders stepping DOWN a voxel per ring on every side, each one cutting
+	-- away everything above it: on flat ground that dug a 4-stud trench round the whole pad, and on the
+	-- uphill side of a slope a trench under a cliff. Now each ring only ever moves the ground TOWARD the
+	-- pad: where the natural ground is lower it is filled up in steps (terraces down to it), where it is
+	-- higher it is cut down in steps (terraces up to it), and where it is already level with the pad it
+	-- is left exactly as it is. Ring heights stay on whole-voxel boundaries, so the steps still render.
+	local reach = pad + steps * TERRAIN_STEP_RUN
+	local region = Region3.new(
+		Vector3.new(spot.X - reach - VOXEL, top - (steps + 2) * VOXEL - 16, spot.Z - reach - VOXEL),
+		Vector3.new(spot.X + reach + VOXEL, top + (steps + 2) * VOXEL + 140, spot.Z + reach + VOXEL)):ExpandToGrid(VOXEL)
+	local materials, occupancies = terrain:ReadVoxels(region, VOXEL)
+	local origin = region.CFrame.Position - region.Size / 2
+	local count = region.Size / VOXEL
+	local changed = false
+	for ix = 1, count.X do
+		local x = origin.X + (ix - 0.5) * VOXEL
+		for iz = 1, count.Z do
+			local z = origin.Z + (iz - 0.5) * VOXEL
+			local r = math.sqrt((x - spot.X) ^ 2 + (z - spot.Z) ^ 2)
+			if r > pad and r <= reach then
+				-- The natural ground's top in this column (fill height, before the surface lift). Water is
+				-- left alone: a lake shore beside a landmark keeps its water.
+				local ground, water = nil, false
+				for iy = count.Y, 1, -1 do
+					local was = materials[ix][iy][iz]
+					if was == Enum.Material.Water and occupancies[ix][iy][iz] > 0 then
+						water = true
+					elseif occupancies[ix][iy][iz] > 0 and was ~= Enum.Material.Air then
+						ground = origin.Y + (iy - 1) * VOXEL + occupancies[ix][iy][iz] * VOXEL
+						break
+					end
+				end
+				if ground and not water then
+					local ring = math.ceil((r - pad) / TERRAIN_STEP_RUN)
+					local target = math.clamp(ground, top - ring * TERRAIN_STEP_RISE, top + ring * TERRAIN_STEP_RISE)
+					if math.abs(target - ground) > 0.05 then
+						changed = true
+						for iy = 1, count.Y do
+							local bottom = origin.Y + (iy - 1) * VOXEL
+							local occupancy = math.clamp((target - bottom) / VOXEL, 0, 1)
+							occupancies[ix][iy][iz] = occupancy
+							if occupancy <= 0 then
+								materials[ix][iy][iz] = Enum.Material.Air
+							elseif materials[ix][iy][iz] == Enum.Material.Air or bottom + VOXEL > target - VOXEL then
+								-- New fill, and the new top face of a cut, are the site's material.
+								materials[ix][iy][iz] = material
+							end
+						end
+					end
+				end
+			end
+		end
 	end
+	if changed then
+		terrain:WriteVoxels(region, VOXEL, materials, occupancies)
+	end
+
 	terrain:FillCylinder(CFrame.new(spot.X, top + 25, spot.Z), 50, pad, Enum.Material.Air)
 	terrain:FillCylinder(CFrame.new(spot.X, top - 8, spot.Z), 16, pad, material)
 end
