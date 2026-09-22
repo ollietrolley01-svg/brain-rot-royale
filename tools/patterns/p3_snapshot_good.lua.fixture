@@ -1,0 +1,23 @@
+-- MUST NOT BE FLAGGED: SNAPSHOT_AS_EVENT
+-- The same broadcast, acted on only where it differs from the last one. Re-sending the identical
+-- snapshot now does nothing, which is what a snapshot means.
+
+local SnapshotGood = {}
+
+local Remotes = script.Parent
+
+function SnapshotGood.Start(movement)
+	local lastPhase = nil
+	Remotes.FixtureLobbyState.OnClientEvent:Connect(function(state)
+		if state.phase == lastPhase then
+			return
+		end
+		lastPhase = state.phase
+		if state.phase == "Lobby" then
+			movement:CancelSprint()
+			movement:ResetAim()
+		end
+	end)
+end
+
+return SnapshotGood

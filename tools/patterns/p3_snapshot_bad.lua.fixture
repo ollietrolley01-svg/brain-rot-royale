@@ -1,0 +1,19 @@
+-- MUST BE FLAGGED: SNAPSHOT_AS_EVENT
+-- Invariant: a handler for a state snapshot must be idempotent, because the sender decides how
+-- often it repeats itself and a snapshot carries no "this changed" flag. The lobby broadcasts its
+-- state about once a second; this shape cancelled the player's sprint and aim every second.
+
+local SnapshotBad = {}
+
+local Remotes = script.Parent
+
+function SnapshotBad.Start(movement)
+	Remotes.FixtureLobbyState.OnClientEvent:Connect(function(state)
+		if state.phase == "Lobby" then
+			movement:CancelSprint()
+			movement:ResetAim()
+		end
+	end)
+end
+
+return SnapshotBad

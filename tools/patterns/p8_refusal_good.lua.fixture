@@ -1,0 +1,16 @@
+-- MUST NOT BE FLAGGED: SILENT_REFUSAL
+-- The same refusal, carrying its reason out to the caller. `nil, why` is the Lua idiom and it is
+-- enough: the caller can count the refusals, name them in a probe, or put them on a checklist. The
+-- warn is still there for whoever is watching the console — it is just no longer the only record.
+
+local RefusalGood = {}
+
+function RefusalGood.BuildFixtureShed(plot, profile)
+	if plot.size.X < profile.minimumWidth then
+		warn("[Fixture] shed does not fit, skipping")
+		return nil, string.format("shed needs %d studs, plot has %d", profile.minimumWidth, plot.size.X)
+	end
+	return Instance.new("Model")
+end
+
+return RefusalGood

@@ -923,6 +923,12 @@ def _string_content(literal):
     return literal[1:-1]
 
 
+def _is_call(tokens, i):
+    """tokens[i] is a name; True when it is being called (`f(`, `f"s"`, `f{`)."""
+    nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+    return nxt is not None and (nxt[1] in ("(", "{") or nxt[0] == "str")
+
+
 def _dotted_before(tokens, i):
     """The `a.b:c` chain ending at the name tokens[i], as a list of segments."""
     parts = [tokens[i][1]]
@@ -1293,6 +1299,94 @@ def pattern_attributes(scan, report, targets):
     if tools_only:
         report.note(code, f"{len(tools_only)} attribute(s) whose only reader is a tools/ probe — written "
                           f"by the game, read by nothing the players run: " + ", ".join(sorted(tools_only)))
+
+
+# --- P3: a state snapshot treated as an event ------------------------------------------------------
+# The lobby broadcasts its state about once a second. A handler that treats every repeat as a fresh
+# transition cancelled the player's sprint and aim every second. The invariant: a handler for a
+# periodically re-sent snapshot must be idempotent, and the cheap proxy for that is comparing the
+# snapshot with the previous one before acting.
+#
+# HEURISTIC, and the loosest of the eight. It cannot know a remote's send rate, so it keys off the
+# remote/parameter naming and asks only whether SOME previous-value comparison exists. Comparing the
+# snapshot with a LITERAL (`if state.phase == "Lobby"`) is not that comparison and does not count:
+# that is the flagged shape itself, and an early version of this rule accepted it and let its own
+# planted fault through.
+
+SNAPSHOT_REMOTE = re.compile(r"(State|Status|Sync|Snapshot|Phase|Standings|Scores?|Broadcast|Push)$")
+# `info` and `payload` are what a one-shot event's argument is called too — keying off them put four
+# companion hit-effect handlers on the list, none of which is a snapshot. They are counted as
+# candidates and named in a note instead.
+SNAPSHOT_PARAM = {"state", "status", "snapshot", "phase", "standings"}
+SNAPSHOT_VAGUE_PARAM = {"payload", "info", "summary", "data"}
+SNAPSHOT_MEMORY = re.compile(r"^(last|prev|previous|current|shown|applied|was|old)[A-Z_]?\w*$")
+SNAPSHOT_ACTION = re.compile(
+    r"^(Cancel|Stop|Reset|Clear|Abort|Break|Force|Apply|Play|Fire|Teleport|Destroy|Remove|Disable|"
+    r"Enable|Toggle|Exit|Close|Open|Show|Hide|Set|Give|Take|Equip|Unequip|Respawn|Kill)\w*$")
+
+
+def pattern_snapshot_as_event(scan, report, targets):
+    code = "SNAPSHOT_AS_EVENT"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    vague = 0
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        frames = function_frames(tokens)
+        for index, (kind, value, line) in enumerate(tokens):
+            if kind != "name" or value not in ("OnClientEvent", "OnServerEvent"):
+                continue
+            if not (index + 3 < len(tokens) and tokens[index + 1][1] == ":" and tokens[index + 2][1] == "Connect"):
+                continue
+            handler = None
+            for frame in frames:
+                if frame["start"] == index + 4:
+                    handler = frame
+                    break
+            if handler is None:
+                continue
+            stats["candidates"] += 1
+            remote = tokens[index - 2][1] if index >= 2 and tokens[index - 2][0] == "name" else "?"
+            params = handler["params"]
+            data = None
+            if value == "OnServerEvent":
+                data = params[1] if len(params) > 1 else None
+            else:
+                data = params[0] if params else None
+            if data is None:
+                continue
+            if not SNAPSHOT_REMOTE.search(remote) and data not in SNAPSHOT_PARAM:
+                if data in SNAPSHOT_VAGUE_PARAM:
+                    vague += 1
+                continue
+            body = tokens[handler["body"]:handler["end"]]
+            compares = False
+            actions = []
+            for j, (bkind, bvalue, _) in enumerate(body):
+                if bkind == "op" and bvalue in ("==", "~="):
+                    left = [token for token in body[max(0, j - 4):j] if token[0] in ("name", "str", "num")]
+                    right = body[j + 1:j + 2]
+                    names = [token[1] for token in left if token[0] == "name"]
+                    # Only a comparison against something REMEMBERED counts. `state.phase == "Lobby"`
+                    # compares against a literal, which is the flagged shape, not a guard against it.
+                    if data in names and right and right[0][0] == "name":
+                        compares = True
+                if bkind == "name" and SNAPSHOT_MEMORY.match(bvalue):
+                    compares = True
+                if bkind == "name" and SNAPSHOT_ACTION.match(bvalue) and _is_call(body, j):
+                    actions.append(bvalue)
+            if compares or not actions:
+                continue
+            if scan_file.rel in targets:
+                shown = ", ".join(sorted(set(actions))[:4])
+                report.flag(code, scan_file.rel, line, f"{remote}.{value}",
+                            f"acts on `{data}` without comparing it with the previous value "
+                            f"({len(set(actions))} action call(s): {shown}) — a re-sent snapshot "
+                            f"replays every action")
+    if vague:
+        report.note(code, f"{vague} handler(s) skipped because their argument is called `info` or "
+                          f"`payload` — a one-shot event's argument is called that too, so the name "
+                          f"carries no claim either way. A snapshot remote wants a snapshot name.")
 
 
 # --- P4: a weak-keyed table holding state, and the property-cache version -------------------------
@@ -1878,6 +1972,56 @@ def _pretty_number(value):
     return str(int(value)) if value == int(value) else str(value)
 
 
+# --- P8: a warn-and-return refusal in build code ---------------------------------------------------
+# A town yard refused to build and the feature simply appeared absent, with no reason anywhere a
+# human would look. The caller of a builder that warns and returns bare cannot tell "built" from
+# "declined", so the absence has no explanation at the only place it is noticed — the render.
+#
+# HEURISTIC: which functions count as "build code" is a name match. A refusal that returns a reason
+# (`return nil, "no space for the yard"`) or raises is not flagged — the caller can surface those.
+
+BUILD_FUNCTION = re.compile(
+    r"^(build|create|make|spawn|place|generate|gen|roll|draw|render|install|attach|mount|new|add|"
+    r"populate|scatter|fill|lay|emit)\w*$", re.I)
+
+
+def pattern_build_refusal(scan, report, targets):
+    code = "SILENT_REFUSAL"
+    stats = report.rule(code)
+    stats["files"] = len(scan)
+    for scan_file in scan:
+        tokens = scan_file.tokens
+        frames = function_frames(tokens)
+        for index, (kind, value, line) in enumerate(tokens):
+            if kind != "name" or value != "warn" or not _is_call(tokens, index):
+                continue
+            frame = _owning_frame(frames, index)
+            if frame is None or not frame["name"]:
+                continue
+            short = _last_segment(frame["name"])
+            if not BUILD_FUNCTION.match(short):
+                continue
+            stats["candidates"] += 1
+            close = _matching_close(tokens, index + 1)
+            if close is None:
+                continue
+            j = close + 1
+            while j < len(tokens) and tokens[j][1] == ";":
+                j += 1
+            if j >= len(tokens) or tokens[j][0] != "kw" or tokens[j][1] != "return":
+                continue
+            end = _statement_end(tokens, j + 1)
+            returned = [token[1] for token in tokens[j + 1:end]]
+            if returned and returned not in (["nil"], ["false"]):
+                continue  # it returns a reason the caller can surface
+            if scan_file.rel not in targets:
+                continue
+            shape = "return " + (" ".join(returned) if returned else "(nothing)")
+            report.flag(code, scan_file.rel, line, frame["name"],
+                        f"warns and then `{shape}` — the caller of a builder cannot tell \"built\" "
+                        f"from \"declined\"; return a reason or raise")
+
+
 # --- the rule table -------------------------------------------------------------------------------
 # code, one-line title, EXACT or HEURISTIC, the function, and the fixture pair that must and must not
 # fire. The fixtures are the permanent planted faults: see run_pattern_self_test.
@@ -1887,6 +2031,8 @@ PATTERN_RULES = [
      "p1_clock_bad", "p1_clock_good"),
     ("ATTRIBUTE", "an attribute written and never read, or read and never written", "HEURISTIC",
      pattern_attributes, "p2_attribute_bad", "p2_attribute_good"),
+    ("SNAPSHOT_AS_EVENT", "a state snapshot treated as an event", "HEURISTIC",
+     pattern_snapshot_as_event, "p3_snapshot_bad", "p3_snapshot_good"),
     ("WEAK_TABLE", "a weak-keyed table primed from a property the module writes", "EXACT",
      pattern_weak_tables, "p4_weak_bad", "p4_weak_good"),
     ("RETURN_IGNORED", "an ignored return value, where the callers disagree", "HEURISTIC",
@@ -1895,6 +2041,8 @@ PATTERN_RULES = [
      pattern_nil_handler, "p6_handler_bad", "p6_handler_good"),
     ("NUMBER_DRIFT", "a stale copy of a number defined elsewhere", "HEURISTIC",
      pattern_number_drift, "p7_number_bad", "p7_number_good"),
+    ("SILENT_REFUSAL", "a warn-and-return refusal in build code", "HEURISTIC",
+     pattern_build_refusal, "p8_refusal_bad", "p8_refusal_good"),
 ]
 
 

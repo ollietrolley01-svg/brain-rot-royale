@@ -1,0 +1,16 @@
+-- MUST BE FLAGGED: SILENT_REFUSAL
+-- Invariant: a builder that declines has to tell its caller so, because the only place the absence
+-- is noticed is a render, and a render has no console. A town yard refused to build and the feature
+-- simply appeared absent, with no reason anywhere a human would look.
+
+local RefusalBad = {}
+
+function RefusalBad.BuildFixtureYard(plot, profile)
+	if plot.size.X < profile.minimumWidth then
+		warn("[Fixture] yard does not fit, skipping")
+		return
+	end
+	return Instance.new("Model")
+end
+
+return RefusalBad
