@@ -1591,8 +1591,13 @@ local function startMatch()
 	end
 	tagInMatch(Players:GetPlayers())
 
+	-- The battle royale fills to 50, every other mode to 30 (MatchConfig, Oliver 09-22 13:45).
+	local fillTarget = MatchConfig.BotFillTarget
+	if currentMode.id == "BattleRoyale" then
+		fillTarget = MatchConfig.BotFillTargetBattleRoyale or fillTarget
+	end
 	local botCount = math.clamp(
-		math.min(MatchConfig.BotFillTarget, MatchConfig.MaxPlayers) - #joining,
+		math.min(fillTarget, MatchConfig.MaxPlayers) - #joining,
 		0,
 		MatchConfig.MaxPlayers
 	)
