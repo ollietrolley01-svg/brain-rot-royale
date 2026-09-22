@@ -2298,6 +2298,39 @@ local function refreshTownMarkers()
 			townMarkers[town] = nil
 		end
 	end
+
+	-- No two names printed over each other on the minimap (Oliver's 16:58 screenshot: BONKINGTON
+	-- across GRASS TOUCHER'S REST, THE BEACHED GALLEON across a town). Landmarks first, then towns;
+	-- a name that would overlap one already shown is hidden and its dot stays.
+	local ordered = {}
+	for owner, marker in pairs(townMarkers) do
+		table.insert(ordered, { marker = marker, landmark = owner:GetAttribute("LandmarkCenter") ~= nil })
+	end
+	table.sort(ordered, function(a, b)
+		if a.landmark ~= b.landmark then
+			return a.landmark
+		end
+		return a.marker.Position.Y.Offset < b.marker.Position.Y.Offset
+	end)
+	local shown = {}
+	for _, entry in ipairs(ordered) do
+		local label = entry.marker:FindFirstChildOfClass("TextLabel")
+		if label then
+			local x, y = entry.marker.Position.X.Offset, entry.marker.Position.Y.Offset - 5
+			local half = math.min(label.TextBounds.X, 84) / 2 + 2
+			local free = true
+			for _, box in ipairs(shown) do
+				if math.abs(box.x - x) < box.half + half and math.abs(box.y - y) < 12 then
+					free = false
+					break
+				end
+			end
+			label.Visible = free
+			if free then
+				table.insert(shown, { x = x, y = y, half = half })
+			end
+		end
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -2454,7 +2487,9 @@ local function placeCompassMarker(marker, bearing, heading)
 		return
 	end
 	marker.frame.Visible = true
-	marker.frame.Position = UDim2.fromOffset(COMPASS_W / 2 + delta * (COMPASS_W / COMPASS_SPAN), 0)
+	marker.x = COMPASS_W / 2 + delta * (COMPASS_W / COMPASS_SPAN)
+	marker.delta = delta
+	marker.frame.Position = UDim2.fromOffset(marker.x, 0)
 	-- Fading out toward the ends of the strip.
 	marker.label.TextTransparency = math.clamp((math.abs(delta) - (COMPASS_SPAN / 2 - 28)) / 28, 0, 1) * 0.85
 end
@@ -2474,6 +2509,42 @@ local function updateCompass(root)
 			placeCompassMarker(marker, marker.bearing, heading)
 		elseif marker.position then
 			placeCompassMarker(marker, bearingTo(here, marker.position), heading)
+		end
+	end
+
+	-- No two labels on top of each other (Oliver's 16:58 screenshot: THE BEACON and BRAINROT CARNIVAL
+	-- printed over one another, with the N across LAG LAGOON). The cardinals keep theirs; then each
+	-- place, the one nearest the middle of the strip first, shows its name only where it clears every
+	-- label already shown. A place whose name doesn't fit still shows its dot.
+	local taken = {}
+	local function clear(x, width)
+		for _, span in ipairs(taken) do
+			if x + width / 2 > span[1] and x - width / 2 < span[2] then
+				return false
+			end
+		end
+		return true
+	end
+	local places = {}
+	for _, marker in pairs(compassMarkers) do
+		if marker.frame.Visible and marker.x then
+			if marker.bearing then
+				local width = marker.label.TextBounds.X + 6
+				table.insert(taken, { marker.x - width / 2, marker.x + width / 2 })
+			elseif marker.position then
+				table.insert(places, marker)
+			end
+		end
+	end
+	table.sort(places, function(a, b)
+		return math.abs(a.delta) < math.abs(b.delta)
+	end)
+	for _, marker in ipairs(places) do
+		local width = math.max(marker.label.TextBounds.X, 8) + 6
+		local fits = clear(marker.x, width)
+		marker.label.Visible = fits
+		if fits then
+			table.insert(taken, { marker.x - width / 2, marker.x + width / 2 })
 		end
 	end
 
@@ -3603,6 +3674,13 @@ local function renderBanner()
 	-- this slot (ModeScoreHud moves up to it), so the banner hides while you're playing one.
 	banner.Visible = not (matchState.state == "InProgress" and loadout
 		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale")
+	-- With the banner and the storm line gone, the compass tucks up under the 44-tall score bar
+	-- (y 10..54) instead of hanging 50 px below it (Oliver 16:59: "the hud is messed up at the top").
+	-- Only from the desktop spots, so a phone layout that has placed it elsewhere is left alone.
+	local compassY = compass.Position.Y.Offset
+	if compass.Position.Y.Scale == 0 and (compassY == 104 or compassY == 60) then
+		compass.Position = UDim2.new(0.5, 0, 0, banner.Visible and 104 or 60)
+	end
 
 	if matchState.state == "Waiting" then
 		bannerTitle.Text = ready and "WAITING FOR PLAYERS" or "READY UP TO PLAY"
