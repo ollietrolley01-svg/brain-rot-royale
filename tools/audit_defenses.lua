@@ -119,10 +119,18 @@ local function measure(label, itemId)
 	model.Parent = stage
 	local parts = partsOf(model)
 	local moved = 0
+	local movedNames = {}
 	for _, part in ipairs(parts) do
 		if part:GetAttribute("ZFixed") then
 			moved += 1
+			if #movedNames < 8 then
+				table.insert(movedNames, string.format("%s %s at %s", part.Name, tostring(part.Size), tostring(part.Position - model:GetPivot().Position)))
+			end
 		end
+	end
+	if moved > 0 then
+		-- Named, so "the pass changed 1 part" is a fix and not a search.
+		out("  %s: parts the pass changed: %s", label, table.concat(movedNames, "; "))
 	end
 	local openX, widestX = openings(model, parts, "x")
 	local openZ, widestZ = openings(model, parts, "z")

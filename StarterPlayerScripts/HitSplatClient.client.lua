@@ -43,10 +43,23 @@ local function bodyPart(character, headshot)
 	return nil
 end
 
--- `rarity` is the rank of the gun that dealt the hit (the server's word): the blood is drawn in that
--- rank's colour, plain red when there is none.
+-- `rarity` is the rank of the gun that dealt the hit (the server's word): the splat is drawn in
+-- that rank's colour.
+--
+-- HARD RULE: no red fallback, anywhere. The old code here was
+-- `type(rarity) == "string" and Rarity.Colors[rarity] and Rarity.Color(rarity) or nil`, and passing
+-- that `nil` on to ExplosiveFx.Splat hit a fallback in THAT module literally named BLOOD
+-- (Color3.fromRGB(148, 16, 16)) -- ExplosiveFx.Splat is called from nowhere else in the project, so
+-- that constant is reachable only through this one call. Every WeaponData entry carries a rarity
+-- today (checked: 27/27, ReplicatedStorage/Shared/WeaponData.lua), so the path was dormant rather
+-- than firing on live data, but `rarity` also arrives as literal `false` for a non-gunfire hit
+-- (HitSplatService.Payload) and would have taken the same nil branch. `Rarity.Color` already
+-- defaults unmatched input to Common's grey (ReplicatedStorage/Shared/Rarity.lua:22-24) and is safe
+-- to call directly with a string, `false`, or `nil` alike -- a plain Lua table read on any of those
+-- keys returns nil, never an error -- so routing through it directly removes the red branch
+-- entirely instead of relying on every future caller to remember not to take it.
 local function splat(victim, attacker, headshot, shield, rarity)
-	local color = type(rarity) == "string" and Rarity.Colors[rarity] and Rarity.Color(rarity) or nil
+	local color = Rarity.Color(rarity)
 	local target = bodyPart(victim, headshot)
 	if not target then
 		return

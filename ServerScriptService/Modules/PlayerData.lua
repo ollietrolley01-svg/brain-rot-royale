@@ -30,6 +30,12 @@ end
 
 local sessions = {}
 local failedLoads = {}
+-- UserId -> the Player this server's session belongs to. A rejoin on the same server makes a NEW
+-- Player for the same UserId while the previous one's Release (or an orphaned Load) may still be in
+-- flight; without this tag that old work wiped the new session's tables and left the rejoined
+-- player profileless - "Profile still loading." on every menu, no autosave, no final save - for
+-- the rest of the session. Every path that writes, reads or clears a session checks it owns it.
+local owners = {}
 
 local function defaultData()
 	return {
@@ -305,11 +311,57 @@ local function reconcile(saved)
 	-- Only a known brainrot of the rarity it's filed under survives a load; anything else could only
 	-- be a bad write, and dropping it just means the receipt falls back to a brainrot of that rarity.
 	if type(saved.PendingBrainrot) == "table" then
+		-- A rarity can hold more than one pick: a player who buys again before the first receipt is
+		-- processed has both waiting, and both were paid for. They are stored oldest-first with the
+		-- oldest in the slot's own fields and the rest in `more` (BrainrotShopService explains why),
+		-- so every one of them has to survive a rejoin -- dropping `more` here would hand the later
+		-- receipts a random brainrot each.
+		local PENDING_LIMIT = 5
+		local function cleanEntry(rarity, entry)
+			if type(entry) ~= "table" or type(entry.name) ~= "string" then
+				return nil
+			end
+			local def = BrainrotData.Get(entry.name)
+			if not def or def.rarity ~= rarity then
+				return nil
+			end
+			return {
+				name = def.name,
+				at = type(entry.at) == "number" and entry.at or 0,
+				-- `paid` means its prompt reported a completed purchase; only ever true or absent.
+				paid = entry.paid == true or nil,
+			}
+		end
 		for rarity, pending in pairs(saved.PendingBrainrot) do
-			if type(rarity) == "string" and type(pending) == "table" and type(pending.name) == "string" then
-				local def = BrainrotData.Get(pending.name)
-				if def and def.rarity == rarity then
-					data.PendingBrainrot[rarity] = { name = def.name, at = type(pending.at) == "number" and pending.at or 0 }
+			if type(rarity) == "string" and type(pending) == "table" then
+				-- Every pick this rarity holds, head and tail together, cleaned as one list. Cleaning
+				-- the head on its own would have been wrong: a head naming a brainrot that no longer
+				-- exists would have taken the paid picks behind it down with it, and those are the
+				-- ones somebody is owed.
+				local list = {}
+				local function add(entry)
+					local clean = cleanEntry(rarity, entry)
+					-- Bounded on load as well as on write: a corrupt profile must not be able to hand
+					-- a player an unbounded queue of free brainrots.
+					if clean and #list < PENDING_LIMIT then
+						table.insert(list, clean)
+					end
+				end
+				add(pending)
+				if type(pending.more) == "table" then
+					for _, entry in ipairs(pending.more) do
+						add(entry)
+					end
+				end
+				if #list > 0 then
+					local slot = list[1]
+					if #list > 1 then
+						slot.more = {}
+						for index = 2, #list do
+							table.insert(slot.more, list[index])
+						end
+					end
+					data.PendingBrainrot[rarity] = slot
 				end
 			end
 		end
@@ -353,6 +405,16 @@ local function reconcile(saved)
 		end
 	end
 
+	-- A showcase pointing at a brainrot the player does not own does not survive a load. Done here,
+	-- after Brainrots is filled, because it is the only place that can heal a profile that ALREADY
+	-- holds one: the sell paths stop new orphans, but every player who hit that bug before it was
+	-- fixed still has a podium in the lobby showing a brainrot they sold, and it is in other people's
+	-- showcase and trade lists too. `Companion` already self-heals this way in CompanionService's
+	-- spawnFor; the showcase had nothing doing it.
+	if data.Showcase and not table.find(data.Brainrots, data.Showcase) then
+		data.Showcase = nil
+	end
+
 	return data
 end
 
@@ -394,7 +456,26 @@ local LOCK_STALE_SECONDS = 150
 local LOCK_WAIT_SECONDS = 16
 local LOCK_RETRY_SECONDS = 2
 
--- Studio has no JobId; a per-run id keeps the two ends of a test apart.
+-- THE CLOCK EVERY DEADLINE IN THIS FILE IS WAITED OUT ON. tick(), never os.clock().
+--
+-- os.clock() is process CPU TIME in Roblox. Every wait below is a `task.wait` loop that YIELDS --
+-- on a DataStore round trip, which is network latency, not computation -- so almost no CPU time
+-- accrues while the wall clock runs. That makes the divergence largest here of anywhere in the
+-- project, and this is the one place it costs a player their saved progress rather than a few
+-- frames: `ReleaseAll` is called from BindToClose, whose ~30 seconds are WALL seconds Roblox will
+-- not extend. A 20-CPU-second budget can outlast them with saves still in flight, and the process
+-- is killed mid-write.
+--
+-- The units are the check: a tick() deadline is this machine's epoch (~1.7e9); an
+-- `os.clock() + seconds` deadline is single digits since process start. Under an idle window the
+-- two behave identically, so no timing test can separate them -- the magnitude always can.
+-- Same reasoning and same clock as RateLimit.Now and VoteDropClient's reveal deadline.
+local function wallNow()
+	return tick()
+end
+
+-- Studio has no JobId; a per-run id keeps the two ends of a test apart. os.clock() is deliberate
+-- and correct here: this is a unique suffix for a string, not a deadline, and nothing waits on it.
 local JOB_ID = game.JobId ~= "" and game.JobId or ("studio-" .. tostring(os.clock()))
 -- Set only by _SetStoreForTest.
 local testMode = false
@@ -471,13 +552,24 @@ end
 function PlayerData.Load(player)
 	local key = keyFor(player)
 	local saved, loaded, lockedOut = nil, false, false
+	-- This session owns the UserId from here on. If the previous session on this server is still
+	-- writing its release, let it finish (it clears state[] when done) rather than pulling its tables
+	-- out from under it; bounded, so a stuck save cannot hold a join forever.
+	owners[player.UserId] = player
+	local previous = state[player.UserId]
+	if previous and previous.saving then
+		local waitUntil = wallNow() + LOCK_WAIT_SECONDS
+		while state[player.UserId] == previous and previous.saving and wallNow() < waitUntil do
+			task.wait(0.1)
+		end
+	end
 	-- A fresh load starts clean: an earlier attempt for this user id (a failed load, or a lockout that
 	-- asked them to rejoin) must not leave this session marked unsaveable for good.
 	failedLoads[player.UserId] = nil
 	state[player.UserId] = nil
 
 	if store then
-		local deadline = os.clock() + LOCK_WAIT_SECONDS
+		local deadline = wallNow() + LOCK_WAIT_SECONDS
 		local errors = 0
 		while true do
 			-- tryClaim already takes over a lock older than LOCK_STALE_SECONDS: a live server refreshes
@@ -485,6 +577,13 @@ function PlayerData.Load(player)
 			-- NOT enough that the holder wrote nothing while we waited — a live server with nothing to
 			-- save looks exactly the same, and stealing from it would give the player two live copies.
 			local status, profile, version, err, tookOver = tryClaim(key)
+			if owners[player.UserId] ~= player then
+				-- A newer session for this UserId took over while we waited (the player left and rejoined
+				-- this server): this load is an orphan. Hand back a throwaway profile and register
+				-- nothing, so nothing of ours can touch the new session. A lock we may have just claimed
+				-- is this server's own, which the new session's claim takes over.
+				return reconcile(nil)
+			end
 			if status == "ok" then
 				if tookOver then
 					PlayerData.StaleLockTakeovers += 1
@@ -496,7 +595,7 @@ function PlayerData.Load(player)
 				state[player.UserId] = { version = version, saving = false, dirty = false, lost = false, isNew = profile == nil }
 				break
 			elseif status == "held" then
-				if os.clock() >= deadline then
+				if wallNow() >= deadline then
 					-- Still held by a server that is refreshing it: ask the player to come back rather
 					-- than open a second copy. A crashed holder is taken over once its lock goes stale.
 					lockedOut = true
@@ -544,6 +643,9 @@ function PlayerData.Load(player)
 end
 
 function PlayerData.Get(player)
+	if owners[player.UserId] ~= player then
+		return nil
+	end
 	return sessions[player.UserId]
 end
 
@@ -565,8 +667,8 @@ end
 
 function PlayerData.CanSave(player)
 	local session = state[player.UserId]
-	return store ~= nil and sessions[player.UserId] ~= nil and not failedLoads[player.UserId]
-		and session ~= nil and not session.lost
+	return store ~= nil and owners[player.UserId] == player and sessions[player.UserId] ~= nil
+		and not failedLoads[player.UserId] and session ~= nil and not session.lost
 end
 
 -- One write. Returns true on success; false means the write failed, and `lost` says the lock is gone
@@ -574,7 +676,7 @@ end
 local function writeOnce(player, releaseLock)
 	local session = state[player.UserId]
 	local data = sessions[player.UserId]
-	if not session or not data then
+	if not session or not data or owners[player.UserId] ~= player then
 		return false, false
 	end
 
@@ -627,8 +729,8 @@ local function saveInternal(player, releaseLock)
 		end
 		-- Long enough to cover a save that is mid-retry (three attempts with a capped backoff), and still
 		-- well inside the per-player share of BindToClose's ~30 s.
-		local deadline = os.clock() + 8
-		while session.saving and os.clock() < deadline do
+		local deadline = wallNow() + 8
+		while session.saving and wallNow() < deadline do
 			task.wait(0.1)
 		end
 		if session.saving then
@@ -660,14 +762,19 @@ function PlayerData.Save(player)
 end
 
 function PlayerData.Release(player)
+	if owners[player.UserId] ~= player then return end -- a superseded session's release touches nothing
 	-- The final write clears the lock in the same operation, so the next server can load at once. If an
 	-- autosave is in flight, saveInternal waits for it rather than coalescing: a coalesced release would
 	-- leave the lock held until it went stale, and the player would be turned away from their next
 	-- server for up to LOCK_STALE_SECONDS.
 	saveInternal(player, true)
+	-- Checked again: the save above yields, and a rejoin during it hands the UserId to a new session
+	-- whose tables these now are.
+	if owners[player.UserId] ~= player then return end -- superseded during the final save
 	sessions[player.UserId] = nil
 	failedLoads[player.UserId] = nil
 	state[player.UserId] = nil
+	owners[player.UserId] = nil
 end
 
 -- Every player at once, for BindToClose, which Roblox gives about 30 seconds. Returns how many were
@@ -682,8 +789,8 @@ function PlayerData.ReleaseAll(players, timeout)
 			done += 1
 		end)
 	end
-	local deadline = os.clock() + (timeout or 20)
-	while done < remaining and os.clock() < deadline do
+	local deadline = wallNow() + (timeout or 20)
+	while done < remaining and wallNow() < deadline do
 		task.wait(0.2)
 	end
 	return done
@@ -708,6 +815,7 @@ function PlayerData._SetStoreForTest(testStore, jobId, timings)
 	table.clear(sessions)
 	table.clear(failedLoads)
 	table.clear(state)
+	table.clear(owners)
 	PlayerData.LockedOutKicks = 0
 	PlayerData.StaleLockTakeovers = 0
 	return JOB_ID

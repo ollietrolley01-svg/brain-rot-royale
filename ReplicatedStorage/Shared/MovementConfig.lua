@@ -162,6 +162,11 @@ MovementConfig.Parkour = {
 	VaultClearance = 3.4,
 	-- You have to be moving at least this fast (studs/s) toward it to vault; slower and it's a climb.
 	VaultMinSpeed = 9,
+	-- In the air within this much of the ground last stood on (a plain jump's apex is 6.4), a vault is
+	-- measured from THAT ground rather than from the rising feet: a body that jumped at a sill meant to
+	-- vault it, and measured from its feet the same sill read lower every frame until it vanished
+	-- (tools/vault_jump_probe.lua). Beyond it (a Bounce Boots jump, a launch) the feet are the reference.
+	JumpGrace = 6.5,
 	-- A surface counts as a ledge top when its normal is at least this upright.
 	TopNormal = 0.72,
 	-- A wall counts as a wall when its normal is at most this upright.

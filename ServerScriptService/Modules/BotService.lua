@@ -22,6 +22,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local GameModes = require(Shared:WaitForChild("GameModes"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local Rarity = require(Shared:WaitForChild("Rarity"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
@@ -279,6 +280,15 @@ local spawnGeneration = 0
 -- Start() inside one think interval can't leave the old loop running alongside the new one (it
 -- only checked a flag, which the Start() had already set back to true).
 local loopGeneration = 0
+
+-- Every bot's golden-angle fan-out slot (modeObjective), assigned once here and never reused
+-- within a match. Spawn() used to hand out `index` from its own loop (1..count) instead, which
+-- is fine for one big batch but not for a team mode's replacement bots: spawnReplacementBot calls
+-- Spawn(1, ...) one bot at a time, so `index` was 1 on every call and every replacement landed on
+-- the exact same golden-angle point as every other replacement, all standing together. Reset by
+-- Clear() so slot numbers stay small and stable within one match; the golden-angle spread works
+-- for any starting value, so continuing to climb across a match is harmless too.
+local nextSlot = 0
 
 local LOOT_SEEK_RANGE = 200
 
@@ -837,7 +847,13 @@ local function reportSighting(bot, position, now)
 	end
 end
 
-local HILL_RADIUS = 28 -- Shared/GameModes hillRadius; ModeKingOfTheHill.Occupancy uses the same default
+-- Read from Shared/GameModes instead of keeping a second copy of the number: this used to be a
+-- hardcoded 28 that happened to agree with GameModes.Modes.KingOfTheHill.hillRadius (also 28)
+-- purely by nobody having changed either one yet. ModeKingOfTheHill.Occupancy's own `mode.hillRadius
+-- or 28` is a genuine fallback for a mode argument that failed to carry one; this had no such excuse,
+-- since KingOfTheHill.hillRadius always exists. A future resize (#121, bigger maps) now reaches the
+-- bots' fan-out automatically instead of silently drifting the ring away from the real hill radius.
+local HILL_RADIUS = (GameModes.Modes.KingOfTheHill and GameModes.Modes.KingOfTheHill.hillRadius) or 28
 local HILL_SPREAD = 0.55 -- bots stand this share of the hill radius out from its centre, spread round it
 local RALLY_RANGE = 80 -- friendlies this close count as the squad
 local RALLY_GAP = 40 -- further than this from the squad, go to it before pushing
@@ -1964,6 +1980,16 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	reportSighting(bot, targetRoot.Position, now)
 	if bot.acquiredAt == 0 then
 		bot.acquiredAt = now
+		-- Pre-arm the burst here, during the reaction delay, rather than leaving burstLeft at the 0
+		-- losing a target reset it to. Unarmed, shootAt's own burst-discipline check (below) treats
+		-- the first call after the reaction delay as "burst exhausted": it only sets burstLeft and
+		-- bot.nextShotAt and returns with no shot fired, so the bot pays a full BotBurstRest (0.48s
+		-- +0-0.35s) on top of the reaction delay before ever shooting. Measured: a configured 0.28s
+		-- reaction was taking 1.25s to the first shot. Arming here means the first shootAt call after
+		-- reacting has a live burst waiting and actually fires.
+		if bot.burstLeft <= 0 then
+			bot.burstLeft = math.random(2, 5)
+		end
 	end
 	BotNav.Progress(bot, humanoid, root, nil, now)
 	setSprint(bot, false)
@@ -2114,6 +2140,27 @@ local function flee(bot, humanoid, root, threatPosition, now, threatToken)
 	humanoid:MoveTo(point)
 	BotNav.Progress(bot, humanoid, root, point, now)
 end
+
+-- Only hunt loot while under-armed. Without this, 29 bots sweeping a 200-stud radius every few
+-- seconds would strip the map before a player found anything.
+-- Carrying nothing always counts. Bots spawn empty-handed, and without this they would never go
+-- looking, because the old test read the rarity of a gun they do not have.
+--
+-- A weapon SpawnLoadout issued counts as sufficient regardless of its rarity. Team modes hand out
+-- GameModes.GreenRarity (Uncommon), one tier under this test's old Rare floor, so every team-mode
+-- bot read as permanently under-armed: it re-entered the loot-seeking block every 1.5-5s forever,
+-- and a truthy lootTarget there returns out of updateBot before the objective/wander code ever
+-- runs, so the bot never went to the hill or pushed with its squad. Measured before this fix: 26
+-- of 30 TDM bots stuck re-looting, drifting 457-631 studs from the arena centre over a minute.
+--
+-- A named function rather than an inline local: tools/bot_probe.lua checks this directly, the same
+-- way it already does BotService.ExposedTo, rather than needing a real loot spawn near a bot to
+-- exercise the branch that reads it.
+local function isUnderArmed(bot)
+	return not bot.weapon
+		or (not bot.loadoutWeapon and (Rarity.Index[bot.weapon.rarity] or 0) < (Rarity.Index.Rare or 3))
+end
+BotService.IsUnderArmed = isUnderArmed
 
 local function updateBot(bot)
 	local humanoid = bot.humanoid
@@ -2351,11 +2398,8 @@ local function updateBot(bot)
 		BotNav.Drop(bot)
 	end
 
-	-- Only hunt loot while under-armed. Without this, 29 bots sweeping a 200-stud radius
-	-- every few seconds would strip the map before a player found anything.
-	-- Carrying nothing always counts. Bots spawn empty-handed, and without this they would
-	-- never go looking, because the old test read the rarity of a gun they do not have.
-	local underArmed = not bot.weapon or (Rarity.Index[bot.weapon.rarity] or 0) < (Rarity.Index.Rare or 3)
+	-- Only hunt loot while under-armed (isUnderArmed above updateBot).
+	local underArmed = isUnderArmed(bot)
 
 	-- Carrying nothing is urgent: look again every second or so, and look further afield, rather
 	-- than idling five seconds at a time between sweeps while defenceless. Once armed it drops
@@ -2566,6 +2610,7 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				character = character,
 				humanoid = humanoid,
 				weapon = nil,
+				loadoutWeapon = false, -- true once SpawnLoadout hands over a gun: sufficient at any rarity
 				spawnWeapon = weapon,
 				nextShotAt = os.clock() + math.random() * 1.5,
 				burstLeft = 0,
@@ -2599,7 +2644,7 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				lastRocketAt = 0,
 				throwables = {},
 				ownStructures = {},
-				slot = index,
+				slot = nextSlot,
 				objectiveKind = nil,
 				escapeScanAt = 0,
 				coverBlockedUntil = 0,
@@ -2622,6 +2667,7 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				crouching = false,
 				nextSlideAt = 0,
 			}
+			nextSlot += 1
 			BotNav.Attach(bot)
 
 			-- Everything that doesn't need the rig in the world is set up before parenting, so the
@@ -2675,6 +2721,7 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				end
 				if type(def) == "table" and def.id then
 					bot.weapon = def
+					bot.loadoutWeapon = true
 					bot.magWeapon = def.id
 					bot.mag = magazineOf(def)
 					giveBotGun(character, def)
@@ -2799,6 +2846,7 @@ function BotService.Clear()
 	running = false
 	loopGeneration += 1
 	spawnGeneration += 1
+	nextSlot = 0
 
 	for _, bot in ipairs(bots) do
 		BotNav.Drop(bot)

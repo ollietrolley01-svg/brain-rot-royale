@@ -43,26 +43,101 @@ local writing = false
 local subject = nil
 local connection = nil
 
--- Whether an UNMIGRATED writer is holding the attribute right now. The menu's own big panel is the
--- one that matters: MenuClient sets the attribute from that panel's visibility and never writes
+-- Declared HERE, above the first reader, not next to Claim. Every public entry point binds through
+-- it, because this module used to bind only on the first Claim() — so a caller that merely ASKED who
+-- was holding the cursor, before anything had claimed, was answered from `subject == nil`: "nobody",
+-- with no claim table and no PlayerGui to look at. The vote screen is exactly that caller, and it
+-- would have read a wide-open main menu as an empty lobby and drawn straight over it.
+-- Binding on a read is safe: `if subject then return end` means it only ever fires when nothing is
+-- bound, and when nothing is bound there are no claims for Bind's table-clear to lose.
+-- AND IT NEVER CALLS Bind(nil). `Bind` clears the claim table and zeroes the count, so binding to
+-- nothing is DESTRUCTIVE: with no LocalPlayer — a server-side runtest, a gallery, a probe that has
+-- not bound yet — every call would wipe claims that `Claim` had already booked (Claim can book one
+-- while unbound: `apply` returns early, but the entry is on the books). A read would then silently
+-- release screens it was only being asked about. With no subject the honest answer is "nobody is
+-- holding it", which is what the readers below return without touching anything.
+local function ensureBound()
+	if subject then
+		return
+	end
+	local player = Players.LocalPlayer
+	if not player then
+		return
+	end
+	MenuOpenClaims.Bind(player)
+end
+
+-- Whether an UNMIGRATED writer is holding the attribute right now, and WHICH ONE. The menu's own big
+-- panel is the first: MenuClient sets the attribute from that panel's visibility and never writes
 -- again until it changes, so clearing the attribute while it is up strands the cursor.
 --
 -- This is the same test HudClient's inventory already makes for the same reason (HudClient around
 -- line 1548), deliberately rather than by coincidence: two different answers to "is the menu up"
 -- would be a third bug of this exact shape. Replaced wholesale by a test.
+--
+-- IT RETURNS THE DETECTOR'S NAME AS A SECOND VALUE, and `Detectors` below says how many there are,
+-- because a filter is a claim about what it matched: "no legacy holder" has to be distinguishable
+-- from "nothing was looked at". `apply()` pcalls this and reads the first value only, so the second
+-- costs it nothing.
+--
+-- KEYED ON GUI NAMES, WHICH IS A LISTED BUG PATTERN IN THIS PROJECT, and accepted here for exactly as
+-- long as the migration lasts. Each detector is one line; when its owner takes the attribute through
+-- Claim(), delete the line. When the list is empty, delete the function.
+local LEGACY_DETECTORS = {
+	-- MenuClient.client.lua:3373 — SetAttribute driven off the big panel's Visible.
+	{
+		name = "MenuClient/BrrMenu",
+		held = function(playerGui)
+			local menuGui = playerGui:FindFirstChild("BrrMenu")
+			for _, child in ipairs(menuGui and menuGui:GetChildren() or {}) do
+				if child:IsA("Frame") and child.Visible and child.AbsoluteSize.X > 500 then
+					return true
+				end
+			end
+			return false
+		end,
+	},
+}
+
+-- How many unmigrated writers this module knows how to see. Printed by the probes next to what they
+-- found, so a green "nobody else is holding it" can never be a measurement of nothing.
+MenuOpenClaims.Detectors = #LEGACY_DETECTORS
+
 function MenuOpenClaims.LegacyHolder()
+	ensureBound()
 	local player = subject
 	if not player or not player.FindFirstChild then
 		return false
 	end
-	local gui = player:FindFirstChild("PlayerGui")
-	local menuGui = gui and gui:FindFirstChild("BrrMenu")
-	for _, child in ipairs(menuGui and menuGui:GetChildren() or {}) do
-		if child:IsA("Frame") and child.Visible and child.AbsoluteSize.X > 500 then
-			return true
+	local playerGui = player:FindFirstChild("PlayerGui")
+	if not playerGui then
+		return false
+	end
+	for _, detector in ipairs(LEGACY_DETECTORS) do
+		-- pcall per detector: one gui shape this does not expect must not blind the others.
+		local ok, held = pcall(detector.held, playerGui)
+		if ok and held == true then
+			return true, detector.name
 		end
 	end
 	return false
+end
+
+-- Is anybody OTHER THAN `name` holding the cursor right now?
+--
+-- ANSWERED FROM THE HOLDER SET, NEVER FROM `Count()` MINUS ONE. A count is a snapshot, and a
+-- count-based test fails in the direction that LOCKS THE MOUSE: a screen that claims twice, or that
+-- misses a release on one of its exit paths, would read as "somebody else is holding" forever, with
+-- nothing in the log and no probe able to see it. Excluding by name is idempotent — our own claim can
+-- be outstanding once, twice, or leaked, and the answer does not change.
+function MenuOpenClaims.HeldByOthers(name)
+	for _, held in pairs(claims) do
+		if held ~= name then
+			return true
+		end
+	end
+	local ok, legacy = pcall(MenuOpenClaims.LegacyHolder)
+	return ok and legacy == true
 end
 
 local function apply()
@@ -108,13 +183,6 @@ function MenuOpenClaims.Bind(instance)
 	apply()
 end
 
-local function ensureBound()
-	if subject then
-		return
-	end
-	MenuOpenClaims.Bind(Players.LocalPlayer)
-end
-
 -- Claims the cursor for `name` and returns the release. Releasing twice is the same as releasing
 -- once: a screen that closes on both a button and a key would otherwise drop the count below zero
 -- and leave the next claimant unable to hold it at all.
@@ -131,8 +199,20 @@ function MenuOpenClaims.Claim(name)
 			return
 		end
 		released = true
+		-- A release whose claim is not on the books any more does NOTHING. `Bind` clears the table
+		-- and zeroes the count, so a closure handed out before a re-bind is a claim on a subject
+		-- that no longer exists; letting it decrement would take a claim off the NEW binding that
+		-- was never added to it. The count would go negative, `wanted = count > 0` would be false
+		-- for the rest of the session, and the cursor would simply stop being freed — silently,
+		-- with nothing in the log. Production only re-binds through `ensureBound` and so cannot
+		-- reach this today; the probe binds twice, and one refactor would be enough.
+		if claims[token] == nil then
+			return
+		end
 		claims[token] = nil
-		count -= 1
+		-- Floored as well as guarded. Belt and braces on the one value whose going negative is
+		-- invisible and permanent.
+		count = math.max(0, count - 1)
 		apply()
 	end
 end
@@ -140,10 +220,12 @@ end
 -- How many claims are outstanding, and who holds them. For probes and for anyone debugging a
 -- cursor that will not come back: the names are the answer to "what is holding this".
 function MenuOpenClaims.Count()
+	ensureBound()
 	return count
 end
 
 function MenuOpenClaims.Holders()
+	ensureBound()
 	local names = {}
 	for _, name in pairs(claims) do
 		table.insert(names, name)

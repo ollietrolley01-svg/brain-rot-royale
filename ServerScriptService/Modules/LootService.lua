@@ -244,8 +244,11 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 		beam.CanCollide = false
 	end
 
-	label(base, def.name, color)
-	local prompt = makePrompt(base, "Pick Up", def.name)
+	-- The tier in words, not only in the colour. A player deciding whether a gun on the floor beats the
+	-- one in their hands reads this from a distance, and colour alone asks them to have learnt seven
+	-- shades -- and excludes anyone who cannot tell two of them apart.
+	label(base, string.format("%s %s", def.rarity, def.name), color)
+	local prompt = makePrompt(base, "Pick Up", string.format("%s %s", def.rarity, def.name))
 
 	-- Parented once everything is attached, so the pickup replicates as one piece; the z-fight
 	-- pass runs after, in the world, so a pad whose top meets the ground on a slope is lifted.

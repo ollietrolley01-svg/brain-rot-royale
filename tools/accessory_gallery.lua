@@ -2,8 +2,11 @@
 --
 --   powershell -ExecutionPolicy Bypass -File tools/gallery.ps1 -Gallery tools/accessory_gallery.lua -OutDir <folder> -TimeoutSeconds 1800
 --
--- Each accessory gets a pair shot -- the old design on the left, the new one on the right, same
--- camera -- and then a closer three-quarter of the new one on its own. The "before" comes from a copy
+-- Each accessory gets a pair shot -- the old design beside the new one, same camera, each rig labelled
+-- OLD or NEW over its head -- and then a closer three-quarter of the new one on its own. The labels are
+-- in the picture because which side is which depends on where the camera stands: the first run of this
+-- gallery photographed the rigs face-on, so the rig at -X appeared on the right of the image and a
+-- caption saying "old on the left" was wrong about its own screenshot. The "before" comes from a copy
 -- of the old CosmeticData dropped into the private build tree as Shared/CosmeticDataOld, so the old
 -- designs are the actual shipped numbers rather than my transcription of them. Without that module
 -- the gallery still runs and renders the new designs only.
@@ -59,7 +62,7 @@ end
 
 -- Wears `id` on a fresh rig at `at`, facing `yaw`. `which` is "new" or "old"; "old" swaps the entry
 -- for the shipped one for the length of the attach and puts it back.
-local function wear(id, at, yaw, which, parent)
+local function wear(id, at, yaw, which, parent, label)
 	local rig = character()
 	for _, part in ipairs(rig:GetDescendants()) do
 		if part:IsA("BasePart") then
@@ -75,20 +78,52 @@ local function wear(id, at, yaw, which, parent)
 	end
 	AccessoryService.Attach(rig, id)
 	CosmeticData.Items[id] = restore
+
+	if label then
+		local post = Instance.new("Part")
+		post.Name = "Label"
+		post.Size = V(0.2, 0.2, 0.2)
+		post.Transparency = 1
+		post.Anchored = true
+		post.CanCollide = false
+		post.CFrame = CFrame.new(at + V(0, 4.6, 0))
+		post.Parent = parent
+
+		local billboard = Instance.new("BillboardGui")
+		billboard.Size = UDim2.fromOffset(150, 44)
+		billboard.AlwaysOnTop = true
+		billboard.Parent = post
+
+		local text = Instance.new("TextLabel")
+		text.Size = UDim2.fromScale(1, 1)
+		text.BackgroundTransparency = 1
+		text.Font = Enum.Font.GothamBold
+		text.TextSize = 26
+		text.TextColor3 = label == "NEW" and Color3.fromRGB(120, 240, 150) or Color3.fromRGB(245, 180, 120)
+		text.TextStrokeTransparency = 0.1
+		text.Text = label
+		text.Parent = billboard
+	end
+
 	return rig
 end
 
 local views = {}
 local function add(name, setup)
-	table.insert(views, { name = name, settle = 1.2, hold = 2, setup = setup })
+	-- No `hold` here on purpose: the plugin uses `view.hold or HOLD`, so a view that names its
+	-- own hold ignores gallery.ps1's -Hold. Leaving it out lets the caller slow the run down
+	-- when the machine is busy, which is when the capture loop falls behind the plugin.
+	table.insert(views, { name = name, settle = 1.2, setup = setup })
 end
 
--- Head-anchored pieces sit around y+3.05 on an R15 rig; back-anchored ones around y+2.4, seen from
--- behind. `turn` faces the rig away from the camera for those.
+-- `from` is which side of the rig the camera stands on: -1 in front, +1 behind. It is a field rather
+-- than something derived from the anchor, because deriving it is how the first run went wrong -- a
+-- back-anchored rig was turned to face away AND the camera moved round to the far side, which cancelled
+-- out and photographed the pizza slice from the front, where there is no pizza.
 local FRAMING = {
-	HeadTop = { height = 3.15, aim = 3.05, distance = 4.6, lift = 0.7, yaw = 0 },
-	Face = { height = 2.95, aim = 2.95, distance = 3.6, lift = 0.25, yaw = 0 },
-	Back = { height = 2.5, aim = 2.3, distance = 5.2, lift = 0.6, yaw = math.pi },
+	HeadTop = { height = 3.15, aim = 3.05, distance = 4.6, lift = 0.7, yaw = 0, from = -1 },
+	Face = { height = 2.95, aim = 2.95, distance = 3.6, lift = 0.25, yaw = 0, from = -1 },
+	Back = { height = 2.9, aim = 2.2, distance = 5.6, lift = 0.5, yaw = 0, from = 1 },
 }
 
 local ids = CosmeticData.OfKind("Accessory")
@@ -102,13 +137,12 @@ for _, id in ipairs(ids) do
 	-- Old on the left, new on the right, one camera on both.
 	if Old and Old.Items[id] then
 		add(id .. "_pair", function(folder, camera)
-			wear(id, HIGH + V(-1.6, 0, 0), frame.yaw, "old", folder)
-			wear(id, HIGH + V(1.6, 0, 0), frame.yaw, "new", folder)
+			wear(id, HIGH + V(-1.6, 0, 0), frame.yaw, "old", folder, "OLD")
+			wear(id, HIGH + V(1.6, 0, 0), frame.yaw, "new", folder, "NEW")
 			camera.FieldOfView = 34
-			local side = frame.yaw == 0 and -1 or 1
-			camera.CFrame = CFrame.lookAt(HIGH + V(0, frame.height + frame.lift, side * (frame.distance + 1.8)),
+			camera.CFrame = CFrame.lookAt(HIGH + V(0, frame.height + frame.lift, frame.from * (frame.distance + 1.8)),
 				HIGH + V(0, frame.aim, 0))
-			note(string.format("%s: left is the old design, right is the new one%s", id, changed and "" or " (same piece count)"))
+			note(string.format("%s: both rigs labelled in shot%s", id, changed and "" or " (same piece count)"))
 		end)
 	end
 
@@ -116,8 +150,8 @@ for _, id in ipairs(ids) do
 	add(id .. "_new", function(folder, camera)
 		wear(id, HIGH, frame.yaw, "new", folder)
 		camera.FieldOfView = 28
-		local side = frame.yaw == 0 and -1 or 1
-		camera.CFrame = CFrame.lookAt(HIGH + V(side * frame.distance * 0.55, frame.height + frame.lift, side * frame.distance * 0.8),
+		camera.CFrame = CFrame.lookAt(
+			HIGH + V(frame.from * frame.distance * 0.55, frame.height + frame.lift, frame.from * frame.distance * 0.8),
 			HIGH + V(0, frame.aim, 0))
 	end)
 end
@@ -130,7 +164,9 @@ for half = 0, 1 do
 		for index = from, math.min(from + 6, #ids) do
 			local id = ids[index]
 			local item = CosmeticData.Get(id)
-			local yaw = (FRAMING[item.anchor] or FRAMING.HeadTop).yaw
+			-- The lineup camera stands in front of the row, so a back-anchored rig turns round in this
+			-- shot only -- otherwise its backpack faces away and the cell shows an empty back.
+			local yaw = item.anchor == "Back" and math.pi or 0
 			wear(id, HIGH + V((shown - 3) * 3.4, 0, 0), yaw, "new", folder)
 			shown += 1
 		end

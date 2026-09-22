@@ -587,7 +587,14 @@ if LootService then
 			out("%-22s DropWeapon produced no pickup (%s)", id, tostring(err))
 		else
 			local gunParts, padParts = {}, {}
-			for _, child in ipairs(base:GetChildren()) do
+			-- DESCENDANTS, not children. The gun pieces used to be loose directly under `base`, because
+			-- `BuildStaticGun` reparents them and destroys the Model it built; they now sit inside a
+			-- `Gun` Model so the rarity Highlight has something with visible parts to adorn. This loop
+			-- walked CHILDREN, so the moment that Model appeared it collected nothing, `measure({})`
+			-- returned nil and the whole gallery died on `shape.size.X` with 0 shots. Worth saying
+			-- plainly: the game's own consumers of this structure were all checked first and were all
+			-- fine -- it was THIS TOOL, the one doing the checking, that was the consumer nobody checked.
+			for _, child in ipairs(base:GetDescendants()) do
 				if child:IsA("BasePart") then
 					-- The pad discs (and a Legendary's beam) are built by LootService's own `detail`,
 					-- which never names them, so they arrive as plain "Part"; every gun piece carries
@@ -600,6 +607,14 @@ if LootService then
 						table.insert(gunParts, child)
 					end
 				end
+			end
+			-- A pickup with no gun parts is a finding, not a crash. This used to fall straight through
+			-- to `shape.size.X` on a nil and take the whole run down -- 0 shots, and the log's last
+			-- line was a Lua error rather than the thing that was wrong.
+			if #gunParts == 0 then
+				out("%-22s NO GUN PARTS FOUND under the pickup (%d descendants, %d pad) -- skipped",
+					id, #base:GetDescendants(), #padParts)
+				continue
 			end
 			local shape = measure(gunParts, base.CFrame)
 			local view = eyeView(gunParts, base.Position, math.max(shape.size.X, shape.size.Y, shape.size.Z) * 0.6 + 0.3)
@@ -1011,12 +1026,20 @@ for _, id in ipairs({ "TralalaShotgun", "PocketPopper" }) do
 				local base = drop(folder, id, Vector3.zero)
 				local changed = 0
 				if base and not case[2] then
-					for _, child in ipairs(base:GetChildren()) do
+					-- Descendants: the gun pieces now sit inside a `Gun` Model (see the note at the
+					-- pickup sweep above). Walking CHILDREN here would have turned off zero shadows
+					-- and photographed two identical frames labelled "as shipped" and "no self
+					-- shadow" -- a comparison that quietly compares nothing, which is worse than one
+					-- that crashes.
+					for _, child in ipairs(base:GetDescendants()) do
 						if child:IsA("BasePart") and child.Name ~= "Part" then
 							child.CastShadow = false
 							changed += 1
 						end
 					end
+				end
+				if base and not case[2] and changed == 0 then
+					out("view shadow_%s_%s: NO PARTS FOUND to turn off -- this pair compares nothing", case[1], id)
 				end
 				local focus = base and base.Position + Vector3.new(0, 1.5, 0) or VIEW_ORIGIN
 				out("view shadow_%s_%s: %d parts had their shadow turned off", case[1], id, changed)
@@ -1044,6 +1067,61 @@ local function lightGlow(base, on)
 	return glow ~= nil
 end
 
+-- `LootService.DropWeapon` scatters a drop by a random offset. That is right in the game and wrong in
+-- a comparison: the 19:04 pair was photographed with the guns in DIFFERENT PLACES, so the two frames
+-- could not have been differenced even if the glow had worked. A compared pickup is therefore moved
+-- to an exact spot afterwards, rigidly -- the base and every descendant part by one delta, which is
+-- what AmbientClient's spin does and is measured at 0.000000 studs of distortion through a full turn.
+local function moveTo(base, cframe)
+	if not base then
+		return nil
+	end
+	local delta = cframe * base.CFrame:Inverse()
+	for _, d in ipairs(base:GetDescendants()) do
+		if d:IsA("BasePart") then
+			d.CFrame = delta * d.CFrame
+		end
+	end
+	base.CFrame = cframe
+	return base
+end
+
+-- THE A/B HAS TO BE ONE SCENE PHOTOGRAPHED TWICE. Dropping the guns again per view rebuilt the models
+-- and re-scattered them, so "the same three guns with and without a rim" was not the same three guns
+-- and no pixel could be compared. They are built once and kept in their own folder under workspace,
+-- out of reach of the harness's per-view clear; the two views then differ by exactly one property.
+local GLOW_IDS = { "PocketPopper", "TralalaShotgun", "GoldenSahurCannon" }
+local glowHold = nil
+
+local function glowScene()
+	if glowHold and glowHold.folder.Parent then
+		return glowHold
+	end
+	local held = Instance.new("Folder")
+	held.Name = "GalleryGlowHold"
+	held.Parent = workspace
+	local bases, withGlow = {}, 0
+	-- One Common and one Uncommon, which is all the map itself ever drops loose, plus a Legendary to
+	-- show a high tier (it reaches the floor only from a death drop).
+	for index, id in ipairs(GLOW_IDS) do
+		local base = drop(held, id, Vector3.new((index - 2) * 4.5, 0, 0))
+		if base then
+			base.Parent = held
+			moveTo(base, CFrame.new(VIEW_ORIGIN + Vector3.new((index - 2) * 4.5, 0.3, 0)))
+			if base:FindFirstChild("RarityGlow") then
+				withGlow += 1
+			end
+			table.insert(bases, base)
+		end
+	end
+	-- Said out loud, because "0 rims" and "0 rims that render" are different failures and the picture
+	-- cannot tell them apart: a build without the LootService change has no RarityGlow to switch on.
+	out("glow scene: %d pickup(s) built, %d carry a RarityGlow%s", #bases, withGlow,
+		withGlow == 0 and "  -- NO GLOW IN THIS BUILD, the A/B below is void" or "")
+	glowHold = { folder = held, bases = bases }
+	return glowHold
+end
+
 for _, distance in ipairs({ 10, 25, 60 }) do
 	for _, case in ipairs({ { "glow", true }, { "noglow", false } }) do
 		table.insert(views, {
@@ -1052,20 +1130,21 @@ for _, distance in ipairs({ 10, 25, 60 }) do
 			hold = 2,
 			setup = function(folder, camera)
 				scene(folder)
-				local made = {}
-				-- One Common and one Uncommon, which is all the map itself ever drops loose, plus a
-				-- Legendary to show a high tier (it reaches the floor only from a death drop).
-				for index, id in ipairs({ "PocketPopper", "TralalaShotgun", "GoldenSahurCannon" }) do
-					local base = drop(folder, id, Vector3.new((index - 2) * 4.5, 0, 0))
-					if base then
-						lightGlow(base, case[2])
-						table.insert(made, base)
+				local held = glowScene()
+				local made, lit = held.bases, 0
+				for _, base in ipairs(made) do
+					if lightGlow(base, case[2]) then
+						lit += 1
 					end
 				end
 				local focus = VIEW_ORIGIN + Vector3.new(0, 1.2, 0)
 				camera.FieldOfView = 70
 				camera.CFrame = CFrame.lookAt(VIEW_ORIGIN + Vector3.new(0, EYE_HEIGHT, distance), focus)
-				out("view glow_%dstud_%s: %d pickups, rim %s", distance, case[1], #made, case[2] and "lit" or "off")
+				-- The count is of rims SET, which is not a count of rims DRAWN -- that is the whole
+				-- lesson of the 19:04 run, where forty were set and none drawn. The drawn count comes
+				-- from `guns_f0_glowcheck.py`, which differences this frame against its partner.
+				out("view glow_%dstud_%s: %d pickups, %d rim(s) SET %s (drawn count comes from the pixels)",
+					distance, case[1], #made, lit, case[2] and "on" or "off")
 				frameCheck(string.format("glow_%dstud_%s", distance, case[1]), camera, focus, made[1])
 			end,
 		})
@@ -1074,30 +1153,74 @@ end
 
 -- How many Highlights actually render at once. Roblox drops the surplus silently, and a map carries
 -- far more pickups than the cap, so this is the measurement that decides whether the glow can ever be
--- always-on: forty pickups in a grid, all lit, all the same distance away. Count the rims in the
--- picture. If fewer than forty glow, the distance gate is not an optimisation, it is the only version
--- that works.
+-- always-on: forty pickups in a grid, all the same distance away.
+--
+-- IT IS A PAIR, and it is a pair because of what the last run got wrong. That run switched forty rims
+-- on, said so truthfully, and photographed forty guns with no rim on any of them -- and nothing in the
+-- run noticed, because everything it checked was a property it had just set. The count of rims DRAWN
+-- comes from differencing these two frames and counting the separate blobs that changed
+-- (`guns_f0_glowcheck.py`); forty blobs means no cap in reach, fewer means the distance gate is not an
+-- optimisation but the only version that works.
+local FORTY_IDS = {}
+for index = 1, 40 do
+	FORTY_IDS[index] = index % 2 == 0 and "PocketPopper" or "TralalaShotgun"
+end
+local fortyHold = nil
+
+local function fortyScene()
+	if fortyHold and fortyHold.folder.Parent then
+		return fortyHold
+	end
+	-- The three held pickups from the A/B above would otherwise still be standing in this shot.
+	if glowHold and glowHold.folder then
+		glowHold.folder:Destroy()
+		glowHold = nil
+	end
+	local held = Instance.new("Folder")
+	held.Name = "GalleryFortyHold"
+	held.Parent = workspace
+	local bases, withGlow = {}, 0
+	for index, id in ipairs(FORTY_IDS) do
+		local row, column_ = math.floor((index - 1) / 8), (index - 1) % 8
+		local spot = Vector3.new((column_ - 3.5) * 3.2, 0, -row * 3.2)
+		local base = drop(held, id, spot)
+		if base then
+			base.Parent = held
+			moveTo(base, CFrame.new(VIEW_ORIGIN + spot + Vector3.new(0, 0.3, 0)))
+			if base:FindFirstChild("RarityGlow") then
+				withGlow += 1
+			end
+			table.insert(bases, base)
+		end
+	end
+	out("forty scene: %d pickup(s) built, %d carry a RarityGlow%s", #bases, withGlow,
+		withGlow == 0 and "  -- NO GLOW IN THIS BUILD, the cap question cannot be asked" or "")
+	fortyHold = { folder = held, bases = bases }
+	return fortyHold
+end
+
+for _, case in ipairs({ { "glow", true }, { "noglow", false } }) do
 table.insert(views, {
-	name = "glow_fortypickups_cap",
+	name = "glow_fortypickups_" .. case[1],
 	settle = 2,
 	hold = 2.5,
 	setup = function(folder, camera)
 		scene(folder)
+		local held = fortyScene()
 		local lit = 0
-		for index = 1, 40 do
-			local row, column_ = math.floor((index - 1) / 8), (index - 1) % 8
-			local base = drop(folder, index % 2 == 0 and "PocketPopper" or "TralalaShotgun",
-				Vector3.new((column_ - 3.5) * 3.2, 0, -row * 3.2))
-			if base and lightGlow(base, true) then
+		for _, base in ipairs(held.bases) do
+			if lightGlow(base, case[2]) then
 				lit += 1
 			end
 		end
-		out("view glow_fortypickups_cap: %d rims switched on; count how many the picture actually shows", lit)
+		out("view glow_fortypickups_%s: %d rims SET %s -- this is NOT a count of rims drawn", case[1], lit,
+			case[2] and "on" or "off")
 		camera.FieldOfView = 70
 		camera.CFrame = CFrame.lookAt(VIEW_ORIGIN + Vector3.new(0, 9, 16), VIEW_ORIGIN + Vector3.new(0, 0, -6))
-		frameCheck("glow_fortypickups_cap", camera, VIEW_ORIGIN + Vector3.new(0, 0, -6))
+		frameCheck("glow_fortypickups_" .. case[1], camera, VIEW_ORIGIN + Vector3.new(0, 0, -6), held.bases[1])
 	end,
 })
+end
 
 out("gallery: %d views", #views)
 return views

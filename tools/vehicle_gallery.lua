@@ -715,6 +715,29 @@ local function assertInFrame(camera, worldPoint, label, fov)
 	return ok
 end
 
+-- "IN FRAME" says where the camera points, not what's between it and the subject (2026-09-21
+-- lesson, match-flow/guns tabs -- occluded renders read as passes until this ray is added). Casts
+-- camera->worldPoint and fails loud, naming what it hit, rather than passing on geometry alone.
+local function assertVisible(camera, worldPoint, label, folder)
+	local origin = camera.CFrame.Position
+	local delta = worldPoint - origin
+	local targetDist = delta.Magnitude
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { folder }
+	local result = workspace:Raycast(origin, delta, params)
+	if result then
+		local hitDist = (result.Position - origin).Magnitude
+		if hitDist < targetDist - 0.5 then
+			note(string.format("%s: OCCLUDED by %s at %.1f studs (target at %.1f studs)",
+				label, result.Instance:GetFullName(), hitDist, targetDist))
+			return false
+		end
+	end
+	note(string.format("%s: clear line of sight, %.1f studs", label, targetDist))
+	return true
+end
+
 -- Every rod-CANDIDATE part on a built model, ANY shape, named with its length, cross-section and
 -- length/cross-section ratio -- the same ratio that flagged the Van's roof drumsticks (1.72 studs
 -- at diameter 0.10, ratio 17.2, thickened to 0.17, ratio 10.1). The first version of this checked
@@ -1070,6 +1093,217 @@ table.insert(views, {
 			emitters, emitters == 1 and "PASS" or "FAIL"))
 
 		look(camera, Vector3.new(-17, 8, -19), Vector3.new(0, 2.2, 0), 40)
+	end,
+})
+
+--------------------------------------------------------------------------------
+-- Oliver: "make the car wheel models more flat". Measures every car's tyre width/diameter ratio
+-- from the BUILT model (not the source constants), and that the tyre still meets the ground --
+-- narrowing width must never have touched radius, which is what the suspension samples for ride
+-- height. Documented before-values (the tw this file's VehicleModels.lua carried before this
+-- change): Rotster 1.05, CrocodiloRanger 1.35, TralalaGT 1.25, SahurVan 1.1 -- all read against a
+-- diameter that did not change, so those are also the before-ratios.
+--------------------------------------------------------------------------------
+
+local WHEEL_BEFORE = {
+	Rotster = 1.05, CrocodiloRanger = 1.35, TralalaGT = 1.25, SahurVan = 1.1,
+}
+
+table.insert(views, {
+	name = "audit_wheels",
+	setup = function(folder, camera)
+		stage(folder)
+		local ids = { "Rotster", "CrocodiloRanger", "TralalaGT", "SahurVan" }
+		for _, id in ipairs(ids) do
+			local model = VehicleModels.Build(id, Random.new(7), { scheme = 1 })
+			model.Parent = folder
+			-- Without this, the model sits wherever VehicleModels.Build's own local geometry puts
+			-- it, nowhere near the stage() floor the ground-clearance raycast below is aimed at --
+			-- measured: every one of the four read "no ground found" until this line was added.
+			model:PivotTo(CFrame.new(ORIGIN))
+			local diameter, width, tyres = nil, nil, 0
+			for _, part in ipairs(model:GetDescendants()) do
+				if part:IsA("Part") and part.Shape == Enum.PartType.Cylinder and string.find(part.Name, "_Tyre", 1, true)
+					and not string.find(part.Name, "Wall", 1, true) then
+					tyres += 1
+					width, diameter = part.Size.X, part.Size.Y
+				end
+			end
+			-- Ground clearance measured against the actual terrain/floor under the wheel, not an
+			-- assumed Y, the same "sample, don't trust it" rule every other footing check here uses.
+			-- Tracks the WORST (largest magnitude) gap across all four tyres, not the best.
+			local worstGroundGap, foundGround = 0, false
+			if tyres > 0 then
+				local params = RaycastParams.new()
+				params.FilterType = Enum.RaycastFilterType.Exclude
+				params.FilterDescendantsInstances = { model }
+				for _, part in ipairs(model:GetDescendants()) do
+					if part:IsA("Part") and string.find(part.Name, "_Tyre", 1, true) and not string.find(part.Name, "Wall", 1, true) then
+						local radius = part.Size.Y / 2
+						local bottom = part.Position - Vector3.new(0, radius, 0)
+						local hit = workspace:Raycast(bottom + Vector3.new(0, 3, 0), Vector3.new(0, -6, 0), params)
+						if hit then
+							foundGround = true
+							local gap = bottom.Y - hit.Position.Y
+							if math.abs(gap) > math.abs(worstGroundGap) then
+								worstGroundGap = gap
+							end
+						end
+					end
+				end
+			end
+			local ratio = (tyres > 0) and (width / diameter) or nil
+			local before = WHEEL_BEFORE[id]
+			local beforeRatio = (before and diameter) and (before / diameter) or nil
+			note(string.format("audit_wheels %s: %d tyres, width %.2f diameter %.2f, ratio %s (was width %.2f, ratio %s) | worst tyre-to-ground gap %s studs (0 = sitting exactly on it)",
+				id, tyres, width or -1, diameter or -1, ratio and string.format("%.2f", ratio) or "N/A",
+				before, beforeRatio and string.format("%.2f", beforeRatio) or "N/A",
+				foundGround and string.format("%.3f", worstGroundGap) or "no ground found"))
+			model:Destroy()
+			task.wait()
+		end
+		look(camera, Vector3.new(0, 20, -40), Vector3.new(0, 0, 0), 50)
+	end,
+})
+
+-- The worst two (TralalaGT ratio 0.46, Rotster 0.40) at a standing player's eye height (~5 studs),
+-- close enough to read the tyre profile the way Oliver actually sees it walking up to the car.
+-- The first attempt at this framing shipped empty-hood shots with no wheel in them at all -- the
+-- exact "empty sky" failure the harness rule exists for -- because it had no in-frame assertion.
+-- Fixed by targeting the actual front-left tyre part and asserting on it, not just eyeballing the
+-- numbers.
+for _, id in ipairs({ "TralalaGT", "Rotster" }) do
+	table.insert(views, {
+		name = "wheelflat_" .. id,
+		setup = function(folder, camera)
+			stage(folder)
+			local model = place(folder, id, 1, Vector3.zero, 0, false)
+			local wheel = model:FindFirstChild("Wheel_FL_Tyre", true)
+			local target = wheel and wheel.Position or (ORIGIN + Vector3.new(-2.6, 1.4, -4.2))
+			-- Deliberately NOT going through look(): it adds ORIGIN to whatever it's given, and
+			-- `target` here is already an absolute world position (wheel.Position), so routing it
+			-- through look() would add ORIGIN a second time -- precisely the "camera helper adds
+			-- the world origin twice" trap this whole job was warned about at the start. Eye set in
+			-- the same absolute frame instead: standing height (5 studs above the stage floor,
+			-- which sits at ORIGIN.Y) a few studs off to the side of the wheel.
+			local eye = Vector3.new(target.X - 6, ORIGIN.Y + 5, target.Z - 6)
+			camera.FieldOfView = 45
+			camera.CFrame = CFrame.lookAt(eye, target)
+			assertInFrame(camera, target, "wheelflat_" .. id .. "/Wheel_FL_Tyre")
+			if not wheel then
+				note("wheelflat_" .. id .. ": Wheel_FL_Tyre not found, fell back to an assumed position")
+			end
+		end,
+	})
+end
+
+--------------------------------------------------------------------------------
+-- #116 ("bat parts still appear sideways on the Sahur RV, this problem is also on the Ranger"):
+-- old #50/#61 already attempted this. #61's own fix (above, on CrocodiloRanger) was measured and
+-- confirmed to be a THINNESS fix (bull bar/roll bar/mirror arm rods were too thin, ratio-wise) --
+-- rodAudit's own ratio test, not an axis test, so it says nothing about whether a Cylinder is
+-- lying on the wrong axis. That is a DIFFERENT bug class (Enum.PartType.Cylinder's circular faces
+-- sit on local X, so Size.X is the length ALONG the axis -- get the CFrame's rotation wrong and an
+-- elongated cylinder points the wrong way). This audit checks THAT invariant directly and by name
+-- covers every Cylinder-shaped part on every one of the 7 vehicle kinds, not a sample: for each it
+-- reads the part's OWN CFrame.RightVector (the world direction its local +X -- its length axis --
+-- actually points, after every rotation in the build function has been applied) and prints length,
+-- diameter and that direction. "Flagged" is elongation (length/diameter) >= 2.5 -- short covers and
+-- bolts don't read as "sideways" however they're turned, only genuinely rod/barrel-shaped ones do.
+--------------------------------------------------------------------------------
+
+local function axisBucket(axis)
+	local ax, ay, az = math.abs(axis.X), math.abs(axis.Y), math.abs(axis.Z)
+	if ay >= ax and ay >= az then
+		return ay > 0.85 and "VERTICAL" or "diagonal-ish vertical"
+	elseif ax >= ay and ax >= az then
+		return ax > 0.85 and "LATERAL (world X, left-right)" or "diagonal-ish lateral"
+	else
+		return az > 0.85 and "LONGITUDINAL (world Z, front-back)" or "diagonal-ish longitudinal"
+	end
+end
+
+table.insert(views, {
+	name = "axis_audit",
+	setup = function(folder, camera)
+		local examined, flagged = 0, {}
+		local ids = {}
+		for id in pairs(VehicleModels.Models) do
+			table.insert(ids, id)
+		end
+		table.sort(ids)
+		-- Every kind gets built and scanned, not sampled -- the map tab's "29 of 29" lesson: a probe
+		-- that walks "every X" only covers the kinds its sample happened to deal.
+		for _, id in ipairs(ids) do
+			local model = VehicleModels.Build(id, Random.new(7), { scheme = 1 })
+			for _, part in ipairs(model:GetDescendants()) do
+				if part:IsA("Part") and part.Shape == Enum.PartType.Cylinder then
+					examined += 1
+					local length = part.Size.X
+					local diameter = (part.Size.Y + part.Size.Z) / 2
+					local ratio = diameter > 0 and length / diameter or math.huge
+					if ratio >= 2.5 then
+						local axis = part.CFrame.RightVector
+						table.insert(flagged, {
+							model = id, name = part.Name, length = length, diameter = diameter,
+							ratio = ratio, axis = axis, bucket = axisBucket(axis),
+						})
+					end
+				end
+			end
+			model:Destroy()
+			task.wait()
+		end
+		note(string.format("axis audit: %d Cylinder parts examined across %d vehicle kinds (every kind built, none sampled), %d elongated (ratio >= 2.5) flagged for axis review",
+			examined, #ids, #flagged))
+		table.sort(flagged, function(a, b) return a.ratio > b.ratio end)
+		for _, f in ipairs(flagged) do
+			note(string.format("  %s/%s: length %.2f, diameter %.2f, ratio %.1f, axis (%.2f, %.2f, %.2f) -- %s",
+				f.model, f.name, f.length, f.diameter, f.ratio, f.axis.X, f.axis.Y, f.axis.Z, f.bucket))
+		end
+		look(camera, Vector3.new(0, 20, -40), Vector3.new(0, 0, 0), 50)
+	end,
+})
+
+table.insert(views, {
+	name = "closeup_bat_SahurVan",
+	setup = function(folder, camera)
+		stage(folder)
+		-- Pinned model AND scheme (VehicleService.Create draws its own Random with no options.model --
+		-- 09-21 vehicle-tab lesson), same seed `place()` always uses, so this is the exact geometry
+		-- that ships.
+		local model = place(folder, "SahurVan", 1, Vector3.zero, 0, false)
+		local names = { "BatKnob", "BatHandle", "BatTaper", "BatThroat", "BatBarrel", "BatEnd",
+			"BatStrap1", "BatStrap2", "DrumShell" }
+		for _, name in ipairs(names) do
+			local part = model:FindFirstChild(name)
+			if part then
+				local axis = part.Shape == Enum.PartType.Cylinder and part.CFrame.RightVector or nil
+				if axis then
+					local length, diameter = part.Size.X, (part.Size.Y + part.Size.Z) / 2
+					note(string.format("closeup_bat_SahurVan/%s: length %.2f, diameter %.2f, ratio %.1f, axis (%.2f, %.2f, %.2f) -- %s",
+						name, length, diameter, diameter > 0 and length / diameter or 0, axis.X, axis.Y, axis.Z, axisBucket(axis)))
+				else
+					note(string.format("closeup_bat_SahurVan/%s: %s, size (%.2f, %.2f, %.2f)",
+						name, tostring(part.Shape), part.Size.X, part.Size.Y, part.Size.Z))
+				end
+			else
+				note("closeup_bat_SahurVan: part not found: " .. name)
+			end
+		end
+		-- Roof rack sits around (batX=-1.4 .. 4, roofY+~1) in model space on a van whose roofY is
+		-- ~5.8-6; framed from the left-front quarter, close enough that the bat fills the frame
+		-- rather than being a few pixels of a wide shot (the "wide shot of something small is not a
+		-- picture of it" lesson).
+		local target = ORIGIN + Vector3.new(0.8, 7.3, -0.5)
+		look(camera, Vector3.new(-9, 10, -9), Vector3.new(0.8, 7.3, -0.5), 32)
+		assertInFrame(camera, target, "closeup_bat_SahurVan roof rack")
+		for _, name in ipairs({ "BatKnob", "BatBarrel", "BatEnd", "DrumShell" }) do
+			local part = model:FindFirstChild(name)
+			if part then
+				assertVisible(camera, part.Position, "closeup_bat_SahurVan/" .. name, folder)
+			end
+		end
 	end,
 })
 

@@ -57,7 +57,7 @@ local bandTransparency = BAND_TRANSPARENCY
 
 local function layout(center, radius)
 	-- A stud of overlap closes the seams between neighbouring segments.
-	local length = 2 * math.pi * radius / SEGMENTS + 1
+	local length = 2 * radius * math.tan(math.pi / SEGMENTS) + 0.02
 	local flatCenter = Vector3.new(center.X, 0, center.Z)
 
 	for index = 1, SEGMENTS do

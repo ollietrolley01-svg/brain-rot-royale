@@ -97,9 +97,25 @@ local function placeRect(spot, natural, fit)
 end
 
 -- Every element on HudClient's own ScreenGui, desktop literals as authored (file:line cited).
+-- Reconciled against a full `grep -n "Parent = screenGui" HudClient.client.lua` (the polish tab's
+-- finding: menu_hud_audit.py's udim2_offsets() drops anything sized with a named constant and
+-- reports nothing dropped -- that is THAT tool's bug, not this one's: this file transcribes every
+-- literal by hand with a cited line, so there is no regex to silently miss a named size. Still,
+-- the grep caught real omissions here (hitmarker, zoneWarning, streakLabel, readyButton) that
+-- simply hadn't been added yet; added below. townLabel is deliberately NOT here -- it duplicated
+-- enteringLabel and was deleted outright (see HudClient.client.lua's "Now entering" section).
+-- dropModal/dropScreen/votePanel/resultsPanel/championBanner/confetti/recapPanel are all modal
+-- screens (results, death recap, vote/drop before the pre-match UI landed) and stay excluded the
+-- same way tools/menu_hud_audit.py excludes its own MODAL list, for the same reason: they take the
+-- screen alone, so comparing them to the ambient HUD compares two things that are never both up.
 local DESKTOP = {
 	{ name = "Event banner", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 10 }, size = { 0, 440, 0, 56 }, cite = "HudClient.client.lua:62-70" },
+	{ name = "Ready pill", anchor = { 0, 0 }, pos = { 0.5, 232, 0, 8 }, size = { 0, 230, 0, 60 }, cite = "HudClient.client.lua:109-118", group = "lobbyOnly" },
 	{ name = "Crosshair", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, 0 }, size = { 0, 64, 0, 64 }, cite = "HudClient.client.lua:273-280", group = "centre" },
+	{ name = "Hitmarker", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, 0 }, size = { 0, 80, 0, 40 }, cite = "HudClient.client.lua:340-350", group = "centre" },
+	{ name = "Zone warning", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.68, 0 }, size = { 0, 520, 0, 40 }, cite = "HudClient.client.lua:486-498 (fixed: was 0.62, inside the interact prompt)" },
+	{ name = "Streak label", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 180 }, size = { 0, 520, 0, 60 }, cite = "HudClient.client.lua:628-638 (fixed: was 0.34 scale, inside the damage arc)" },
+	{ name = "Entering label", anchor = { 0.5, 0 }, pos = { 0.5, 0, 0, 130 }, size = { 0, 600, 0, 44 }, cite = "HudClient.client.lua:2447-2457 (fixed: was 0.24 scale, 13px from streakLabel's old spot)" },
 	{ name = "Health panel", anchor = { 0, 0 }, pos = { 0, 16, 1, -96 }, size = { 0, 280, 0, 80 }, cite = "HudClient.client.lua:794-802" },
 	{ name = "Companion status", anchor = { 0, 0 }, pos = { 0, 16, 1, -166 }, size = { 0, 300, 0, 62 }, cite = "HudClient.client.lua:884-892" },
 	{ name = "Speed boost pill", anchor = { 0, 0 }, pos = { 0, 16, 1, -202 }, size = { 0, 150, 0, 28 }, cite = "HudClient.client.lua:965-975" },
@@ -117,6 +133,10 @@ local DESKTOP = {
 	-- with a 170 px radial offset; "straight up" (attacker directly ahead) is the representative
 	-- sample used here, the orientation most likely to interact with the top-centre cluster.
 	{ name = "Damage indicator (sample: from ahead)", anchor = { 0.5, 0.5 }, pos = { 0.5, 0, 0.5, -170 }, size = { 0, 4, 0, 150 }, cite = "HudClient.client.lua:764-773", group = "centre" },
+	-- Full-screen by design (four edge gradients under one Size(1,1) frame -- COORDINATION.md's own
+	-- note: "counting them made the HUD look worse than it is"), so it's excluded from every pair,
+	-- not just other "overlay" members -- see the `group == "overlay"` skip below.
+	{ name = "Vignette (low health / storm edge)", anchor = { 0, 0 }, pos = { 0, 0, 0, 0 }, size = { 1, 0, 1, 0 }, cite = "HudClient.client.lua:434-475", group = "overlay" },
 }
 
 -- ModeScoreHud.client.lua's own ScreenGui ("Scoreline"), desktop literal.
@@ -267,6 +287,12 @@ local function buildElements(vw, menuOpen)
 			add("Toast", offsetRect(vw.x / 2 - 460 * 0.62 / 2, spots.toast.y, 460 * 0.62, 36 * 0.62))
 		end
 		add("Drop pickup banner", offsetRect(vw.x / 2 - 480 * 0.62 / 2, 128 * 0.62, 480 * 0.62, 30 * 0.62))
+		-- Zone warning / streak label: CENTRED-table entries with no `key` (HudClient.client.lua's
+		-- Phone layout section), so like dropBanner they keep their OWN desktop anchor/position and
+		-- only their SIZE shrinks by the fixed scale -- not spot-fitted.
+		add("Zone warning", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.68, 0 }, { 0, 520 * 0.7, 0, 40 * 0.7 }, vw))
+		add("Streak label", udimRect({ 0.5, 0 }, { 0.5, 0, 0, 180 }, { 0, 520 * 0.7, 0, 60 * 0.7 }, vw))
+		add("Entering label", udimRect({ 0.5, 0 }, { 0.5, 0, 0, 130 }, { 0, 600 * 0.7, 0, 44 * 0.7 }, vw))
 		-- Hotbar: HudClient.client.lua:2854-2918's setHotbarShape, no-slots screens fall back to the
 		-- Inventory button alone.
 		local hbSpot = spots.hotbar
@@ -302,7 +328,9 @@ local function buildElements(vw, menuOpen)
 		-- Crosshair and the damage indicator stay screen-centre anchored on every viewport (no
 		-- PhoneLayout entry moves them).
 		add("Crosshair", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.5, 0 }, { 0, 64, 0, 64 }, vw), "centre")
+		add("Hitmarker", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.5, 0 }, { 0, 80, 0, 40 }, vw), "centre")
 		add("Damage indicator (sample: from ahead)", udimRect({ 0.5, 0.5 }, { 0.5, 0, 0.5, -170 }, { 0, 4, 0, 150 }, vw), "centre")
+		add("Vignette (low health / storm edge)", offsetRect(0, 0, vw.x, vw.y), "overlay")
 		-- Roblox's own reserved zones: nothing of ours may sit in them.
 		for _, key in ipairs({ "jump", "stick", "fire", "aim", "reload", "run", "pet", "slide", "move" }) do
 			local s = spots[key]
@@ -365,7 +393,8 @@ for _, vw in ipairs(VIEWPORTS) do
 					local a, b = elements[i], elements[j]
 					local bothReserved = a.group == "reserved" and b.group == "reserved"
 					local sameExcludedGroup = a.group and a.group == b.group and EXCLUDE_GROUPS[a.group]
-					if not bothReserved and not sameExcludedGroup and not isCompassScorePair(a, b) then
+					local anyOverlay = a.group == "overlay" or b.group == "overlay"
+					if not bothReserved and not sameExcludedGroup and not isCompassScorePair(a, b) and not anyOverlay then
 						local ox = math.min(a.r.x + a.r.w, b.r.x + b.r.w) - math.max(a.r.x, b.r.x)
 						local oy = math.min(a.r.y + a.r.h, b.r.y + b.r.h) - math.max(a.r.y, b.r.y)
 						if ox > 0 and oy > 0 then

@@ -30,7 +30,7 @@
 -- Layout, relative to the centre (+X east, +Z the pier and spawn side); angles are degrees
 -- with 0 = +X and 90 = +Z: plaza r100, grass rim r132, tree at the centre, statue (0, 30),
 -- pier z 98–126, airship z 128–182, market stalls at r74 from 225° to 315° with the Crate
--- Altar at 270° r84, arena terrace centred (86, 0), pitch centred (-74, 0), disco at 135° r80,
+-- Altar at 270° r84, arena terrace centred (86, 0), pitch centred (-74, 0),
 -- boards at 55° and 125° r84, Walk of Fame at 150°–170° r88, waterfalls at 45°, 135°, 225°,
 -- 315° on the rim. The showcase podium ring (ShowcaseService) sits at r70.
 
@@ -567,6 +567,13 @@ local function buildPier(lobby, base)
 	end
 end
 
+-- MODULE SCOPE, NOT A LOCAL INSIDE buildReadyPad. It is the debounce for a Touched connection that
+-- lives as long as the server does, so as an upvalue it grew by one entry for every player who ever
+-- stepped on the ready pad and released none of them -- a slow leak keyed by Player, which also holds
+-- the Instance alive. Cleared in the PlayerRemoving handler beside climbRuns and lastGoalPaidAt,
+-- which are at module scope for exactly this reason.
+local readyPadLastTouch = {}
+
 local function buildReadyPad(lobby, center)
 	local ring = decor(disc(lobby, 13, 0.3, center, GREEN, Enum.Material.Neon))
 	-- The pad stands clear of the ring's underside. At 0.05 the two undersides were within the
@@ -583,17 +590,16 @@ local function buildReadyPad(lobby, center)
 	-- The ready key can be rebound, so it's filled in per player (it said F whatever you'd bound).
 	keyHint(billboard(pad, "(or use your ready key anywhere)", WHITE, Vector3.new(0, 4.3, 0), 9, 1), "(or press [{Ready}] anywhere)")
 
-	local lastTouch = {}
 	pad.Touched:Connect(function(hit)
 		local player = Players:GetPlayerFromCharacter(hit.Parent)
 		if not player then
 			return
 		end
 		local now = os.clock()
-		if lastTouch[player] and now - lastTouch[player] < PAD_COOLDOWN then
+		if readyPadLastTouch[player] and now - readyPadLastTouch[player] < PAD_COOLDOWN then
 			return
 		end
-		lastTouch[player] = now
+		readyPadLastTouch[player] = now
 		LobbyService.OnReadyPad(player)
 	end)
 	return ring
@@ -729,7 +735,7 @@ local function buildAirship(lobby, base)
 	local sign = decor(part(lobby, Vector3.new(12, 3, 0.4), CFrame.new(center + Vector3.new(0, 10.5, 12.85)), DARK, Enum.Material.Metal))
 	surfaceText(sign, Enum.NormalId.Front, {
 		{ y = 0, h = 0.55, text = "NOW BOARDING", color = GREEN },
-		{ y = 0.55, h = 0.45, text = "the next drop leaves when the countdown ends", color = WHITE, font = Enum.Font.GothamBold },
+		{ y = 0.55, h = 0.45, text = "The next drop leaves when the countdown ends", color = WHITE, font = Enum.Font.GothamBold },
 	}, 30, 160)
 	buildReadyPad(lobby, center + Vector3.new(0, 4.4, -6))
 	-- The name over the top of the balloon (whose crown is 49 up). At 24 it sat inside the
@@ -1053,7 +1059,7 @@ local function buildStatue(lobby, base)
 		local plate = decor(part(lobby, Vector3.new(6, 1.6, 0.3), CFrame.new(center + Vector3.new(0, 2.8, 5.2)), DARK, Enum.Material.Metal))
 		surfaceText(plate, Enum.NormalId.Front, {
 			{ y = 0, h = 0.6, text = def.name, color = GOLD },
-			{ y = 0.6, h = 0.4, text = "the one they all want", color = WHITE, font = Enum.Font.GothamBold },
+			{ y = 0.6, h = 0.4, text = "The one they all want", color = WHITE, font = Enum.Font.GothamBold },
 		}, 40, 80)
 	end
 	pointLight(disc(lobby, 1, 0.2, center + Vector3.new(0, 4.3, 0), GOLD, Enum.Material.Neon), GOLD, 30, 2)
@@ -1224,7 +1230,7 @@ local function buildTradingHall(lobby, base)
 		local facing = z < -1 and math.pi or 0
 		for _, x in ipairs({ -4.5, 0, 4.5 }) do
 			local foot = (look * CFrame.new(x, 1, z)).Position
-			column(lobby, 1.5, 1.1, foot, WOOD_DARK, Enum.Material.Wood)
+			column(lobby, 1.6, 1.1, foot - Vector3.new(0, 0.1, 0), WOOD_DARK, Enum.Material.Wood)
 			seat(lobby, Vector3.new(2.2, 0.5, 2.2), look * CFrame.new(x, 2.75, z) * CFrame.Angles(0, facing, 0),
 				WOOD, Enum.Material.WoodPlanks)
 		end
@@ -1435,7 +1441,7 @@ local function buildCrateAltar(lobby, base)
 		local angle = index / 4 * math.pi * 2 + math.pi / 4
 		local foot = center + Vector3.new(math.cos(angle) * 11, 0, math.sin(angle) * 11)
 		-- Standing on the plinth's top, not reaching down to its underside (a coincident pair each).
-		column(lobby, 15, 2, foot + Vector3.new(0, 1, 0), STONE, Enum.Material.Marble)
+		column(lobby, 14.9, 2, foot + Vector3.new(0, 1.1, 0), STONE, Enum.Material.Marble)
 		part(lobby, Vector3.new(3, 1, 3), CFrame.new(foot + Vector3.new(0, 16.5, 0)), STONE, Enum.Material.Marble)
 	end
 	for index = 0, 15 do
@@ -1507,7 +1513,7 @@ local function buildCrateAltar(lobby, base)
 	billboard(header, "CRATE ALTAR", GOLD, Vector3.new(0, 2.6, 0), 12, 2, MatchConfig.LobbySignDistance)
 	-- Two short lines rather than one long one, which scaled down to text too small to read.
 	billboard(header, "Open your crates at the console", WHITE, Vector3.new(0, 1.2, 0), 13, 1)
-	billboard(header, "everyone in the lobby sees the pull", WHITE, Vector3.new(0, 0.15, 0), 13, 0.9)
+	billboard(header, "Everyone in the lobby sees the pull", WHITE, Vector3.new(0, 0.15, 0), 13, 0.9)
 
 	-- The pull's name floats over the altar; readable from across the plaza.
 	local anchor = decor(part(lobby, Vector3.new(1, 1, 1), CFrame.new(center + Vector3.new(0, 12.5, 0)), plum, Enum.Material.SmoothPlastic))
@@ -1918,8 +1924,17 @@ end
 
 -- Gold, silver and bronze statues of the top three all-time winners, each with a plate the
 -- all-time refresh fills in.
+--
+-- THESE THREE COLOURS ARE THE PODIUM AND THEY ARE SAID ONCE, HERE. The statues, the all-time
+-- plates and the two leaderboards all rank the same top three, and they stand within sight of
+-- each other on the Walk of Fame, so a first place written one way on a statue and another way
+-- on the row beside it is simply two different golds. It was: the podium was written out three
+-- times, silver and bronze agreed to the byte across all three, and gold did not — statues
+-- rgb(255,196,64), rows rgb(255,200,60). Two of three matching is how you can tell that was a
+-- slip and not a choice. Gold is now the island's own GOLD, and the boards read
+-- HALL_METALS[place][1] rather than keeping a copy.
 local HALL_METALS = {
-	{ Color3.fromRGB(255, 196, 64), Enum.Material.Foil, 3.4 },
+	{ GOLD, Enum.Material.Foil, 3.4 },
 	{ Color3.fromRGB(210, 214, 226), Enum.Material.Metal, 2.6 },
 	{ Color3.fromRGB(214, 146, 90), Enum.Material.Metal, 2 },
 }
@@ -1995,7 +2010,7 @@ function LobbyService.RefreshGlobalBoard()
 		return
 	end
 	local top = GlobalBoardService.Top(LEADERBOARD_ROWS)
-	local medal = { Color3.fromRGB(255, 200, 60), Color3.fromRGB(210, 214, 226), Color3.fromRGB(214, 146, 90) }
+	local medal = { HALL_METALS[1][1], HALL_METALS[2][1], HALL_METALS[3][1] }
 	if hallPlates then
 		for place, plate in ipairs(hallPlates) do
 			local entry = top and top[place]
@@ -2033,7 +2048,7 @@ function LobbyService.RefreshLeaderboard()
 		end
 		return a.kills > b.kills
 	end)
-	local medal = { Color3.fromRGB(255, 200, 60), Color3.fromRGB(210, 214, 226), Color3.fromRGB(214, 146, 90) }
+	local medal = { HALL_METALS[1][1], HALL_METALS[2][1], HALL_METALS[3][1] }
 	for index, row in ipairs(leaderboardRows) do
 		local entry = entries[index]
 		if entry then
@@ -2117,8 +2132,8 @@ local function buildArena(lobby, base)
 		Enum.Material.SmoothPlastic))
 	practiceAnchor.Transparency = 1
 	billboard(practiceAnchor, "COMPANION PRACTICE", GOLD, Vector3.new(0, 0.9, 0), 14, 2, MatchConfig.LobbySignDistance)
-	keyHint(billboard(practiceAnchor, "stand near a target and use your companion's move", WHITE, Vector3.new(0, -0.65, 0), 14, 1,
-		MatchConfig.LobbySignDistance), "stand near a target and press [{Companion}]")
+	keyHint(billboard(practiceAnchor, "Stand near a target and use your companion's move", WHITE, Vector3.new(0, -0.65, 0), 14, 1,
+		MatchConfig.LobbySignDistance), "Stand near a target and press [{Companion}]")
 
 	-- Three Legendary guns on lit pedestals, turning.
 	local legendaries = {}
@@ -2367,7 +2382,7 @@ local function buildPitch(lobby, base)
 	for _, corner in ipairs({ Vector3.new(-29, 0, -21), Vector3.new(-29, 0, 21), Vector3.new(29, 0, -21), Vector3.new(29, 0, 21) }) do
 		local foot = center + corner
 		-- The pole's foot 0.2 into the ground: at 0 it was 0.05 from the turf's underside.
-		column(lobby, 16.2, 0.8, foot - Vector3.new(0, 0.2, 0), IRON, Enum.Material.Metal)
+		column(lobby, 16.45, 0.8, foot - Vector3.new(0, 0.45, 0), IRON, Enum.Material.Metal)
 		local lamp = decor(part(lobby, Vector3.new(3, 1.2, 1), CFrame.lookAt(foot + Vector3.new(0, 16.5, 0), center + Vector3.new(0, 8, 0)),
 			Color3.fromRGB(255, 250, 230), Enum.Material.Neon))
 		pointLight(lamp, Color3.fromRGB(255, 250, 230), 40, 1.4)
@@ -2459,7 +2474,10 @@ local SNAP_REGROW = 3.2
 local LANTERN_RANGE = 300
 -- From the Roblox client's own sounds, which tools/sound_probe.lua measured as present.
 local SNAP_SOUND = "rbxasset://sounds/snap.mp3"
-local CREAK_SOUND = "rbxasset://sounds/collide.wav"
+-- The creak before deadwood snaps: `switch3` (a heavy latch) at half speed is a 0.74 s wooden crick,
+-- about the `hold` before the snap. (#120: it was `collide`, the brick-collision crash, 2.4 s at
+-- half speed for a branch that breaks 0.7-1.1 s after you land on it.)
+local CREAK_SOUND = "rbxasset://sounds/switch3.wav"
 local CHECKPOINT_SOUND = "rbxasset://sounds/electronicpingshort.wav"
 
 local function renderObbyBest()
@@ -3441,6 +3459,7 @@ function LobbyService.Start()
 	Players.PlayerRemoving:Connect(function(player)
 		climbRuns[player] = nil
 		lastGoalPaidAt[player] = nil
+		readyPadLastTouch[player] = nil
 	end)
 
 	task.spawn(function()

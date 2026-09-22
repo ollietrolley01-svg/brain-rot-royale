@@ -157,7 +157,8 @@ function CrateService.Open(player, tier, shownLuck)
 			and string.format("Your crate luck is now %dx. The odds on the card have been updated, check them and open again.", luck)
 			or "Your crate luck boost has run out. The odds on the card have been updated, check them and open again."
 		StateSync.Push(player)
-		StateSync.Notify(player, message, true)
+		-- Not toasted here: the REPLY is. Bootstrap's guard() toasts every menu remote's message, and
+		-- the altar (LobbyService.OnAltarOpen) toasts what it is returned -- this line said it twice.
 		return false, message
 	end
 

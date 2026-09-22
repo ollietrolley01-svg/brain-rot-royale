@@ -194,7 +194,11 @@ for index, landmark in ipairs(all) do
 				if d:IsA("TrussPart") then
 					trusses += 1
 				end
-				top = math.max(top, d.Position.Y + d.Size.Magnitude / 2)
+				-- The part's own top, not the radius of a sphere round it: Size.Magnitude/2 on a 60-stud
+				-- beam reports 30 studs of height that beam does not have.
+				local cf, half = d.CFrame, d.Size / 2
+				local ey = math.abs(cf.XVector.Y) * half.X + math.abs(cf.YVector.Y) * half.Y + math.abs(cf.ZVector.Y) * half.Z
+				top = math.max(top, d.Position.Y + ey)
 			end
 		end
 		-- How far the piece reaches from its middle, against the round pad the site is levelled to
@@ -208,11 +212,22 @@ for index, landmark in ipairs(all) do
 		for _, d in ipairs(model:GetDescendants()) do
 			if d:IsA("BasePart") and not (d.Parent and d.Parent.Name == "Zipline") then
 				local cf, half = d.CFrame, d.Size / 2
-				local ex = math.abs(cf.XVector.X) * half.X + math.abs(cf.YVector.X) * half.Y + math.abs(cf.ZVector.X) * half.Z
 				local ey = math.abs(cf.XVector.Y) * half.X + math.abs(cf.YVector.Y) * half.Y + math.abs(cf.ZVector.Y) * half.Z
-				local ez = math.abs(cf.XVector.Z) * half.X + math.abs(cf.YVector.Z) * half.Y + math.abs(cf.ZVector.Z) * half.Z
+				-- The furthest point of a box from the landmark's middle is one of its EIGHT CORNERS.
+				-- Measuring the corner of its axis-aligned box instead (|at.X| + ex, |at.Z| + ez) over-reads
+				-- by up to 1.41x on anything turned off the axes -- and the build is turned 0.6 radians, so
+				-- that is exactly what happened: a 44-stud square floor 22 studs from its own middle read
+				-- 43. Every one of the 15 landmarks reported 'past its claim' off that one line.
+				local out_ = 0
+				for _, sx in ipairs({ -1, 1 }) do
+					for _, sy in ipairs({ -1, 1 }) do
+						for _, sz in ipairs({ -1, 1 }) do
+							local corner = origin:PointToObjectSpace(cf * Vector3.new(sx * half.X, sy * half.Y, sz * half.Z))
+							out_ = math.max(out_, Vector2.new(corner.X, corner.Z).Magnitude)
+						end
+					end
+				end
 				local at = origin:PointToObjectSpace(d.Position)
-				local out_ = Vector2.new(math.abs(at.X) + ex, math.abs(at.Z) + ez).Magnitude
 				reachAll = math.max(reachAll, out_)
 				if d.Position.Y - ey < spot.Y + LOW and out_ > reachLow then
 					reachLow, reachPart = out_, d

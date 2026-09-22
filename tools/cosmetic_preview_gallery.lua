@@ -58,9 +58,15 @@ local function place(id, at, parent)
 	local reach = math.max(size.Magnitude / 2, 0.001)
 	local scale = (CELL * 0.42) / reach
 	model:ScaleTo(scale)
-	-- Centred on the cell by its bounding box, not its pivot: an accessory's pivot is the head socket
-	-- it hangs from, which is nowhere near the middle of the thing you are looking at.
-	model:PivotTo(CFrame.new(at))
+	-- Moved, never re-oriented. PivotTo with a plain CFrame.new also sets the model's ROTATION, and a
+	-- model with no PrimaryPart takes its pivot from its first part -- which for the party hat and the
+	-- viking helm is an upright cylinder, authored with a quarter turn in it. Pivoting those to identity
+	-- laid them on their sides in the first sheet. Keeping the pivot's own rotation leaves them standing.
+	--
+	-- Then centred on the cell by bounding box rather than by pivot: an accessory's pivot is the head
+	-- socket it hangs from, which is nowhere near the middle of the thing you are looking at.
+	local turn = model:GetPivot().Rotation
+	model:PivotTo(CFrame.new(at) * turn)
 	local box = model:GetBoundingBox()
 	model:PivotTo(model:GetPivot() + (at - box.Position))
 	model.Parent = parent
@@ -94,7 +100,8 @@ end
 
 local views = {}
 local function add(name, setup)
-	table.insert(views, { name = name, settle = 1.4, hold = 2, setup = setup })
+	-- No `hold`: see the note in accessory_gallery -- -Hold governs when the view doesn't.
+	table.insert(views, { name = name, settle = 1.4, setup = setup })
 end
 
 -- A grid of up to COLUMNS x 3, centred on the camera.

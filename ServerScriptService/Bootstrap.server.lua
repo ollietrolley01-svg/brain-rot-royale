@@ -32,6 +32,7 @@ local DefenseService = require(Modules:WaitForChild("DefenseService"))
 local DropMapService = require(Modules:WaitForChild("DropMapService"))
 -- Launcher rounds, grenades, smoke, and the splat where a bullet lands. Both hook themselves in.
 local HitSplatService = require(Modules:WaitForChild("HitSplatService"))
+local HazardService = require(Modules:WaitForChild("HazardService"))
 local ProjectileService = require(Modules:WaitForChild("ProjectileService"))
 -- The creative guns' knockback, bleed, ignite and chill; hooks itself in the same way.
 local StatusEffects = require(Modules:WaitForChild("StatusEffects"))
@@ -230,6 +231,10 @@ local function refreshLeaderstats(player)
 end
 
 local function onPlayerAdded(player)
+	-- #102: not in any match until startMatch says so. The client's spectator cycle reads this off the
+	-- Player and treats an ABSENT attribute as "in" (so the read is inert wherever the write is not),
+	-- which is why a mid-match joiner is told `false` here rather than left unset.
+	player:SetAttribute("InMatch", false)
 	player.CharacterAdded:Connect(function(character)
 		MatchService.OnCharacterAdded(player, character)
 		WeaponService.RefreshHeldGun(player)
@@ -279,7 +284,21 @@ local function onPlayerAdded(player)
 	RewardService.CheckCollections(player)
 
 	-- Re-broadcast so someone joining mid-countdown sees the vote already in progress.
-	VoteService.Broadcast()
+	--
+	-- GATED ON open, and the gate is the whole point (#107, "game choosing menu pulls up randomly
+	-- mid match"). VoteService.Resolve caches its pick until the next Open(), so from the moment a
+	-- match starts until the next lobby countdown the snapshot still reads `open = false` with a
+	-- `winner` set -- and that pair is exactly the cue VoteDropClient treats as "reveal the
+	-- result". Broadcast is FireAllClients, so an ungated call here popped the mode/map reveal onto
+	-- EVERY player's screen for three seconds every time anybody joined the server mid-match.
+	-- Random from the player's side, because he cannot see who is joining.
+	--
+	-- A snapshot is not an event: the winner field stays true for a whole match, so anything that
+	-- resends it re-fires the reveal. VoteService.Forget already gates its own rebroadcast on
+	-- `if open`; this was the one path of the two that did not.
+	if VoteService.IsOpen() then
+		VoteService.Broadcast()
+	end
 	ShowcaseService.Refresh()
 
 	-- The new arrival changes everyone else's trade list.
@@ -351,8 +370,14 @@ MovementService.SpendStamina = MatchService.SpendStamina
 MovementService.GetStamina = MatchService.GetStamina
 -- A climb or a vault stands the body up first, the way it does for a player.
 MovementService.SetCrouching = MatchService.SetCrouching
--- Vaulting through a window breaks the pane, with the same shatter a shot through it gives.
-MovementService.BreakGlassAlong = CombatService.BreakGlassAlong
+-- Vaulting through a window breaks the panes the body passes, with the same shatter a shot through them
+-- gives: one DamageDestructible per pane (DestructibleService's hook on CombatService, set when it loads).
+MovementService.BreakPane = function(token, pane, from)
+	if not CombatService.DamageDestructible then
+		return false
+	end
+	return CombatService.DamageDestructible(token, pane, 1, from) > 0
+end
 -- The movement sanity monitor watches players in a running match only, and only ever counts (see its
 -- header). Vehicles fall back to its own seat allowance, which clears the fastest vehicle (92).
 MovementSanity.IsActive = function(player)
@@ -403,11 +428,15 @@ LobbyService.OnReadyPad = function(player)
 end
 -- Cloud Climb obby: the time every clear, and 250 SahurCoins the first clear per server.
 LobbyService.OnObbyComplete = function(player, seconds, firstClear, isRecord)
-	local summary = string.format("Cloud Climb cleared in %.1fs%s", seconds, isRecord and " — server record!" or "")
+	-- The clear is announced whatever happens, and the coins are their own line. It used to hand the
+	-- whole sentence to AwardBonusCoins as the bracketed "reason", which read as
+	-- "+250 SahurCoins (Cloud Climb cleared in 12.3s — server record!)" -- the record, the thing the
+	-- player actually did, arriving as a footnote to the payment. It also meant the announcement only
+	-- went out if coins landed, so a first clear on a profile that had not loaded said nothing at all.
+	StateSync.Notify(player, string.format("Cloud Climb cleared in %.1fs%s", seconds,
+		isRecord and " — server record!" or ""))
 	if firstClear then
-		RewardService.AwardBonusCoins(player, 250, summary)
-	else
-		StateSync.Notify(player, summary)
+		RewardService.AwardBonusCoins(player, 250, "first clear")
 	end
 	QuestService.Progress(player, "obby", 1)
 end
@@ -641,15 +670,39 @@ local function setReplicationFocus(player, part)
 	-- and have the server replicate that region to it. Spectating means a dead PARTICIPANT of the
 	-- running match: without that, anyone sitting in the lobby could stream the match and pass on
 	-- what they saw.
-	if MatchService.IsAlive(player) or not MatchService.IsParticipant(player) then
-		return
-	end
-	if part.Name ~= "HumanoidRootPart" or not (part.Parent and Combatants.FromCharacter(part.Parent)) then
+	--
+	-- Through MatchService.IsSpectating, which is that same rule written once. It used to be spelled
+	-- out here as `IsAlive or not IsParticipant`; now that there is an EXIT from spectating (#102)
+	-- there are two places that must agree on who is spectating, and two spellings of one rule is
+	-- how they drift -- a player who had left would keep streaming the arena from the lobby.
+	-- Both halves of the rule -- who may spectate, and which body they may stream around -- live in
+	-- MatchService.FocusTarget beside IsSpectating and LeaveSpectate, so the three cannot drift. The
+	-- target test that used to sit here accepted any Player's character (Combatants.FromCharacter falls
+	-- back to Players:GetPlayerFromCharacter), which let a modified client stream the arena from a
+	-- lobby idler's body; the target must now be alive in the match's own table (#102).
+	local focus = MatchService.FocusTarget(player, part)
+	if not focus then
 		return
 	end
 
-	player.ReplicationFocus = part
+	player.ReplicationFocus = focus
 end
+
+-- #102: the way OUT of spectating. Until this existed the only exit was the end of the match, so an
+-- early elimination meant watching until the reset with no control that did anything.
+--
+-- RateLimit.Take, not Latest: this is a door, not a state. Over budget the press is dropped and
+-- costs one more press, whereas a QUEUED press would fire a respawn seconds later, after the player
+-- had given up on the button and the match had moved on underneath them.
+--
+-- No arguments, so there is nothing to validate: the server decides entirely from its own state
+-- whether this player is spectating, and MatchService.LeaveSpectate refuses anyone who is not.
+Remotes.Event("LeaveSpectate").OnServerEvent:Connect(function(player)
+	if not RateLimit.Take(player, "LeaveSpectate") then
+		return
+	end
+	MatchService.LeaveSpectate(player)
+end)
 
 Remotes.Event("SetReplicationFocus").OnServerEvent:Connect(function(player, part)
 	if part ~= nil and typeof(part) ~= "Instance" then
@@ -668,6 +721,7 @@ local function guard(handler)
 	return function(player, ...)
 		local data = PlayerData.Get(player)
 		if not data then
+			pcall(StateSync.Notify, player, "Profile still loading.", true)
 			return false, "Profile still loading."
 		end
 		-- One shared budget for the menu: each of these ends in a profile push and a leaderstats
@@ -679,7 +733,21 @@ local function guard(handler)
 		local ok, success, message = pcall(handler, player, ...)
 		if not ok then
 			warn("[Bootstrap] Remote handler error: " .. tostring(success))
+			pcall(StateSync.Notify, player, "Something went wrong.", true)
 			return false, "Something went wrong."
+		end
+		-- THE ONE PLACE A MENU REMOTE'S ANSWER REACHES THE PLAYER. The client fires and forgets on
+		-- purpose (MenuClient's invoke discards the reply: the profile push re-renders the tab), so a
+		-- message a handler returns is heard only if it is toasted here. Before this, every refusal
+		-- and every receipt written on the server -- "you can't sell your last copy", "that request
+		-- expired", "Sold 4 Uncommon brainrots" -- was generated and thrown away, and a button that
+		-- silently refused looked exactly like one that silently worked. A nil message stays silent
+		-- (a rate-limited call, a settings save); a failure is red. The rule that goes with it: no
+		-- guarded handler, and no service it calls, toasts the CALLER the message it also returns --
+		-- tools/menu_reply_probe.lua counts those sites to zero. pcall'd, because a toast at a player
+		-- on their way out must not take the reply with it.
+		if message ~= nil then
+			pcall(StateSync.Notify, player, message, not success)
 		end
 		refreshLeaderstats(player)
 		return success, message
@@ -788,17 +856,27 @@ end
 
 -- Selling can take away the brainrot you have equipped as a companion.
 Remotes.Function("SellBrainrot").OnServerInvoke = guard(function(player, name)
-	local success, message = RewardService.SellBrainrot(player, name)
+	local success, message, showcaseChanged = RewardService.SellBrainrot(player, name)
 	if success then
 		CompanionService.Refresh(player)
+		-- Only when the sale actually took the showcased brainrot: Refresh rebuilds every
+		-- podium on the server, so it is not run for a sale that changed nothing on them.
+		if showcaseChanged then
+			ShowcaseService.Refresh()
+		end
 	end
 	return success, message
 end)
 
 Remotes.Function("SellAllOfRarity").OnServerInvoke = guard(function(player, rarity)
-	local success, message = RewardService.SellAllOfRarity(player, rarity)
+	local success, message, showcaseChanged = RewardService.SellAllOfRarity(player, rarity)
 	if success then
 		CompanionService.Refresh(player)
+		-- Only when the sale actually took the showcased brainrot: Refresh rebuilds every
+		-- podium on the server, so it is not run for a sale that changed nothing on them.
+		if showcaseChanged then
+			ShowcaseService.Refresh()
+		end
 	end
 	return success, message
 end)
@@ -815,10 +893,8 @@ Remotes.Function("BuyBrainrot").OnServerInvoke = guard(function(player, name)
 	if type(name) ~= "string" then
 		return false, "Invalid brainrot."
 	end
+	-- Toasted by guard(), like every other reply.
 	local success, message = BrainrotShopService.Choose(player, name)
-	if not success and message then
-		StateSync.Notify(player, message, true)
-	end
 	return success, message
 end)
 
@@ -837,10 +913,9 @@ Remotes.Function("MergeBrainrot").OnServerInvoke = guard(function(player, name, 
 		if data and data.Showcase == name then
 			ShowcaseService.Refresh()
 		end
-		-- A refusal is shown inside the confirm dialog; success also gets a toast, since the
-		-- dialog closes itself.
-		StateSync.Notify(player, message)
 	end
+	-- guard() toasts the reply (the receipt once the dialog has closed itself; a refusal as well,
+	-- beside the line the confirm dialog shows).
 	return success, message
 end)
 
@@ -852,9 +927,9 @@ Remotes.Function("SetCompanion").OnServerInvoke = guard(function(player, name)
 	if success then
 		CompanionService.Refresh(player)
 	end
-	-- The menu doesn't show this result itself, so say it here either way.
-	StateSync.Notify(player, message or (success and "Done." or "Couldn't do that."), not success)
-	return success, message
+	-- The menu doesn't show this result itself, so a message goes back either way: guard() toasts
+	-- the reply, and the fallback wording survives as the message itself.
+	return success, message or (success and "Done." or "Couldn't do that.")
 end)
 
 Remotes.Function("BuyCosmetic").OnServerInvoke = guard(function(player, cosmeticId)
@@ -1018,11 +1093,19 @@ TradeService.OnTradeComplete = function()
 	end
 end
 
+-- A mine is a weapon: it only triggers while a match is actually being played, so one left armed
+-- cannot kill anyone on the results screen.
+HazardService.MatchIsLive = function()
+	return MatchService.GetState() == "InProgress"
+end
+
 MatchService.OnMatchStart = function()
 	TradeService.CancelAll("Match starting — trade cancelled.")
 	MovementService.Clear()
 	DefenseService.Clear()
 	ProjectileService.Clear()
+	-- Only the mines players armed; the map's own barrels belong to the map.
+	HazardService.Clear("mine")
 	QuestService.ResetTallies()
 	-- Where everyone's Rot Rank stands, for the results card's progression line.
 	ProgressionService.BeginMatch()
@@ -1033,6 +1116,7 @@ MatchService.OnMatchEnd = function()
 	MovementService.Clear()
 	DefenseService.Clear()
 	ProjectileService.Clear()
+	HazardService.Clear("mine")
 	-- Companions downed this match come back for the next one.
 	CompanionService.ReviveAll()
 end

@@ -39,6 +39,7 @@ Settings.Actions = {
 	{ id = "Quests", label = "Quests and challenges", default = "J", group = "General" },
 	{ id = "Ready", label = "Ready up", default = "F", group = "General" },
 	{ id = "SpectateNext", label = "Spectate next player", default = "E", group = "General" },
+	{ id = "SpectateLeave", label = "Leave spectating (back to the lobby)", default = "L", group = "General" },
 }
 
 Settings.Sliders = {
@@ -258,6 +259,39 @@ function Settings.Bind(name, actionId, handler, touch, ...)
 	local binding = { name = name, actionId = actionId, handler = handler, touch = touch, extras = { ... } }
 	bindings[name] = binding
 	applyBinding(binding)
+end
+
+-- Gamepad face names, for a legend on a console. Declared HERE and not beside KeyLabel: `bindings`
+-- is a local declared further down the file than KeyLabel is, so a copy of this next to KeyLabel
+-- would read a nil upvalue and fail only once somebody plugged a pad in.
+--
+-- A second hand-written table of "which button is inventory" would drift from the binds the first
+-- time anybody moved one, so this reads the ACTUAL extras handed to Settings.Bind, and answers nil
+-- when an action has no gamepad button at all -- the honest answer for Zoom and Inspect, and the
+-- reason a legend drops those rows on a pad rather than printing a key that does nothing.
+local GAMEPAD_LABELS = {
+	ButtonA = "A", ButtonB = "B", ButtonX = "X", ButtonY = "Y",
+	ButtonL1 = "LB", ButtonR1 = "RB", ButtonL2 = "LT", ButtonR2 = "RT",
+	ButtonL3 = "LS", ButtonR3 = "RS", ButtonSelect = "Back", ButtonStart = "Start",
+	-- ASCII, not arrow glyphs. An arrow would be shorter and read better, and it assumes
+	-- GothamBold renders that codepoint -- if it does not, every d-pad row becomes a tofu box,
+	-- which is exactly what the menu's close button did with U+2715. Nothing can be seen on a
+	-- screen tonight, so these stay ASCII until a render says the glyph is safe.
+	DPadUp = "D-Pad Up", DPadDown = "D-Pad Dn", DPadLeft = "D-Pad L", DPadRight = "D-Pad R",
+}
+
+function Settings.GamepadLabel(actionId)
+	for _, binding in pairs(bindings) do
+		if binding.actionId == actionId then
+			for _, extra in ipairs(binding.extras) do
+				local label = typeof(extra) == "EnumItem" and GAMEPAD_LABELS[extra.Name]
+				if label then
+					return label
+				end
+			end
+		end
+	end
+	return nil
 end
 
 Settings.Changed:Connect(function(id)

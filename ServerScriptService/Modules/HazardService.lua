@@ -38,6 +38,44 @@ local HazardService = {}
 HazardService.WeaponId = "ExplosiveBarrel"
 HazardService.MineWeaponId = "RotMine"
 
+-- Set by whoever owns the match (Bootstrap -> MatchService): is a match actually being played? A mine
+-- is a weapon, and a weapon that still kills during the fifteen-second results screen kills someone
+-- who has already won or lost. True by default so this module still runs standalone in a probe, and
+-- so a build without a match (the range, the lobby playground) behaves as it always did.
+local DEFAULT_MATCH_IS_LIVE = function()
+	return true
+end
+HazardService.MatchIsLive = DEFAULT_MATCH_IS_LIVE
+
+-- Fail-open is deliberate, but never fail-open in SILENCE: if a live mine is polled while the DEFAULT
+-- is still installed, Bootstrap's wiring has been dropped or has errored, mines are killing on the
+-- results screen again, and nothing anywhere would say so. Warned once, the way StormService warns
+-- when a tick begins with no eligibility predicate installed (StormService.lua:54-75).
+local warnedUnwiredMatch = false
+local warnedPredicateError = false
+local function matchIsLive()
+	local predicate = HazardService.MatchIsLive
+	if predicate == DEFAULT_MATCH_IS_LIVE and not warnedUnwiredMatch then
+		warnedUnwiredMatch = true
+		warn("[HazardService] a mine was polled with NO match-state predicate installed (Bootstrap wires HazardService.MatchIsLive): mines will trigger during the results screen")
+	end
+	-- Through a pcall. The mine poll is a bare `while true` inside a task.spawn and there is no pcall
+	-- anywhere else in this file, so a predicate that throws would kill that coroutine for the life of
+	-- the server -- every mine AND every barrel dead, silently, with one stack trace at the top and
+	-- nothing after it. That is far worse than the fifteen seconds of wrong triggering this guards
+	-- against, so a throw is treated as LIVE (fail-open, like the default) and named once, with its own
+	-- message so "nothing installed" and "it threw" are told apart in a log.
+	local ok, live = pcall(predicate)
+	if not ok then
+		if not warnedPredicateError then
+			warnedPredicateError = true
+			warn("[HazardService] the match-state predicate threw, so mines keep triggering: " .. tostring(live))
+		end
+		return true
+	end
+	return live ~= false
+end
+
 local BARREL_HEALTH = 60
 local BLAST_RADIUS = 15
 local BLAST_DAMAGE = 78
@@ -434,7 +472,9 @@ local function stepMines(now)
 					model:SetAttribute("Armed", true)
 				end
 				setLights(entry, math.floor(now * 1.5) % 2 == 0 and LIGHT_ARMED or LIGHT_OFF)
-				for _, victim in ipairs(CombatService.InRadius(entry.position, MINE_TRIGGER_RADIUS, entry.owner)) do
+				-- It still blinks and still times out, but it does not TRIGGER once the match is over:
+				-- walking over a mine on the results screen is not a death anyone can answer.
+				for _, victim in ipairs(matchIsLive() and CombatService.InRadius(entry.position, MINE_TRIGGER_RADIUS, entry.owner) or {}) do
 					if math.abs(victim.root.Position.Y - entry.position.Y) <= MINE_TRIGGER_HEIGHT then
 						explode(model, entry.owner)
 						break
@@ -461,6 +501,23 @@ function HazardService.Count(kind)
 		end
 	end
 	return count
+end
+
+-- Everything this service is holding, gone: the mines a match left armed, and optionally the barrels
+-- too. Called at both ends of a match, so nothing armed survives a results screen or greets the next
+-- one. `kind` is "mine", "barrel", or nil for both. Returns how many it removed.
+function HazardService.Clear(kind)
+	local removed = 0
+	for model, entry in pairs(hazards) do
+		if kind == nil or entry.kind == kind then
+			hazards[model] = nil
+			if model.Parent then
+				model:Destroy()
+			end
+			removed += 1
+		end
+	end
+	return removed
 end
 
 -- Whether a mine has finished arming (for the build check).

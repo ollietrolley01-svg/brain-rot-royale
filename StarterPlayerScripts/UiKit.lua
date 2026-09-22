@@ -165,6 +165,27 @@ function UiKit.panelSize(viewport, touch)
 	return Vector2.new(math.floor(width), math.floor(height))
 end
 
+-- A TEXT WIDTH THAT CANNOT COME OUT NEGATIVE.
+--
+-- `UDim2.new(1, -N, ...)` where N exceeds the parent's width does NOT truncate the text. Roblox
+-- draws nothing at all, so the row comes up blank with no sign of what happened -- invisible in
+-- review, invisible in any landscape test, and only reachable at all once the menu's `tall` form
+-- started running. Five labels in MenuClient were one viewport away from going blank on a portrait
+-- phone, and the crate odds line and the progression rows had already vanished this way at 296 px.
+--
+-- Below the width where the reserve stops fitting, THE RESERVE IS GIVEN UP RATHER THAN THE TEXT,
+-- because the text is what the player came to read. `MIN` is what a label keeps whatever else has
+-- to give; a caller wanting a different floor passes one.
+--
+-- Pure, and it lives here rather than in MenuClient for the reason the shell's viewport wiring
+-- does: MenuClient is a LocalScript and nothing in the harness can run one, so logic written there
+-- is logic no probe can ever check. Here it is one require away.
+function UiKit.textSpan(width, reservePx, height, minimum)
+	local floor = minimum or 64
+	local capped = math.min(reservePx, math.max(0, (width or 0) - floor))
+	return UDim2.new(1, -capped, 0, height)
+end
+
 function UiKit.create(className, props, children)
 	local instance = Instance.new(className)
 	local parent = props and props.Parent

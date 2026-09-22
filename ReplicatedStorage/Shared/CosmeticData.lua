@@ -36,6 +36,15 @@ local GREEN = Color3.fromRGB(80, 220, 120)
 local CHEESE = Color3.fromRGB(252, 204, 86)
 local CRUST = Color3.fromRGB(178, 112, 52)
 local TOAST = Color3.fromRGB(206, 150, 80)
+local WOOD = Color3.fromRGB(168, 122, 72)
+local SOCK = Color3.fromRGB(198, 220, 158)
+local STINK = Color3.fromRGB(150, 196, 96)
+local NOODLE = Color3.fromRGB(248, 226, 146)
+local BROTH = Color3.fromRGB(222, 168, 88)
+local CACTUS = Color3.fromRGB(86, 164, 88)
+local BLOOM = Color3.fromRGB(246, 128, 168)
+local CROC = Color3.fromRGB(92, 150, 80)
+local CROC_DARK = Color3.fromRGB(58, 104, 52)
 
 local function block(size, position, color, material)
 	return { shape = "Block", size = size, offset = CFrame.new(position), color = color, material = material }
@@ -516,14 +525,17 @@ CosmeticData.Items = {
 		anchor = "HeadTop",
 		color = WHITE,
 		description = "Tonight's special: whatever you find in chests.",
+		-- SmoothPlastic, not Fabric. Fabric on white renders as grey rock: in the first preview
+		-- sheet this hat read as a stone mushroom, the same thing that dulled every parachute
+		-- canopy until they came off Fabric too. Cloth here is colour and shape, not texture.
 		parts = {
-			column(0.6, 1.05, Vector3.new(0, 0.3, 0), WHITE, Enum.Material.Fabric),
-			sphere(Vector3.new(1.36, 0.7, 1.36), Vector3.new(0, 0.76, 0), WHITE, Enum.Material.Fabric),
-			sphere(Vector3.new(0.7, 0.56, 0.7), Vector3.new(0.3, 0.98, 0.16), WHITE, Enum.Material.Fabric),
-			sphere(Vector3.new(0.64, 0.5, 0.64), Vector3.new(-0.28, 0.96, -0.2), WHITE, Enum.Material.Fabric),
+			column(0.6, 1.05, Vector3.new(0, 0.3, 0), WHITE),
+			sphere(Vector3.new(1.36, 0.7, 1.36), Vector3.new(0, 0.76, 0), WHITE),
+			sphere(Vector3.new(0.7, 0.56, 0.7), Vector3.new(0.3, 0.98, 0.16), WHITE),
+			sphere(Vector3.new(0.64, 0.5, 0.64), Vector3.new(-0.28, 0.96, -0.2), WHITE),
 			-- Two more puffs, so the toque is round from every side rather than lopsided from behind.
-			sphere(Vector3.new(0.62, 0.48, 0.62), Vector3.new(0.02, 1, -0.36), WHITE, Enum.Material.Fabric),
-			sphere(Vector3.new(0.58, 0.46, 0.58), Vector3.new(-0.04, 0.98, 0.34), WHITE, Enum.Material.Fabric),
+			sphere(Vector3.new(0.62, 0.48, 0.62), Vector3.new(0.02, 1, -0.36), WHITE),
+			sphere(Vector3.new(0.58, 0.46, 0.58), Vector3.new(-0.04, 0.98, 0.34), WHITE),
 		},
 	},
 	TrafficCone = {
@@ -563,9 +575,18 @@ CosmeticData.Items = {
 			spike(CFrame.new(0, 0.13, 0.3), 1.7, 1.4, 0.2, CHEESE),
 			{
 				rod(1.6, 0.32, CFrame.new(0, -0.78, 0.3), CRUST),
+				-- Five pepperoni and two basil leaves, all balls, which the pass has no flat faces to
+				-- catch on. The slice dropped from nine parts to six when the staircase became one
+				-- triangle; at ten the shape is better AND the detail is up, rather than traded away.
+				-- Each sits inside the triangle at its own height, where the half-width is
+				-- 0.7 * (1 - (y + 0.72) / 1.7).
 				ball(0.26, Vector3.new(-0.36, -0.52, 0.42), RED),
 				ball(0.26, Vector3.new(0.3, -0.28, 0.42), RED),
 				ball(0.24, Vector3.new(0, 0.18, 0.42), RED),
+				ball(0.22, Vector3.new(-0.16, -0.05, 0.42), RED),
+				ball(0.18, Vector3.new(0.12, 0.42, 0.42), RED),
+				ball(0.14, Vector3.new(0.4, -0.6, 0.42), GREEN),
+				ball(0.12, Vector3.new(-0.2, 0.06, 0.43), GREEN),
 			}
 		),
 	},
@@ -682,10 +703,16 @@ CosmeticData.Items = {
 				-- Balls and meshed spheres have no flat faces for the pass to catch on, so the gems and
 				-- the dome can sit wherever they look right.
 				sphere(Vector3.new(0.86, 0.26, 0.86), Vector3.new(0, 0.2, 0), BRAIN),
+				-- Two creases crossing and five gems, not one and three: 25 pieces against the 23 of
+				-- the two-ring crown this replaced. The creases are cylinders laid at right angles, so
+				-- the only flat faces either has -- its two ends -- are never parallel to the other's.
 				rod(0.44, 0.07, CFrame.new(0, 0.31, 0), BRAIN_DARK),
+				rod(0.44, 0.07, CFrame.new(0, 0.31, 0) * CFrame.Angles(0, math.pi / 2, 0), BRAIN_DARK),
 				ball(0.17, Vector3.new(0, 0.27, -0.55), PURPLE, NEON),
 				ball(0.14, Vector3.new(0.55, 0.27, 0), GREEN, NEON),
 				ball(0.14, Vector3.new(-0.55, 0.27, 0), GREEN, NEON),
+				ball(0.12, Vector3.new(0.389, 0.27, -0.389), GREEN, NEON),
+				ball(0.12, Vector3.new(-0.389, 0.27, -0.389), GREEN, NEON),
 			}
 		),
 	},
@@ -723,7 +750,244 @@ CosmeticData.Items = {
 		),
 	},
 
-	-- Parachutes: the canopy that opens over you on the drop-in and with the Rot Glider. Each id is a
+	BonkStick = {
+		name = "Bonk Stick",
+		kind = "Accessory",
+		rarity = "Common",
+		price = 3200,
+		anchor = "HeadTop",
+		color = WOOD,
+		description = "Sahur's own. Strapped on so both hands stay free for more bonking.",
+		-- Tung Tung Tung Sahur carries the bat; this is the bat, worn. Two collinear cylinders meeting
+		-- end to end make the taper (barrel into handle) -- their touching faces point at each other,
+		-- which is contact rather than a fight -- and the strap is a 12-piece band, each 0.22 wide where
+		-- the ring allows 0.236 at the inner corners.
+		parts = concat(
+			ring(12, 0.5, 0.08, Vector3.new(0.22, 0.1, 0.12), BLACK),
+			{
+				rod(0.86, 0.34, CFrame.new(-0.12, 0.44, 0) * CFrame.Angles(0, 0, math.rad(9)), WOOD),
+				rod(0.54, 0.19, CFrame.new(0.58, 0.55, 0) * CFrame.Angles(0, 0, math.rad(9)), WOOD),
+				ball(0.25, Vector3.new(0.86, 0.6, 0), WOOD),
+				ball(0.1, Vector3.new(-0.3, 0.6, 0.08), STEEL),
+				ball(0.1, Vector3.new(-0.02, 0.58, -0.1), STEEL),
+				ball(0.1, Vector3.new(0.2, 0.54, 0.06), STEEL),
+			}
+		),
+	},
+	StinkoSock = {
+		name = "Sockolino's Sock",
+		kind = "Accessory",
+		rarity = "Uncommon",
+		price = 6500,
+		anchor = "HeadTop",
+		color = SOCK,
+		description = "Worn on the head, which is the only place left. The cloud comes with it.",
+		-- The sock is spheres, which have no flat faces at all, so the only pieces the pass can see are
+		-- the cuff and the two stripes -- and they are 0.15 and 0.2 apart in Y, clear of 0.055 even on
+		-- the smallest head, where every authored gap shrinks to 0.6 of itself.
+		parts = {
+			sphere(Vector3.new(1.24, 0.66, 1.24), Vector3.new(0, 0.22, 0), SOCK),
+			sphere(Vector3.new(0.62, 0.46, 0.78), Vector3.new(0, 0.42, -0.52), SOCK),
+			column(0.12, 1.28, Vector3.new(0, 0.06, 0), WHITE),
+			column(0.06, 1.24, Vector3.new(0, 0.24, 0), STINK),
+			column(0.06, 1.18, Vector3.new(0, 0.44, 0), STINK),
+			ball(0.42, Vector3.new(0.44, 0.78, 0.3), STINK, Enum.Material.Snow),
+			ball(0.34, Vector3.new(-0.4, 0.86, 0.12), STINK, Enum.Material.Snow),
+			ball(0.3, Vector3.new(0.06, 0.94, -0.36), STINK, Enum.Material.Snow),
+			ball(0.26, Vector3.new(-0.22, 1.02, 0.42), STINK, Enum.Material.Snow),
+			ball(0.22, Vector3.new(0.34, 1.1, -0.2), STINK, Enum.Material.Snow),
+			ball(0.18, Vector3.new(-0.02, 1.18, 0.08), STINK, Enum.Material.Snow),
+		},
+	},
+	NoodleBowl = {
+		name = "Wobblo's Bowl",
+		kind = "Accessory",
+		rarity = "Uncommon",
+		price = 7500,
+		anchor = "HeadTop",
+		color = BROTH,
+		description = "Noodlo Wobblo wore it first. He has not asked for it back.",
+		-- Eight noodles hang at eight different angles, so no two rods put their end faces in one plane,
+		-- and the bowl above them is a sphere with none of its own.
+		parts = concat(
+			{
+				sphere(Vector3.new(1.3, 0.64, 1.3), Vector3.new(0, 0.3, 0), BROTH),
+				column(0.1, 1.36, Vector3.new(0, 0.58, 0), CRUST),
+				rod(0.9, 0.07, CFrame.new(0.16, 0.92, -0.1) * CFrame.Angles(0, 0, math.rad(16)), WOOD),
+				rod(0.9, 0.07, CFrame.new(0.2, 0.9, 0.12) * CFrame.Angles(0, 0, math.rad(24)), WOOD),
+			},
+			(function()
+				local strands = {}
+				for index = 0, 7 do
+					local angle = index / 8 * math.pi * 2
+					local lean = math.rad(62 + index * 5)
+					table.insert(strands, rod(0.54 + index % 3 * 0.12, 0.1,
+						CFrame.Angles(0, angle, 0) * CFrame.new(0, 0.18, 0.56) * CFrame.Angles(0, 0, lean), NOODLE))
+				end
+				return strands
+			end)()
+		),
+	},
+	CactinoCrown = {
+		name = "Cactino Pokko",
+		kind = "Accessory",
+		rarity = "Rare",
+		price = 14000,
+		anchor = "HeadTop",
+		color = CACTUS,
+		description = "Needles included. Pokko does not consider that a warning.",
+		-- Arms stop at 0.85 where the stem's top face is 1.0: 0.15 apart, and clear at every head size.
+		-- The needles are rods pointing out radially, so their ends face along the spine they sit on and
+		-- are parallel to nothing.
+		parts = concat(
+			{
+				column(1, 0.46, Vector3.new(0, 0.5, 0), CACTUS),
+				rod(0.34, 0.2, CFrame.new(-0.3, 0.42, 0), CACTUS),
+				column(0.44, 0.2, Vector3.new(-0.44, 0.63, 0), CACTUS),
+				rod(0.3, 0.18, CFrame.new(0.28, 0.6, 0), CACTUS),
+				column(0.36, 0.18, Vector3.new(0.4, 0.78, 0), CACTUS),
+				ball(0.17, Vector3.new(0, 1.06, 0), BLOOM),
+				ball(0.13, Vector3.new(0.13, 1.04, 0.05), BLOOM),
+				ball(0.13, Vector3.new(-0.11, 1.05, -0.08), BLOOM),
+				ball(0.12, Vector3.new(0.04, 1.02, -0.13), BLOOM),
+				ball(0.12, Vector3.new(-0.06, 1.03, 0.12), BLOOM),
+				ball(0.09, Vector3.new(0, 1.14, 0), YELLOW),
+			},
+			(function()
+				local spines = {}
+				for index = 0, 9 do
+					local angle = index / 10 * math.pi * 2 + index * 0.3
+					local height = 0.22 + index % 5 * 0.16
+					table.insert(spines, rod(0.16, 0.045,
+						CFrame.new(0, height, 0) * CFrame.Angles(0, angle, 0) * CFrame.new(0, 0, 0.24)
+							* CFrame.Angles(0, math.pi / 2, 0) * CFrame.Angles(0, 0, math.rad(18)), IVORY))
+				end
+				return spines
+			end)()
+		),
+	},
+	CrocodiloWings = {
+		name = "Bombardiro Wings",
+		kind = "Accessory",
+		rarity = "Epic",
+		price = 32000,
+		anchor = "Back",
+		color = CROC,
+		description = "Air Drop, without the drop. Or the air. They are decorative.",
+		-- Each wing is a wedge pair, which is the one shape that gives a real swept point; the struts lie
+		-- along the wings at their own angles, and the pack between them is a sphere with no faces.
+		parts = concat(
+			spike(CFrame.new(-0.78, 0.18, 0.32) * CFrame.Angles(0, 0, math.rad(96)), 1.04, 0.72, 0.14, CROC),
+			spike(CFrame.new(0.78, 0.18, 0.32) * CFrame.Angles(0, 0, math.rad(-96)), 1.04, 0.72, 0.14, CROC),
+			{
+				sphere(Vector3.new(0.74, 0.86, 0.44), Vector3.new(0, 0.1, 0.3), CROC_DARK),
+				rod(0.86, 0.09, CFrame.new(-0.74, 0.3, 0.33) * CFrame.Angles(0, 0, math.rad(6)), CROC_DARK),
+				rod(0.86, 0.09, CFrame.new(0.74, 0.3, 0.33) * CFrame.Angles(0, 0, math.rad(-6)), CROC_DARK),
+				rod(0.66, 0.08, CFrame.new(-0.66, -0.06, 0.33) * CFrame.Angles(0, 0, math.rad(-14)), CROC_DARK),
+				rod(0.66, 0.08, CFrame.new(0.66, -0.06, 0.33) * CFrame.Angles(0, 0, math.rad(14)), CROC_DARK),
+				ball(0.2, Vector3.new(0, 0.62, 0.34), STEEL),
+				ball(0.16, Vector3.new(0, -0.42, 0.34), STEEL),
+			}
+		),
+	},
+		StinkoCloud = {
+		name = "Stinko Cloud",
+		kind = "Aura",
+		rarity = "Uncommon",
+		price = 8000,
+		color = STINK,
+		description = "Sockolino's own weather. It follows you and it sinks.",
+		-- The first aura that is a shape rather than a hue: heavy puffs, slow, thrown wide and falling,
+		-- because a stink cloud that rises is steam. rise is negative and drag holds them near the feet.
+		aura = {
+			lightRange = 8,
+			lightBrightness = 0.7,
+			layers = {
+				{ rate = 9, size = 0.85, endSize = 0.3, speed = { 0.6, 1.2 }, rise = -1.4,
+					lifetime = { 1.4, 2.2 }, transparency = 0.45, spread = 70, drag = 1.2 },
+			},
+		},
+	},
+	PokkoNeedles = {
+		name = "Pokko's Needles",
+		kind = "Aura",
+		rarity = "Rare",
+		price = 13000,
+		color = IVORY,
+		description = "Needle Shot, permanently. Cactino Pokko does not aim it.",
+		-- Fast, small, tight and spinning: the opposite end of the same contract. A 35 degree spread
+		-- reads as a spit rather than a halo, and the short life keeps them close.
+		aura = {
+			lightColor = CACTUS,
+			lightRange = 7,
+			lightBrightness = 0.9,
+			layers = {
+				{ rate = 26, size = 0.22, endSize = 0.05, speed = { 6, 9 }, rise = -9,
+					lifetime = { 0.35, 0.6 }, transparency = 0.1, spread = 35, spin = 180 },
+			},
+		},
+	},
+	WobbloSteam = {
+		name = "Wobblo Steam",
+		kind = "Aura",
+		rarity = "Common",
+		price = 4000,
+		color = NOODLE,
+		description = "Still hot. Noodlo Wobblo insists it is always still hot.",
+		-- Two layers: wide slow wisps, and a few darker flecks of broth riding up through them.
+		aura = {
+			lightRange = 6,
+			lightBrightness = 0.6,
+			layers = {
+				{ rate = 10, size = 0.6, endSize = 0.15, speed = { 0.8, 1.6 }, rise = 3.2,
+					lifetime = { 1.2, 2 }, transparency = 0.55, spread = 120 },
+				{ rate = 5, size = 0.15, color = BROTH, speed = { 1.5, 2.5 }, rise = 2.4,
+					lifetime = { 0.8, 1.4 }, transparency = 0.3, spread = 60 },
+			},
+		},
+	},
+	BombardiroContrail = {
+		name = "Bombardiro Contrail",
+		kind = "Aura",
+		rarity = "Epic",
+		price = 28000,
+		color = STEEL,
+		description = "Air Drop leaves a line in the sky. This is the line, minus the sky.",
+		-- A trail that hangs where you were, with green sparks cutting down through it. `fade` gives the
+		-- trail a second colour at the end of its life, which is the one thing a single emitter could
+		-- never do when an aura was one Color3.
+		aura = {
+			lightColor = CROC,
+			lightRange = 11,
+			lightBrightness = 1,
+			layers = {
+				{ rate = 20, size = 0.7, endSize = 0.2, speed = { 0.5, 1 }, rise = 0.6, drag = 0.6,
+					lifetime = { 1.6, 2.4 }, transparency = 0.5, spread = 40, fade = WHITE },
+				{ rate = 8, size = 0.18, color = CROC, speed = { 4, 7 }, rise = -2,
+					lifetime = { 0.4, 0.8 }, transparency = 0.15, spread = 55, spin = 120 },
+			},
+		},
+	},
+	GummoBubbles = {
+		name = "Gummo Bubbles",
+		kind = "Aura",
+		rarity = "Rare",
+		price = 14000,
+		color = PINK,
+		description = "Bubblo Gummo blows one every few seconds. They all pop. He keeps going.",
+		-- Big slow bubbles fading pale, and small fast pops underneath them.
+		aura = {
+			lightRange = 9,
+			lightBrightness = 0.9,
+			layers = {
+				{ rate = 7, size = 0.9, endSize = 0.5, speed = { 1, 2 }, rise = 1.8,
+					lifetime = { 1.8, 2.6 }, transparency = 0.55, spread = 90, fade = WHITE },
+				{ rate = 12, size = 0.12, speed = { 3, 5 }, rise = 0.5,
+					lifetime = { 0.3, 0.5 }, transparency = 0.25, spread = 160 },
+			},
+		},
+	},
+		-- Parachutes: the canopy that opens over you on the drop-in and with the Rot Glider. Each id is a
 	-- design in Shared/ParachuteModels, which builds it; `color` is its main colour for icons and
 	-- crate reveals. Common to Epic rotate through the shop; Legendary and up only come from the
 	-- Parachute Crate. With none equipped you get the default Rot Glider canopy.

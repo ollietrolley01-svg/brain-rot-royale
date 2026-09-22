@@ -195,10 +195,36 @@ root.InputBegan:Connect(function(input)
 	end
 end)
 
+-- THREE devices, not two. A console is neither touch nor keyboard, so `TouchEnabled and not
+-- KeyboardEnabled` sent it down the keyboard branch and a pad player read a legend of keys their
+-- machine does not have -- a list of controls you cannot reach, from the thing written to stop
+-- controls being unreachable.
+--
+-- Labels come from Settings.GamepadLabel, which reads the buttons actually bound, so this cannot
+-- claim a button that is not there. An action with no gamepad button (Zoom, Inspect) is DROPPED
+-- rather than shown with a key that does nothing.
+--
+-- GetLastInputType can answer None before the player has touched anything, so a console player may
+-- get the keyboard legend for the first moment; LastInputTypeChanged below corrects it on their
+-- very first input. The legend is up for 12 seconds, so it corrects itself well inside its own life.
 local function rebuild()
+	local last = UserInputService:GetLastInputType()
+	if string.find(last.Name, "Gamepad", 1, true) then
+		local rows = {}
+		for _, entry in ipairs(ROWS) do
+			local label = Settings.GamepadLabel(entry[1])
+			if label then
+				rows[#rows + 1] = { label, entry[2] }
+			end
+		end
+		buildRows(rows, true)
+		return
+	end
 	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 	buildRows(touch and TOUCH_ROWS or ROWS, touch)
 end
+
+UserInputService.LastInputTypeChanged:Connect(rebuild)
 
 rebuild()
 place()

@@ -195,6 +195,13 @@ local function narrowContent()
 	return width < NARROW_CONTENT, width
 end
 
+-- On sizing a label below: `UiKit.textSpan(select(2, narrowContent()), reserve, height)`, rather
+-- than a flat `UDim2.new(1, -reserve, ...)`. A fixed reserve becomes a NEGATIVE width once it
+-- passes the content width, and a negative width draws nothing rather than truncating. Written out
+-- at each site instead of wrapped in a helper because this chunk is at Luau's 200-local ceiling and
+-- verify.py warns at 195 -- one more top-level local here costs more than the repetition does.
+-- These rows sit inside cards a gutter narrower than the content, and textSpan's floor absorbs that.
+
 -- Returns the row's button container so callers can append their own buttons.
 local function makeRow(order, title, titleColor, subtitle)
 	local narrow = narrowContent()
@@ -333,7 +340,9 @@ end
 local function statLine(parent, y, text, color, font, size)
 	return create("TextLabel", {
 		Position = UDim2.new(0, 124, 0, y),
-		Size = UDim2.new(1, -340, 0, size + 6),
+		-- 124 of photo on the left and 216 of buttons on the right: -44 px at the 296 a portrait
+		-- phone gives, which drew nothing at all.
+		Size = UiKit.textSpan(select(2, narrowContent()), 340, size + 6),
 		BackgroundTransparency = 1,
 		Font = font or Enum.Font.Gotham,
 		Text = text,
@@ -383,7 +392,9 @@ local function codexRow(order, def, count)
 
 	create("TextLabel", {
 		Position = UDim2.fromOffset(64, 8),
-		Size = UDim2.new(1, -220 - rightReserve, 0, 22),
+		-- rightReserve is 0, 100 or 200 depending on the BUY and OWNED chips, so this ran from 76 px
+		-- down to -124 at 296 of content.
+		Size = UiKit.textSpan(select(2, narrowContent()), 220 + rightReserve, 22),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold,
 		Text = owned and def.name or "???  " .. def.name,
@@ -395,7 +406,7 @@ local function codexRow(order, def, count)
 	})
 	create("TextLabel", {
 		Position = UDim2.fromOffset(64, 32),
-		Size = UDim2.new(1, -220 - rightReserve, 0, 18),
+		Size = UiKit.textSpan(select(2, narrowContent()), 220 + rightReserve, 18),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.Gotham,
 		Text = owned and string.format("%s  •  %s coins each", string.upper(def.rarity), formatNumber(def.coinValue))
@@ -473,7 +484,13 @@ local function openMergeDialog(def, entry, level, stars)
 		count = entry.count,
 		onConfirm = function()
 			task.spawn(function()
-				local reached, success, message = pcall(function()
+				-- The server's own message is NOT passed on: Bootstrap's `guard` now toasts whatever a
+				-- menu remote returns, so repeating it here put the same words on screen twice at the
+				-- same moment. The dialog keeps its generic line and the toast carries the reason.
+				--
+				-- The "couldn't reach the server" line below is different and stays: guard never ran,
+				-- so nothing else will say anything at all.
+				local reached, success = pcall(function()
 					return mergeBrainrot:InvokeServer(entry.name, stars)
 				end)
 				if not reached then
@@ -483,7 +500,7 @@ local function openMergeDialog(def, entry, level, stars)
 				if success then
 					Sfx.Play("Gold")
 				end
-				MergeDialog.Resolve(success == true, message)
+				MergeDialog.Resolve(success == true)
 			end)
 		end,
 	})
@@ -651,8 +668,14 @@ local function renderBrainrots()
 	end
 
 	-- The Codex toggle at the end of the chip row.
+	-- Sized to its own label, because it has two of very different lengths: "CODEX" fits the 70 px
+	-- this used to be fixed at and "BACK TO MY BRAINROTS" is twenty characters that did not, so the
+	-- text ran out of the chip (Oliver's #129). Its siblings above are each sized for their own word
+	-- (`option == "All" and 54 or 84`); this was the one that was not. AutomaticSize keeps both
+	-- labels exact instead of trading one overflowing chip for one too wide for "CODEX".
 	local codexChip = create("TextButton", {
-		Size = UDim2.fromOffset(70, 28),
+		Size = UDim2.fromOffset(0, 28),
+		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundColor3 = codexMode and C.Storm or C.Panel,
 		BorderSizePixel = 0,
 		AutoButtonColor = true,
@@ -662,7 +685,10 @@ local function renderBrainrots()
 		TextSize = 11,
 		LayoutOrder = 99,
 		Parent = chips,
-	}, { rounded(7) })
+	}, {
+		rounded(7),
+		create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }),
+	})
 	codexChip.Activated:Connect(function()
 		Sfx.Play("UiClick", 0.08)
 		codexMode = not codexMode
@@ -697,6 +723,22 @@ local function renderBrainrots()
 					LayoutOrder = order,
 					Parent = content,
 				})
+				-- THE ONE EDIT, when Oliver answers the sort question. The list is grouped by rarity
+				-- (rarest last) and, within a rarity, follows BrainrotData's own order -- which is the
+				-- order they were written, not a chosen one. The three candidates and the change each
+				-- one costs, so whoever picks it up is not re-deriving this:
+				--   * leave it as written      -- nothing to do
+				--   * by name, A to Z          -- sort a copy of `set` on def.name
+				--   * by coin value, low first -- sort a copy of `set` on def.coinValue
+				-- Sort a COPY: BrainrotData.OfRarity returns a fresh table today, but sorting the
+				-- module's own data in place would reorder it for the shop, the crate roll and the
+				-- codex all at once.
+				--
+				-- Shared/BrainrotCodex holds a line of flavour text for all 126, keyed by name
+				-- (`BrainrotCodex.Get(def.name)`, nil if there is none). It is drawn nowhere yet. The
+				-- row is 60 px tall with two lines of text at x 64; a third line at y 46 is where it
+				-- goes, and the row grows to about 80. verify.py already checks the file is complete
+				-- and inside its own length limit, so the text is ready whenever the panel is.
 				for _, def in ipairs(set) do
 					order += 1
 					codexRow(order, def, counts[def.name] or 0)
@@ -793,8 +835,33 @@ local function renderBrainrots()
 			addButton(buttons, 3, "SELL 1", C.Accent, function()
 				invoke(sellBrainrot, entry.name)
 			end)
+			-- Confirmed before it acts, because it is irreversible and it is bigger than it looks.
+			-- Drawn on one brainrot's card under "SELL 1", this sells every brainrot of the whole
+			-- RARITY (RewardService.SellAllOfRarity :339), keeping one copy of each merged one. MERGE
+			-- -- which leaves you better off -- has had a confirm card since it was written; this had
+			-- none, and `invoke` discards the server's reply, so the first a player knew was a shorter
+			-- list. The body names what is KEPT as well as what goes: "are you sure" helps nobody.
+			--
+			-- The LABEL still says "SELL ALL" and should say the rarity. That is deliberate and it is
+			-- held for a render: a variable-length label in a fixed 95x39 grid cell is exactly the
+			-- clipped chip that #129 was, and it is not going in unmeasured. The dialog prevents the
+			-- loss; the label prevents the misunderstanding, and only the first is urgent.
 			addButton(buttons, 4, "SELL ALL", C.Red, function()
-				invoke(sellAllOfRarity, entry.rarity)
+				local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+					or Vector2.new(1280, 720)
+				UiParts.dialog({
+					parent = screenGui,
+					viewport = viewport,
+					title = "Sell every " .. entry.rarity .. " brainrot?",
+					body = "This sells your whole " .. entry.rarity .. " collection, not just "
+						.. entry.name .. ". One copy of each merged brainrot stays. It cannot be undone.",
+					actions = {
+						{ text = "CANCEL", kind = "secondary" },
+						{ text = "SELL THEM", kind = "danger", onClick = function()
+							invoke(sellAllOfRarity, entry.rarity)
+						end },
+					},
+				})
 			end)
 
 			-- MERGE says what the next star needs: live once there are enough spare copies,
@@ -2051,7 +2118,7 @@ local function featuredCard(order, product)
 
 	create("TextLabel", {
 		Position = UDim2.fromOffset(130, 32),
-		Size = UDim2.new(1, -310, 0, 30),
+		Size = UiKit.textSpan(select(2, narrowContent()), 310, 30),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.FredokaOne,
 		Text = product.name,
@@ -2083,7 +2150,7 @@ local function featuredCard(order, product)
 	else
 		create("TextLabel", {
 			Position = UDim2.fromOffset(130, 66),
-			Size = UDim2.new(1, -310, 0, 52),
+			Size = UiKit.textSpan(select(2, narrowContent()), 310, 52),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.Gotham,
 			Text = product.description,
@@ -3385,12 +3452,23 @@ shell.onBack = toggleMenu
 shell.onClose = toggleMenu
 shell:BindBack("BrrMenuBack")
 
+-- A CONTROLLER COULD NOT OPEN THE MENU AT ALL. This has always been a ContextActionService
+-- binding, which takes gamepad KeyCodes perfectly well (Settings.lua:243 forwards `extras` into
+-- BindAction); it simply passed none, so the action existed on a keyboard and nowhere else. A whole
+-- match with no menu, no settings and no quests, and it is not a crash so nothing reported it.
+--
+-- ButtonSelect (Back/View), not ButtonStart: Roblox very likely reserves Start for its own console
+-- menu the way it reserves Escape on a keyboard, and a binding it swallows would LOOK fixed and do
+-- nothing -- the exact failure this fix exists to undo. Somebody with a controller can settle it in
+-- one press; until then this takes the button nobody reserves.
+--
+-- `nil` is the touch argument; extras follow it.
 Settings.Bind("BRR_Menu", "Menu", function(_, inputState)
 	if inputState == Enum.UserInputState.Begin and not listeningFor and os.clock() - lastKeyCaptureAt > 0.25 then
 		toggleMenu()
 	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.ButtonSelect)
 
 local function labelMenuButton()
 	menuButton.Text = "MENU  [" .. Settings.KeyLabel("Menu") .. "]"
@@ -3567,12 +3645,17 @@ tracker.Activated:Connect(function()
 	openTab("Quests")
 end)
 
+-- DPadLeft, and the walk to it is worth recording. DPadUp is the camera toggle
+-- (CombatClient:840), DPadRight is the inventory (HudClient:1659) and DPadDown is the movement item
+-- (MovementClient:984) -- so the d-pad is already three-quarters spoken for, and Left is the only
+-- face of it free. ButtonL1 looked free and is the vehicle's (VehicleClient:327): a weapon control
+-- that also drives is a collision built on purpose.
 Settings.Bind("BRR_Quests", "Quests", function(_, inputState)
 	if inputState == Enum.UserInputState.Begin and not listeningFor and os.clock() - lastKeyCaptureAt > 0.25 then
 		openTab("Quests")
 	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.DPadLeft)
 Settings.Changed:Connect(renderTracker)
 
 -- The lobby's booths (Trading Hall, Cosmetics, Codex) open straight onto their tab.

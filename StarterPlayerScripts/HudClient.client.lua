@@ -508,6 +508,18 @@ RunService.RenderStepped:Connect(function()
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 
+	-- Not in this match -- joined late, or eliminated and watching -- means none of the storm's
+	-- warnings are about this player. A spectator still has a body standing in the lobby, so without
+	-- this the vignette pulses purple over someone who is not in the storm, and the readout counts
+	-- down a zone they are not in. This is the test renderBanner has made since it was written.
+	-- Written out rather than kept in a local: HudClient's main chunk is near Luau's 200-local limit
+	-- and overrunning it fails the compile silently.
+	if matchState.state == "InProgress" and not loadout then
+		setVignette(0)
+		zoneWarning.TextTransparency = 1
+		return
+	end
+
 	if not humanoid or humanoid.Health <= 0 or not root then
 		setVignette(0)
 		zoneWarning.TextTransparency = 1
@@ -1489,6 +1501,16 @@ local function renderWeapon()
 		elseif raising then
 			ammoText.Text = "RAISING"
 			ammoText.TextColor3 = C.Muted
+		elseif slot.mag == 0 and slot.reserve == 0 then
+			-- Out entirely. "0 / 0" in the ordinary colour carries the same weight as "24 / 90", and
+			-- a reload at zero reserve is refused SILENTLY (WeaponService.lua:1756) -- so the player
+			-- presses reload, nothing happens, and nothing says why.
+			ammoText.Text = "NO AMMO"
+			ammoText.TextColor3 = C.Red
+		elseif slot.mag == 0 then
+			-- Empty magazine, ammo to load. The key is read from Settings so a rebind shows.
+			ammoText.Text = string.format("0 / %d  •  [%s]", slot.reserve, Settings.KeyLabel("Reload"))
+			ammoText.TextColor3 = C.Accent
 		else
 			ammoText.Text = string.format("%d / %d", slot.mag, slot.reserve)
 			ammoText.TextColor3 = C.Text
@@ -1528,6 +1550,7 @@ end
 do
 	local okInventory, inventoryError = pcall(function()
 	local InventoryPanel = require(script.Parent:WaitForChild("InventoryPanel"))
+	local MenuOpenClaims = require(script.Parent:WaitForChild("MenuOpenClaims"))
 	local swapRemote = Remotes.Event("SwapSlots")
 
 	-- Its own ScreenGui, above the HUD and the menu, keeping the top-bar inset (the panel's pointer maths
@@ -1541,7 +1564,7 @@ do
 		Parent = playerGui,
 	})
 
-	local ownsMenuOpen = false
+	local releaseInventory = nil
 	local panel
 
 	-- Whether the menu's own big panel is up (a large visible Frame straight under its ScreenGui).
@@ -1555,12 +1578,16 @@ do
 		return false
 	end
 
+	-- The claim's own release. It does NOT decide whether the cursor goes back: MenuOpenClaims counts
+	-- every holder, so closing this while a picker still needs the cursor leaves it free, and closing
+	-- it last gives it back. Releasing twice is the same as releasing once, which matters because two
+	-- different paths close this panel -- closePanel for every external close, and the panel's own
+	-- onClose when it closes itself.
 	local function releaseMenuOpen()
-		if ownsMenuOpen then
-			ownsMenuOpen = false
-			if not menuPanelShowing() then
-				player:SetAttribute("MenuOpen", false)
-			end
+		if releaseInventory then
+			local release = releaseInventory
+			releaseInventory = nil
+			release()
 		end
 	end
 
@@ -1611,9 +1638,12 @@ do
 		if player:GetAttribute("MenuOpen") and menuPanelShowing() then
 			return
 		end
-		if not player:GetAttribute("MenuOpen") then
-			ownsMenuOpen = true
-			player:SetAttribute("MenuOpen", true)
+		-- A CLAIM, not a write. Reading the attribute to decide whether to take it is what broke:
+		-- opening this under a picker's claim found it already true, so ownership was refused, and
+		-- closing it later released nothing. The attribute then stayed true for the rest of the match
+		-- with no owner -- inCombat() dead, cursor on screen (Oliver's #112, half of #100).
+		if not releaseInventory then
+			releaseInventory = MenuOpenClaims.Claim("Inventory")
 		end
 		panel:Open(loadout)
 		Sfx.Play("UiClick", 0.08, 1.1)
@@ -1696,12 +1726,24 @@ do
 	}, { rounded(6) })
 	-- A phone has no B key to press, so the key badge only shows where a keyboard exists (a tablet with
 	-- one plugged in later counts, hence the property signal); the label takes the freed room.
+	-- THREE devices. `KeyboardEnabled or not TouchEnabled` answers TRUE on a console, where neither
+	-- flag is set, so a pad player was shown a KEYBOARD key for a control that is actually D-Pad
+	-- Right. That is the worse half of this bug's family: the same two-device assumption spelled the
+	-- other way round fails by confidently showing the wrong thing rather than by showing nothing,
+	-- and a wrong label looks like a feature where a missing one looks like a bug.
+	--
+	-- On a pad the badge is HIDDEN rather than relabelled, deliberately and temporarily: `tabKey` is
+	-- a fixed 30x20 box sized for "Tab", and "D-Pad R" in it is the clipped chip of #129 again. The
+	-- CONTROLS legend names the control in the meantime, so nothing is unreachable — only unlabelled
+	-- here. The badge comes back with a measured width in the next render batch.
 	local function fitTabKey()
-		local hasKeyboard = UserInputService.KeyboardEnabled or not UserInputService.TouchEnabled
+		local onPad = string.find(UserInputService:GetLastInputType().Name, "Gamepad", 1, true) ~= nil
+		local hasKeyboard = not onPad and (UserInputService.KeyboardEnabled or not UserInputService.TouchEnabled)
 		tabKey.Visible = hasKeyboard
-		tabKey.Text = Settings.KeyLabel("Inventory")
+		tabKey.Text = hasKeyboard and Settings.KeyLabel("Inventory") or ""
 		tabLabel.Size = UDim2.new(1, hasKeyboard and -76 or -44, 1, 0)
 	end
+	UserInputService.LastInputTypeChanged:Connect(fitTabKey)
 	fitTabKey()
 	Settings.Changed:Connect(fitTabKey)
 	UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(fitTabKey)
@@ -1728,14 +1770,6 @@ do
 	UserInputService.InputBegan:Connect(function(input)
 		if panel:IsOpen() and (input.KeyCode == Settings.Key("Menu") or input.KeyCode == Settings.Key("Quests")) then
 			closePanel()
-		end
-	end)
-
-	-- The menu closing underneath (it clears MenuOpen) mustn't lock the mouse while this is still open.
-	player:GetAttributeChangedSignal("MenuOpen"):Connect(function()
-		if panel:IsOpen() and not player:GetAttribute("MenuOpen") then
-			ownsMenuOpen = true
-			player:SetAttribute("MenuOpen", true)
 		end
 	end)
 
@@ -1804,6 +1838,22 @@ stormChanged.OnClientEvent:Connect(function(storm)
 	stormState = storm.status ~= "Idle" and storm or nil
 
 	if not stormState then
+		stormLabel.Text = ""
+		return
+	end
+
+	-- A STATIC boundary says nothing here. StormService.StartStatic (:140) -- which GameMode:418
+	-- calls for every team mode -- sends `label` ("Stay in the arena") precisely because the phase
+	-- countdown "means nothing for a circle that never moves" (StormService.lua:90-92). Nothing read
+	-- it, so a whole team match showed "Storm moves in 0s   •   Zone 0/5   •   4 dmg/s": a countdown
+	-- at zero, a phase that does not exist and a storm that is not coming.
+	--
+	-- The readout's job is to report what CHANGES -- when the next shrink lands and how much it
+	-- hurts. In a team mode nothing changes, so a permanent line reporting a constant is furniture,
+	-- not information, and it also sat in ModeScoreHud's slot at y=72. The boundary is still told
+	-- twice where it matters: the minimap's zone ring draws it continuously, and the vignette plus
+	-- OUTSIDE THE ZONE say "you are outside it, now".
+	if storm.label then
 		stormLabel.Text = ""
 		return
 	end
@@ -1895,32 +1945,6 @@ do
 
 local chooseDrop = Remotes.Event("ChooseDrop")
 local DROP_PX = 440
-
--- The same two things that freed the cursor on the inventory, for the same bug here (Oliver: "my
--- mouse gets locked up on the drop location checker too").
---
--- A VISIBLE GuiButton with `Modal = true` unlocks the mouse for as long as it is up, which is the
--- one thing that beats a first-person camera relocking it every frame. The picker carries its own
--- rather than relying on another script watching an attribute: a window you cannot click is a
--- window you cannot use, and this button is alive for exactly the window's lifetime.
---
--- The MenuOpen attribute is the second half and does a different job: CombatClient reads it so a
--- click on the map does not also fire the gun. Modal frees the cursor; MenuOpen stops the shot.
-local dropModal = create("TextButton", {
-	Name = "DropSelectOverlay",
-	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Color3.new(0, 0, 0),
-	BackgroundTransparency = 0.45,
-	AutoButtonColor = false,
-	Modal = true,
-	Selectable = false,
-	Text = "",
-	Visible = false,
-	ZIndex = 39,
-	Parent = screenGui,
-})
-
-local dropOwnsMenuOpen = false
 
 local dropScreen = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
@@ -2119,16 +2143,6 @@ function Drop.update()
 		refreshDropMap()
 	end
 	dropScreen.Visible = active
-	-- Overlay and attribute follow the window exactly, so the cursor is freed while it is up and
-	-- handed straight back when a spot is picked or the phase ends.
-	dropModal.Visible = active
-	if active and not dropOwnsMenuOpen then
-		dropOwnsMenuOpen = true
-		player:SetAttribute("MenuOpen", true)
-	elseif not active and dropOwnsMenuOpen then
-		dropOwnsMenuOpen = false
-		player:SetAttribute("MenuOpen", false)
-	end
 	if active then
 		dropClock.Text = tostring(matchState.countdown or 0)
 	end
@@ -2605,7 +2619,13 @@ RunService.RenderStepped:Connect(function()
 		dropDot.Visible = false
 	end
 
-	if stormState then
+	-- The readout is cleared here rather than beside the vignette, because `stormLabel` is declared
+	-- below that loop: referencing it there compiles as a nil global and only fails when it runs.
+	if matchState.state == "InProgress" and not loadout and stormLabel.Text ~= "" then
+		stormLabel.Text = ""
+	end
+
+	if stormState and not (matchState.state == "InProgress" and not loadout) then
 		local size = math.max(4, stormState.radius * 2 * scale)
 		zoneRing.Size = UDim2.fromOffset(size, size)
 		zoneRing.Position = UDim2.new(0.5, stormState.center.X * scale, 0.5, stormState.center.Z * scale)
@@ -2741,7 +2761,13 @@ bountyRemote.OnClientEvent:Connect(function(info)
 	end
 	bountyLabel.Text = string.format("BOUNTY  •  %s  (%d kills)  •  %d C", info.name or "?", info.kills or 0, info.reward or 0)
 	bountyLabel.Visible = matchState.state == "InProgress"
-	if info.name ~= player.DisplayName then
+	-- player.Name, not DisplayName: the server sends Combatants.GetName, which is the USERNAME
+	-- (Combatants.lua:44-45), and most accounts have a DisplayName that differs from it. So this
+	-- compared two different things, and the one toast written for a single person -- "there's a
+	-- bounty on YOU" -- went to everybody EXCEPT its subject, who got the third-person version about
+	-- their own username instead. The kill-feed self-highlight above already compares player.Name.
+	-- A username is unique across Roblox, so it identifies exactly one account.
+	if info.name ~= player.Name then
 		showToast(string.format("BOUNTY: %d SahurCoins on %s (%d kills)", info.reward or 0, info.name or "?", info.kills or 0))
 	else
 		showToast(string.format("There's a %d coin bounty on YOU — everyone knows.", info.reward or 0), true)
@@ -3515,9 +3541,16 @@ matchResults.OnClientEvent:Connect(function(result)
 
 	if result.reward then
 		table.insert(lines, "")
-		table.insert(lines, string.upper(result.reward.crate) .. " CRATE")
-		table.insert(lines, "open it from the menu")
-		table.insert(lines, "")
+		-- Team modes award coins and XP with NO crate (GameMode's AwardResult sends `crate = nil`),
+		-- so only the crate LINES are conditional. Coins, XP and the rank line below are not: a team
+		-- reward still shows everything it actually contains. string.upper(nil) threw here, after the
+		-- panel and rank were already drawn, so the card showed an empty body and never ran its 10 s
+		-- hide -- it lingered until the 15 s Intermission broadcast.
+		if result.reward.crate then
+			table.insert(lines, string.upper(result.reward.crate) .. " CRATE")
+			table.insert(lines, "open it from the menu")
+			table.insert(lines, "")
+		end
 		table.insert(lines, string.format("+%d SahurCoins", result.reward.coins))
 		table.insert(lines, string.format("+%d Brainrot Pass XP", result.reward.xp))
 		-- Rot Rank this match (ProgressionService.MatchSummary). ONE line: the card is nearly full, and
@@ -3531,7 +3564,9 @@ matchResults.OnClientEvent:Connect(function(result)
 			table.insert(lines, string.format("%s  •  +%s XP%s", rankText, formatNumber(progression.xp),
 				(progression.cells or 0) > 0 and string.format("  •  +%s Cells", formatNumber(progression.cells)) or ""))
 		end
-		resultsBody.TextColor3 = Rarity.Color(result.reward.crate)
+		-- Rarity.Color(nil) answers Common rather than failing, so without this a team card came out
+		-- Common grey -- a wrong colour is harder to notice than a crash and lasts longer.
+		resultsBody.TextColor3 = result.reward.crate and Rarity.Color(result.reward.crate) or C.Text
 	else
 		table.insert(lines, "")
 		table.insert(lines, "No placement reward this time.")
@@ -3680,9 +3715,53 @@ companionAttackRemote.OnClientEvent:Connect(function(info)
 	TweenService:Create(companionDot, TweenInfo.new(0.3, Enum.EasingStyle.Back), { Size = UDim2.fromOffset(22, 22) }):Play()
 end)
 
-player:GetAttributeChangedSignal("SpeedBoosted"):Connect(function()
-	speedPill.Visible = player:GetAttribute("SpeedBoosted") == true
-end)
+-- The pill counts down. It used to read "SPEED BOOST" with no seconds, so a player could not tell
+-- whether they had eight seconds of it left or half of one -- and the moment it ends, their speed
+-- changes under them with nothing on screen having said it was about to.
+--
+-- `SpeedBoostUntil` is a SERVER-TIME stamp (MatchService:1040, cleared with the flag at :1052), and
+-- `workspace:GetServerTimeNow()` gives the client the same clock, so this needs no remote and cannot
+-- drift from the server's own idea of when the boost ends. If the stamp is ever missing the pill
+-- falls back to its old wording rather than showing a wrong number.
+--
+-- Driven off Heartbeat only while the pill is visible: a per-frame connection that exists for the
+-- eighteen seconds a boost lasts, not for the whole match.
+local speedBoostTick = nil
+local function stopSpeedBoostTick()
+	if speedBoostTick then
+		speedBoostTick:Disconnect()
+		speedBoostTick = nil
+	end
+end
+
+local function refreshSpeedPill()
+	local on = player:GetAttribute("SpeedBoosted") == true
+	speedPill.Visible = on
+	if not on then
+		stopSpeedBoostTick()
+		speedPill.Text = "SPEED BOOST"
+		return
+	end
+	if speedBoostTick then
+		return
+	end
+	speedBoostTick = RunService.Heartbeat:Connect(function()
+		local endsAt = player:GetAttribute("SpeedBoostUntil")
+		if not endsAt then
+			speedPill.Text = "SPEED BOOST"
+			return
+		end
+		local left = endsAt - workspace:GetServerTimeNow()
+		if left <= 0 then
+			speedPill.Text = "SPEED BOOST"
+			return
+		end
+		speedPill.Text = string.format("SPEED BOOST  %ds", math.ceil(left))
+	end)
+end
+
+player:GetAttributeChangedSignal("SpeedBoosted"):Connect(refreshSpeedPill)
+refreshSpeedPill()
 
 --------------------------------------------------------------------------------
 -- Match event banner (StarterPlayerScripts/EventBanner draws it)

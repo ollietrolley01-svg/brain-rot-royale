@@ -41,6 +41,41 @@ function StormService.SetSpeed(scale)
 	speedScale = math.max(0.25, scale or 1)
 end
 
+-- #108. Who the storm may hurt. MatchService installs this (a live participant of the running
+-- match, players and bots alike); nothing else may. A body that is merely REGISTERED is not
+-- thereby in the match: every character goes through Combatants.Register in OnCharacterAdded,
+-- the lobby body included, and the lobby sits at (0, 500, 0) -- inside the circle only while the
+-- circle still covers the origin. From phase 3 or 4 the pier was outside, the storm killed whoever
+-- stood on it, then killed the body the lobby respawn handed them, until the match ended.
+--
+-- With nothing installed the storm damages EVERYONE, and that is deliberate: fail-open, not
+-- fail-closed. Fail-open reproduces today's known, reported bug; fail-closed would make a storm
+-- that hurts nobody, which is decorative and can survive several playtests before anyone names
+-- it. The forgotten wire is made loud instead: Start and StartStatic warn when they begin with no
+-- predicate installed, and tools/storm_lobby_probe.lua plants exactly that fault.
+local eligibility = nil
+
+function StormService.SetEligibility(fn)
+	eligibility = fn
+end
+
+function StormService.GetEligibility()
+	return eligibility
+end
+
+local function eligible(token)
+	if eligibility == nil then
+		return true
+	end
+	return eligibility(token) == true
+end
+
+local function warnIfUnwired(where)
+	if eligibility == nil then
+		warn("[StormService] " .. where .. " began with NO eligibility predicate installed: every registered body, the lobby included, will take storm damage (MatchService's SetEligibility wire is missing)")
+	end
+end
+
 local function broadcast()
 	stormChanged:FireAllClients({
 		center = state.center,
@@ -111,6 +146,7 @@ function StormService.StartStatic(center, radius, damagePerSecond, label)
 	generation += 1
 	local myGeneration = generation
 	running = true
+	warnIfUnwired("StartStatic")
 
 	state.center = Vector3.new(center.X, 0, center.Z)
 	state.radius = radius
@@ -128,11 +164,11 @@ function StormService.StartStatic(center, radius, damagePerSecond, label)
 		while running and generation == myGeneration do
 			task.wait(1)
 			if state.damagePerSecond > 0 then
-				for character in pairs(Combatants.All()) do
+				for character, token in pairs(Combatants.All()) do
 					if character.Parent then
 						local humanoid = character:FindFirstChildOfClass("Humanoid")
 						local root = character:FindFirstChild("HumanoidRootPart")
-						if humanoid and root and humanoid.Health > 0 and StormService.IsOutside(root.Position) then
+						if humanoid and root and humanoid.Health > 0 and eligible(token) and StormService.IsOutside(root.Position) then
 							humanoid:TakeDamage(state.damagePerSecond)
 						end
 					end
@@ -152,6 +188,7 @@ function StormService.Start(radius)
 	generation += 1
 	local myGeneration = generation
 	running = true
+	warnIfUnwired("Start")
 
 	state.center = Vector3.zero
 	state.radius = mapRadius
@@ -224,11 +261,11 @@ function StormService.Start(radius)
 				-- Every combatant, not just real players. Iterating Players here left bots
 				-- completely immune to the storm, so they'd never be pressured to rotate
 				-- and could sit outside the final circle forever.
-				for character in pairs(Combatants.All()) do
+				for character, token in pairs(Combatants.All()) do
 					if character.Parent then
 						local humanoid = character:FindFirstChildOfClass("Humanoid")
 						local root = character:FindFirstChild("HumanoidRootPart")
-						if humanoid and root and humanoid.Health > 0 and StormService.IsOutside(root.Position) then
+						if humanoid and root and humanoid.Health > 0 and eligible(token) and StormService.IsOutside(root.Position) then
 							humanoid:TakeDamage(state.damagePerSecond)
 						end
 					end

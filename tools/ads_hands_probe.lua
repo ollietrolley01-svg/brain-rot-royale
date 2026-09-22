@@ -292,6 +292,189 @@ local function gripReport(id, vm, grips)
 	end
 end
 
+--------------------------------------------------------------------------------
+-- #92 B: WHERE THE GRIP ACTUALLY IS, and therefore WHICH BUG this anchor has
+--------------------------------------------------------------------------------
+
+-- The aggregate above says how many palms are on nothing. It does not say WHY, and the two reasons
+-- need opposite fixes, so a single "on NOTHING" count cannot be acted on:
+--
+--   STANDOFF -- there IS grip material straight down the palm, just further than the 2 cm the
+--     viewmodel allows (`gripShape`: `if not depth or first > 0.02 then return nil`). The palm is
+--     hovering over the right place. The correction is ONE NUMBER along the palm's own -Y.
+--   ADRIFT -- there is nothing under the palm at all. The palm is not over the grip; it is beside
+--     it, or past the end of it. The correction is a REAL MOVE in three axes, per gun, by eye.
+--
+-- So this measures both, per gun and per anchor: how far down the palm's own -Y the first material
+-- is, and where the NEAREST solid point is expressed in the hand's own frame. The second is the
+-- number that says which bug it is -- a point that is mostly -Y with little sideways or forward
+-- offset is a standoff; anything else is adrift, and the vector IS the move.
+--
+-- The geometry is `gripShape`'s, copied deliberately rather than called: that function returns nil
+-- at the first disqualifying step and throws away every number on the way, which is exactly the
+-- information wanted here. Where it stops at GRIP_REACH, this keeps looking, because the question
+-- is "how far away is the grip" and the answer "further than we look" is not an answer.
+local GAP_REACH = 0.9
+local GAP_STEP = 0.0038
+local GAP_SINK = 0.055 -- Viewmodel's HAND_SINK: the palm's inner face below the keypoint
+
+local function gapKind(part)
+	if part:IsA("Part") then
+		if part.Shape == Enum.PartType.Cylinder then
+			return "cyl"
+		elseif part.Shape == Enum.PartType.Ball then
+			return "ball"
+		end
+	end
+	return "box"
+end
+
+local function gapInside(node, point)
+	local p = node.inverse * point
+	local h = node.half
+	if node.kind == "cyl" then
+		local r = math.min(h.Y, h.Z)
+		return math.abs(p.X) <= h.X and p.Y * p.Y + p.Z * p.Z <= r * r
+	elseif node.kind == "ball" then
+		return p.Magnitude <= math.min(h.X, h.Y, h.Z)
+	end
+	return math.abs(p.X) <= h.X and math.abs(p.Y) <= h.Y and math.abs(p.Z) <= h.Z
+end
+
+-- The closest point ON a node to a point outside it, and how far away that is. Clamping into the
+-- box is exact for a box and conservative for the two round kinds (it answers for their bounding
+-- box), which errs toward saying a grip is NEARER than it is -- the safe direction, because it can
+-- only make this report understate a problem, never invent one.
+local function gapClosest(node, point)
+	local p = node.inverse * point
+	local h = node.half
+	local c = Vector3.new(
+		math.clamp(p.X, -h.X, h.X),
+		math.clamp(p.Y, -h.Y, h.Y),
+		math.clamp(p.Z, -h.Z, h.Z))
+	return (c - p).Magnitude, node.offset * c
+end
+
+local function gripGap(vm, anchor)
+	local keyFrame = vm.keys and vm.keys[anchor]
+	local offsets = vm.offsets
+	if not keyFrame or not offsets then
+		return nil
+	end
+	local origin = keyFrame.Position
+	local near = {}
+	for part, offset in pairs(offsets) do
+		if part.Transparency < 1 and (offset.Position - origin).Magnitude <= GAP_REACH + part.Size.Magnitude / 2 then
+			table.insert(near, {
+				part = part, offset = offset, inverse = offset:Inverse(),
+				half = part.Size / 2, kind = gapKind(part),
+			})
+		end
+	end
+	if #near == 0 then
+		return { parts = 0 }
+	end
+
+	-- Straight down the palm, as the viewmodel does, but further.
+	local palm = keyFrame * CFrame.new(0, -GAP_SINK, 0)
+	local first, firstPart = nil, nil
+	local d = 0
+	while d <= GAP_REACH do
+		local at = (palm * CFrame.new(0, -d, 0)).Position
+		for _, node in ipairs(near) do
+			if gapInside(node, at) then
+				first, firstPart = d, node.part.Name
+				break
+			end
+		end
+		if first then
+			break
+		end
+		d += GAP_STEP
+	end
+
+	-- The nearest solid anywhere, in the hand's own frame.
+	local best, bestAt, bestPart
+	for _, node in ipairs(near) do
+		local distance, point = gapClosest(node, palm.Position)
+		if not best or distance < best then
+			best, bestAt, bestPart = distance, point, node.part.Name
+		end
+	end
+	local local_ = keyFrame:PointToObjectSpace(bestAt)
+	return {
+		parts = #near,
+		first = first, firstPart = firstPart,
+		nearest = best, nearestPart = bestPart,
+		x = local_.X, y = local_.Y, z = local_.Z,
+	}
+end
+
+-- One line per gun per anchor that the viewmodel could not seat, sorted worst first, plus a tally of
+-- how the failures split between the two bugs. Printing the guns by name matters: the previous run's
+-- named worst-offender list existed only in a terminal and did not survive the tab that made it.
+local gapRows = {}
+
+local function gapReport(id, vm)
+	if not vm.gripShapes then
+		return
+	end
+	for anchor, shape in pairs(vm.gripShapes) do
+		if shape == false or shape == nil then
+			local gap = gripGap(vm, anchor)
+			if gap then
+				table.insert(gapRows, {
+					id = id, anchor = anchor, parts = gap.parts,
+					first = gap.first, firstPart = gap.firstPart,
+					nearest = gap.nearest, nearestPart = gap.nearestPart,
+					x = gap.x, y = gap.y, z = gap.z,
+				})
+			end
+		end
+	end
+end
+
+local function sayGaps()
+	if #gapRows == 0 then
+		say("#92B no unseated anchors to explain (either everything is seated, or nothing was measured -- check the count above)")
+		return
+	end
+	-- Worst first by how far the nearest material is: that is the size of the move needed.
+	table.sort(gapRows, function(a, b)
+		return (a.nearest or 9) > (b.nearest or 9)
+	end)
+	local standoff, adrift, barren = 0, 0, 0
+	for _, row in ipairs(gapRows) do
+		if row.parts == 0 then
+			barren += 1
+		elseif row.first then
+			standoff += 1
+		else
+			adrift += 1
+		end
+	end
+	say("#92B %d unseated anchor(s): %d STANDOFF (material straight down the palm, just too far -- one number each),"
+		.. " %d ADRIFT (nothing down the palm; the palm is in the wrong place -- a real move each),"
+		.. " %d with no gun geometry within %.2f studs at all",
+		#gapRows, standoff, adrift, barren, GAP_REACH)
+	say("#92B %-22s %-12s %-9s %-26s %s", "gun", "anchor", "kind", "nearest solid in hand frame", "detail")
+	for _, row in ipairs(gapRows) do
+		local kind = row.parts == 0 and "BARREN" or (row.first and "STANDOFF" or "ADRIFT")
+		local detail
+		if row.parts == 0 then
+			detail = "no parts near the palm"
+		elseif row.first then
+			detail = string.format("material at %.3f down -Y (%s); move the palm %.3f studs along -Y",
+				row.first, row.firstPart or "?", row.first)
+		else
+			detail = string.format("nothing down -Y within %.2f; nearest is %s at %.3f studs",
+				GAP_REACH, row.nearestPart or "?", row.nearest or -1)
+		end
+		say("#92B %-22s %-12s %-9s (%+.3f, %+.3f, %+.3f) %s", row.id, row.anchor, kind,
+			row.x or 0, row.y or 0, row.z or 0, detail)
+	end
+end
+
 local function sayGrips(grips)
 	local anchors = {}
 	for anchor in pairs(grips) do

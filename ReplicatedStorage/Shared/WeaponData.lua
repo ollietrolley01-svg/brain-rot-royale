@@ -181,11 +181,15 @@ WeaponData.Weapons = {
 		name = "Aura Crossbow",
 		rarity = "Uncommon",
 		style = "crossbow",
-		-- One bolt, then reload. A body shot takes 70; a headshot kills anyone without shield.
+		-- A body shot takes 70; a headshot kills anyone without shield. THREE body shots are needed
+		-- to kill through a full shield (100 health + 100 shield), so a magazine of one meant two full
+		-- 1.4s reloads inside every kill and the weapon's real time-to-kill was nowhere near the 2.22s
+		-- its numbers implied. The magazine now holds the shots the kill actually takes; reserveAmmo is
+		-- unchanged, so nothing about how much ammo you carry moves.
 		damage = 70,
 		headshotMultiplier = 2.2,
 		fireRate = 0.9,
-		magSize = 1,
+		magSize = 3,
 		reserveAmmo = 20,
 		reloadTime = 1.4,
 		range = 520,

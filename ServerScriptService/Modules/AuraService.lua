@@ -17,6 +17,18 @@ local AuraService = {}
 
 local AURA_NAME = "CosmeticAura"
 
+-- The emitter every aura had before designs could declare their own. Any aura without an `aura` field
+-- is built from exactly this, so the fifteen that shipped are untouched by the layer system.
+local DEFAULT_LAYER = {
+	size = 0.55,
+	transparency = 0.3,
+	lifetime = { 0.8, 1.4 },
+	rate = 14,
+	speed = { 1.5, 3 },
+	spread = 180,
+	rise = 2.5,
+}
+
 function AuraService.Apply(player, character)
 	character = character or player.Character
 	if not character then
@@ -43,35 +55,55 @@ function AuraService.Apply(player, character)
 	local attachment = Instance.new("Attachment")
 	attachment.Name = AURA_NAME
 
-	-- No Texture set: ParticleEmitter falls back to Roblox's built-in sparkle, so this needs
-	-- no uploaded asset.
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Color = ColorSequence.new(item.color)
-	emitter.LightEmission = 0.8
-	emitter.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.55),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	emitter.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.3),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	emitter.Lifetime = NumberRange.new(0.8, 1.4)
-	emitter.Rate = 14
-	emitter.Speed = NumberRange.new(1.5, 3)
-	emitter.SpreadAngle = Vector2.new(180, 180)
-	emitter.Acceleration = Vector3.new(0, 2.5, 0)
-	emitter.Parent = attachment
+	-- An aura used to be one emitter driven by one colour, which made fifteen cosmetics that differed
+	-- only in hue. A design may now declare `aura.layers`, each layer its own emitter, so an aura can
+	-- be heavy puffs that sink, a fast spit of needles, or a trail with sparks in it. Layers are
+	-- ParticleEmitters and nothing else -- no per-frame work, and the whole thing still replicates as
+	-- one attachment. An entry with no `aura` field gets DEFAULT_LAYER, which is the emitter that
+	-- shipped, value for value, so every existing aura renders exactly as it does today.
+	local design = item.aura or {}
+	for _, layer in ipairs(design.layers or { DEFAULT_LAYER }) do
+		local emitter = Instance.new("ParticleEmitter")
+		local tint = layer.color or item.color
+		-- No Texture set: ParticleEmitter falls back to Roblox's built-in sparkle, so this needs
+		-- no uploaded asset.
+		if layer.fade then
+			emitter.Color = ColorSequence.new(tint, layer.fade)
+		else
+			emitter.Color = ColorSequence.new(tint)
+		end
+		emitter.LightEmission = layer.lightEmission or 0.8
+		emitter.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, layer.size or 0.55),
+			NumberSequenceKeypoint.new(1, layer.endSize or 0),
+		})
+		emitter.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, layer.transparency or 0.3),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		local life = layer.lifetime or { 0.8, 1.4 }
+		emitter.Lifetime = NumberRange.new(life[1], life[2])
+		emitter.Rate = layer.rate or 14
+		local speed = layer.speed or { 1.5, 3 }
+		emitter.Speed = NumberRange.new(speed[1], speed[2])
+		local spread = layer.spread or 180
+		emitter.SpreadAngle = Vector2.new(spread, spread)
+		emitter.Acceleration = Vector3.new(0, layer.rise or 2.5, 0)
+		emitter.Drag = layer.drag or 0
+		emitter.Rotation = NumberRange.new(layer.rotation or 0, layer.rotation or 0)
+		emitter.RotSpeed = NumberRange.new(-(layer.spin or 0), layer.spin or 0)
+		emitter.Parent = attachment
+	end
 
 	local light = Instance.new("PointLight")
-	light.Color = item.color
-	light.Range = 10
-	light.Brightness = 1.2
+	light.Color = design.lightColor or item.color
+	light.Range = design.lightRange or 10
+	light.Brightness = design.lightBrightness or 1.2
 	light.Shadows = true
 	light.Parent = attachment
 
-	-- Parented last, with emitter and light attached, so the aura replicates as one piece
-	-- rather than three steps onto a character that's already live.
+	-- Parented last, with every emitter and the light already on it, so the aura replicates as one
+	-- piece rather than several steps onto a character that is already live.
 	attachment.Parent = root
 end
 

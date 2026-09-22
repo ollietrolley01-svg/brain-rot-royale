@@ -24,6 +24,7 @@ local Landmarks = require(script.Parent:WaitForChild("Landmarks"))
 local MapDecor = require(script.Parent:WaitForChild("MapDecor"))
 local MapSpace = require(script.Parent:WaitForChild("MapSpace"))
 local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
+local MapWilds = require(script.Parent:WaitForChild("MapWilds"))
 local RoadNetwork = require(script.Parent:WaitForChild("RoadNetwork"))
 local VehicleService = require(script.Parent:WaitForChild("VehicleService"))
 local VendorService = require(script.Parent:WaitForChild("VendorService"))
@@ -857,6 +858,44 @@ function MapGenerator.Build(mapId)
 				end
 			end
 		end
+	end
+	task.wait()
+
+	-- Trees, undergrowth and shelters over everything that is already placed. Last of the placers
+	-- because every wild piece asks space:IsFree, so anything claiming ground has claimed it by
+	-- now; after MapTerrain.RestoreRoadGround so the ground it samples is final; and before the
+	-- map-wide z-fight pass below, so any flush pair it creates is still caught.
+	--
+	-- `seed` and `avoid` are passed EXPLICITLY because MapWilds treats both as optional and
+	-- degrades in silence without them: with no seed it falls back to Random.new(1), which would
+	-- make every map on every server roll the identical sequence and quietly break the module's
+	-- own "no global RNG" contract; with no avoid list the easter eggs get no clearance and
+	-- foliage grows through them. One draw from the global RNG here keeps MapWilds' rolls off the
+	-- shared stream, which is what the separate seed is for.
+	--
+	-- NOTE: ctx.groundAt is MapGenerator.GroundHeightAt, which today ends `or 0` and so never
+	-- returns nil -- MapWilds' documented "nil vetoes the spot" check cannot fire yet, so its
+	-- counts are an OVER-COUNT and will drop when that contract lands. Not a regression.
+	-- pcall because this module had never run in the build path before it was hooked: foliage is
+	-- decoration and the map is the game, so a fault in here must not cost the match its map (this
+	-- call is not inside one anywhere up the stack -- MatchService takes MapGenerator.Build's
+	-- return straight). It must not be SILENT either, which is why the failure lands on an
+	-- attribute and not only in a warn: a warn does not reach the render harness, and "no trees"
+	-- would otherwise look identical to "trees turned off".
+	local okWilds, wilds = pcall(MapWilds.Build, map, {
+		preset = preset, radius = radius, centers = centers,
+		townSpread = townSpread, space = space,
+		groundAt = MapGenerator.GroundHeightAt,
+		roads = roads, river = river,
+		avoid = eggSpots,
+		seed = math.random(1, 2147483646),
+	})
+	if okWilds and type(wilds) == "table" then
+		map:SetAttribute("WildsParts", wilds.parts)
+		map:SetAttribute("WildsTrees", wilds.counts.trees)
+	else
+		map:SetAttribute("WildsFailed", tostring(wilds))
+		warn("[MapGenerator] MapWilds.Build failed; map built with no foliage: " .. tostring(wilds))
 	end
 	task.wait()
 

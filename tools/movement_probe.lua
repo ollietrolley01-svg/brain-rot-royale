@@ -690,6 +690,12 @@ local measurement = {
 		-- breaking looks; a pane anywhere else is invisible to it, which is worth knowing when placing
 		-- windows on the map.
 		lane("A vault takes the window with it", function(L)
+			-- A plugin's require gets its own module instance, so Bootstrap's BreakPane wire is not on this
+			-- MovementService: it is re-made here exactly as Bootstrap makes it (one DamageDestructible per pane).
+			local CombatService = require(modules:WaitForChild("CombatService"))
+			MovementService.BreakPane = function(paneToken, pane, from)
+				return CombatService.DamageDestructible ~= nil and CombatService.DamageDestructible(paneToken, pane, 1, from) > 0
+			end
 			local token = { isBot = true, name = "ProbeGlass", character = L.rig }
 			Combatants.Register(L.rig, token)
 			local map = workspace:FindFirstChild("Map")
@@ -770,14 +776,16 @@ local measurement = {
 			local after = panesLeft()
 
 			-- The planted fault: the same vault with nothing breaking the glass.
-			local real = MovementService.BreakGlassAlong
-			MovementService.BreakGlassAlong = function() end
+			local real = MovementService.BreakPane
+			MovementService.BreakPane = function()
+				return false
+			end
 			buildPane()
 			local plantedBefore = panesLeft()
 			task.wait(MovementConfig.Parkour.Recovery + 0.3)
 			local plantedKind = runAtIt()
 			local plantedAfter = panesLeft()
-			MovementService.BreakGlassAlong = real
+			MovementService.BreakPane = real
 
 			frame:Destroy()
 			if ourMap then

@@ -232,6 +232,35 @@ if flush then
 	flush()
 end
 
+-- CONTRACT, before the real build: a map generator is about to call this for the first time, so
+-- every required argument is removed in turn and the error has to NAME the one that is missing. A
+-- guard that silently passes is indistinguishable from a guard that never fires, so this plants the
+-- fault rather than trusting the code to be read (the roads tab nearly shipped exactly that).
+do
+	local full = {
+		preset = preset, radius = info.radius, centers = centers, townSpread = townSpread, space = space,
+		groundAt = MapGenerator.GroundHeightAt, roads = info.roads, river = info.river, seed = SEED,
+	}
+	for _, name in ipairs({ "preset", "radius", "centers", "townSpread", "space" }) do
+		local ctx = {}
+		for key, value in pairs(full) do
+			ctx[key] = value
+		end
+		ctx[name] = nil
+		local holder = Instance.new("Model")
+		holder.Parent = workspace
+		local ok, err = pcall(MapWilds.Build, holder, ctx)
+		holder:Destroy()
+		if ok then
+			out("CONTRACT BROKEN: building with no ctx.%s SUCCEEDED -- the guard does not fire", name)
+		elseif not string.find(tostring(err), name, 1, true) then
+			out("CONTRACT BROKEN: building with no ctx.%s failed without naming it: %s", name, tostring(err))
+		else
+			out("contract: no ctx.%s -> refused by name", name)
+		end
+	end
+end
+
 -- The wilds. Timed on the wall clock as well: os.clock is process CPU time, and a map build spends
 -- most of its life yielding, so CPU time badly understates what a player waits for.
 local t1 = os.clock()
@@ -249,6 +278,11 @@ local result = MapWilds.Build(map, {
 	river = info.river,
 	seed = SEED,
 })
+-- A frame before anything is measured: terrain written in this instant is not raycastable yet, and
+-- the road tab watched a pad read 38 studs of spread in a shot that showed it dead flat purely
+-- because the measurement ran in the same instant as the write. The wilds only paint material,
+-- which does not move a surface, but a buried-or-floating count is not worth the doubt.
+task.wait(0.5)
 local kinds = {}
 for kind, n in pairs(result.counts.byKind) do
 	table.insert(kinds, kind .. " " .. n)

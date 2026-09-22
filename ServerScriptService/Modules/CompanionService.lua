@@ -47,8 +47,18 @@ local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 local CompanionService = {}
 
 local SCALE = 0.55
--- Right of, above and behind the owner. Characters face -Z, so +Z is behind.
-local FOLLOW_OFFSET = Vector3.new(2.8, 2.6, 2.4)
+-- Left of, above and behind the owner. Characters face -Z, so +Z is behind. Was the character's
+-- RIGHT (2.8, 2.6, 2.4) -- Oliver's #67, "move the companion to the characters left side so it
+-- doesn't block the third person view": the right side is where the over-the-shoulder camera's own
+-- pivot sits (CombatClient.client.lua's SHOULDER_HEIGHT=1.7 / SHOULDER_SIDE=1.9, guns-owned, read
+-- only), so the companion was floating almost on top of the camera itself. Measured before/after in
+-- tools/companion_offset_probe.lua and rendered in tools/companion_offset_gallery.lua (and the
+-- merged tools/orphan3_render_gallery.lua): the fix moves it clear of the character's silhouette in
+-- the real third-person camera and does not overlap the bottom-left HUD panels. The only use site
+-- (grepped) is `anchor.Position` below and the `cframe` this function builds the model at; every
+-- attack/ability origin elsewhere in this file reads the companion's LIVE position dynamically
+-- (`entry.root.Position`), so nothing else needed to change for this.
+local FOLLOW_OFFSET = Vector3.new(-2.8, 2.6, 2.4)
 local THINK_INTERVAL = 0.2
 -- Further than this from its anchor means the owner teleported; snap rather than fly across the map.
 local TELEPORT_DISTANCE = 80
@@ -121,9 +131,19 @@ local function ensureFolder()
 	return folder
 end
 
+-- The condition a companion was in when it last left the world: the fraction of its health it had,
+-- and when it last used its ability. Kept per owner and OUTLIVES the creature, because unequipping
+-- destroys the entry -- and off-then-on is precisely the shape of the exploit this exists to stop.
+-- Cleared at the match's own boundaries (ResetStats, ReviveAll), which are allowed to heal, and when
+-- the player leaves.
+local lastCondition = {}
+
 local function despawn(owner)
 	local entry = companions[owner]
 	companions[owner] = nil
+	if entry and entry.maxHealth and entry.maxHealth > 0 then
+		lastCondition[owner] = { fraction = entry.health / entry.maxHealth, lastAttackAt = entry.lastAttackAt }
+	end
 	if entry then
 		owners[entry.model] = nil
 		entry.model:Destroy()
@@ -949,6 +969,7 @@ end
 -- Match start: clean stats, every companion back to full health.
 function CompanionService.ResetStats()
 	table.clear(damageDealt)
+	table.clear(lastCondition)
 	for owner in pairs(fallen) do
 		setFallen(owner, false)
 	end
@@ -960,6 +981,7 @@ end
 
 -- Match end: downed companions come home for the next game.
 function CompanionService.ReviveAll()
+	table.clear(lastCondition)
 	for owner in pairs(fallen) do
 		setFallen(owner, false)
 	end
@@ -973,8 +995,34 @@ function CompanionService.ReviveAll()
 	end
 end
 
+-- Re-spawns the companion the profile now names: after equipping a different one, and after selling
+-- changes what is owned.
+--
+-- A respawn is a BRAND NEW creature -- full health, `lastAttackAt = -math.huge`, ability ready -- and
+-- that turned the menu into a heal button and a cooldown reset. Equipping off and on is two Menu
+-- tokens, and the Menu budget allows a burst of 15 then 5 a second, so a player could take a full
+-- heal and a ready ability about twice a second against designed cooldowns of 1.35-2.6 s.
+--
+-- So the condition the old creature was in is carried across, exactly the way UpdateStats carries it
+-- across a merge one function down: the same FRACTION of the new maximum (the new companion may have
+-- a different maximum), and the same cooldown. Carrying the cooldown matters as much as the health --
+-- without it, swapping companions is still a free ability every time.
+--
+-- Nothing here heals. The match's own boundaries do that: ResetStats at the start, ReviveAll at the
+-- end. Outside a match this is the same fresh companion it always was, because there is nothing to
+-- carry when none was out.
 function CompanionService.Refresh(player)
+	-- `spawnFor` despawns first, and `despawn` is what records the condition -- so the read happens
+	-- AFTER, and one line covers both shapes of the exploit: re-equipping while the creature is still
+	-- out, and unequipping (which destroys the entry) then equipping again a moment later.
 	spawnFor(player, player.Character)
+
+	local entry = companions[player]
+	local last = lastCondition[player]
+	if entry and last then
+		setHealth(entry, entry.maxHealth * last.fraction)
+		entry.lastAttackAt = last.lastAttackAt
+	end
 end
 
 -- Re-reads level and stars for the companion already out, after a merge. Done in place rather
@@ -995,9 +1043,12 @@ function CompanionService.UpdateStats(player)
 	setHealth(entry, entry.stats.health * fraction)
 end
 
+-- Every player's companion re-read, after a trade moved brainrots between collections. Through
+-- Refresh, not spawnFor, so it carries health and cooldown for the same reason Refresh does: a trade
+-- that completed mid-match would otherwise heal and re-arm every companion on the server at once.
 function CompanionService.RefreshAll()
 	for _, player in ipairs(Players:GetPlayers()) do
-		spawnFor(player, player.Character)
+		CompanionService.Refresh(player)
 	end
 end
 
@@ -1027,6 +1078,9 @@ function CompanionService.Start()
 		despawn(player)
 		fallen[player] = nil
 		damageDealt[player] = nil
+		-- After the despawn above, which is what writes it: a player who leaves must not leave their
+		-- companion's condition behind in a table keyed by them.
+		lastCondition[player] = nil
 	end)
 
 	local accumulated = 0

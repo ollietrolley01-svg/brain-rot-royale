@@ -29,6 +29,7 @@ local Role, Type, Space, Radius = UiKit.Role, UiKit.Type, UiKit.Space, UiKit.Rad
 
 local player = Players.LocalPlayer
 local modeChanged = Remotes.Event("ModeChanged")
+local matchChanged = Remotes.Event("MatchChanged")
 
 local WIDTH, HEIGHT = 420, 44
 local BAR_HEIGHT = 8
@@ -144,8 +145,27 @@ local function fit()
 	end
 end
 
+-- Oliver's #104: "the tdm hud at the top stays after the game". `state.scores ~= nil` below is
+-- this HUD's only hide predicate, and nothing on the server ever sends a scores=nil push when a
+-- team match ends -- GameMode.stopWorld (ServerScriptService/Modules/GameMode.lua, Match-flow's
+-- file) tears down every other piece of server state and fires no client signal at all, so the
+-- last real score just sits here forever: through the results screen, into the lobby, and into
+-- whatever match comes next if it isn't a team mode (which raises no ModeChanged of its own).
+-- Rather than depend on the server remembering to fire a hide event on every teardown path, this
+-- also hides itself the moment the match itself isn't InProgress. MatchChanged already fires
+-- reliably on every state change -- 27 other sites in HudClient key off the same field the same
+-- way -- so this is ONE predicate that covers every path, not one that has to be threaded through
+-- each of them.
+local inProgress = false
+matchChanged.OnClientEvent:Connect(function(state)
+	inProgress = state ~= nil and state.state == "InProgress"
+	if not inProgress then
+		root.Visible = false
+	end
+end)
+
 local function render(state)
-	local teams = state and state.scores ~= nil
+	local teams = inProgress and state and state.scores ~= nil
 	if not teams then
 		root.Visible = false
 		return
@@ -188,7 +208,41 @@ local function render(state)
 	fit()
 end
 
-modeChanged.OnClientEvent:Connect(render)
+-- Same test the HUD makes, from the same remote: no loadout during a live match means this player
+-- is not in it -- they joined late, or were eliminated and are watching. A team scoreline for a
+-- match you are not playing is what Oliver saw stay up after the game (#104). This script has no
+-- access to HudClient's `loadout`, and it does not need one: LoadoutChanged is a client remote and
+-- any client script may listen, so this reads the same authority rather than inventing a signal.
+--
+-- The last state is cached because the two signals are independent and either can arrive first.
+-- Hiding on the nil push alone is not enough: when the non-nil push arrives at spawn there may be
+-- no further ModeChanged for a long time -- on TDM the next one is the first KILL, on KOTH the
+-- first hill tick -- so the scoreline would stay blank for the opening seconds of the match, and a
+-- player spawning into a game already at 3-1 would see nothing until someone scored again.
+local inMatch = false
+local lastState = nil
+
+Remotes.Event("LoadoutChanged").OnClientEvent:Connect(function(newLoadout)
+	local joined = newLoadout ~= nil
+	if joined == inMatch then
+		return
+	end
+	inMatch = joined
+	if not inMatch then
+		root.Visible = false
+	elseif lastState then
+		render(lastState)
+	end
+end)
+
+modeChanged.OnClientEvent:Connect(function(state)
+	lastState = state
+	if not inMatch then
+		root.Visible = false
+		return
+	end
+	render(state)
+end)
 
 local camera = workspace.CurrentCamera
 if camera then

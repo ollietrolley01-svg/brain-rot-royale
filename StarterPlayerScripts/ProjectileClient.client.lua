@@ -650,7 +650,7 @@ local function driving()
 	return seat ~= nil and seat:IsA("VehicleSeat")
 end
 
-ContextActionService:BindActionAtPriority("BRR_Throw", function(_, inputState)
+local function onThrowInput(_, inputState)
 	local slot, item, spec = throwableInHand()
 	if not slot or not inCombat() then
 		return Enum.ContextActionResult.Pass
@@ -676,7 +676,46 @@ ContextActionService:BindActionAtPriority("BRR_Throw", function(_, inputState)
 	end
 	-- Cancel: the button may still be down; the frame loop watches it and throws on release.
 	return Enum.ContextActionResult.Sink
-end, false, Enum.ContextActionPriority.High.Value, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
+end
+
+ContextActionService:BindActionAtPriority("BRR_Throw", onThrowInput, false,
+	Enum.ContextActionPriority.High.Value, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
+
+-- ON A PHONE. The binding above never sees a touch: it lists MouseButton1 and ButtonR2 and draws no
+-- button, so the only thing a touch screen has is CombatClient's FIRE button, whose item branch fires
+-- the use remote on press -- which throws a coconut with its whole fuse still on it. Cooking was
+-- unreachable on the entire platform.
+--
+-- So while a COOKABLE throwable is in hand, and only then, a second binding of the same handler draws
+-- its own button. Only then, because ContextActionService draws at most seven touch buttons and this
+-- game already binds more than that (CombatClient's CAM note): a button that exists for the few
+-- seconds a coconut is in your hand costs a slot nobody else is using at that moment. Held, exactly
+-- like the mouse: press starts the fuse, release throws.
+--
+-- The real home for this is StarterPlayerScripts/TouchControls (it has "extra1"/"extra2" slots and
+-- draws every touch button in one place), but its feature flag is off, so nothing it binds appears.
+-- When that flag goes live this should move there and lose its own button.
+local COOK_ACTION = "BRR_Cook"
+local cookButtonBound = false
+
+local function refreshCookButton()
+	local _, _, spec = throwableInHand()
+	local wanted = UserInputService.TouchEnabled and spec ~= nil and spec.cookable == true and inCombat()
+	if wanted == cookButtonBound then
+		return
+	end
+	cookButtonBound = wanted
+	if wanted then
+		ContextActionService:BindActionAtPriority(COOK_ACTION, onThrowInput, true,
+			Enum.ContextActionPriority.High.Value, Enum.UserInputType.Touch)
+		pcall(function()
+			ContextActionService:SetTitle(COOK_ACTION, "COOK")
+			ContextActionService:SetPosition(COOK_ACTION, UDim2.new(1, -140, 1, -400))
+		end)
+	else
+		ContextActionService:UnbindAction(COOK_ACTION)
+	end
+end
 
 local function onCook(info)
 	if info.thrower == player.Character then
@@ -1103,6 +1142,7 @@ RunService.RenderStepped:Connect(function(dt)
 	dt = math.min(dt, 0.1)
 	local now = serverNow()
 	stepFlying(dt, now)
+	refreshCookButton()
 	preview.update()
 	danger.update()
 	stepScreen(dt)

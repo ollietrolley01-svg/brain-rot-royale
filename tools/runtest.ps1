@@ -44,6 +44,21 @@ Assert-StudioLock
 
 $source = if ($PlaceFile -ne "") { $PlaceFile } else { "C:\Users\oliver\Downloads\claude\brain-rot-royale\BrainRotRoyale.rbxlx" }
 $runToken = [guid]::NewGuid().ToString("N")
+# Set aside as the wait loop runs, so a log overwritten after Studio exits is not lost with it.
+$liveMarker = "BRR_LOG_BEGIN $runToken"
+$captured = ""
+$capturedLen = 0
+# runtest SNAPSHOTS the place and never builds it, so a probe run after an edit measures the LAST
+# build -- and a stale pass is indistinguishable from a real one. Two tabs have lost runs to this and
+# it is recorded twice in COORDINATION.md, which is not where anyone reads it at the moment it bites.
+# So the harness says it here, where the cost lands.
+$newestSource = Get-ChildItem "C:\Users\oliver\Downloads\claude\brain-rot-royale" -Recurse -Include *.lua -ErrorAction SilentlyContinue |
+	Where-Object { $_.FullName -notmatch '\(tools|\.git)\' } |
+	Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($newestSource -and (Test-Path $source) -and $newestSource.LastWriteTime -gt (Get-Item $source).LastWriteTime) {
+	"WARNING: $(Split-Path $source -Leaf) was built BEFORE $($newestSource.Name) changed -- this run will measure the OLD code."
+	"         Run 'python build_place.py .' first, or pass -PlaceFile to snapshot a pinned build on purpose."
+}
 $place = Join-Path $env:TEMP "BRR_RunTest\BRR_RunTest.rbxlx"
 $lock = "$place.lock"
 $pluginDir = "$env:LOCALAPPDATA\Roblox\Plugins"
@@ -1465,8 +1480,53 @@ $studioExe = Start-StudioPlace $place
 $started = Get-Date
 $seenWindow = $false
 $goneSince = $null
+# Roblox Studio opens a modal "Auto-Recovery" dialog when a previous Studio did not exit cleanly.
+# It blocks the place from loading, so the plugin never draws its capture tag, every frame is
+# legitimately untagged, and the run saves nothing -- and because a blocked run also cannot exit
+# cleanly, it writes the file that re-arms the dialog for the NEXT run. Measured 2026-09-22: the
+# dialog reappeared on a fresh launch even with %LOCALAPPDATA%\Roblox\AutoSaves emptied first, and
+# three tabs lost days to that loop while every theory reached past it.
+#
+# WM_CLOSE is deliberate: it is the X button, which leaves the recovery files alone. Not "Open",
+# which would load someone's recovered work into a render; not "Delete", which would throw away
+# their recovery data to unblock a screenshot. Studio decides what happens to those files; the
+# harness only stops the asking.
+if (-not ("BrrAutoRecovery" -as [type])) {
+	Add-Type @"
+using System;using System.Text;using System.Runtime.InteropServices;
+public class BrrAutoRecovery {
+ public delegate bool EP(IntPtr h, IntPtr p);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(EP e, IntPtr p);
+ [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int c);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+}
+"@
+}
+function Close-AutoRecoveryDialog {
+	$ids = @(Get-Process -Name RobloxStudioBeta, RobloxStudio -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+	if ($ids.Count -eq 0) { return }
+	$script:brrAutoRecoveryHits = @()
+	$cb = [BrrAutoRecovery+EP]{ param($h, $p)
+		$owner = 0
+		[BrrAutoRecovery]::GetWindowThreadProcessId($h, [ref]$owner) | Out-Null
+		if ($ids -contains [int]$owner -and [BrrAutoRecovery]::IsWindowVisible($h)) {
+			$sb = New-Object System.Text.StringBuilder 200
+			[BrrAutoRecovery]::GetWindowText($h, $sb, 200) | Out-Null
+			if ($sb.ToString() -eq "Auto-Recovery") { $script:brrAutoRecoveryHits += $h }
+		}
+		return $true }
+	[BrrAutoRecovery]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+	foreach ($h in $script:brrAutoRecoveryHits) {
+		[BrrAutoRecovery]::SendMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+		"closed a Studio Auto-Recovery dialog (it blocks the place from loading)"
+	}
+}
+
 while (((Get-Date) - $started).TotalSeconds -lt $WaitSeconds) {
 	Start-Sleep 3
+	Close-AutoRecoveryDialog
 	$elapsed = [int]((Get-Date) - $started).TotalSeconds
 	# Matched by the snapshot path on the command line, never by window title: a loading Studio (or
 	# Oliver's own) has an empty title, and killing on that would close his window.
@@ -1480,6 +1540,26 @@ while (((Get-Date) - $started).TotalSeconds -lt $WaitSeconds) {
 		} elseif (((Get-Date) - $goneSince).TotalSeconds -ge 10) {
 			"WARNING: the harness Studio window closed on its own after $elapsed s (crash, out of memory, or closed by hand) -- the output below may be partial"
 			break
+		}
+	}
+	# Capture this run's log WHILE Studio is alive. The log lives in a plugin settings file that every
+	# open Studio shares, and Studio rewrites that file wholesale when it exits -- so a second Studio
+	# opening and closing inside our window erases our entry before the post-exit read happens. Three
+	# full runs were lost to exactly that (NO LOG, our token in no file, 0 windows left at the check).
+	# Reading it every poll means the worst we lose is the last few seconds, not the whole run. The
+	# probe path already relied on this by accident: it breaks out the moment its own token appears,
+	# so its exposure was seconds where a full run's was minutes.
+	$live = Get-ChildItem "$env:LOCALAPPDATA\Roblox\*\InstalledPlugins\*\settings.json" -ErrorAction SilentlyContinue |
+		Where-Object { $_.LastWriteTime -gt $since } |
+		Select-String -Pattern $liveMarker -SimpleMatch -List -ErrorAction SilentlyContinue
+	foreach ($lf in $live) {
+		$lraw = Get-Content $lf.Path -Raw -Encoding UTF8
+		$lstart = $lraw.IndexOf($liveMarker)
+		# Longest wins: the log only grows, so a later poll that read a SHORTER copy read a file
+		# another Studio had already rewritten, and must not replace what we have.
+		if ($lstart -ge 0 -and ($lraw.Length - $lstart) -gt $capturedLen) {
+			$captured = $lraw.Substring($lstart)
+			$capturedLen = $captured.Length
 		}
 	}
 	if ($Probe -ne "") {
@@ -1527,7 +1607,18 @@ foreach ($f in $files) {
 		[regex]::Unescape($raw.Substring($start))
 	}
 }
-if (-not $files) {
+if (-not $files -and $captured -ne "") {
+	# The settings file no longer carries our entry, but the wait loop read it while Studio was alive.
+	# The overwrite case is now survivable instead of fatal.
+	"NOTE: this run's log was overwritten in the shared plugin settings file after the run; showing the"
+	"copy captured while Studio was still open (complete to within one poll of the end)."
+	$cend = $captured.IndexOf("BRR_LOG_END")
+	if ($cend -gt 0) {
+		[regex]::Unescape($captured.Substring(0, $cend))
+	} else {
+		[regex]::Unescape($captured)
+	}
+} elseif (-not $files) {
 	"NO LOG FROM THIS RUN (token $runToken): Studio closed or failed before the plugin's first flush. Nothing from earlier runs is shown; re-run."
 	# Diagnose it instead of leaving the next tab to guess. The log lives in a plugin settings file
 	# that EVERY open Studio shares, so a second Studio can write that file without this run's entry

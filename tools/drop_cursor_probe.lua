@@ -146,6 +146,30 @@ if claimsOk then
 	check(attribute() == true, "the last release does NOT strand a menu that is still open")
 	legacyHolding = false
 
+	-- A RE-BIND WITH A CLAIM STILL OUT. Bind clears the books, so the old release is a claim on a
+	-- subject that no longer exists: it must do nothing at all. If it decremented, the count would
+	-- go negative, every later claim would be ignored, and the cursor would stop being freed for
+	-- the rest of the session with nothing in the log to say why.
+	local stale = MenuOpenClaims.Claim("before the re-bind")
+	local second = Instance.new("Folder")
+	MenuOpenClaims.Bind(second)
+	stale()
+	check(MenuOpenClaims.Count() == 0, "a release from before a re-bind does not drive the count negative (%d)",
+		MenuOpenClaims.Count())
+	local afterRebind = MenuOpenClaims.Claim("after the re-bind")
+	check(second:GetAttribute("MenuOpen") == true, "and the module still works after that")
+	afterRebind()
+	second:Destroy()
+	MenuOpenClaims.Bind(subject)
+
+	-- PLANTED FAULT for that one: the unfloored, unguarded arithmetic it replaced. One release from
+	-- a stale closure takes it below zero, and `count > 0` is then false however many claims follow.
+	local naive = 0
+	naive = 0 -- a re-bind zeroed it
+	naive = naive - 1 -- the stale release
+	check(naive < 0 and not (naive + 1 > 0),
+		"planted fault: unfloored, one stale release leaves the count at %d and the next claim reads as unheld", naive)
+
 	-- PLANTED FAULT, every run: the same two sequences against the code this replaced — a bare
 	-- SetAttribute on open and on close. Both must end WRONG, which is what makes the passes above
 	-- mean something.
