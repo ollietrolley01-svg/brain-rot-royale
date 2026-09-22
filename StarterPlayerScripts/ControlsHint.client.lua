@@ -15,6 +15,11 @@
 -- It opens for a few seconds when you spawn and then collapses to a small pill, because a legend
 -- that never goes away is clutter and Oliver's word for the HUD elsewhere was "non-intrusive".
 
+-- Oliver, 2026-09-22 13:59: "the controls hud is inside the daily quest hud ... put the controls in the
+-- settings menu". The menu's SETTINGS page already lists every key under CONTROLS (and rebinds them),
+-- so the on-screen legend is switched off here rather than moved. Delete this line to bring it back.
+do return end
+
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 

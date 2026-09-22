@@ -2696,9 +2696,24 @@ local DESTINATION_LOOK = {
 	Settings = { glyph = "⚙", sub = "Keys and audio" },
 }
 
+-- Oliver, 2026-09-22 13:59-14:00: no single menu -- separate buttons, each its own page. A button opens
+-- its GROUP, and the rail shows only that group's tabs. Quests sit under PROGRESS with the pass.
+local TAB_GROUP = {
+	Crates = "Shop", Style = "Shop", Cosmetics = "Shop",
+	Brainrots = "Brainrots", Trade = "Brainrots",
+	Pass = "Progress", Quests = "Progress",
+	Robux = "Robux",
+	Settings = "Settings",
+}
+
 local function renderTabStrip()
 	local destinations = {}
-	for index, tab in ipairs(TABS) do
+	local group = TAB_GROUP[activeTab]
+	for _, tab in ipairs(TABS) do
+		if group and TAB_GROUP[tab.key] ~= group then
+			continue
+		end
+		local index = #destinations + 1
 		local look = DESTINATION_LOOK[tab.key] or {}
 		destinations[index] = { key = tab.key, label = string.upper(tab.label), glyph = look.glyph, sub = look.sub }
 	end
@@ -3409,17 +3424,20 @@ end)
 -- Open / close
 --------------------------------------------------------------------------------
 
+-- Compact (Oliver 14:01: "small enough to fit on the screen without taking too much space"): five
+-- 56 x 30 buttons in a 296 px row, inside the left stack's 300 px.
+local HUD_BUTTON_W = 56
 local menuButton = create("TextButton", {
 	Position = UDim2.new(0, 16, 0, 130),
-	Size = UDim2.new(0, 210, 0, 42),
+	Size = UDim2.new(0, HUD_BUTTON_W, 0, 30),
 	BackgroundColor3 = C.Accent,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
-	Text = "MENU  [M]",
+	Text = "SHOP",
 	TextColor3 = Color3.new(0, 0, 0),
-	TextSize = 16,
+	TextScaled = true,
 	Parent = screenGui,
-}, { rounded(10) })
+}, { rounded(8), create("UITextSizeConstraint", { MaxTextSize = 12 }), create("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }) })
 
 -- CombatClient reads this. While the menu is open mid-match the mouse has to be free — first
 -- person otherwise keeps it locked to centre, leaving the panel unclickable — and clicks must
@@ -3441,7 +3459,34 @@ local function toggleMenu()
 	end
 end
 
-menuButton.Activated:Connect(toggleMenu)
+-- Declared here, assigned below once openTab exists.
+local hudButtonOpen
+menuButton.Activated:Connect(function()
+	hudButtonOpen("Crates")
+end)
+-- The other four buttons ride on the SHOP button as children, so every place that shows, hides or
+-- stacks menuButton (phone layout, MenuStackToggle) moves all five together.
+for index, spec in ipairs({
+	{ "BRAINROTS", "Brainrots" },
+	{ "PROGRESS", "Pass" },
+	{ "ROBUX", "Robux" },
+	{ "SETTINGS", "Settings" },
+}) do
+	local button = create("TextButton", {
+		Position = UDim2.new(0, index * (HUD_BUTTON_W + 4), 0, 0),
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundColor3 = C.Accent,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Text = spec[1],
+		TextColor3 = Color3.new(0, 0, 0),
+		TextScaled = true,
+		Parent = menuButton,
+	}, { rounded(8), create("UITextSizeConstraint", { MaxTextSize = 12 }), create("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }) })
+	button.Activated:Connect(function()
+		hudButtonOpen(spec[2])
+	end)
+end
 shell.onBack = toggleMenu
 -- Oliver's #66. `onBack` alone was not enough: the scrim and Backspace read that field at click
 -- time, but the header's X captured `options.onClose` at CONSTRUCTION -- line 138, before this
@@ -3471,7 +3516,7 @@ Settings.Bind("BRR_Menu", "Menu", function(_, inputState)
 end, nil, Enum.KeyCode.ButtonSelect)
 
 local function labelMenuButton()
-	menuButton.Text = "MENU  [" .. Settings.KeyLabel("Menu") .. "]"
+	menuButton.Text = "SHOP"
 end
 labelMenuButton()
 Settings.Changed:Connect(labelMenuButton)
@@ -3487,6 +3532,15 @@ local function openTab(key)
 	activeTab = key
 	shell:Open()
 	renderTab()
+end
+
+-- A HUD button: open its group, or close it if that group is what is showing.
+hudButtonOpen = function(key)
+	if panel.Visible and TAB_GROUP[activeTab] == TAB_GROUP[key] then
+		toggleMenu()
+		return
+	end
+	openTab(key)
 end
 
 --------------------------------------------------------------------------------
