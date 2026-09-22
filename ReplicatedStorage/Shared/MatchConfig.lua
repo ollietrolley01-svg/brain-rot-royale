@@ -94,11 +94,13 @@ MatchConfig.XpPerKill = 60
 -- retreat when hurt. Accuracy falls off with range so close fights are genuinely dangerous
 -- and long ones are survivable.
 -- #127 (Oliver, 2026-09-22): "reduce the bot count down to 30". Was 50 (49 bots with one player).
--- This is the ONE field every mode reads: MatchService fills to min(BotFillTarget, MaxPlayers) minus
--- the real players, and the team modes take that same roster, so 30 here means 29 bots with one
--- player in the battle royale and in TDM/KOTH alike. Fewer bots in one area is also the cheapest
--- answer to his lag complaint (#126), before any think-loop work.
+-- Oliver, 2026-09-22 13:45: "we need 50 players in the battle royale rounds and keep 30 in the other
+-- gamemodes". So the fill target is per mode: MatchService fills to min(target, MaxPlayers) minus the
+-- real players, reading BotFillTargetBattleRoyale for the battle royale and BotFillTarget for every
+-- other mode (TDM, KOTH). 50 in the battle royale means 49 bots with one player, as it was before #127;
+-- the team modes keep 30, where bunched bots were the lag complaint (#126).
 MatchConfig.BotFillTarget = 30
+MatchConfig.BotFillTargetBattleRoyale = 50
 MatchConfig.BotHealth = 100
 MatchConfig.BotWalkSpeed = 17
 MatchConfig.BotThinkInterval = 0.25
