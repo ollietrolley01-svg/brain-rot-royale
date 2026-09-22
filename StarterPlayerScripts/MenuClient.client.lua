@@ -1542,6 +1542,12 @@ end
 -- find. Buyable items that aren't in stock right now are left out, with a note that more rotate in.
 local function renderCosmetics()
 	stockHeader(0, "SHOP  •  a new selection every 5 minutes, rarer items less often")
+	-- Loaded here rather than at the top: the main chunk is at Luau's 200-local limit. require caches, and a
+	-- module that fails to load just costs the rows their previews.
+	local okPreview, cosmeticPreview = pcall(require, Shared:WaitForChild("CosmeticPreview"))
+	if not okPreview then
+		cosmeticPreview = nil
+	end
 	local cosmetics = profile and profile.cosmetics
 	local sections = {
 		{ title = "ON SALE NOW", items = {} },
@@ -1603,6 +1609,18 @@ local function renderCosmetics()
 			local buttons = makeRow(order, item.name, item.rarity and Rarity.Color(item.rarity) or item.color, subtitle)
 			if item.kind == "Parachute" then
 				parachutePreview(buttons.Parent, id)
+			elseif cosmeticPreview and buttons.Parent.Size.Y.Offset <= 64 then
+				-- Accessories, gun skins and auras get a live preview in the same spot as a parachute's
+				-- (Shared/CosmeticPreview, finished and never hooked up). Only on a wide row: a stacked
+				-- one on a narrow screen runs its subtitle under that spot. It tears itself down with the row.
+				local holder = create("Frame", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -118, 0.5, 0),
+					Size = UDim2.fromOffset(72, 56),
+					BackgroundTransparency = 1,
+					Parent = buttons.Parent,
+				}, { rounded(8) })
+				pcall(cosmeticPreview.Fill, holder, id)
 			end
 
 			if sectionIndex == 5 then

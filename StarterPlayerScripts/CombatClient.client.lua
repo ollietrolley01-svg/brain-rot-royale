@@ -2028,6 +2028,10 @@ Remotes.Event("ItemUsed").OnClientEvent:Connect(function(character, itemId)
 	burst(root.Position, item.color, item.kind == "movement" and 4 or 2.6, 14)
 end)
 
+-- Guns whose viewmodel template has been asked for ahead of time (the cache itself lives in Viewmodel
+-- and may evict; a repeat Preload of an evicted gun would just rebuild it, so this only stops asking twice).
+local preloaded = {}
+
 loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	-- Pickup cue whenever something was added. Only against an existing loadout, so the fresh
 	-- one handed out at match start doesn't ping; uses (count going down) stay silent.
@@ -2037,6 +2041,30 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	end
 
 	loadout = newLoadout
+	-- Build each carried gun's viewmodel template now, while it's being picked up, rather than on its
+	-- first draw (Viewmodel.Preload; it had no caller, so every first draw built one and hitched). One
+	-- gun per frame so a full loadout arriving at once doesn't hitch here instead. Unskinned only: a
+	-- skin is read off the held gun at draw time, which isn't known yet.
+	if newLoadout and type(newLoadout.slots) == "table" then
+		local wanted = {}
+		for _, slot in pairs(newLoadout.slots) do
+			if type(slot) == "table" and slot.kind == "weapon" and slot.id then
+				local def = WeaponData.Get(slot.id)
+				if def and not preloaded[def.id] then
+					preloaded[def.id] = true
+					table.insert(wanted, def)
+				end
+			end
+		end
+		if #wanted > 0 then
+			task.spawn(function()
+				for _, def in ipairs(wanted) do
+					task.wait()
+					pcall(Viewmodel.Preload, def, Rarity.Color(def.rarity), Enum.Material.Metal, false)
+				end
+			end)
+		end
+	end
 	if newLoadout and newLoadout.using then
 		useEndsAt = os.clock() + newLoadout.using.remaining
 		useDuration = newLoadout.using.duration

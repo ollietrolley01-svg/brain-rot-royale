@@ -27,6 +27,10 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local GameModes = require(Shared:WaitForChild("GameModes"))
 
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
+local RunService = game:GetService("RunService")
+-- The crate you won, as the real 3D crate (the same model the menu opens). Loaded softly: if the
+-- builder fails, the crate still shows as its name and colour.
+local okCrates, CrateModels = pcall(require, Shared:WaitForChild("CrateModels"))
 local okSfx, Sfx = pcall(require, script.Parent:WaitForChild("Sfx"))
 
 local create, rounded, padding = UiKit.create, UiKit.rounded, UiKit.padding
@@ -501,15 +505,78 @@ local function render(result)
 		})
 	end
 
-	-- 5. Rewards.
+	-- 5. Rewards. The crate first and big (Oliver 16:42: the screen didn't show your reward crate -- it
+	-- was one chip of five in a row that ran off both sides of the card), then the rest as chips that wrap.
 	local reward = result.reward
-	local rewardRow = row(7, 30)
+	if reward and reward.crate then
+		local tint = Rarity.Color(reward.crate)
+		local tile = create("Frame", {
+			Size = UDim2.new(1, 0, 0, 92),
+			BackgroundColor3 = tint,
+			BackgroundTransparency = 0.86,
+			BorderSizePixel = 0,
+			LayoutOrder = 7,
+			Parent = card,
+		}, {
+			rounded(14),
+			create("UIStroke", { Color = tint, Thickness = 2, Transparency = 0.15 }),
+		})
+		local viewport = create("ViewportFrame", {
+			Position = UDim2.fromOffset(10, 6),
+			Size = UDim2.fromOffset(96, 80),
+			BackgroundTransparency = 1,
+			Ambient = Color3.fromRGB(170, 170, 182),
+			LightColor = Color3.fromRGB(255, 250, 240),
+			LightDirection = Vector3.new(-0.4, -1, 0.6),
+			Parent = tile,
+		})
+		if okCrates and CrateModels and CrateModels.Crate then
+			local built, model = pcall(CrateModels.Crate, reward.crate)
+			if built and model then
+				model.Parent = viewport
+				local camera = Instance.new("Camera")
+				camera.FieldOfView = 34
+				camera.Parent = viewport
+				viewport.CurrentCamera = camera
+				local _, size = model:GetBoundingBox()
+				local focus = Vector3.new(0, size.Y * 0.5, 0)
+				local distance = math.max(size.X, size.Y, size.Z) * 2.1
+				local spin
+				spin = RunService.RenderStepped:Connect(function()
+					if not viewport.Parent then
+						spin:Disconnect()
+						return
+					end
+					local angle = os.clock() * 0.9
+					camera.CFrame = CFrame.lookAt(focus + Vector3.new(math.sin(angle) * distance, size.Y * 0.45, -math.cos(angle) * distance), focus)
+				end)
+			end
+		end
+		label({
+			Position = UDim2.fromOffset(118, 18),
+			Size = UDim2.new(1, -130, 0, 32),
+			Font = Enum.Font.FredokaOne,
+			TextSize = 28,
+			TextColor3 = tint,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = string.upper(reward.crate) .. " CRATE",
+			Parent = tile,
+		})
+		label({
+			Position = UDim2.fromOffset(118, 52),
+			Size = UDim2.new(1, -130, 0, 18),
+			Font = Enum.Font.GothamMedium,
+			TextSize = 14,
+			TextColor3 = R.Text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = "Added to your crates. Open it from the menu.",
+			Parent = tile,
+		})
+	end
+	local rewardRow = row(8, nil)
+	rewardRow:FindFirstChildOfClass("UIListLayout").Wraps = true
 	local any = false
 	if reward then
-		if reward.crate then
-			chip(rewardRow, string.upper(reward.crate) .. " CRATE", Rarity.Color(reward.crate), 1)
-			any = true
-		end
 		if (reward.coins or 0) > 0 then
 			chip(rewardRow, "+" .. formatNumber(reward.coins) .. " COINS", GOLD, 2)
 			any = true
@@ -548,16 +615,6 @@ local function render(result)
 				Parent = card,
 			})
 		end
-	elseif reward and reward.crate then
-		label({
-			Size = UDim2.new(1, 0, 0, 14),
-			Font = Enum.Font.GothamMedium,
-			TextSize = 12,
-			TextColor3 = R.TextMuted,
-			Text = "Open your crate from the menu",
-			LayoutOrder = 8,
-			Parent = card,
-		})
 	end
 
 	-- 6. Footer: countdown and close.
