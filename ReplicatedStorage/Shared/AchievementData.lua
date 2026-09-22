@@ -51,6 +51,10 @@ AchievementData.List = {
 		description = "Eliminate 25 opponents with explosive barrels or Rot Mines." },
 	{ id = "vendor30", name = "Regular Customer", title = "Big Spender", stat = "vendor", target = 30, coins = 2500,
 		description = "Buy 30 things from Rot Vendors." },
+	{ id = "item150", name = "Well Stocked", title = "Stocked Up", stat = "items", target = 150, coins = 3000,
+		description = "Use 150 heals, shields or items." },
+	{ id = "supply10", name = "Drop Zone", title = "Air Support", stat = "supply", target = 10, coins = 4000,
+		description = "Claim 10 supply drops." },
 
 	-- Progression (ProgressionService). `rankScore` is prestige * 100 + Rot Rank, so 101 is the first
 	-- prestige; `mastered` counts guns at Gold mastery or better.
