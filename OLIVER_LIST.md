@@ -1,4 +1,4 @@
-# Oliver's list — the ledger (#1–#133)
+# Oliver's list — the ledger (#1–#135)
 
 **Rebuilt 2026-09-22 from the handoffs, the two source files and COORDINATION.md.** The previous
 version of this file was last written 2026-09-18 08:22, covered #1–#64 only, and had stopped being
@@ -56,15 +56,15 @@ at all — they are in **"Needs a number from Oliver"** at the bottom. One line 
 
 ## Where it stands, in one table
 
-| | List 1 (#1–#94) | List 2 (#95–#133) | A1–A6 | Total |
+| | List 1 (#1–#94) | List 2 (#95–#135) | A1–A6 | Total |
 |---|---|---|---|---|
 | `[x]` done | 22 | 9 | 1 | **32** |
 | `[~]` in progress / in tree | 41 | 13 | 4 | **58** |
-| `[ ]` not started | 31 | 15 | 0 | **46** |
+| `[ ]` not started | 31 | 17 | 0 | **48** |
 | `[?]` held → you | 0 | 2 | 1 | **3** |
-| **Items** | **94** | **39** | **6** | **139** |
+| **Items** | **94** | **41** | **6** | **141** |
 
-Counted from the rows below, not asserted: every number #1–#133 appears exactly once, no gaps and
+Counted from the rows below, not asserted: every number #1–#135 appears exactly once, no gaps and
 no duplicates. Re-check with the row marks any time you doubt this table — if they disagree, the
 rows are right and this table is stale.
 
@@ -259,10 +259,10 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 
 ---
 
-# LIST 2 — #95 to #133
+# LIST 2 — #95 to #135
 
 Source: `C:\Users\oliver\Downloads\make it easier to see whos an enemy.txt` (#95–#132) and your 06:1x
-message (#133).
+message (#133), and your 2026-09-22 13:36 message (#134–#135).
 
 - `[~]` **95. Easier to see who's an enemy, including bots.** IN TREE — `EnemyAura` rewritten: enemies
   filled red, teammates outlined, nameplates tinted to match. **The bug inside the old #27 was that it
@@ -341,6 +341,11 @@ message (#133).
   and it failed the coordinator's bar on the bots tab's own numbers**: stationary share went 4.7% → 6.5%,
   the wrong direction, on a confounded metric. At cap 15 the frozen state is ~0.1% of bot-samples, so your
   own cap choice already removed most of it. Do not re-propose without the built-and-unrun S26 run. — *bots*
+- `[ ]` **134. Bots just stand around in clumps in TDM and don't fight.** Reported by Oliver on 09-22 13:36. Not yet
+  diagnosed. Related, not the same: #125 (team bots in unison) and #133 (idle
+  wander) are about movement; this one is about bots not engaging enemies at all in Team Deathmatch. — *bots*
+- `[ ]` **135. Moving into a new area pops up two HUD notifications for it instead of one.** Reported by Oliver
+  on 09-22 13:36. Not yet diagnosed; find which client scripts show the area notice and why it fires twice. — *HUD*
 
 ---
 
