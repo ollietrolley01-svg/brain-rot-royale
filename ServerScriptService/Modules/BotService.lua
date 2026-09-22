@@ -827,10 +827,11 @@ function BotService.ModeState(bot)
 		state.arena = teams.Arena()
 	end
 	local koth = lazy("ModeKingOfTheHill")
-	local hill = koth and koth.Position and koth.Position() or nil
+	-- Objective Capture: the objective this bot's team should go for (one it does not own yet).
+	local hill = koth and koth.Position and koth.Position(state.team) or nil
 	if hill then
 		state.hill = hill
-		local counts = koth.Occupancy and koth.Occupancy() or { 0, 0 }
+		local counts = koth.Occupancy and koth.Occupancy(hill) or { 0, 0 }
 		state.occupancy = counts
 		state.holder = koth.Holder and koth.Holder(counts[1] or 0, counts[2] or 0) or nil
 	end

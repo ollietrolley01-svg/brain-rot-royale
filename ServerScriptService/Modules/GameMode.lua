@@ -445,12 +445,15 @@ local function startWorld(mapInfo)
 				return
 			end
 			if current.id == "KingOfTheHill" then
-				local team, status = ModeKingOfTheHill.Tick()
+				-- Objective Capture: every objective a team owns scores it a point a second.
+				local team, status, _, scoring = ModeKingOfTheHill.Tick()
 				hillHolder, hillStatus = team, status
 				accumulated += KOTH_TICK
 				if accumulated >= 1 then
 					accumulated -= 1
-					addScore(team, 1)
+					for _, owner in ipairs(scoring or {}) do
+						addScore(owner, 1)
+					end
 				end
 			end
 			if nowMs() >= deadlineMs then
