@@ -725,12 +725,29 @@ RunService.Heartbeat:Connect(function(delta)
 	end
 end)
 
+-- Spray (Oliver, 2026-09-22: "the guns need a recoil and accuracy dropoff as they shoot like in other
+-- similar games"). Each shot of an unbroken spray kicks harder than the last and sideways drift grows,
+-- and while the trigger stays down the kick only half-recovers between shots, so the view (and the aim,
+-- which is read from the camera) climbs and the player pulls down against it. Let go and it settles.
+-- The server widens the spread the same way (CombatService bloom).
+local spray = { shots = 0, lastAt = 0 }
+
 function addRecoil(def)
+	local now = os.clock()
+	if now - spray.lastAt > math.max(0.3, 2.2 / math.max(def.fireRate, 0.1)) then
+		spray.shots = 0
+	end
+	spray.lastAt = now
+	spray.shots += 1
 	-- Heavier, slower weapons kick harder; a 13/sec chaingun would be unusable otherwise.
 	local kick = math.clamp(def.damage / 60, 0.25, 2.2) / math.max(1, def.fireRate * 0.35)
 	kick *= 1 - (1 - CROUCH_STEADY.SteadyRecoil) * steadyFactor
-	recoilPitch += math.rad(kick * 1.7)
-	recoilYaw += math.rad((math.random() - 0.5) * kick * 1.4)
+	kick *= 1 + math.min((spray.shots - 1) * 0.12, 1.2)
+	if aiming then
+		kick *= 0.7
+	end
+	recoilPitch = math.min(recoilPitch + math.rad(kick * 1.7), math.rad(14))
+	recoilYaw += math.rad((math.random() - 0.5) * kick * 1.4 * (1 + math.min(spray.shots * 0.06, 0.8)))
 end
 
 -- Two passes around Roblox's camera update. The default camera module reads
@@ -761,7 +778,9 @@ RunService:BindToRenderStep("BRR_Recoil", Enum.RenderPriority.Camera.Value + 1, 
 	camera.CFrame = camera.CFrame * offset
 	appliedRecoil = offset
 
-	local decay = math.clamp(delta * 12, 0, 1)
+	-- Mid-spray the kick barely recovers, so it builds; once the trigger is let go it settles fast.
+	local spraying = os.clock() - spray.lastAt < 0.18
+	local decay = math.clamp(delta * (spraying and 3 or 12), 0, 1)
 	recoilPitch -= recoilPitch * decay
 	recoilYaw -= recoilYaw * decay
 end)
