@@ -144,11 +144,36 @@ end
 -- The spread a shot from `token` goes out with: the weapon's own, tightened by aiming and then by a
 -- steady crouch — each applied once, so the two multiply and neither is counted twice. Fire uses
 -- this, and so does the probe, so what's measured is what's fired.
+-- Bloom (Oliver, 2026-09-22: "the guns need a recoil and accuracy dropoff as they shoot like in other
+-- similar games"). Every shot adds a point of heat and heat drains at BLOOM_RECOVER a second, so the
+-- first shot is as accurate as the gun's `spread`, a held trigger gets steadily wider (up to
+-- 1 + BLOOM_MAX times), and tapping or bursting keeps it tight. A slow gun (a sniper, a pump) drains
+-- faster than it fires and never blooms; an SMG held down does. Aiming down sights halves the growth.
+local BLOOM_PER_SHOT = 0.2
+local BLOOM_MAX = 1.5
+local BLOOM_RECOVER = 5
+local bloom = setmetatable({}, { __mode = "k" })
+
+local function bloomHeat(token)
+	local entry = bloom[token]
+	if not entry then
+		return 0
+	end
+	return math.max(0, entry.heat - (os.clock() - entry.at) * BLOOM_RECOVER)
+end
+
+function CombatService.NoteShot(token)
+	bloom[token] = { heat = bloomHeat(token) + 1, at = os.clock() }
+end
+
 function CombatService.SpreadFor(token, def)
 	local spread = def and def.spread or 0
+	local growth = BLOOM_PER_SHOT
 	if aiming[token] then
 		spread *= ADS_SPREAD_SCALE
+		growth *= 0.5
 	end
+	spread *= 1 + math.min(bloomHeat(token) * growth, BLOOM_MAX)
 	return spread * CombatService.SteadySpread(token)
 end
 
@@ -729,6 +754,7 @@ function CombatService.Fire(player, aimPoint)
 	CombatService.WatchCrouch(character)
 
 	local spread = CombatService.SpreadFor(player, def)
+	CombatService.NoteShot(player)
 
 	-- Launchers fire real rounds that fly, drop and burst (ProjectileService); the shot still broadcasts
 	-- with no end points so everyone gets the flash and report.

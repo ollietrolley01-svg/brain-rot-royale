@@ -2058,8 +2058,14 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	BotNav.Progress(bot, humanoid, root, nil, now)
 	setSprint(bot, false)
 
-	-- Out of time to get inside: keep walking in, shooting on the way.
-	if pressure >= MatchConfig.BotStormUrgent and humanoid.Health > MatchConfig.BotRetreatHealth then
+	-- Out of time to get inside, or already in the storm: keep walking in, shooting on the way. In the
+	-- storm this beats cover or a retreat at any health, because staying put is what kills it.
+	local inStorm = StormService.IsOutside(root.Position)
+	if inStorm then
+		bot.coverUntil = 0
+		bot.coverPoint = nil
+	end
+	if (pressure >= MatchConfig.BotStormUrgent and humanoid.Health > MatchConfig.BotRetreatHealth) or inStorm then
 		setCrouch(bot, false)
 		bot.combatMove = nil
 		local center, circleRadius = safeCircle()
@@ -2202,6 +2208,31 @@ local function runForCircle(bot, humanoid, root, now)
 	end
 	if navigate(bot, humanoid, root, bot.wanderTarget, BotNav.Priority.Urgent, now) == "abandon" then
 		bot.wanderTarget = nil
+	end
+
+	-- Stuck in the storm (Oliver, 2026-09-22: "the bots get stuck in the storm too and just do nothing
+	-- about it"). Outside the circle and hardly moved in 1.5 s: stop waiting on a route, walk straight
+	-- for the middle and jump, and pick a new heading next time.
+	if center and StormService.IsOutside(root.Position) then
+		local mark = bot.stormMark
+		if not mark or flatDistance(root.Position, mark.position) > 4 then
+			bot.stormMark = { position = root.Position, at = now }
+		elseif now - mark.at > 1.5 then
+			STATS.stormUnstick = (STATS.stormUnstick or 0) + 1
+			BotNav.Drop(bot)
+			bot.wanderTarget = nil
+			bot.wanderGoal = nil
+			local toward = flat(center - root.Position)
+			if toward.Magnitude > 1 then
+				-- A little sideways each time, so a wall dead ahead gets walked round rather than into.
+				local side = Vector3.new(-toward.Unit.Z, 0, toward.Unit.X) * (math.random() - 0.5) * 40
+				humanoid:MoveTo(root.Position + toward.Unit * math.min(60, toward.Magnitude) + side)
+			end
+			humanoid.Jump = true
+			bot.stormMark = { position = root.Position, at = now }
+		end
+	else
+		bot.stormMark = nil
 	end
 end
 
@@ -2373,6 +2404,18 @@ local function updateBot(bot)
 
 	local threat = bot.threat
 	local shotAtRecently = threat and now - threat.at < FLEE_WINDOW
+
+	-- In the storm, getting out comes before healing up, building or holding in cover: every one of
+	-- those stood a bot still while the storm killed it. Heals still go in on the move.
+	if StormService.IsOutside(root.Position) and pressure >= MatchConfig.BotStormUrgent then
+		bot.coverUntil = 0
+		bot.branch = "storm"
+		setCrouch(bot, false)
+		tryHeal(bot, humanoid, now)
+		tryShield(bot, humanoid, now)
+		runForCircle(bot, humanoid, root, now)
+		return
+	end
 
 	-- Nobody in sight: patch up before moving on (behind a barricade first, if the shooter could still
 	-- see us here). Doesn't return, so it heals on the move.
