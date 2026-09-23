@@ -24,7 +24,7 @@ StickyPreview.ValidColor = Color3.fromRGB(94, 214, 122)
 StickyPreview.InvalidColor = Color3.fromRGB(232, 92, 92)
 StickyPreview.Transparency = 0.55
 
--- { itemId, model, parts = { { part, color } }, valid }
+-- { itemId, model, parts = { { part, color } }, valid, placed }
 local ghost = nil
 
 local function folder()
@@ -61,7 +61,9 @@ local function build(itemId)
 end
 
 function StickyPreview.Show(itemId, position, normal, valid)
-	if ghost and ghost.itemId ~= itemId then
+	-- Another item's ghost, or ours taken out of the world by something else (its folder cleared):
+	-- a destroyed model's Parent is locked, so it is rebuilt rather than put back.
+	if ghost and (ghost.itemId ~= itemId or (ghost.placed and ghost.model.Parent == nil)) then
 		StickyPreview.Hide()
 	end
 	if not ghost then
@@ -81,6 +83,7 @@ function StickyPreview.Show(itemId, position, normal, valid)
 	ghost.model:PivotTo(Ballistics.StuckFrame(position, normal, spec and spec.stickOffset or 0))
 	if ghost.model.Parent == nil then
 		ghost.model.Parent = folder()
+		ghost.placed = true
 	end
 end
 
