@@ -1948,6 +1948,8 @@ function MatchService.Start()
 							participants, alive, placements = {}, {}, {}
 							aliveCount = 0
 							state = "Waiting"
+							-- A throw before VoteService.Close() leaves the vote open with no countdown; close it here. #107
+							VoteService.Close()
 							for _, player in ipairs(Players:GetPlayers()) do
 								WeaponService.Clear(player)
 								pcall(function()

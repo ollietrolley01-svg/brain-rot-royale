@@ -369,6 +369,9 @@ RunService.RenderStepped:Connect(function()
 			for _, part in ipairs(model:GetDescendants()) do
 				if part:IsA("BasePart") then
 					part.LocalTransparencyModifier = hide
+				elseif part:IsA("SurfaceGui") then
+					-- A SurfaceGui keeps drawing when its part is hidden: the floating gun text, #72.
+					part.Enabled = hide == 0
 				end
 			end
 		end

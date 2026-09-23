@@ -237,6 +237,12 @@ local CAR_COLORS = {
 local function parkedCar(parent, position, yaw)
 	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
 	local paint = pick(CAR_COLORS)
+	-- One Model, one health pool (DestructibleService reads the attribute): shot apart as a car, #51.
+	local car = Instance.new("Model")
+	car.Name = "ParkedCar"
+	car:SetAttribute("DestructibleHealth", 240)
+	car.Parent = parent
+	parent = car
 
 	makePart(parent, Vector3.new(6.4, 2.6, 12.6), cf * CFrame.new(0, 2.1, 0), paint, Enum.Material.SmoothPlastic)
 	local cabin = makePart(parent, Vector3.new(5.8, 2.3, 6.6), cf * CFrame.new(0, 4.55, 0.8),
