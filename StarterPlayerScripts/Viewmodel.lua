@@ -879,8 +879,65 @@ function Viewmodel.new(def, options)
 	self.cocked = true
 	self.roundShown = true
 	self.hidden = false
+
+	-- Night sights (Oliver, 2026-09-22: "its hard to see your gun sights in night ops event"). The
+	-- iron sights are dark anodised metal, invisible against a dark sky, so in the dark they turn into
+	-- glowing tritium (green posts, the dot and reticle left red but lit), and a faint light on the
+	-- gun keeps its shape readable. Driven from Update by how dark the Lighting is, so it covers Night
+	-- Ops and anything else that turns the lights down, and switches back when it's light.
+	self.nightParts = {}
+	for part in pairs(self.offsets) do
+		local name = part.Name
+		if name == "FrontSight" or name == "FrontBead" or name == "RearSight" or name == "RearSightRing"
+			or name == "SightDot" or name == "SightReticle" then
+			table.insert(self.nightParts, { part = part, color = part.Color, material = part.Material })
+		end
+	end
+	local anchorPart = (self.keys.Sight and model:FindFirstChild("Sight", true)) or model.PrimaryPart
+		or model:FindFirstChildWhichIsA("BasePart", true)
+	if anchorPart then
+		local glow = Instance.new("PointLight")
+		glow.Name = "NightSightGlow"
+		glow.Color = Color3.fromRGB(170, 200, 255)
+		glow.Brightness = 0.7
+		glow.Range = 3
+		glow.Shadows = false
+		glow.Enabled = false
+		glow.Parent = anchorPart
+		self.nightGlow = glow
+	end
+	self.night = false
+	self.nightCheckAt = 0
+
 	self.model.Parent = nil
 	return self
+end
+
+local NIGHT_TRITIUM = Color3.fromRGB(90, 255, 130)
+local Lighting = game:GetService("Lighting")
+
+function Viewmodel:updateNightSights()
+	local clock = Lighting.ClockTime
+	local dark = clock < 5.5 or clock > 18.5 or Lighting.Brightness < 0.6
+	if dark == self.night then
+		return
+	end
+	self.night = dark
+	for _, entry in ipairs(self.nightParts) do
+		local part = entry.part
+		if dark then
+			part.Material = Enum.Material.Neon
+			if part.Name ~= "SightDot" and part.Name ~= "SightReticle" then
+				part.Color = NIGHT_TRITIUM
+			end
+		else
+			part.Material = entry.material
+			part.Color = entry.color
+		end
+	end
+	if self.nightGlow then
+		self.nightGlow.Enabled = dark
+	end
 end
 
 function Viewmodel:Destroy()
@@ -1575,6 +1632,10 @@ function Viewmodel:Update(dt, input)
 	dt = math.min(dt, 0.1)
 	self.now += dt
 	local now = self.now
+	if now >= (self.nightCheckAt or 0) then
+		self.nightCheckAt = now + 0.5
+		self:updateNightSights()
+	end
 	local view = input.camera
 
 	-- Blends.

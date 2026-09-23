@@ -1324,6 +1324,32 @@ for _, side in ipairs({ -1, 1 }) do
 end
 reticle(UDim2.fromScale(0.5, 0.5), UDim2.fromOffset(4, 4), Color3.fromRGB(255, 60, 60))
 
+-- At night (Night Ops, or any event that turns the lights down) a black reticle vanishes against a dark
+-- sky: the lines turn glowing green instead, and back to black when it's light.
+do
+	local Lighting = game:GetService("Lighting")
+	local lines = {}
+	for _, child in ipairs(scopeLens:GetChildren()) do
+		if child:IsA("Frame") and child.BackgroundColor3 == Color3.new(0, 0, 0) then
+			table.insert(lines, child)
+		end
+	end
+	local night = false
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			local clock = Lighting.ClockTime
+			local dark = clock < 5.5 or clock > 18.5 or Lighting.Brightness < 0.6
+			if dark ~= night then
+				night = dark
+				for _, line in ipairs(lines) do
+					line.BackgroundColor3 = dark and Color3.fromRGB(90, 255, 130) or Color3.new(0, 0, 0)
+				end
+			end
+		end
+	end)
+end
+
 --------------------------------------------------------------------------------
 -- Building
 --------------------------------------------------------------------------------
