@@ -113,8 +113,10 @@ MatchConfig.BotThinkInterval = 0.25
 -- tools/bot_probe.lua's S23). Accuracy falls off with distance, so these two numbers and the falloff
 -- below are the whole difficulty dial, alongside BotDamageScale.
 -- Oliver, 2026-09-22 14:39: "un nerf the bots aim". Back to the pre-#118 values.
-MatchConfig.BotAccuracyNear = 0.66
-MatchConfig.BotAccuracyFar = 0.19
+-- Oliver, 2026-09-22 21:34: "make the bots aim a little better". Up a notch (0.66/0.19 -> 0.71/0.22);
+-- BotService also lets aim settle on a target and makes fast-moving targets harder to hit.
+MatchConfig.BotAccuracyNear = 0.71
+MatchConfig.BotAccuracyFar = 0.22
 MatchConfig.BotAccuracyFalloff = 120
 MatchConfig.BotReactionTime = 0.28
 MatchConfig.BotBurstRest = 0.48
@@ -147,7 +149,8 @@ MatchConfig.BotRearNoticeTime = 1.2
 MatchConfig.BotMemorySeconds = 6
 
 -- Below this share of max health, a bot that's being hit looks for cover (or builds some).
-MatchConfig.BotCoverHealth = 0.6
+-- Oliver, 2026-09-22 21:35: "make them take cover". Was 0.6.
+MatchConfig.BotCoverHealth = 0.8
 
 -- Storm pressure: the distance to the safe circle over how far a bot can walk before the storm
 -- gets there. Past Rotate it stops looting outside that circle and sprints its wander legs; past
