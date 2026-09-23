@@ -25,10 +25,6 @@ Settings.Actions = {
 	{ id = "Zoom", label = "Zoom the camera out a step (the wheel switches hotbar items)", default = "Z", group = "Combat" },
 	{ id = "MovementItem", label = "Use movement item (keeps your gun out)", default = "X", group = "Combat" },
 	{ id = "Crouch", label = "Crouch — slides if you're sprinting (hold, or a toggle in Gameplay)", default = "C", group = "Combat" },
-	-- #79 lean (MovementClient). Q and E are NextSlot and SpectateNext, so these take the nearest free
-	-- letters; rebindable like the rest.
-	{ id = "LeanLeft", label = "Lean left (first person, hold)", default = "Y", group = "Combat" },
-	{ id = "LeanRight", label = "Lean right (first person, hold)", default = "U", group = "Combat" },
 	{ id = "Slot1", label = "Slot 1", default = "One", group = "Loadout" },
 	{ id = "Slot2", label = "Slot 2", default = "Two", group = "Loadout" },
 	{ id = "Slot3", label = "Slot 3", default = "Three", group = "Loadout" },

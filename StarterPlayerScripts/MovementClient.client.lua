@@ -18,7 +18,6 @@
 --     you land, instead of the humanoid's air control braking them to walking pace; you can steer and
 --     pull back. A launch with no kind (the geyser) is applied exactly as it always was.
 
-local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -985,112 +984,6 @@ Settings.Bind("BRR_MovementItem", "MovementItem", function(_, inputState)
 end, { title = "MOVE", position = UDim2.new(1, -470, 1, -280) }, Enum.KeyCode.DPadDown)
 
 --------------------------------------------------------------------------------
--- Lean (#79)
---------------------------------------------------------------------------------
-
--- First person only: the camera slides sideways (Humanoid.CameraOffset.X, written with the crouch drop
--- in the frame below) and rolls a few degrees (MovementState.leanRoll, applied by CombatClient's recoil
--- step so it is undone before the camera module runs, like the kick). Every frame the eased offset is
--- clamped by MovementConfig.ClampLean with a swept sphere from the head, so the view never enters a wall
--- however hard you lean into one. The server repeats the same clamp from its own head before it moves
--- the shot's origin, so a leaned shot can never start on the far side of anything.
-local LEAN = MovementConfig.Lean
-local leanLeftHeld, leanRightHeld = false, false
--- Touch: tapping a lean button toggles it (a thumb can't hold it and aim), -1 / 0 / 1.
-local touchLean = 0
-local leanNow = 0
-
-local leanParams = RaycastParams.new()
-leanParams.FilterType = Enum.RaycastFilterType.Exclude
-leanParams.RespectCanCollide = true
-leanParams.IgnoreWater = true
-
--- Roblox's own camera is on and zoomed all the way in. CombatClient's third-person camera is Scriptable,
--- and there a sideways offset would just be a shoulder swap.
-local function firstPerson()
-	return camera.CameraType ~= Enum.CameraType.Scriptable
-		and (camera.CFrame.Position - camera.Focus.Position).Magnitude < 1
-end
-
-local function leanAllowed()
-	return alive() and firstPerson() and not humanoid.Sit and MovementState.move == nil
-		and not MovementState.sprinting and not player:GetAttribute("MenuOpen")
-end
-
--- The eased lean, clamped against the world from where the head is now.
-local function stepLean(dt)
-	local input = (leanRightHeld and 1 or 0) - (leanLeftHeld and 1 or 0)
-	if input == 0 then
-		input = touchLean
-	end
-	local target = leanAllowed() and input * LEAN.Offset or 0
-	leanNow += (target - leanNow) * math.clamp(dt * LEAN.Rate, 0, 1)
-	if math.abs(leanNow) < 0.005 and target == 0 then
-		leanNow = 0
-	end
-	local head = character and character:FindFirstChild("Head")
-	if leanNow ~= 0 and head and root then
-		leanParams.FilterDescendantsInstances = { character, camera }
-		local side = root.CFrame.RightVector
-		leanNow = MovementConfig.ClampLean(leanNow, function(reach)
-			local hit = workspace:Spherecast(head.Position, LEAN.Radius, side * reach, leanParams)
-			return hit and hit.Distance or nil
-		end)
-	elseif leanNow ~= 0 then
-		leanNow = 0
-	end
-	MovementState.lean = leanNow
-	MovementState.leanRoll = -math.rad(LEAN.Roll) * leanNow / LEAN.Offset
-end
-
-local function leanKey(right)
-	return function(_, inputState)
-		local held = inputState == Enum.UserInputState.Begin
-		if right then
-			leanRightHeld = held
-		else
-			leanLeftHeld = held
-		end
-		return Enum.ContextActionResult.Pass
-	end
-end
--- Keyboard only here; the phone buttons come and go with the scope below.
-Settings.Bind("BRR_LeanLeft", "LeanLeft", leanKey(false), nil)
-Settings.Bind("BRR_LeanRight", "LeanRight", leanKey(true), nil)
-
--- The phone's buttons exist only while a scoped gun is aimed in first person (MovementState.scoped,
--- written by CombatClient). Put up and taken down on the edge, never every frame.
-local leanButtonsUp = false
-local function touchLeanButton(direction)
-	return function(_, inputState)
-		if inputState == Enum.UserInputState.Begin then
-			touchLean = touchLean == direction and 0 or direction
-		end
-		return Enum.ContextActionResult.Sink
-	end
-end
-local function updateLeanButtons()
-	local want = UserInputService.TouchEnabled and MovementState.scoped == true and leanAllowed()
-	if want == leanButtonsUp then
-		return
-	end
-	leanButtonsUp = want
-	if want then
-		-- Fifth column, left of MOVE / SLIDE: nothing else is up there while the scope is.
-		ContextActionService:BindAction("BRR_LeanLeftTouch", touchLeanButton(-1), true)
-		ContextActionService:SetTitle("BRR_LeanLeftTouch", "LEAN L")
-		ContextActionService:SetPosition("BRR_LeanLeftTouch", UDim2.new(1, -580, 1, -280))
-		ContextActionService:BindAction("BRR_LeanRightTouch", touchLeanButton(1), true)
-		ContextActionService:SetTitle("BRR_LeanRightTouch", "LEAN R")
-		ContextActionService:SetPosition("BRR_LeanRightTouch", UDim2.new(1, -580, 1, -180))
-	else
-		ContextActionService:UnbindAction("BRR_LeanLeftTouch")
-		ContextActionService:UnbindAction("BRR_LeanRightTouch")
-		touchLean = 0
-	end
-end
-
---------------------------------------------------------------------------------
 -- The frame
 --------------------------------------------------------------------------------
 
@@ -1119,9 +1012,6 @@ RunService.Heartbeat:Connect(function(delta)
 		slide, active, carry = nil, nil, nil
 		MovementState.move = nil
 		MovementState.dip = 0
-		leanNow, touchLean = 0, 0
-		MovementState.lean, MovementState.leanRoll = 0, 0
-		updateLeanButtons()
 		return
 	end
 
@@ -1169,10 +1059,8 @@ RunService.Heartbeat:Connect(function(delta)
 	MovementState.dip = math.max(MovementState.dip, crouched * CROUCH.GunDip)
 	local wantedDrop = math.max(MovementState.move == "slide" and SLIDE.CameraDrop or 0, crouched * CROUCH.CameraDrop)
 	cameraDrop += (wantedDrop - cameraDrop) * math.clamp(dt * (wantedDrop > cameraDrop and 14 or 6), 0, 1)
-	stepLean(dt)
-	updateLeanButtons()
-	if cameraDrop > 0.01 or leanNow ~= 0 or humanoid.CameraOffset ~= Vector3.zero then
-		humanoid.CameraOffset = Vector3.new(leanNow, cameraDrop > 0.01 and -cameraDrop or 0, 0)
+	if cameraDrop > 0.01 or humanoid.CameraOffset.Y ~= 0 then
+		humanoid.CameraOffset = Vector3.new(0, cameraDrop > 0.01 and -cameraDrop or 0, 0)
 	end
 end)
 
@@ -1191,8 +1079,6 @@ local function onCharacter(newCharacter)
 	end
 	lastGroundY = nil
 	cameraDrop = 0
-	leanNow, touchLean = 0, 0
-	MovementState.lean, MovementState.leanRoll = 0, 0
 	MovementState.move = nil
 	MovementState.dip = 0
 	MovementState.crouching = false

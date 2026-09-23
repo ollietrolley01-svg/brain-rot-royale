@@ -35,13 +35,6 @@ local MovementState = {
 	dip = 0,
 	-- os.clock() of the last slide or vault refused for want of stamina (the bar flashes).
 	refusedAt = 0,
-	-- #79 lean. MovementClient writes lean (studs sideways, positive = right, already clamped against
-	-- walls; it is in Humanoid.CameraOffset.X) and leanRoll (radians of camera roll; CombatClient's
-	-- recoil step folds it into the offset it applies and undoes). CombatClient writes scoped (a
-	-- scoped gun is being aimed), which is when a phone gets the lean buttons.
-	lean = 0,
-	leanRoll = 0,
-	scoped = false,
 }
 
 local exhaustedEvent = Instance.new("BindableEvent")
