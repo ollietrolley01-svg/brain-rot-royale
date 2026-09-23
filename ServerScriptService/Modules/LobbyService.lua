@@ -2214,6 +2214,76 @@ local function buildArena(lobby, base)
 end
 
 --------------------------------------------------------------------------------
+-- The edge
+--
+-- #103, "people can jump off the edge in the lobby". The rim's rail is posts with non-colliding
+-- rails between them, low enough to hop, with gaps at the four waterfalls; the invisible wall
+-- round the rim only stops balls (its collision group ignores players); and the pier and the
+-- airship run out past the rim altogether, so a wall players could not cross would have to leave
+-- a hole exactly where they board. And nothing put a faller back: the island is 500 up, so they
+-- fell for the best part of ten seconds, and with a match on they landed in it.
+--
+-- So a safety net rather than more wall: anyone not in a match who drops well below the island
+-- while still over it is put back on the pier, where everyone spawns, and told so. The net is a
+-- band of height as well as a circle, and the band is the part that keeps it off match players:
+-- its floor is well above anywhere a match puts anyone (the drop opens at DropHeight, 170, over
+-- ground far below), so nobody in a match can ever be in it, whatever their InMatch says.
+--------------------------------------------------------------------------------
+
+-- How far below the plaza a fall is caught: under the rim, well clear of anything you could be
+-- standing on (the underside's rock is out of reach below the grass), and above the match.
+local NET_TOP = 30
+local NET_BOTTOM = 220
+-- Past the airship's stern (z182) with room for a run-up jump off it.
+local NET_RADIUS = 260
+local NET_INTERVAL = 0.2
+
+-- Whether someone at `position` has fallen off the island. Pure, so tools/lobby_edge_check.py can
+-- run it against the island's real heights.
+function LobbyService.HasFallen(position, base)
+	local below = base.Y - position.Y
+	if below < NET_TOP or below > NET_BOTTOM then
+		return false
+	end
+	local flat = Vector3.new(position.X - base.X, 0, position.Z - base.Z)
+	return flat.Magnitude <= NET_RADIUS
+end
+
+local function catchFallers()
+	local base = MatchConfig.LobbyPosition
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if root and humanoid and humanoid.Health > 0 and player:GetAttribute("InMatch") ~= true
+			and LobbyService.HasFallen(root.Position, base) then
+			-- The same pier spot MatchService spawns people on, facing the island.
+			local spawn = base + LobbyService.SpawnOffset
+			local position = spawn + Vector3.new(math.random(-LobbyService.SpawnHalfWidth + 2, LobbyService.SpawnHalfWidth - 2), 2.2,
+				math.random(-8, 8))
+			character:PivotTo(CFrame.lookAt(position, Vector3.new(base.X, position.Y, base.Z)))
+			-- Or they arrive still falling at a hundred studs a second and bounce off the pier.
+			root.AssemblyLinearVelocity = Vector3.zero
+			StateSync.Notify(player, "Back on the island.")
+		end
+	end
+end
+
+-- Started once with the module rather than per build: it reads nothing the build makes, only
+-- where the island is, so a rebuilt lobby needs no second loop.
+task.spawn(function()
+	while true do
+		task.wait(NET_INTERVAL)
+		if workspace:FindFirstChild("Lobby") then
+			local ok, err = pcall(catchFallers)
+			if not ok then
+				warn("[LobbyService] lobby edge net failed: " .. tostring(err))
+			end
+		end
+	end
+end)
+
+--------------------------------------------------------------------------------
 -- The Pitch and the play balls
 --
 -- Big googly-eyed balls loose on the plaza to kick around. They're simulated by the server;
