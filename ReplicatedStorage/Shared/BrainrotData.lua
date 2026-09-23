@@ -25,21 +25,21 @@ local GLASS = Enum.Material.Glass
 --------------------------------------------------------------------------------
 
 BrainrotData.Attacks = {
-	Spit = { label = "Spit", range = 60, cooldown = 1.6, power = 1.0, splash = 0,
+	Spit = { label = "Spit", range = 110, cooldown = 1.6, power = 1.0, splash = 0,
 		description = "Fires a glob at one enemy" },
-	Bonk = { label = "Bonk", range = 36, cooldown = 1.9, power = 1.3, splash = 7,
+	Bonk = { label = "Bonk", range = 60, cooldown = 1.9, power = 1.3, splash = 7,
 		description = "Leaps in and slams, splashing anyone close" },
-	Zap = { label = "Zap", range = 55, cooldown = 1.35, power = 0.85, splash = 0,
+	Zap = { label = "Zap", range = 100, cooldown = 1.35, power = 0.85, splash = 0,
 		description = "Instant beam — never misses" },
-	Lob = { label = "Lob", range = 70, cooldown = 2.2, power = 1.1, splash = 11,
+	Lob = { label = "Lob", range = 115, cooldown = 2.2, power = 1.1, splash = 11,
 		description = "Arcing shot that splashes on landing" },
 	-- A radial move's range is the radius it hits, and it grows by `radiusStep` a rarity step (14
 	-- to 23 studs) rather than by RarityRange. It was 26 + RarityRange, 26 to 50: a Secret hit
 	-- everyone in a 50-stud circle, through walls, every 6.8 s, against a Lob's 11-stud splash.
 	-- Brought down on 2026-09-18 with the damage unchanged.
-	Shockwave = { label = "Shockwave", range = 14, radiusStep = 1.5, cooldown = 2.6, power = 0.95, radial = true,
+	Shockwave = { label = "Shockwave", range = 18, radiusStep = 2, cooldown = 2.6, power = 0.95, radial = true,
 		description = "Pulse that hits every enemy nearby" },
-	Chain = { label = "Chain", range = 55, cooldown = 1.8, power = 0.8, chain = 2,
+	Chain = { label = "Chain", range = 95, cooldown = 1.8, power = 0.8, chain = 2,
 		description = "Zap that arcs on to a second enemy" },
 }
 
@@ -50,7 +50,9 @@ BrainrotData.Attacks = {
 -- a real extra gun's worth of pressure without replacing the gun.
 BrainrotData.RarityDamage = { Common = 12, Uncommon = 16, Rare = 21, Epic = 27, Legendary = 34, Mythic = 39, Secret = 45 }
 BrainrotData.RarityCooldown = { Common = 1.15, Uncommon = 1.05, Rare = 1.0, Epic = 0.92, Legendary = 0.85, Mythic = 0.8, Secret = 0.75 }
-BrainrotData.RarityRange = { Common = 0, Uncommon = 4, Rare = 8, Epic = 12, Legendary = 16, Mythic = 20, Secret = 24 }
+-- Ranges roughly doubled on 2026-09-22 (Oliver: "they dont have enough range or dmg to be useful
+-- compared to the range and ttk of guns"): a Spit reaches 110 studs at Common, 150 at Secret (was 60-84).
+BrainrotData.RarityRange = { Common = 0, Uncommon = 7, Rare = 14, Epic = 20, Legendary = 27, Mythic = 34, Secret = 40 }
 -- 0 for Common up to 6 for Secret: the step a radial move's radius grows by.
 BrainrotData.RarityIndex = { Common = 0, Uncommon = 1, Rare = 2, Epic = 3, Legendary = 4, Mythic = 5, Secret = 6 }
 -- Companions can be shot. A downed companion sits out the rest of the match.
@@ -59,9 +61,10 @@ BrainrotData.RarityHealth = { Common = 90, Uncommon = 120, Rare = 160, Epic = 20
 
 -- The companion's move is used on a hotkey, not automatically, so each use hits harder and
 -- recharges for longer than the old auto-attack did.
-BrainrotData.AbilityPower = 1.9
-BrainrotData.MaxAbilityDamage = 90
-BrainrotData.AbilityCooldown = 2.2
+-- Second buff the same night: 1.9 -> 2.3 power, 2.2 -> 1.8 cooldown, cap 90 -> 95.
+BrainrotData.AbilityPower = 2.3
+BrainrotData.MaxAbilityDamage = 95
+BrainrotData.AbilityCooldown = 1.8
 
 --------------------------------------------------------------------------------
 -- Boons: what a companion does FOR its owner
@@ -479,7 +482,7 @@ function BrainrotData.Stats(def, level, stars)
 		description = attack.description,
 		damage = damage,
 		cooldown = math.floor(cooldown * 100 + 0.5) / 100,
-		-- A radial move's range is its radius, in whole studs (14, 16, 17, 19, 20, 22, 23).
+		-- A radial move's range is its radius, in whole studs (18 at Common up to 30 at Secret).
 		range = attack.radial and math.floor(attack.range + (attack.radiusStep or 0) * (BrainrotData.RarityIndex[def.rarity] or 0) + 0.5)
 			or (attack.range + (BrainrotData.RarityRange[def.rarity] or 0)),
 		splash = attack.splash or 0,
