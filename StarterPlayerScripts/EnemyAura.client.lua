@@ -125,9 +125,10 @@ local function paint(character)
 	mark.highlight.FillTransparency = enemy and ENEMY_FILL or FRIEND_FILL
 	mark.highlight.OutlineTransparency = enemy and ENEMY_OUTLINE or FRIEND_OUTLINE
 
-	-- Teammates also get a small green marker over their heads that shows through walls and at range
-	-- (Oliver, 2026-09-23: "make it easier to tell what team youre on"). Friends only: an enemy marker
-	-- through walls would be a wallhack. It is a BillboardGui, so it costs none of the 31-highlight budget.
+	-- Teammates also get a small green marker over their heads (Oliver, 2026-09-23: "make it easier to tell
+	-- what team youre on"). NOT through walls (Oliver, 14:39: "i dont wanna see the team marker icon through
+	-- walls"): AlwaysOnTop is off, so a wall in front hides it like it hides the teammate. It is a
+	-- BillboardGui, so it costs none of the 31-highlight budget.
 	if enemy then
 		if mark.pin then
 			mark.pin:Destroy()
@@ -138,7 +139,7 @@ local function paint(character)
 		if head then
 			local pin = Instance.new("BillboardGui")
 			pin.Name = "TeamPin"
-			pin.AlwaysOnTop = true
+			pin.AlwaysOnTop = false
 			pin.LightInfluence = 0
 			pin.MaxDistance = 600
 			pin.Size = UDim2.fromOffset(22, 18)
