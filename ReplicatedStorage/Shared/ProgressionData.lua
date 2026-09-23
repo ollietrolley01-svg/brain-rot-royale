@@ -605,4 +605,27 @@ function ProgressionData.Snapshot(data, now)
 	}
 end
 
+-- Playtime awards (#76), paid by PlaytimeService: coins for every IntervalSeconds of active play
+-- in one visit, each award StepCoins bigger than the last up to CapCoins. Leaving the server
+-- starts the ladder again; nothing is saved. A stretch only counts if the player moved in at
+-- least MinActiveSamples of its SampleSeconds checks, so standing still in the lobby earns nothing.
+-- Hour 1 pays 50+75+...+175 = 675 and every hour after pays 6 x 200 = 1,200. Against ECONOMY.md
+-- section 2's cash an hour, that is +12% then +22% for a player who only ever loses (5,431), and
+-- +6% then +10% for one who wins sometimes (12,024): it matters most to the player losing most.
+ProgressionData.Playtime = {
+	IntervalSeconds = 600,
+	FirstCoins = 50,
+	StepCoins = 25,
+	CapCoins = 200,
+	SampleSeconds = 30,
+	MinActiveSamples = 10, -- of the 20 checks in a stretch
+	MoveStuds = 4,
+}
+
+-- The coins the award'th playtime award pays (1 = the first one of a visit).
+function ProgressionData.PlaytimeCoins(award)
+	local p = ProgressionData.Playtime
+	return math.min(p.CapCoins, p.FirstCoins + p.StepCoins * math.max(0, award - 1))
+end
+
 return ProgressionData

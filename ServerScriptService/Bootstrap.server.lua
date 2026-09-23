@@ -42,6 +42,7 @@ local LobbyService = require(Modules:WaitForChild("LobbyService"))
 local LootService = require(Modules:WaitForChild("LootService"))
 local AchievementService = require(Modules:WaitForChild("AchievementService"))
 local PlayerData = require(Modules:WaitForChild("PlayerData"))
+local PlaytimeService = require(Modules:WaitForChild("PlaytimeService"))
 local ProgressionService = require(Modules:WaitForChild("ProgressionService"))
 local QuestService = require(Modules:WaitForChild("QuestService"))
 local RateLimit = require(Modules:WaitForChild("RateLimit"))
@@ -458,6 +459,8 @@ LobbyService.OnDailySpin = function(player)
 end
 -- Progression: every point of pass XP also feeds Rot Rank, and credited gun kills feed mastery.
 ProgressionService.Start()
+-- Compounding coins for every ten active minutes in one visit (#76).
+PlaytimeService.Start()
 BattlePassService.OnXp = ProgressionService.OnPassXp
 MatchService.OnKillCredited = ProgressionService.OnKillCredited
 MatchService.ProgressionSummary = ProgressionService.MatchSummary
