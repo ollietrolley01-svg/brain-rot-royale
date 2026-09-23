@@ -36,6 +36,14 @@ local ENEMY_OUTLINE, FRIEND_OUTLINE = 0.15, 0.25
 
 local marks = {}
 
+-- ROBLOX DRAWS AT MOST 31 HIGHLIGHTS AT ONCE, and silently drops the rest. A team match fills to 30
+-- combatants, so 29 marks plus a dead body still carrying its mark, or a barricade preview, went over
+-- and some players and bots showed no outline at all (Oliver, 2026-09-22: "sometimes the outline ...
+-- isnt visible"). So only the nearest MAX_LIT are switched on, re-picked a few times a second, and a
+-- dead body's mark is taken off straight away. The coloured name still marks everyone else.
+local MAX_LIT = 24
+local camera = workspace.CurrentCamera
+
 local function myTeam()
 	local character = player.Character
 	return character and character:GetAttribute("Team")
@@ -69,7 +77,8 @@ local function paint(character)
 		return
 	end
 	local mine, theirs = myTeam(), character:GetAttribute("Team")
-	if mine == nil or theirs == nil then
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if mine == nil or theirs == nil or (humanoid and humanoid.Health <= 0) then
 		clear(character)
 		return
 	end
@@ -89,7 +98,13 @@ local function paint(character)
 		-- marked character exactly as it hides the character.
 		mark.highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 		mark.highlight.Adornee = character
+		mark.highlight.Enabled = false -- the budget loop below switches it on
 		mark.highlight.Parent = character
+		if humanoid then
+			humanoid.Died:Connect(function()
+				clear(character)
+			end)
+		end
 	end
 	mark.highlight.FillColor = colour
 	mark.highlight.OutlineColor = colour
@@ -136,6 +151,38 @@ local function watch(model)
 		paint(model)
 	end
 end
+
+-- The budget: nearest first, enemies ahead of friends at the same distance.
+task.spawn(function()
+	while true do
+		task.wait(0.3)
+		local eye = camera and camera.CFrame.Position
+		local list = {}
+		for character, mark in pairs(marks) do
+			if mark.highlight then
+				if not character.Parent then
+					clear(character)
+				else
+					local pivot = character:GetPivot().Position
+					local distance = eye and (pivot - eye).Magnitude or 0
+					if mark.highlight.FillTransparency < 1 then
+						distance *= 0.8
+					end
+					table.insert(list, { mark = mark, distance = distance })
+				end
+			end
+		end
+		table.sort(list, function(a, b)
+			return a.distance < b.distance
+		end)
+		for index, entry in ipairs(list) do
+			local lit = index <= MAX_LIT
+			if entry.mark.highlight.Enabled ~= lit then
+				entry.mark.highlight.Enabled = lit
+			end
+		end
+	end
+end)
 
 workspace.ChildAdded:Connect(watch)
 workspace.ChildRemoved:Connect(clear)
