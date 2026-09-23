@@ -66,6 +66,9 @@ local function clear(character)
 	if mark.highlight then
 		mark.highlight:Destroy()
 	end
+	if mark.pin then
+		mark.pin:Destroy()
+	end
 	-- The nameplate is the server's, and we only ever changed its colour: put the colour back rather
 	-- than leaving our own on somebody else's instance.
 	local label = nameLabel(character)
@@ -121,6 +124,40 @@ local function paint(character)
 	mark.highlight.OutlineColor = colour
 	mark.highlight.FillTransparency = enemy and ENEMY_FILL or FRIEND_FILL
 	mark.highlight.OutlineTransparency = enemy and ENEMY_OUTLINE or FRIEND_OUTLINE
+
+	-- Teammates also get a small green marker over their heads that shows through walls and at range
+	-- (Oliver, 2026-09-23: "make it easier to tell what team youre on"). Friends only: an enemy marker
+	-- through walls would be a wallhack. It is a BillboardGui, so it costs none of the 31-highlight budget.
+	if enemy then
+		if mark.pin then
+			mark.pin:Destroy()
+			mark.pin = nil
+		end
+	elseif not mark.pin or not mark.pin.Parent then
+		local head = character:FindFirstChild("Head") or character.PrimaryPart
+		if head then
+			local pin = Instance.new("BillboardGui")
+			pin.Name = "TeamPin"
+			pin.AlwaysOnTop = true
+			pin.LightInfluence = 0
+			pin.MaxDistance = 600
+			pin.Size = UDim2.fromOffset(22, 18)
+			pin.StudsOffsetWorldSpace = Vector3.new(0, 4.2, 0)
+			pin.Adornee = head
+			local arrow = Instance.new("TextLabel")
+			arrow.BackgroundTransparency = 1
+			arrow.Size = UDim2.fromScale(1, 1)
+			arrow.Font = Enum.Font.GothamBlack
+			arrow.Text = "▼"
+			arrow.TextScaled = true
+			arrow.TextColor3 = FRIEND
+			arrow.TextStrokeColor3 = Color3.fromRGB(10, 40, 18)
+			arrow.TextStrokeTransparency = 0.2
+			arrow.Parent = pin
+			pin.Parent = head
+			mark.pin = pin
+		end
+	end
 
 	-- The name, in the same colour. The plate is built server-side a moment after the character, so
 	-- this runs again when it appears (see `watch`), and the original colour is kept so `clear` can
