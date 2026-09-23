@@ -112,6 +112,10 @@ local function build()
 		row(pass.name or key, "Pass", key)
 	end
 
+	heading("GOD MODE")
+	row("God mode on", "God", true)
+	row("God mode off", "God", false)
+
 	heading("MOVEMENT")
 	row("Fly on", "Fly", true)
 	row("Fly off", "Fly", false)
