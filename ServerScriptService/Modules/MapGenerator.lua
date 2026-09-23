@@ -265,7 +265,7 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	-- default town. Only the parts of a profile that stay inside the footprint the road planner was
 	-- given (townShape) are read: streets may be shorter than planned, never longer, and a street a
 	-- road leaves along always runs its full length to meet it. The district yard, cul-de-sacs and
-	-- parking bays in the profiles have no builder yet and are not read.
+	-- parking bays are read: `bays.count` sizes the town's car park (ParkingLots, #31).
 	local profile = TownKinds.For(townName or "")
 	town:SetAttribute("TownKind", profile.kind)
 	town:SetAttribute("TownBlurb", profile.blurb)
@@ -537,6 +537,17 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	furniture.cars = nil
 	local decorSpots = MapDecor.Town(town, center, preset, spread, drawn, townName or "Rotville", MapGenerator.GroundHeightAt, space,
 		furniture)
+
+	-- The town's car park (#31): painted bays on flat asphalt near the square, published on the town
+	-- for VehicleService.ParkInTowns. After the buildings and furniture so it only takes ground they
+	-- left; a town with no room for one keeps its cars on the verge.
+	local okParking, parkingErr = pcall(function()
+		local ParkingLots = require(script.Parent:WaitForChild("ParkingLots"))
+		ParkingLots.Build(town, center, spread, profile.bays and profile.bays.count or 6, space, rectFree)
+	end)
+	if not okParking then
+		warn("[MapGenerator] parking lot failed: " .. tostring(parkingErr))
+	end
 	for _, spot in ipairs(decorSpots) do
 		table.insert(lootSpots[math.random() < 0.75 and "weapon" or "heal"], spot)
 	end
@@ -925,7 +936,12 @@ function MapGenerator.Build(mapId)
 	-- claim on the edge, so the car can be checked against everything except the road it parks beside.
 	local VERGE = RoadNetwork.Width / 2 + 7
 	local wantedVehicles = math.clamp(math.floor(radius / 95), 6, 16)
+	-- Most of them in the towns' car parks first (#31); the verge takes whatever is left.
 	local parked = 0
+	local okPark, inLots = pcall(VehicleService.ParkInTowns, vehicles, map, math.ceil(wantedVehicles * 0.6))
+	if okPark and type(inLots) == "number" then
+		parked = inLots
+	end
 	for _, edge in ipairs(roads.edges) do
 		if parked >= wantedVehicles then
 			break
