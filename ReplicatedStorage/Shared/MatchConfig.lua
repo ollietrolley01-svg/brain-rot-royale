@@ -95,6 +95,19 @@ MatchConfig.PlacementBrackets = {
 MatchConfig.CombatDamageScale = 0.92
 
 MatchConfig.CoinsPerKill = 75
+-- Team Deathmatch / King of the Hill payouts (Oliver, 2026-09-23 16:10: "theres no rewards for the team
+-- gamemodes!"). An 8-minute team match pays about what a mid-table battle royale does over the same time:
+-- a crate and coins for the result, plus kills at half the battle royale rate (respawns make kills far
+-- more frequent), and only the first `maxPaidKills` of a match pay so a bot lobby can't be farmed.
+-- Coins go through the same 2x-pass and High Stakes multipliers as placement coins. Wins here do NOT count
+-- as battle royale wins (Stats.wins, the global board).
+MatchConfig.TeamModeRewards = {
+	win = { crate = "Rare", coins = 350, xp = 300 },
+	draw = { crate = "Uncommon", coins = 250, xp = 220 },
+	loss = { crate = "Uncommon", coins = 150, xp = 160 },
+	killScale = 0.5,
+	maxPaidKills = 30,
+}
 MatchConfig.XpPerKill = 60
 
 -- Bots backfill the lobby and play for real: they carry actual weapons from WeaponData,
