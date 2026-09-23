@@ -2600,6 +2600,46 @@ local function updateBot(bot)
 		end
 	end
 
+	-- Team modes: IDLE WATCHDOG (Oliver, 2026-09-23 14:49: "many team bots still stand around and do
+	-- nothing"). Out of a fight, a team bot that has hardly moved in 6 s (and is not mid-pickup) drops
+	-- whatever it was waiting on and walks straight at its objective for a few seconds, jumping, before
+	-- the normal planner takes over again. Whatever it was stuck on is left alone for a while.
+	if BotService.ModeState(bot) then
+		local mark = bot.idleMark
+		if bot.idleKickUntil and now < bot.idleKickUntil and bot.idleKickGoal then
+			humanoid:MoveTo(bot.idleKickGoal)
+			if math.random() < 0.15 then
+				humanoid.Jump = true
+			end
+			return
+		end
+		if not mark or flatDistance(root.Position, mark.position) > 6 or bot.lootHoldStart then
+			bot.idleMark = { position = root.Position, at = now }
+		elseif now - mark.at > 6 then
+			STATS.teamIdleKicks = (STATS.teamIdleKicks or 0) + 1
+			if bot.lootTarget then
+				blacklistLoot(bot, bot.lootTarget, 40, now)
+				releaseLoot(bot)
+			end
+			bot.gearUntil = nil
+			bot.wanderGoal = nil
+			BotNav.Drop(bot)
+			local goal = modeObjective(bot, root, BotService.ModeState(bot), now)
+			if not goal or flatDistance(goal, root.Position) < 10 then
+				local angle = math.random() * math.pi * 2
+				goal = root.Position + Vector3.new(math.cos(angle), 0, math.sin(angle)) * 40
+			end
+			local toward = Vector3.new(goal.X - root.Position.X, 0, goal.Z - root.Position.Z)
+			bot.idleKickGoal = root.Position + toward.Unit * math.min(50, toward.Magnitude)
+				+ Vector3.new(-toward.Unit.Z, 0, toward.Unit.X) * (math.random() - 0.5) * 20
+			bot.idleKickUntil = now + 3
+			bot.idleMark = { position = root.Position, at = now }
+			humanoid.Jump = true
+			humanoid:MoveTo(bot.idleKickGoal)
+			return
+		end
+	end
+
 	-- Looting. Bots contest chests and floor guns like anyone else, which is what stops
 	-- loot from being a resource only real players compete for.
 	if bot.lootTarget and (not bot.lootTarget.Parent or bot.lootTarget:GetAttribute("Claimed")

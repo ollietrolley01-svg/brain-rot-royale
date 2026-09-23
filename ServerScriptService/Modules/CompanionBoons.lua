@@ -79,6 +79,49 @@ local function boonOf(def)
 end
 
 --------------------------------------------------------------------------------
+-- What the owner's HUD shows (Oliver, 2026-09-23 14:49: "a small hud to pop up showing what companion
+-- buffs i have activated"). Two attributes on the Player, read by BoonHud.client.lua:
+--   CompanionBoonName   the brainrot giving the buffs, or nil
+--   CompanionBoons      one buff per line, e.g. "+15 max HP", or nil
+-- Players only: a bot has no HUD.
+--------------------------------------------------------------------------------
+
+local function describe(boon)
+	local lines = {}
+	if SafeValue.Number(boon.health, 500) and boon.health > 0 then
+		table.insert(lines, string.format("+%d max HP", boon.health))
+	end
+	if SafeValue.Number(boon.regen, 100) and boon.regen > 0 then
+		table.insert(lines, string.format("+%s HP/s regen", (string.format("%.1f", boon.regen):gsub("%.0$", ""))))
+	end
+	if SafeValue.Number(boon.speed, 10) and boon.speed > 1 then
+		table.insert(lines, string.format("+%d%% move speed", math.floor((boon.speed - 1) * 100 + 0.5)))
+	end
+	if SafeValue.Number(boon.jump, 10) and boon.jump > 1 then
+		table.insert(lines, string.format("+%d%% jump height", math.floor((boon.jump - 1) * 100 + 0.5)))
+	end
+	local venom = CompanionBoons.VenomOf and type(boon.venom) == "table" and boon.venom or nil
+	if venom and SafeValue.Number(venom.damage, 500) and SafeValue.Number(venom.duration, 60) then
+		table.insert(lines, string.format("Venom hits: %d dmg over %ds", venom.damage, venom.duration))
+	end
+	return lines
+end
+
+local function publish(player, def, boon)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return
+	end
+	local lines = boon and describe(boon) or {}
+	if #lines > 0 then
+		player:SetAttribute("CompanionBoonName", def and def.name or "Companion")
+		player:SetAttribute("CompanionBoons", table.concat(lines, "\n"))
+	else
+		player:SetAttribute("CompanionBoonName", nil)
+		player:SetAttribute("CompanionBoons", nil)
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Apply / clear
 --------------------------------------------------------------------------------
 
@@ -109,6 +152,7 @@ function CompanionBoons.Apply(player, def)
 
 	local state = { def = def, grantedHealth = 0 }
 	active[player] = state
+	publish(player, def, boon)
 
 	local humanoid = humanoidOf(player)
 
@@ -134,6 +178,7 @@ function CompanionBoons.Clear(player)
 		return
 	end
 	active[player] = nil
+	publish(player, nil, nil)
 
 	local humanoid = humanoidOf(player)
 	if humanoid then

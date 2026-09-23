@@ -483,6 +483,26 @@ local function lineOfSight(from, targetCharacter, targetRoot, ownerCharacter, al
 	return result == nil or result.Instance:IsDescendantOf(targetCharacter)
 end
 
+-- Team modes: a teammate is never a target (Oliver, 2026-09-23 14:49: team bots "hit eachother with
+-- their buff companions"). ModeTeams is loaded on first use, not at the top, so no require cycle can form;
+-- anything wrong with it fails open to today's behaviour.
+local modeTeams
+local function friendly(owner, token)
+	if modeTeams == nil then
+		local module = script.Parent:FindFirstChild("ModeTeams")
+		local ok, result = false, nil
+		if module then
+			ok, result = pcall(require, module)
+		end
+		modeTeams = ok and type(result) == "table" and result or false
+	end
+	if not modeTeams or not modeTeams.IsHostile then
+		return false
+	end
+	local ok, hostile = pcall(modeTeams.IsHostile, owner, token)
+	return ok and hostile == false
+end
+
 -- The living enemy in range and in sight of the companion that sits nearest the owner's
 -- crosshair, or, with no aim point (bots), simply the nearest one.
 local function pickTarget(owner, entry, aimPoint)
@@ -494,7 +514,7 @@ local function pickTarget(owner, entry, aimPoint)
 
 	local bestToken, bestRoot, bestScore = nil, nil, math.huge
 	for character, token in pairs(Combatants.All()) do
-		if token ~= owner and character.Parent then
+		if token ~= owner and character.Parent and not friendly(owner, token) then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
@@ -644,7 +664,7 @@ local function onBeam(player, entry, from, to)
 	end
 	local bestToken, bestRoot, bestAt = nil, nil, math.huge
 	for character, token in pairs(Combatants.All()) do
-		if token ~= player and character.Parent then
+		if token ~= player and character.Parent and not friendly(player, token) then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
