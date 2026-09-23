@@ -308,6 +308,37 @@ end
 -- longer streak so a fast round is a line rather than a dot.
 local TRACER_CORE, TRACER_GLOW, TRACER_STREAK = 1.6, 1.45, 1.35
 
+-- Those widths are in studs, so they shrink with distance: a rifle's glow (0.29 studs) is about 3
+-- pixels across at 75 studs on a 1080p screen and under one pixel at 250, which is why a fight across
+-- a field showed no tracers at all. So a streak is widened, never narrowed, to keep its glow at least
+-- TRACER_MIN_GLOW_PX across, and never by more than TRACER_MAX_WIDEN so a very distant one cannot
+-- turn into a rod. The widening is the same for every kind, so a heavy round stays fatter than a
+-- pellet at any range.
+local TRACER_MIN_GLOW_PX = 3
+local TRACER_MAX_WIDEN = 5
+-- A fast round crosses a short shot in a frame or two (a rifle does 20 studs in 0.02 s), and the
+-- streak used to be destroyed the frame it arrived, so a close shot barely drew. It now lingers this
+-- long after arriving, its tail running on into the target and the whole thing thinning to nothing.
+local TRACER_AFTERGLOW = 0.08
+
+-- How much to widen a streak whose nearest point is `distance` studs from the camera, given how many
+-- pixels one stud spans at one stud away (viewport height / (2 tan(FOV/2))).
+function GunFx.TracerWidthScale(distance, pixelsPerStud)
+	if not pixelsPerStud or pixelsPerStud <= 0 then
+		return 1
+	end
+	local glowPixels = 0.2 * TRACER_GLOW * pixelsPerStud / math.max(distance, 1)
+	return math.min(math.max(TRACER_MIN_GLOW_PX / glowPixels, 1), TRACER_MAX_WIDEN)
+end
+
+-- How much of its width a streak keeps `since` seconds after it arrived; nil once it should go.
+function GunFx.TracerFade(since)
+	if since >= TRACER_AFTERGLOW then
+		return nil
+	end
+	return 1 - since / TRACER_AFTERGLOW
+end
+
 local TRACER = {
 	bullet = { speed = 950, streak = 7, core = 0.045, glow = 0.2, color = Color3.fromRGB(255, 180, 90), hot = Color3.fromRGB(255, 244, 214) },
 	pellet = { speed = 760, streak = 3, core = 0.03, glow = 0.12, color = Color3.fromRGB(255, 170, 90), hot = Color3.fromRGB(255, 236, 200) },
@@ -470,8 +501,11 @@ function GunFx.Tracer(origin, target, kind, onArrive)
 		head.Parent = terrain
 		tail.WorldPosition = origin
 		head.WorldPosition = origin
-		beam(tail, head, spec.core * TRACER_CORE, spec.hot, NS({ NSK(0, 1), NSK(0.6, 0.2), NSK(1, 0) }))
-		beam(tail, head, spec.glow * TRACER_GLOW, spec.color, NS({ NSK(0, 1), NSK(0.7, 0.55), NSK(1, 0.25) }))
+		entry.beams = {
+			beam(tail, head, spec.core * TRACER_CORE, spec.hot, NS({ NSK(0, 1), NSK(0.6, 0.2), NSK(1, 0) })),
+			beam(tail, head, spec.glow * TRACER_GLOW, spec.color, NS({ NSK(0, 1), NSK(0.7, 0.55), NSK(1, 0.25) })),
+		}
+		entry.widths = { spec.core * TRACER_CORE, spec.glow * TRACER_GLOW }
 		entry.tail, entry.head = tail, head
 		entry.destroy = function()
 			tail:Destroy()
@@ -629,8 +663,32 @@ end
 -- The loop
 --------------------------------------------------------------------------------
 
+-- Sets a streak's two beams to their base widths times `fade`, widened for distance from the camera
+-- (measured to the nearest point of the streak, which is what the eye judges it by).
+local function sizeBeams(entry, tailPos, headPos, fade, cameraPos, pixelsPerStud)
+	local scale = fade
+	if cameraPos then
+		local line = headPos - tailPos
+		local lengthSquared = line:Dot(line)
+		local t = lengthSquared > 0 and math.clamp((cameraPos - tailPos):Dot(line) / lengthSquared, 0, 1) or 0
+		scale *= GunFx.TracerWidthScale((tailPos + line * t - cameraPos).Magnitude, pixelsPerStud)
+	end
+	for index, b in ipairs(entry.beams) do
+		local width = entry.widths[index] * scale
+		b.Width0 = width * 0.35
+		b.Width1 = width
+	end
+end
+
 RunService.Heartbeat:Connect(function(dt)
 	dt = math.min(dt, 0.1)
+
+	local camera = workspace.CurrentCamera
+	local cameraPos, pixelsPerStud = nil, nil
+	if camera and #flying > 0 then
+		cameraPos = camera.CFrame.Position
+		pixelsPerStud = camera.ViewportSize.Y / (2 * math.tan(math.rad(camera.FieldOfView) / 2))
+	end
 
 	for index = #flying, 1, -1 do
 		local entry = flying[index]
@@ -644,6 +702,22 @@ RunService.Heartbeat:Connect(function(dt)
 				if entry.onArrive then
 					entry.onArrive()
 				end
+			else
+				sizeBeams(entry, entry.origin, entry.origin + entry.direction * entry.distance, 1, cameraPos, pixelsPerStud)
+			end
+		elseif entry.arrived then
+			-- Afterglow: the head sits on the target, the tail runs on into it and the streak thins out.
+			local since = entry.age - entry.arrived
+			local fade = GunFx.TracerFade(since)
+			if not fade then
+				entry.destroy()
+				table.remove(flying, index)
+			else
+				local headPos = entry.origin + entry.direction * entry.distance
+				local tailAt = math.min(entry.distance, math.max(0, entry.distance + spec.speed * since - spec.streak * TRACER_STREAK))
+				local tailPos = entry.origin + entry.direction * tailAt
+				entry.tail.WorldPosition = tailPos
+				sizeBeams(entry, tailPos, headPos, fade, cameraPos, pixelsPerStud)
 			end
 		else
 			entry.travelled = math.min(entry.distance, entry.travelled + spec.speed * dt)
@@ -674,8 +748,10 @@ RunService.Heartbeat:Connect(function(dt)
 				end
 				workspace:BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged)
 			else
+				local tailPos = entry.origin + entry.direction * math.max(0, entry.travelled - spec.streak * TRACER_STREAK)
 				entry.head.WorldPosition = head
-				entry.tail.WorldPosition = entry.origin + entry.direction * math.max(0, entry.travelled - spec.streak * TRACER_STREAK)
+				entry.tail.WorldPosition = tailPos
+				sizeBeams(entry, tailPos, head, 1, cameraPos, pixelsPerStud)
 			end
 			if entry.travelled >= entry.distance then
 				if entry.trail then
@@ -690,12 +766,18 @@ RunService.Heartbeat:Connect(function(dt)
 					task.delay(1.5, function()
 						model:Destroy()
 					end)
+					table.remove(flying, index)
+				elseif entry.beams then
+					-- A streak stays for its afterglow; the impact still lands now, and only once.
+					entry.arrived = entry.age
 				else
 					entry.destroy()
+					table.remove(flying, index)
 				end
-				table.remove(flying, index)
-				if entry.onArrive then
-					entry.onArrive()
+				local onArrive = entry.onArrive
+				entry.onArrive = nil
+				if onArrive then
+					onArrive()
 				end
 			end
 		end
