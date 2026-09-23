@@ -1323,11 +1323,10 @@ local function eliminate(token, killerToken, method, weaponId)
 	-- no spectating and no last one standing.
 	--
 	-- This sits ABOVE dropLoot and above the kill-reward block on purpose, so a respawn mode drops
-	-- nothing of the ISSUED kit (what was picked up still drops - dropPickedUp, Oliver's #124) and
-	-- **PAYS NOTHING AT ALL** — no kill coins, no XP, no mastery. That is DELIBERATE AND TEMPORARY:
-	-- Oliver asked for rewards scaled to what the same performance would earn per minute in the
-	-- battle royale, and no economy moves here until that rate has been measured rather than
-	-- guessed. When the reward work lands, it hangs off currentMode.OnDeath, not off this seam.
+	-- nothing of the ISSUED kit (what was picked up still drops - dropPickedUp, Oliver's #124). Kills
+	-- DO pay here now (Oliver, 2026-09-23 16:10: "theres no rewards for the team gamemodes!"), at
+	-- MatchConfig.TeamModeRewards.killScale of the battle royale rate and only for the first
+	-- maxPaidKills of the match; the result payout is the mode's AwardResult.
 	if currentMode.respawn then
 		dropPickedUp(token)
 		-- Counted for the results card only (no coins, XP or streak banners, per the note above):
@@ -1341,6 +1340,16 @@ local function eliminate(token, killerToken, method, weaponId)
 				streaks[killerToken] = streak
 			end
 			streak.total += 1
+			local rules = MatchConfig.TeamModeRewards or {}
+			if streak.total <= (rules.maxPaidKills or 30) then
+				local ok, err = pcall(RewardService.AwardKill, killerToken, Combatants.IsBot(token), rules.killScale or 0.5)
+				if not ok then
+					warn("[MatchService] team kill reward failed: " .. tostring(err))
+				end
+				if MatchService.OnKillCredited then
+					pcall(MatchService.OnKillCredited, killerToken, token, weaponId)
+				end
+			end
 		end
 		currentMode.OnDeath(token, killerToken, method, weaponId)
 		return

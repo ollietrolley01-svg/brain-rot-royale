@@ -25,6 +25,7 @@ local ModeKingOfTheHill = require(script.Parent:WaitForChild("ModeKingOfTheHill"
 local ModeTeams = require(script.Parent:WaitForChild("ModeTeams"))
 local LootService = require(script.Parent:WaitForChild("LootService"))
 local QuestService = require(script.Parent:WaitForChild("QuestService"))
+local RewardService = require(script.Parent:WaitForChild("RewardService"))
 local StateSync = require(script.Parent:WaitForChild("StateSync"))
 local StormService = require(script.Parent:WaitForChild("StormService"))
 
@@ -569,11 +570,19 @@ local function results()
 	}
 end
 
--- Placeholder until the reward-rate work lands: credits the kill quest and nothing else, so no
--- economy is changed by these modes before the per-minute baseline has been measured.
+-- The team-mode payout (Oliver, 2026-09-23 16:10: "theres no rewards for the team gamemodes!"): a crate,
+-- coins and pass XP for a win, a draw or a loss (MatchConfig.TeamModeRewards). Kills are paid as they
+-- happen, in MatchService's respawn branch.
 local function awardResult(player, rank)
-	QuestService.Progress(player, "matches", 1)
-	return { rank = rank, crate = nil, coins = 0, xp = 0, pending = true }
+	local team = ModeTeams.TeamOf(player)
+	local winner = leader()
+	local outcome = winner == nil and "draw" or (team == winner and "win" or "loss")
+	local ok, reward = pcall(RewardService.AwardTeamResult, player, outcome, rank)
+	if not ok then
+		warn("[GameMode] team reward failed for " .. player.Name .. ": " .. tostring(reward))
+		return { rank = rank, coins = 0, xp = 0 }
+	end
+	return reward
 end
 
 local respawnBehaviour = {
