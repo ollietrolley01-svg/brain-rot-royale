@@ -661,7 +661,8 @@ end
 
 -- What a base cache is made of, per team. GameMode stocks it once at the start and tops it back up
 -- while the match runs, so a team that respawns later still finds gear at home.
-LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 3 }
+-- Chests 3 -> 8 (Oliver, 2026-09-23 14:38: "i wanted chests"), so most of a team gets one on the way out.
+LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 8 }
 LootService.BaseRadius = 85
 
 local function baseKind(item)

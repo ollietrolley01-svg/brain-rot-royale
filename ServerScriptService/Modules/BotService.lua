@@ -1944,7 +1944,7 @@ end
 -- it"). A bot at or near home takes any gun that beats the one it carries, any chest, and loose heals
 -- while it is carrying fewer than three. Returns the nearest such pickup, or nil. A field rather than
 -- a local, for the file's local budget.
-function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
+function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now, chestsFirst)
 	local teams = lazy("ModeTeams")
 	local base = teams and teams.BaseOf and teams.BaseOf(modeState.team)
 	if not base then
@@ -1958,6 +1958,25 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 	end
 	local myRank = bot.weapon and (Rarity.Index[bot.weapon.rarity] or 0) or -1
 	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < 3
+	-- While gearing up after a spawn, an unopened chest at the base beats everything else (Oliver,
+	-- 2026-09-23 14:38: "make the bots go after the chests when they spawn").
+	if chestsFirst then
+		local chest, chestDistance = nil, 220
+		for _, entry in ipairs(lootItems(now)) do
+			local item = entry.item
+			local position = entry.position
+			if item.Name == "Chest" and item.Parent and not item:GetAttribute("Claimed")
+				and (Vector3.new(position.X, 0, position.Z) - flatBase).Magnitude <= baseRadius then
+				local distance = (position - here).Magnitude
+				if distance < chestDistance and lootAllowed(bot, item, distance, center, circleRadius, now) then
+					chest, chestDistance = item, distance
+				end
+			end
+		end
+		if chest then
+			return chest
+		end
+	end
 	local best, bestDistance = nil, 160
 	for _, entry in ipairs(lootItems(now)) do
 		local item = entry.item
@@ -2596,6 +2615,28 @@ local function updateBot(bot)
 	-- than idling five seconds at a time between sweeps while defenceless. Once armed it drops
 	-- back to the slow sweep that keeps 29 bots from stripping the map before a player lands.
 	local empty = bot.weapon == nil
+	-- Team modes: GEAR UP AT THE BASE after every spawn, before heading for the fight (Oliver, 2026-09-23
+	-- 14:38: the bots "left all the loot behind" and "rush into battle"; "make the bots go after the chests
+	-- when they spawn"). For up to BASE_GEAR_SECONDS after a new body the bot looks every 0.6 s, chests
+	-- first, then better guns and heals; the phase ends early once the base has nothing left it wants.
+	-- A fight still comes first: combat and hunting run before this.
+	local gearState = BotService.ModeState(bot)
+	if gearState and bot.gearCharacter ~= bot.character then
+		bot.gearCharacter = bot.character
+		bot.gearStart = now
+		bot.gearUntil = now + (MatchConfig.BotBaseGearSeconds or 30)
+	end
+	if gearState and bot.gearUntil and now < bot.gearUntil and not bot.lootTarget and now - bot.lootCheckedAt > 0.6 then
+		bot.lootCheckedAt = now
+		local item = BotService.FindBaseLoot(bot, root, gearState, center, circleRadius, now, true)
+		if item then
+			setLootTarget(bot, item)
+		elseif now - (bot.gearStart or now) > 4 then
+			-- Nothing left worth having (the first few seconds are allowed for the base to be stocked).
+			bot.gearUntil = nil
+		end
+	end
+
 	if not bot.lootTarget and now - bot.lootCheckedAt > (empty and 1.5 or 5) then
 		bot.lootCheckedAt = now
 		-- A landed supply drop is worth contesting at any armament level; ordinary loot only
