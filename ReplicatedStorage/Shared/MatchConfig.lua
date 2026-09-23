@@ -89,9 +89,10 @@ MatchConfig.PlacementBrackets = {
 -- from ECONOMY.md s.2): at 50 players a player who keeps losing spends two thirds of their matches in
 -- ranks 31-50 and earned 4.5x less a minute than a middle player.
 
--- Every hit between combatants is multiplied by this (CombatService.DealDamage). 0.85 makes a kill take
--- about 18% longer (Oliver, 2026-09-22 21:38, #111: "increase the ttk a bit"). 1 = the weapons' raw damage.
-MatchConfig.CombatDamageScale = 0.85
+-- Every hit between combatants is multiplied by this (CombatService.DealDamage). 1 = the weapons' raw damage.
+-- 0.85 (Oliver, 2026-09-22 21:38: "increase the ttk a bit") turned out too slow (2026-09-23 15:07: "make it
+-- a good middleground"), so 0.92: a kill takes about 9% longer than raw damage instead of 18%.
+MatchConfig.CombatDamageScale = 0.92
 
 MatchConfig.CoinsPerKill = 75
 MatchConfig.XpPerKill = 60
