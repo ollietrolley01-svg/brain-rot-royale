@@ -135,7 +135,7 @@ local coinLabel = create("TextLabel", {
 -- ("is the menu open"), and `content` is a list-laid frame inside the shell's scrolling area, so all
 -- eight renderers draw into exactly what they drew into before and keep their owners.
 local MenuShell = require(script.Parent:WaitForChild("MenuShell"))
-local shell = MenuShell.new({ parent = screenGui, title = "BRAIN ROT ROYALE" })
+local shell = MenuShell.new({ parent = screenGui, title = "BRAINROT BATTLES" })
 local panel = shell.layer
 
 -- THE SHELL HAS TO BE TOLD WHAT SCREEN IT IS ON, and nothing told it (Oliver's #65).
