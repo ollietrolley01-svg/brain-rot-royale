@@ -1191,7 +1191,14 @@ VehicleModels.Models.CrocodiloRanger = {
 			-- headlamps, nothing like a grille guard. Replaced with ONE continuous, thicker member
 			-- per side straight from the bumper corner to the top rail (no bend), so it reads as a
 			-- frame, not scattered rods.
-			b:pipe("BullFrame" .. n, { V(s * 3.5, 2.45, -7.8), V(s * 1.9, 4.15, -8.05) }, 0.42, "trim")
+			-- #61 / #116 again: that one member still ran corner-to-top on a 44 degree diagonal, from the
+			-- bumper's outer corner in to the top rail, and at 0.42 across a thick rod leaning across the
+			-- grin is exactly what "bat parts sideways" describes -- it was the thickening that turned a
+			-- thin pole into a bat. A grille guard's uprights stand straight: each now rises plumb from
+			-- the bumper to the end of the top rail (the ball there closes the corner). It starts 0.25
+			-- inside the bumper so its end disc is buried rather than lying in the bumper's top face.
+			-- tools/vehicle_models_axis_check.py holds every rod on the car to a world axis.
+			b:tube("BullFrame" .. n, V(s * 1.9, 2.2, -8.05), V(s * 1.9, 4.15, -8.05), 0.42, "trim")
 			b:cylZ("SpotHousing" .. n, 0.3, 0.8, V(s * 1.0, 4.55, -8.0), "mesh")
 			b:cylZ("Spot" .. n, 0.3, 0.6, V(s * 1.0, 4.55, -8.08), "lamp")
 			b:tube("SpotMount" .. n, V(s * 1.0, 4.15, -8.05), V(s * 1.0, 4.4, -8.0), 0.12, "trim")
