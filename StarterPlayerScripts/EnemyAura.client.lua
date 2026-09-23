@@ -104,8 +104,16 @@ local function paint(character)
 		mark.highlight.Enabled = false -- the budget loop below switches it on
 		mark.highlight.Parent = character
 		if humanoid then
+			-- A body is not a target (Oliver, 2026-09-22: "the glow ... disappears when the bot or player
+			-- dies so you dont mistake corpses for enemies"). Died, and health reaching 0, both take the
+			-- mark off at once -- Died alone can arrive late or not at all for a body another machine owns.
 			humanoid.Died:Connect(function()
 				clear(character)
+			end)
+			humanoid.HealthChanged:Connect(function(health)
+				if health <= 0 then
+					clear(character)
+				end
 			end)
 		end
 	end
@@ -163,7 +171,10 @@ task.spawn(function()
 		local list = {}
 		for character, mark in pairs(marks) do
 			if mark.highlight then
-				if not character.Parent then
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if not character.Parent or (humanoid and humanoid.Health <= 0)
+					or (humanoid and humanoid:GetState() == Enum.HumanoidStateType.Dead) then
+					-- Gone, or a body: never outlined (the budget pass is the backstop for a missed Died).
 					clear(character)
 				else
 					local pivot = character:GetPivot().Position
