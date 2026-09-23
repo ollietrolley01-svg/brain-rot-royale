@@ -184,4 +184,50 @@ MovementConfig.Parkour = {
 	Recovery = 0.25,
 }
 
+--------------------------------------------------------------------------------
+-- Lean (#79)
+--------------------------------------------------------------------------------
+
+-- Leaning round cover in first person: the camera slides sideways and rolls a few degrees. Held on
+-- the keyboard; on a phone the two buttons only exist while a scope is up (thumbs are busy otherwise).
+-- The server fires from the head moved by the same clamped offset, so what you can see round a
+-- corner is what you can hit, and the clamp below is what stops the shot starting inside a wall.
+MovementConfig.Lean = {
+	-- Studs sideways at a full lean, in the body's frame.
+	Offset = 1.4,
+	-- Degrees of camera roll at a full lean.
+	Roll = 8,
+	-- How quickly the lean follows the input (1/s, eased).
+	Rate = 12,
+	-- The swept sphere that finds the wall: the camera's near plane plus room, so the view never
+	-- clips into a surface even at an angle to it.
+	Radius = 0.3,
+	-- Kept back from whatever the sphere touched, so a lean pressed flat to a wall shows the wall
+	-- and not its inside.
+	Margin = 0.1,
+}
+
+-- The one clamp both sides use. `wanted` is the signed lean in studs (positive = right); `cast` is
+-- called with the signed reach to test and returns how far the sphere got before it touched
+-- something (studs, unsigned), or nil if the way was clear. The result keeps the sign, never passes
+-- Offset, and never passes the touch point less the margin, so the segment from the head to the
+-- leaned eye is always clear: a shot can only start where a sphere could have moved to.
+function MovementConfig.ClampLean(wanted, cast)
+	local lean = MovementConfig.Lean
+	if type(wanted) ~= "number" or wanted ~= wanted then
+		return 0
+	end
+	wanted = math.clamp(wanted, -lean.Offset, lean.Offset)
+	local size = math.abs(wanted)
+	if size < 0.001 then
+		return 0
+	end
+	local sign = wanted > 0 and 1 or -1
+	local hit = cast(sign * (size + lean.Margin))
+	if hit then
+		size = math.clamp(hit - lean.Margin, 0, size)
+	end
+	return sign * size
+end
+
 return MovementConfig
