@@ -3,7 +3,8 @@
 -- HudClient already flashes "ELIM" on the hitmarker and plays the elimination thud. This adds the
 -- payoff on top, for the shooter only:
 --   * a two-note rising chime, higher with every kill in a chain (4 s between kills keeps it going)
---   * a badge that pops in under the crosshair with a bounce: ELIMINATED / HEADSHOT, then x2, x3...
+--   * words that pop in under the crosshair with a bounce: ELIMINATED / HEADSHOT, then x2, x3...
+--     (There was a ✕ mark above them; it read as a random red crosshair, so it was taken out.)
 --   * a quick bright flash round the screen edge, gold for a headshot
 --   * a skull that rises and fades where the target went down
 -- It's its own script because HudClient's main chunk is at Luau's 200-local limit. It listens to the
@@ -61,28 +62,9 @@ badge.Parent = gui
 local badgeScale = Instance.new("UIScale")
 badgeScale.Parent = badge
 
-local mark = Instance.new("TextLabel")
-mark.AnchorPoint = Vector2.new(0.5, 0)
-mark.Position = UDim2.fromScale(0.5, 0)
-mark.Size = UDim2.fromOffset(44, 44)
-mark.BackgroundColor3 = Color3.fromRGB(30, 22, 40)
-mark.BackgroundTransparency = 1
-mark.Font = Enum.Font.FredokaOne
-mark.Text = "✕"
-mark.TextSize = 30
-mark.TextColor3 = ACCENT
-mark.TextTransparency = 1
-mark.Parent = badge
-Instance.new("UICorner", mark).CornerRadius = UDim.new(0.5, 0)
-local markStroke = Instance.new("UIStroke")
-markStroke.Thickness = 3
-markStroke.Color = ACCENT
-markStroke.Transparency = 1
-markStroke.Parent = mark
-
 local words = Instance.new("TextLabel")
 words.AnchorPoint = Vector2.new(0.5, 0)
-words.Position = UDim2.new(0.5, 0, 0, 48)
+words.Position = UDim2.new(0.5, 0, 0, 0)
 words.Size = UDim2.fromOffset(260, 26)
 words.BackgroundTransparency = 1
 words.Font = Enum.Font.FredokaOne
@@ -156,20 +138,14 @@ damageDealt.OnClientEvent:Connect(function(_, wasKill, position, _, headshot, ki
 
 	-- Badge.
 	local colour = headshot and HEAD or ACCENT
-	mark.TextColor3 = colour
-	markStroke.Color = colour
 	-- The server's own streak banner already names DOUBLE KILL and up, so this only counts.
 	local word = headshot and "HEADSHOT" or "ELIMINATED"
 	if chain >= 2 then
 		word ..= "  x" .. chain
 	end
 	words.Text = word
-	words.TextColor3 = chain >= 2 and colour or WHITE
-	for _, item in ipairs({ mark, words }) do
-		item.TextTransparency = 0
-	end
-	mark.BackgroundTransparency = 0.15
-	markStroke.Transparency = 0
+	words.TextColor3 = colour
+	words.TextTransparency = 0
 	words.TextStrokeTransparency = 0.35
 	badgeScale.Scale = 1.7 + math.min(chain - 1, 3) * 0.15
 	TweenService:Create(badgeScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
@@ -189,8 +165,6 @@ damageDealt.OnClientEvent:Connect(function(_, wasKill, position, _, headshot, ki
 			return
 		end
 		local fade = TweenInfo.new(0.35)
-		TweenService:Create(mark, fade, { TextTransparency = 1, BackgroundTransparency = 1 }):Play()
-		TweenService:Create(markStroke, fade, { Transparency = 1 }):Play()
 		TweenService:Create(words, fade, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
 	end)
 end)
