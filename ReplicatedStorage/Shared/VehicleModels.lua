@@ -1625,17 +1625,31 @@ VehicleModels.Models.SahurVan = {
 		-- roof by the drum. Raised so the lowest point (BatKnob's underside) clears the roof by about
 		-- 0.16 studs, matching the ~0.15-0.2 stud margins used elsewhere in this file; nothing about
 		-- the rotation (A(-15, 13, 0)) changed.
-		local batX, batY = -1.4, roofY + 1.35
-		local bat = CF(V(batX, batY, -0.4)) * A(-15, 13, 0)
+		--
+		-- #116 again (Oliver, after the fix above: "bat parts still sideways"): measured by
+		-- tools/vehicle_models_axis_check.py, the bat ran 21 degrees off the van's length -- the 13
+		-- degree turn plus the 15 degree rake put its barrel 3.1 studs above the roof, the highest point
+		-- on the van, with nothing under it -- and it was not even straight: the lifts on the taper,
+		-- throat and barrel bent each piece off the bat's own line by up to 4.5 degrees. So: one straight
+		-- line, pointing along the van like the rack rails, and resting ON the rack. The rake left is the
+		-- one a real bat takes lying on a rack: handle on the front bar, barrel on the middle-rear bar,
+		-- so the axis climbs by the difference between the two radii over the gap between the bars.
+		local barTop = roofY + 0.65 + 0.06 -- the cross bars' tops (0.12 across, at roofY + 0.65)
+		local batX, batZ = -1.4, -0.4
+		local handleBar, barrelBar = -3.5, 1.5 -- the cross bars the handle and the barrel lie on
+		local handleR, barrelR = 0.15, 0.49
+		local rake = math.deg(math.atan((barrelR - handleR) / (barrelBar - handleBar)))
+		local batY = barTop + handleR + (batZ - handleBar) * (barrelR - handleR) / (barrelBar - handleBar)
+		local bat = CF(V(batX, batY, batZ)) * A(-rake, 0, 0)
 		local function batAt(z, lift)
 			return (bat * CF(0, lift or 0, z)).Position
 		end
 		b:ball("BatKnob", 0.46, batAt(-3.8), "wood")
-		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), 0.3, "wood")
-		b:tube("BatTaper", batAt(-1.6), batAt(0.7, 0.1), 0.56, "wood")
-		b:tube("BatThroat", batAt(0.7, 0.1), batAt(1.6, 0.2), 0.78, "wood")
-		b:tube("BatBarrel", batAt(1.6, 0.2), batAt(4.0, 0.25), 0.98, "wood")
-		b:cyl("BatEnd", 0.16, 0.9, CF(batAt(4.06, 0.25)) * (bat - bat.Position) * A(0, 90, 0), "wood")
+		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), handleR * 2, "wood")
+		b:tube("BatTaper", batAt(-1.6), batAt(0.7), 0.56, "wood")
+		b:tube("BatThroat", batAt(0.7), batAt(1.6), 0.78, "wood")
+		b:tube("BatBarrel", batAt(1.6), batAt(4.0), barrelR * 2, "wood")
+		b:cyl("BatEnd", 0.16, 0.9, CF(batAt(4.06)) * (bat - bat.Position) * A(0, 90, 0), "wood")
 		for index, z in ipairs({ -1.0, 1.5 }) do
 			-- The straps follow the bat, or they would hold thin air where it used to lie.
 			b:box("BatStrap" .. index, V(0.9, 0.12, 0.2), CF(batAt(z, -0.3)) * (bat - bat.Position), "accent")
