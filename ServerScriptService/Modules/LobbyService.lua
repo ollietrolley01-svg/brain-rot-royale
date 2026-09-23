@@ -2178,7 +2178,10 @@ local function buildArena(lobby, base)
 			prompt.ActionText = "Take"
 			prompt.ObjectText = def.name
 			prompt.HoldDuration = 0.25
-			prompt.MaxActivationDistance = 12
+			-- Under half the 18 studs between podiums, so nowhere on the terrace is in reach of two:
+			-- at 12 there was a band between each pair where either prompt could be the one that
+			-- fired, and which it was turned on where you were looking. #117
+			prompt.MaxActivationDistance = 8
 			prompt.RequiresLineOfSight = false
 			prompt.Parent = pedestal
 			prompt.Triggered:Connect(function(player)

@@ -115,8 +115,50 @@ function RangeService.Give(player, weaponId)
 		return false, "Stand on the arena terrace to take a gun."
 	end
 
-	-- A fresh single-slot loadout each time, so the range can never be used to stock up for a
-	-- match: whatever was in hand is replaced, and it all goes when you step off.
+	local def = WeaponData.Get(weaponId)
+	local message = "Range gun: " .. def.name .. ".  Walk off the terrace to hand it back."
+
+	-- ALREADY HOLDING RANGE GUNS: ADD THIS ONE, DON'T SWAP -- #117, "lobby trial guns change every
+	-- pickup". Every take used to start with `WeaponService.Reset`, which throws the whole loadout
+	-- away, so taking the second podium's gun silently took the first one off you: whatever you
+	-- picked up, you only ever had the last gun, and it looked as if the guns were changing under
+	-- you. (Nothing else moves: each podium's gun is fixed when the lobby is built, its prompt
+	-- captures that one entry, and the display is built from the same entry.) The loadout here is
+	-- the range's own -- the identity check is the same one `stop` makes -- so adding to it cannot
+	-- stock anyone up for a match: it all goes when you step off the terrace, and a match makes a
+	-- new loadout of its own anyway. There are three podiums and eight slots, so it never fills.
+	local ours = active[player]
+	if ours and WeaponService.Get(player) == ours then
+		for index = 1, WeaponService.SlotCount do
+			local slot = ours.slots[index]
+			if slot and slot.kind == "weapon" and slot.id == weaponId then
+				-- The same gun again: hold it and top it up, rather than a second copy of it.
+				slot.mag = def.magSize
+				slot.reserve = def.reserveAmmo
+				WeaponService.Equip(player, index)
+				WeaponService.Push(player)
+				rangeState:FireClient(player, true)
+				return true, message
+			end
+		end
+		if not WeaponService.GiveWeapon(player, weaponId) then
+			return false, "Couldn't hand you that."
+		end
+		-- GiveWeapon only puts a gun in your hands when they were empty; this is the gun you just
+		-- reached for, so hold it.
+		for index = 1, WeaponService.SlotCount do
+			local slot = ours.slots[index]
+			if slot and slot.kind == "weapon" and slot.id == weaponId then
+				WeaponService.Equip(player, index)
+				break
+			end
+		end
+		rangeState:FireClient(player, true)
+		return true, message
+	end
+
+	-- The first gun off the podiums: a fresh loadout, so whatever the player had is replaced and
+	-- the range can never be used to stock up for a match. It all goes when you step off.
 	WeaponService.Reset(player)
 	local ok = WeaponService.GiveWeapon(player, weaponId)
 	if not ok then
@@ -127,7 +169,7 @@ function RangeService.Give(player, weaponId)
 	-- and deleted out from under the match. #106
 	active[player] = WeaponService.Get(player)
 	rangeState:FireClient(player, true)
-	return true, "Range gun: " .. WeaponData.Get(weaponId).name .. ".  Walk off the terrace to hand it back."
+	return true, message
 end
 
 -- A range shot. Only tagged targets are in the raycast filter, so this cannot reach a player.
