@@ -43,18 +43,25 @@ BrainrotData.Attacks = {
 		description = "Zap that arcs on to a second enemy" },
 }
 
-BrainrotData.RarityDamage = { Common = 6, Uncommon = 9, Rare = 13, Epic = 18, Legendary = 25, Mythic = 32, Secret = 40 }
+-- Buffed 2026-09-22 (Oliver: "buff the brainrots so that they can actually be useful in the matches,
+-- as of now they're redundant to guns"). Was Common 6 up to Secret 40, with AbilityPower 1.65 and
+-- AbilityCooldown 3.5: a Common's Spit did 10 every 6.4 s (1.5 damage a second), a Legendary's 41
+-- every 4.8 s. Now a Common's Spit does 23 every 4 s and a Legendary's 65 every 3 s, so a companion is
+-- a real extra gun's worth of pressure without replacing the gun.
+BrainrotData.RarityDamage = { Common = 12, Uncommon = 16, Rare = 21, Epic = 27, Legendary = 34, Mythic = 39, Secret = 45 }
 BrainrotData.RarityCooldown = { Common = 1.15, Uncommon = 1.05, Rare = 1.0, Epic = 0.92, Legendary = 0.85, Mythic = 0.8, Secret = 0.75 }
 BrainrotData.RarityRange = { Common = 0, Uncommon = 4, Rare = 8, Epic = 12, Legendary = 16, Mythic = 20, Secret = 24 }
 -- 0 for Common up to 6 for Secret: the step a radial move's radius grows by.
 BrainrotData.RarityIndex = { Common = 0, Uncommon = 1, Rare = 2, Epic = 3, Legendary = 4, Mythic = 5, Secret = 6 }
 -- Companions can be shot. A downed companion sits out the rest of the match.
-BrainrotData.RarityHealth = { Common = 60, Uncommon = 80, Rare = 105, Epic = 135, Legendary = 175, Mythic = 225, Secret = 290 }
+-- Half as tough again (2026-09-22 buff), so a companion isn't shot down before it earns its keep.
+BrainrotData.RarityHealth = { Common = 90, Uncommon = 120, Rare = 160, Epic = 200, Legendary = 260, Mythic = 340, Secret = 430 }
 
 -- The companion's move is used on a hotkey, not automatically, so each use hits harder and
 -- recharges for longer than the old auto-attack did.
-BrainrotData.AbilityPower = 1.65
-BrainrotData.AbilityCooldown = 3.5
+BrainrotData.AbilityPower = 1.9
+BrainrotData.MaxAbilityDamage = 90
+BrainrotData.AbilityCooldown = 2.2
 
 --------------------------------------------------------------------------------
 -- Boons: what a companion does FOR its owner
@@ -461,6 +468,9 @@ function BrainrotData.Stats(def, level, stars)
 	local bonus = BrainrotData.LevelBonus(level or 1) * BrainrotData.StarBonus(stars)
 	local damage = math.floor((BrainrotData.RarityDamage[def.rarity] or 6) * attack.power * (def.power or 1)
 		* BrainrotData.AbilityPower * bonus + 0.5)
+	-- No single companion hit takes a full-health player (100) in one go, whatever the rarity, level
+	-- and stars: it's a strong extra hit, not a kill button.
+	damage = math.min(damage, BrainrotData.MaxAbilityDamage)
 	local cooldown = attack.cooldown * (BrainrotData.RarityCooldown[def.rarity] or 1) * BrainrotData.AbilityCooldown
 
 	return {
