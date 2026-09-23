@@ -354,6 +354,14 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 		return 0
 	end
 
+	-- Time-to-kill (Oliver, 2026-09-22 21:38, #111: "increase the ttk a bit"). Every hit one combatant
+	-- lands on another is scaled here, guns, explosives and melee alike, for players and bots, so the
+	-- guns keep their balance against each other and every fight lasts a little longer.
+	-- Storm, fall and self-damage are left alone.
+	if attackerToken ~= nil and attackerToken ~= victimToken then
+		amount *= MatchConfig.CombatDamageScale or 1
+	end
+
 	-- A shield soaks damage before health does. Players keep theirs in the loadout; bots keep
 	-- theirs on the humanoid, where BotService drinks potions into it.
 	local absorbed = 0
