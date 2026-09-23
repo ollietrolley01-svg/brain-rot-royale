@@ -310,6 +310,9 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 			end
 			StateSync.Notify(player, message)
 			base:Destroy()
+		elseif message then
+			-- Never fail silently: a pickup that does nothing reads as a broken prompt.
+			StateSync.Notify(player, "Couldn't pick that up: " .. message, true)
 		end
 	end)
 end
@@ -416,6 +419,8 @@ local function spawnConsumable(position, itemId, amount)
 			else
 				StateSync.Notify(player, "No room: you're already holding " .. item.name .. ".", true)
 			end
+		else
+			StateSync.Notify(player, "Couldn't pick that up right now.", true)
 		end
 	end)
 end
