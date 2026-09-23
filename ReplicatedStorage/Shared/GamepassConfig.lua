@@ -127,10 +127,10 @@ GamepassConfig.Products = {
 		description = "The big one: a Super Crate, 2 Mythic Crates, 2 Legendary Crates, 50K coins, Pro boosts and two Pro exclusives.",
 		featured = 2,
 		badge = "BEST VALUE",
-		-- At this shop's own Robux prices: 50K coins 399, Super 999, 2 Mythic 1,798, 2 Legendary 998 =
-		-- 4,194 R$, before the Pro boosts and the two exclusives, which aren't sold alone. (It used to
+		-- At this shop's own Robux prices: 50K coins 399, Super 100, 2 Mythic 1,798, 2 Legendary 998 =
+		-- 3,295 R$, before the Pro boosts and the two exclusives, which aren't sold alone. (It used to
 		-- say 7,000+, which only held with the Mythic Crates counted at their coin price.)
-		worth = "Worth 4,000+ R$  •  5x value",
+		worth = "Worth 3,200+ R$  •  4x value",
 		color = Color3.fromRGB(255, 184, 48),
 		suggestedPrice = 800,
 		order = 6,
@@ -179,7 +179,8 @@ GamepassConfig.Products = {
 		badge = "ALWAYS IN STOCK",
 		worth = "Mythic or Secret, guaranteed",
 		color = Color3.fromRGB(255, 90, 200),
-		suggestedPrice = 999,
+		-- 100 R$ (Oliver, 2026-09-22 22:22; was 999). Set the same on the Creator Dashboard.
+		suggestedPrice = 100,
 		order = 9,
 	},
 	CrateCommon = {
