@@ -1087,7 +1087,7 @@ end
 -- Shooting
 --------------------------------------------------------------------------------
 
-local BOT_HEADSHOT_CHANCE = 0.1
+local BOT_HEADSHOT_CHANCE = 0.12
 
 -- Launcher rounds ProjectileService.LeadAim can lead (straight-line flight with drop). Anything else a
 -- bot would mis-aim, so it doesn't pick those guns up.
@@ -1212,7 +1212,17 @@ local function shootAt(bot, target, targetRoot, distance, head)
 		return
 	end
 
-	local hit = math.random() < accuracyAt(distance)
+	-- Aim settles the longer a bot stays on one target (90% of its accuracy on the first shots, up to
+	-- 105% after about 1.5 s), and a target moving fast is harder to hit, so strafing and jumping pay
+	-- off for a player (Oliver, 2026-09-22: "aim a little better", "more strategic").
+	local chance = accuracyAt(distance)
+	local settle = math.clamp((now - (bot.acquiredAt or now) - MatchConfig.BotReactionTime) / 1.5, 0, 1)
+	chance *= 0.9 + 0.15 * settle
+	local velocity = targetRoot.AssemblyLinearVelocity
+	if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > 18 or math.abs(velocity.Y) > 8 then
+		chance *= 0.85
+	end
+	local hit = math.random() < chance
 	local endPoint = hit
 		and targetRoot.Position
 		or targetRoot.Position + Vector3.new(math.random(-12, 12), math.random(-5, 9), math.random(-12, 12))
@@ -1266,12 +1276,16 @@ end
 -- of candidates — hold, strafe either way at two lengths, advance or fall back on a diagonal — and
 -- takes the best one that BotNav.CanStep says it can actually walk to. The old engage picked one
 -- point by formula and walked at it, into walls, off ledges and out into the storm.
-local COMBAT_REPLAN = 0.6
+local COMBAT_REPLAN = 0.45
 local COMBAT_CHECKS = 5
 
 local function planCombatMove(bot, root, threatPosition, distance, retreating, now)
 	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
 	local preferred = math.min(MatchConfig.BotEngagePreferred, reach * 0.6)
+	-- Closing in on a target that's nearly dead (set in fight()).
+	if bot.pushing and not retreating then
+		preferred *= 0.5
+	end
 	-- A launcher wants room between itself and its own blast.
 	if bot.weapon and bot.weapon.projectile then
 		preferred = math.max(preferred, 30)
@@ -1310,9 +1324,12 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 			-- with a clear shot, is better off holding and getting low than shuffling sideways. That
 			-- is also what makes crouching happen at all.
 			local settled = not retreating and math.abs(distance - preferred) < preferred * 0.25
-			score += retreating and 3 or (settled and -0.6 or 0.9)
+			-- Holding still is only worth it from cover; in the open a bot keeps strafing (Oliver,
+			-- 2026-09-22: "jump and strafe more").
+			local covered = bot.coverUntil and now < bot.coverUntil
+			score += retreating and 3 or ((settled and covered) and -0.6 or (settled and 0.4 or 1.2))
 		elseif option.side == bot.strafeDir then
-			score -= 0.35
+			score -= 0.6
 		end
 		-- Fighting from its own barricade: stay by it, stepping out either side to shoot.
 		if bot.anchor and now < bot.anchor.untilTime and flatDistance(point, bot.anchor.position) > 9 then
@@ -2081,8 +2098,28 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 		return
 	end
 
-	-- Hurt and being hit: get behind something, or put something up.
-	if humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth and now - bot.lastHurtAt < 2 then
+	-- Strategy (Oliver, 2026-09-22: "more strategic", "take cover"). Take cover when hurt and being
+	-- hit, when reloading within reach of the target, and when two or more enemies are close while
+	-- not at full health. Push a target that's nearly dead when the bot is healthy.
+	local outnumbered = 0
+	if humanoid.Health < humanoid.MaxHealth * 0.85 then
+		local position = root.Position
+		for _, entry in ipairs(combatantList) do
+			if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
+				and (entry.position - position).Magnitude < 70 then
+				outnumbered += 1
+			end
+		end
+	end
+	local targetHumanoid = candidate.character and candidate.character:FindFirstChildOfClass("Humanoid")
+	bot.pushing = targetHumanoid ~= nil and targetHumanoid.Health < targetHumanoid.MaxHealth * 0.35
+		and humanoid.Health > humanoid.MaxHealth * 0.5 and not bot.reloadUntil
+	local wantsCover = (humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth and now - bot.lastHurtAt < 2)
+		or (bot.reloadUntil ~= nil and distance < 100)
+		or outnumbered >= 2
+
+	-- Hurt and being hit, reloading, or outnumbered: get behind something, or put something up.
+	if wantsCover and not bot.pushing then
 		local cover, direct = seekCover(bot, root, eye, now, candidate.character)
 		if cover and goToCover(bot, humanoid, root, cover, direct, now) then
 			setCrouch(bot, false)
@@ -2126,13 +2163,23 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	end
 
 	local point = combatMove(bot, root, targetRoot.Position, distance, false, now)
+	-- Hop now and then while strafing in the open, like a player dodging (Oliver, 2026-09-22: "jump
+	-- and strafe more"). Never from cover, never at knife range.
+	local jumped = false
+	if not (bot.coverUntil and now < bot.coverUntil) and distance > 12 and now >= (bot.nextJumpAt or 0) then
+		bot.nextJumpAt = now + 1.2 + math.random() * 2.2
+		if math.random() < 0.6 then
+			jumped = true
+			humanoid.Jump = true
+		end
+	end
 	-- Holding this spot rather than moving to another: get low. Anything closer than this and being
 	-- slow matters more than being small.
 	-- Crouch when this move is to stay put (or has already arrived), and not at knife range where
 	-- being slow costs more than being small.
 	local move = bot.combatMove
 	local settled = move ~= nil and (move.hold == true or flatDistance(root.Position, move.point) < 3)
-	setCrouch(bot, settled and distance > CROUCH_MIN_RANGE)
+	setCrouch(bot, settled and not jumped and distance > CROUCH_MIN_RANGE)
 	humanoid:MoveTo(point)
 	faceTarget(bot, humanoid, root, targetRoot)
 	shootAt(bot, target, targetRoot, distance, head)
@@ -2280,7 +2327,7 @@ local function updateBot(bot)
 
 	if now >= bot.strafeFlipAt then
 		bot.strafeDir = -bot.strafeDir
-		bot.strafeFlipAt = now + 1.4 + math.random() * 1.8
+		bot.strafeFlipAt = now + 0.9 + math.random() * 1.3
 	end
 
 	forgetStale(bot, now)
