@@ -29,6 +29,9 @@ local GameModes = require(Shared:WaitForChild("GameModes"))
 local player = Players.LocalPlayer
 
 local ENEMY = Color3.fromRGB(232, 92, 92)
+-- Teammates are green, whichever team you are on (Oliver, 2026-09-22: "change the friendly color for the
+-- team gamemodes to green"). It used to be the team's own colour.
+local FRIEND = Color3.fromRGB(80, 230, 110)
 -- Enemies are filled; friends are outlined only. A fill on every teammate is a wash of colour over
 -- half the screen in a 6v6, and the question "is that one mine" is answered by an edge just as well.
 local ENEMY_FILL, FRIEND_FILL = 0.65, 1
@@ -84,7 +87,7 @@ local function paint(character)
 	end
 
 	local enemy = theirs ~= mine
-	local colour = enemy and ENEMY or GameModes.TeamColor(theirs)
+	local colour = enemy and ENEMY or FRIEND
 	local mark = marks[character]
 	if not mark then
 		mark = {}
