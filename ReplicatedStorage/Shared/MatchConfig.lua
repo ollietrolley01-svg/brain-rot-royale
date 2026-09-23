@@ -155,6 +155,9 @@ MatchConfig.BotMemorySeconds = 6
 -- Below this share of max health, a bot that's being hit looks for cover (or builds some).
 -- Oliver, 2026-09-22 21:35: "make them take cover". Was 0.6.
 MatchConfig.BotCoverHealth = 0.8
+-- Team modes: how long a freshly spawned bot spends gearing up at its base (chests first) before it
+-- heads for the fight. Ends early once the base has nothing it wants.
+MatchConfig.BotBaseGearSeconds = 30
 
 -- Storm pressure: the distance to the safe circle over how far a bot can walk before the storm
 -- gets there. Past Rotate it stops looting outside that circle and sprints its wander legs; past
