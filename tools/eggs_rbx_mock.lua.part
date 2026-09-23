@@ -1,0 +1,261 @@
+-- (.lua.part, not .lua: plain Lua 5.4 for lupa with deliberate globals, so the Luau checks skip it.)
+-- A small, headless stand-in for the Roblox types the easter eggs and the storm wall use, so
+-- tools/eggs_storm_check.py can run the REAL module source under lupa (plain Lua 5.4) and measure
+-- the geometry it builds. Only what those two files call is here; anything else errors loudly
+-- rather than quietly returning nil.
+--
+-- CFrame follows Roblox: a position plus a rotation whose columns are the right, up and back
+-- vectors (LookVector is the negated third column). CFrame.Angles(x, y, z) is Rx * Ry * Rz.
+
+local V = {}
+V.__index = function(v, key)
+	if key == "Magnitude" then
+		return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+	elseif key == "Unit" then
+		local m = math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+		return Vector3.new(v.X / m, v.Y / m, v.Z / m)
+	end
+	return V[key]
+end
+local function vec(x, y, z)
+	return setmetatable({ X = x or 0, Y = y or 0, Z = z or 0, __kind = "Vector3" }, V)
+end
+V.__add = function(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
+V.__sub = function(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
+V.__unm = function(a) return vec(-a.X, -a.Y, -a.Z) end
+V.__mul = function(a, b)
+	if type(a) == "number" then return vec(a * b.X, a * b.Y, a * b.Z) end
+	if type(b) == "number" then return vec(a.X * b, a.Y * b, a.Z * b) end
+	return vec(a.X * b.X, a.Y * b.Y, a.Z * b.Z)
+end
+V.__div = function(a, b)
+	if type(b) == "number" then return vec(a.X / b, a.Y / b, a.Z / b) end
+	return vec(a.X / b.X, a.Y / b.Y, a.Z / b.Z)
+end
+V.__eq = function(a, b) return a.X == b.X and a.Y == b.Y and a.Z == b.Z end
+function V.Lerp(a, b, t) return a + (b - a) * t end
+function V.Dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+function V.Cross(a, b) return vec(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X) end
+function V.Min(a, b) return vec(math.min(a.X, b.X), math.min(a.Y, b.Y), math.min(a.Z, b.Z)) end
+function V.Max(a, b) return vec(math.max(a.X, b.X), math.max(a.Y, b.Y), math.max(a.Z, b.Z)) end
+
+Vector3 = { new = vec, zero = vec(0, 0, 0), xAxis = vec(1, 0, 0), yAxis = vec(0, 1, 0), zAxis = vec(0, 0, 1), one = vec(1, 1, 1) }
+
+-- r = { {r00, r01, r02}, {r10, r11, r12}, {r20, r21, r22} }
+local C = {}
+local function cf(p, r)
+	return setmetatable({ p = p, r = r, __kind = "CFrame" }, C)
+end
+local I3 = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }
+local function mm(a, b)
+	local out = { {}, {}, {} }
+	for i = 1, 3 do
+		for j = 1, 3 do
+			out[i][j] = a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j]
+		end
+	end
+	return out
+end
+local function mv(r, v)
+	return vec(r[1][1] * v.X + r[1][2] * v.Y + r[1][3] * v.Z, r[2][1] * v.X + r[2][2] * v.Y + r[2][3] * v.Z,
+		r[3][1] * v.X + r[3][2] * v.Y + r[3][3] * v.Z)
+end
+local function transpose(r)
+	return { { r[1][1], r[2][1], r[3][1] }, { r[1][2], r[2][2], r[3][2] }, { r[1][3], r[2][3], r[3][3] } }
+end
+C.__index = function(c, key)
+	if key == "Position" then return c.p
+	elseif key == "X" then return c.p.X
+	elseif key == "Y" then return c.p.Y
+	elseif key == "Z" then return c.p.Z
+	elseif key == "RightVector" then return vec(c.r[1][1], c.r[2][1], c.r[3][1])
+	elseif key == "UpVector" then return vec(c.r[1][2], c.r[2][2], c.r[3][2])
+	elseif key == "LookVector" then return vec(-c.r[1][3], -c.r[2][3], -c.r[3][3])
+	end
+	return C[key]
+end
+C.__mul = function(a, b)
+	if b.__kind == "Vector3" then
+		return a.p + mv(a.r, b)
+	end
+	return cf(a.p + mv(a.r, b.p), mm(a.r, b.r))
+end
+C.__add = function(a, v) return cf(a.p + v, a.r) end
+C.__sub = function(a, v) return cf(a.p - v, a.r) end
+function C.Inverse(c)
+	local t = transpose(c.r)
+	return cf(-mv(t, c.p), t)
+end
+function C.VectorToWorldSpace(c, v) return mv(c.r, v) end
+function C.VectorToObjectSpace(c, v) return mv(transpose(c.r), v) end
+function C.PointToObjectSpace(c, v) return mv(transpose(c.r), v - c.p) end
+function C.PointToWorldSpace(c, v) return c * v end
+
+local function rx(a) local c, s = math.cos(a), math.sin(a) return { { 1, 0, 0 }, { 0, c, -s }, { 0, s, c } } end
+local function ry(a) local c, s = math.cos(a), math.sin(a) return { { c, 0, s }, { 0, 1, 0 }, { -s, 0, c } } end
+local function rz(a) local c, s = math.cos(a), math.sin(a) return { { c, -s, 0 }, { s, c, 0 }, { 0, 0, 1 } } end
+
+CFrame = {
+	new = function(x, y, z)
+		if type(x) == "table" then
+			return cf(x, I3)
+		end
+		return cf(vec(x or 0, y or 0, z or 0), I3)
+	end,
+	Angles = function(a, b, c) return cf(vec(0, 0, 0), mm(mm(rx(a), ry(b)), rz(c))) end,
+	lookAt = function(at, target, up)
+		up = up or vec(0, 1, 0)
+		local look = (target - at).Unit
+		local right = look:Cross(up).Unit
+		local newUp = right:Cross(look)
+		local back = -look
+		return cf(at, { { right.X, newUp.X, back.X }, { right.Y, newUp.Y, back.Y }, { right.Z, newUp.Z, back.Z } })
+	end,
+}
+CFrame.fromEulerAnglesXYZ = CFrame.Angles
+
+local Col = {}
+Col.__index = Col
+local function col(r, g, b) return setmetatable({ R = r, G = g, B = b }, Col) end
+function Col.Lerp(a, b, t) return col(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t) end
+Color3 = { new = col, fromRGB = function(r, g, b) return col(r / 255, g / 255, b / 255) end }
+
+UDim2 = { new = function(...) return { ... } end, fromScale = function(...) return { ... } end, fromOffset = function(...) return { ... } end }
+NumberSequence = { new = function(...) return { ... } end }
+NumberRange = { new = function(...) return { ... } end }
+ColorSequence = { new = function(...) return { ... } end }
+NumberSequenceKeypoint = { new = function(...) return { ... } end }
+ColorSequenceKeypoint = { new = function(...) return { ... } end }
+Vector2 = { new = function(x, y) return { X = x, Y = y } end }
+
+-- Enum.Anything.Name reads back as a string, which is all the checks need.
+Enum = setmetatable({}, { __index = function(_, group)
+	return setmetatable({}, { __index = function(_, item) return group .. "." .. item end })
+end })
+
+-- Signals: Connect stores the handler so the harness can fire it.
+local function signal()
+	local s = { handlers = {} }
+	function s:Connect(fn)
+		table.insert(self.handlers, fn)
+		return { Disconnect = function() end }
+	end
+	function s:Fire(...)
+		for _, fn in ipairs(self.handlers) do fn(...) end
+	end
+	return s
+end
+MockSignal = signal
+
+local BASEPART = { Part = true, WedgePart = true }
+local Inst = {}
+Inst.__index = function(self, key)
+	local raw = rawget(self, "__props")[key]
+	if raw ~= nil then return raw end
+	if Inst[key] then return Inst[key] end
+	if key == "Destroying" or key == "Triggered" or key == "Changed" then
+		local s = signal()
+		rawget(self, "__props")[key] = s
+		return s
+	end
+	return nil
+end
+Inst.__newindex = function(self, key, value)
+	local props = rawget(self, "__props")
+	if key == "Parent" then
+		local old = props.Parent
+		if old then
+			local kids = rawget(old, "__children")
+			for i, child in ipairs(kids) do
+				if child == self then table.remove(kids, i) break end
+			end
+		end
+		if value then table.insert(rawget(value, "__children"), self) end
+	end
+	props[key] = value
+end
+function Inst.IsA(self, class)
+	local mine = rawget(self, "__class")
+	if class == "BasePart" then return BASEPART[mine] == true end
+	if class == "Instance" then return true end
+	return mine == class
+end
+function Inst.GetChildren(self) return table.move(rawget(self, "__children"), 1, #rawget(self, "__children"), 1, {}) end
+function Inst.GetDescendants(self)
+	local out = {}
+	local function walk(node)
+		for _, child in ipairs(rawget(node, "__children")) do
+			table.insert(out, child)
+			walk(child)
+		end
+	end
+	walk(self)
+	return out
+end
+function Inst.FindFirstChild(self, name)
+	for _, child in ipairs(rawget(self, "__children")) do
+		if child.Name == name then return child end
+	end
+	return nil
+end
+function Inst.FindFirstChildOfClass(self, class)
+	for _, child in ipairs(rawget(self, "__children")) do
+		if rawget(child, "__class") == class then return child end
+	end
+	return nil
+end
+Inst.WaitForChild = Inst.FindFirstChild
+function Inst.SetAttribute(self, key, value) rawget(self, "__attrs")[key] = value end
+function Inst.GetAttribute(self, key) return rawget(self, "__attrs")[key] end
+function Inst.Destroy(self) self.Parent = nil end
+function Inst.ClearAllChildren(self)
+	for _, child in ipairs(self:GetChildren()) do child.Parent = nil end
+end
+
+Instance = {
+	new = function(class)
+		local props = { Name = class, Transparency = 0, CanCollide = true, CanQuery = true, CanTouch = true, Anchored = false,
+			Shape = "PartType.Block", Size = vec(4, 1, 2), CFrame = cf(vec(0, 0, 0), I3), Enabled = true }
+		return setmetatable({ __class = class, __props = props, __children = {}, __attrs = {} }, Inst)
+	end,
+}
+
+-- A part's Position is its CFrame's.
+local rawIndex = Inst.__index
+Inst.__index = function(self, key)
+	if key == "Position" then
+		local c = rawget(self, "__props").CFrame
+		return c and c.p
+	elseif key == "ClassName" then
+		return rawget(self, "__class")
+	end
+	return rawIndex(self, key)
+end
+
+MockTags = {}
+local services = {
+	CollectionService = { AddTag = function(_, inst, tag) MockTags[tag] = (MockTags[tag] or 0) + 1 end },
+}
+workspace = Instance.new("Workspace")
+workspace.Name = "Workspace"
+workspace.CurrentCamera = Instance.new("Camera")
+workspace.CurrentCamera.CFrame = CFrame.new(0, 10, 0)
+game = { GetService = function(_, name)
+	return services[name] or error("mock has no service " .. tostring(name))
+end }
+services.Workspace = workspace
+
+task = { spawn = function(fn, ...) fn(...) end, wait = function() return 0 end, delay = function() end }
+tick = os.clock
+warn = function(...) MockWarnings = (MockWarnings or 0) + 1 print("[warn]", ...) end
+typeof = function(v)
+	if type(v) == "table" then return rawget(v, "__kind") or (rawget(v, "__class") and "Instance") or "table" end
+	return type(v)
+end
+math.clamp = function(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+math.sign = function(x) return x > 0 and 1 or (x < 0 and -1 or 0) end
+table.clone = function(t) local out = {} for k, v in pairs(t) do out[k] = v end return out end
+RaycastParams = { new = function() return {} end }
+
+-- Terrain: the eggs level their sites and fill a pond; none of that is geometry this check measures.
+workspace.Terrain = setmetatable({}, { __index = function() return function() end end })
