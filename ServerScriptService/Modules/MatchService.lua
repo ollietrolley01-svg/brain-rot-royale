@@ -1330,6 +1330,18 @@ local function eliminate(token, killerToken, method, weaponId)
 	-- guessed. When the reward work lands, it hangs off currentMode.OnDeath, not off this seam.
 	if currentMode.respawn then
 		dropPickedUp(token)
+		-- Counted for the results card only (no coins, XP or streak banners, per the note above):
+		-- the respawn path returned before the tally below, so a Team Deathmatch results screen showed
+		-- 0 eliminations however many players and bots you took down (Oliver, 2026-09-22: "the win
+		-- screen isnt showing my bot kills").
+		if killerToken and killerToken ~= token and Combatants.IsPlayer(killerToken) and participants[killerToken] then
+			local streak = streaks[killerToken]
+			if not streak then
+				streak = { count = 0, at = 0, total = 0 }
+				streaks[killerToken] = streak
+			end
+			streak.total += 1
+		end
 		currentMode.OnDeath(token, killerToken, method, weaponId)
 		return
 	end
