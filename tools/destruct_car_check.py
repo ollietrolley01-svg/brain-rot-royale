@@ -83,7 +83,12 @@ Enum = setmetatable({}, { __index = function(t, k)
   rawset(t, k, e) return e end })
 math.clamp = function(x, a, b) return math.max(a, math.min(b, x)) end
 typeof = function(v) if getmetatable(v) == V then return "Vector3" end return type(v) end
-task = { spawn = function(fn, ...) fn(...) end, defer = function(fn) fn() end, delay = function() end }
+-- defer really defers: it queues, as Roblox runs it after the current thread yields.
+deferred = {}
+task = { spawn = function(fn, ...) fn(...) end, defer = function(fn) table.insert(deferred, fn) end, delay = function() end }
+NumberSequence = { new = function() return {} end }
+ColorSequence = NumberSequence
+NumberRange = NumberSequence
 
 local BASE = { Part = true, WedgePart = true }
 local I = {}
@@ -104,7 +109,7 @@ end
 Instance = {}
 function Instance.new(class)
   local o = setmetatable({ _p = { ClassName = class, Name = class, CanCollide = true, CanQuery = true,
-    Transparency = 0, Size = Vector3.new(1, 1, 1), CFrame = CFrame.new(0, 0, 0), Color = Color3.new(1, 1, 1),
+    Transparency = 0, Material = "Material.Plastic", LightEmission = 0, Size = Vector3.new(1, 1, 1), CFrame = CFrame.new(0, 0, 0), Color = Color3.new(1, 1, 1),
     Destroying = signal() }, _kids = {}, _attr = {} }, I)
   table.insert(Instances, o)
   return o

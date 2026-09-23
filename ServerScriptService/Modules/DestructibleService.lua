@@ -144,11 +144,8 @@ end
 -- where `from` (optional) is where the shot or blast came from, so the shards fly away from it.
 local pendingPanes = nil
 
-local function breakPane(pane, from)
-	local entry = damaged[pane]
-	if entry then
-		entry.broken = true
-	end
+-- Sends the shards of one pane-shaped piece of glass with this frame's batch.
+local function queueShards(glass, from)
 	if not pendingPanes then
 		pendingPanes = {}
 		task.defer(function()
@@ -157,7 +154,15 @@ local function breakPane(pane, from)
 			glassShatter:FireAllClients(batch)
 		end)
 	end
-	table.insert(pendingPanes, { pane.CFrame, pane.Size, pane.Color, typeof(from) == "Vector3" and from or nil })
+	table.insert(pendingPanes, { glass.CFrame, glass.Size, glass.Color, typeof(from) == "Vector3" and from or nil })
+end
+
+local function breakPane(pane, from)
+	local entry = damaged[pane]
+	if entry then
+		entry.broken = true
+	end
+	queueShards(pane, from)
 	pane:Destroy()
 end
 
@@ -306,16 +311,93 @@ function DestructibleService.SettleDown(node, maxDrop)
 	return true
 end
 
--- A few chunks of a breaking part thrown out, cleared away a moment later. `cap` (optional) caps
--- how many, so a model breaking all at once throws a bounded number; `parent` (optional) is where
--- they go, the part's own parent by default.
+-- How each material comes apart (#71): wood splinters into long thin sticks, stone and brick
+-- crumble into chunky lumps under a puff of dust, metal tears into thin plates with a spray of
+-- sparks. `piece` shapes one chunk from the part's size and the piece count; `extra` adds pieces,
+-- `throw` and `lift` set how hard they fly. Anything unlisted keeps the plain slabs.
+local M = Enum.Material
+local SPLINTER = {
+	extra = 2, throw = 22, lift = 12, spin = 14,
+	piece = function(size, pieces)
+		return Vector3.new(0.25, 0.25, math.clamp(math.max(size.X, size.Y, size.Z) / (pieces + 1), 1, 2.6))
+	end,
+}
+local CRUMBLE = {
+	extra = 1, throw = 10, lift = 5, spin = 5, dust = true,
+	piece = function(size, pieces)
+		local side = math.clamp(math.max(size.X, size.Y, size.Z) / (pieces + 1), 0.5, 1.6)
+		return Vector3.new(side, side * 0.8, side)
+	end,
+}
+local TEAR = {
+	extra = 0, throw = 16, lift = 8, spin = 10, sparks = true,
+	piece = function(size, pieces)
+		local side = math.clamp(math.max(size.X, size.Z) / (pieces + 1), 0.6, 1.8)
+		return Vector3.new(side, 0.15, side * 0.7)
+	end,
+}
+local BREAKS_AS = {
+	[M.Wood] = SPLINTER, [M.WoodPlanks] = SPLINTER,
+	[M.Concrete] = CRUMBLE, [M.Brick] = CRUMBLE, [M.Cobblestone] = CRUMBLE, [M.Slate] = CRUMBLE,
+	[M.Granite] = CRUMBLE, [M.Marble] = CRUMBLE, [M.Pebble] = CRUMBLE, [M.Rock] = CRUMBLE,
+	[M.Sandstone] = CRUMBLE, [M.Limestone] = CRUMBLE, [M.Basalt] = CRUMBLE, [M.Asphalt] = CRUMBLE,
+	[M.Pavement] = CRUMBLE, [M.Plaster] = CRUMBLE,
+	[M.Metal] = TEAR, [M.DiamondPlate] = TEAR, [M.CorrodedMetal] = TEAR, [M.Foil] = TEAR,
+}
+
+-- A short burst from the broken part's whole volume: dust for stone, sparks for metal. The
+-- emitter runs for a fraction of a second and is then switched off rather than using Emit, since
+-- a property change replicates to every client and a server-side Emit call does not.
+local function burst(part, parent, how)
+	local holder = Instance.new("Part")
+	holder.Name = "Rubble"
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanQuery = false
+	holder.CanTouch = false
+	holder.Transparency = 1
+	holder.Size = part.Size
+	holder.CFrame = part.CFrame
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Shape = Enum.ParticleEmitterShape.Box
+	if how.dust then
+		emitter.Color = ColorSequence.new(part.Color:Lerp(Color3.fromRGB(200, 196, 188), 0.6))
+		emitter.Size = NumberSequence.new(1.5, 5)
+		emitter.Transparency = NumberSequence.new(0.35, 1)
+		emitter.Lifetime = NumberRange.new(0.9, 1.6)
+		emitter.Speed = NumberRange.new(2, 6)
+		emitter.Drag = 3
+		emitter.Rate = 70
+	else
+		emitter.Color = ColorSequence.new(Color3.fromRGB(255, 190, 90))
+		emitter.LightEmission = 1
+		emitter.Size = NumberSequence.new(0.25, 0)
+		emitter.Lifetime = NumberRange.new(0.2, 0.45)
+		emitter.Speed = NumberRange.new(14, 26)
+		emitter.Acceleration = Vector3.new(0, -60, 0)
+		emitter.Rate = 120
+	end
+	emitter.Parent = holder
+	holder.Parent = parent
+	task.delay(0.18, function()
+		emitter.Enabled = false
+	end)
+	Debris:AddItem(holder, 2)
+end
+
+-- A few chunks of a breaking part thrown out, cleared away a moment later, shaped by what it was
+-- made of. `cap` (optional) caps how many, so a model breaking all at once throws a bounded
+-- number; `parent` (optional) is where they go, the part's own parent by default.
 local function throwRubble(part, cap, parent)
 	local size = part.Size
-	local pieces = math.min(math.clamp(math.floor(math.max(size.X, size.Y, size.Z) / 3), 2, 5), cap or 5)
+	local how = BREAKS_AS[part.Material]
+	local pieces = math.clamp(math.floor(math.max(size.X, size.Y, size.Z) / 3), 2, 5) + (how and how.extra or 0)
+	pieces = math.min(pieces, cap or pieces)
+	parent = parent or part.Parent
 	for index = 1, pieces do
 		local chunk = Instance.new("Part")
 		chunk.Name = "Rubble"
-		chunk.Size = Vector3.new(
+		chunk.Size = how and how.piece(size, pieces) or Vector3.new(
 			math.max(0.4, size.X / (pieces + 1)),
 			math.max(0.4, size.Y / (pieces + 1)),
 			math.max(0.4, math.min(size.Z, 1.4))
@@ -331,14 +413,18 @@ local function throwRubble(part, cap, parent)
 		chunk.CanQuery = false
 		chunk.CanTouch = false
 		chunk.CastShadow = false
-		chunk.Parent = parent or part.Parent
+		chunk.Parent = parent
+		local throw, lift, spin = how and how.throw or 18, how and how.lift or 6, how and how.spin or 8
 		chunk.AssemblyLinearVelocity = Vector3.new(
-			(math.random() - 0.5) * 18,
-			6 + math.random() * 10,
-			(math.random() - 0.5) * 18
+			(math.random() - 0.5) * throw,
+			lift + math.random() * 10,
+			(math.random() - 0.5) * throw
 		)
-		chunk.AssemblyAngularVelocity = Vector3.new(math.random() * 8, math.random() * 8, math.random() * 8)
+		chunk.AssemblyAngularVelocity = Vector3.new(math.random() * spin, math.random() * spin, math.random() * spin)
 		Debris:AddItem(chunk, 2.5 + math.random())
+	end
+	if how and (how.dust or how.sparks) then
+		burst(part, parent, how)
 	end
 end
 
@@ -363,8 +449,8 @@ local function shatter(part, from)
 end
 
 -- A pooled model coming apart: every piece of it at once. Rubble comes from its solid pieces,
--- biggest first and a dozen chunks in all, so a car costs no more than two walls; its trim and
--- lights simply go with it.
+-- biggest first and a dozen chunks in all, so a car costs no more than two walls; its glass
+-- goes to shards the way a window does, and its trim and lights simply go with it.
 local MODEL_RUBBLE = 12
 
 local function shatterModel(model, from)
@@ -373,7 +459,12 @@ local function shatterModel(model, from)
 	local solid = {}
 	for _, piece in ipairs(model:GetDescendants()) do
 		if piece:IsA("BasePart") and piece.CanCollide and piece.Transparency < 1 then
-			table.insert(solid, piece)
+			-- Glass in a model (a car's windows) bursts into shards like a window pane.
+			if piece.Material == Enum.Material.Glass then
+				queueShards(piece, from)
+			else
+				table.insert(solid, piece)
+			end
 		end
 	end
 	table.sort(solid, function(a, b)
@@ -416,16 +507,14 @@ function DestructibleService.Damage(part, amount, attackerToken, from)
 	entry.health -= dealt
 
 	-- Half gone: it starts to look it, so you can read what is nearly through. (Glass has no
-	-- halfway; it just breaks.) A pooled model darkens all over.
+	-- halfway; it just breaks.) A pooled model darkens all over. Darker, never see-through: a wall
+	-- fading toward clear read as a ghost of cover rather than cover taking a beating (#71).
 	if entry.health <= entry.max * 0.5 and not entry.battered and entry.max > 1 then
 		entry.battered = true
 		local pieces = key:IsA("Model") and key:GetDescendants() or { key }
 		for _, piece in ipairs(pieces) do
 			if piece:IsA("BasePart") then
 				piece.Color = piece.Color:Lerp(Color3.new(0, 0, 0), 0.25)
-				if piece == key then
-					piece.Transparency = math.max(piece.Transparency, 0.12)
-				end
 			end
 		end
 	end
