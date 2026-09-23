@@ -30,6 +30,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local GamepassConfig = require(Shared:WaitForChild("GamepassConfig"))
 local MatchEvents = require(Shared:WaitForChild("MatchEvents"))
+local CrateData = require(Shared:WaitForChild("CrateData"))
 
 local Modules = ServerScriptService:WaitForChild("Modules")
 local RateLimit = require(Modules:WaitForChild("RateLimit"))
@@ -82,6 +83,8 @@ local function modules()
 		PlayerData = require(Modules:WaitForChild("PlayerData")),
 		Match = require(Modules:WaitForChild("MatchService")),
 		Loot = require(Modules:WaitForChild("LootService")),
+		Crate = require(Modules:WaitForChild("CrateService")),
+		StateSync = require(Modules:WaitForChild("StateSync")),
 	}
 end
 
@@ -159,6 +162,22 @@ local HANDLERS = {
 			return "event " .. id .. " REFUSED: " .. tostring(reason)
 		end
 		return "event " .. id
+	end,
+
+	-- Any crate in CrateData, one at a time (Oliver, 2026-09-22: "add all crates to the admin menu").
+	-- The tier is looked up in CrateData like every other id here, and handed over through
+	-- CrateService.Give, the same path placements and quests use.
+	Crate = function(player, payload)
+		local tier = typeof(payload) == "string" and payload or nil
+		if not tier or not CrateData.Get(tier) then
+			return nil
+		end
+		local m = modules()
+		if not m.Crate.Give(player, tier, 1) then
+			return nil
+		end
+		pcall(m.StateSync.Push, player)
+		return "crate " .. tier
 	end,
 
 	Fly = function(player, payload)
