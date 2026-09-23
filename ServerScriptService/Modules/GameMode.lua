@@ -400,7 +400,9 @@ end
 
 local KOTH_TICK = 0.25
 
-local BASE_RESTOCK = 45
+-- Oliver, 2026-09-23 14:32: "make sure that the loot regenerates over the course of the round like
+-- every minute or so". Every 60 s each base is refilled to its full stock.
+local BASE_RESTOCK = 60
 
 local function startWorld(mapInfo)
 	-- No storm. Stop() sets the broadcast status to "Idle", which is what makes the HUD's storm
@@ -416,20 +418,17 @@ local function startWorld(mapInfo)
 	local centre, radius = ModeTeams.Setup(current, mapInfo)
 
 	-- Base loot (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Each base is
-	-- stocked at the start and topped back up every BASE_RESTOCK seconds while the match runs, so
+	-- stocked at the start and refilled to full every BASE_RESTOCK seconds while the match runs, so
 	-- whoever respawns later still finds something at home. Off the main thread: seeding yields.
 	local stockGeneration = generation
 	task.spawn(function()
-		local first = true
 		while running and generation == stockGeneration do
 			for team = 1, GameModes.TeamCount do
 				local base = ModeTeams.BaseOf(team)
 				if base then
 					local have = LootService.CountNear(base, LootService.BaseRadius)
 					for kind, want in pairs(LootService.BaseStock) do
-						-- A top-up refills to about two thirds, so a base is never a bottomless well.
-						local target = first and want or math.ceil(want * 0.66)
-						local missing = target - (have[kind] or 0)
+						local missing = want - (have[kind] or 0)
 						if missing > 0 then
 							local inner = kind == "chest" and 20 or 10
 							local gap = kind == "chest" and 14 or 6
@@ -438,7 +437,6 @@ local function startWorld(mapInfo)
 					end
 				end
 			end
-			first = false
 			task.wait(BASE_RESTOCK)
 		end
 	end)
