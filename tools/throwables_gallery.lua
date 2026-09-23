@@ -234,10 +234,8 @@ local function stuckModel(folder, surfacePoint, normal, lit)
 	model:PivotTo(Ballistics.StuckFrame(surfacePoint, normal, crumpetSpec and crumpetSpec.stickOffset or 0))
 	model.Parent = folder
 	if lit then
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") and part.Name == "Glow" then
-				part.Color = Color3.fromRGB(255, 250, 220)
-			end
+		for _, part in ipairs(ThrowableModels.Arm(model)) do
+			part.Color = Color3.fromRGB(255, 250, 220)
 		end
 	end
 	local count = 0

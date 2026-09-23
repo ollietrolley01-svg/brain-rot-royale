@@ -819,7 +819,7 @@ table.insert(views, {
 		local target = ORIGIN + Vector3.new(0, 3.6, -8.0)
 		look(camera, Vector3.new(6, 5, -18), Vector3.new(0, 3.6, -8.0), 32)
 		assertInFrame(camera, target, "polesfront_CrocodiloRanger bull bar cluster")
-		for _, name in ipairs({ "BullTop", "BullFrameL1", "SpotMountL" }) do
+		for _, name in ipairs({ "BullTop", "BullFrameL", "SpotMountL" }) do
 			local part = model:FindFirstChild(name)
 			if part then
 				assertInFrame(camera, part.Position, "polesfront_CrocodiloRanger/" .. name)
