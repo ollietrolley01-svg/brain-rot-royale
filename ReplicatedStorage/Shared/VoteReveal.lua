@@ -65,4 +65,28 @@ function VoteReveal.ShouldReveal(previous, next)
 	return previous.open == true
 end
 
+-- Which of the vote screen's two faces may be drawn, given the match state from MatchChanged, whether
+-- the vote snapshot says it is open, and whether a reveal timer is running. Returns open, showReveal.
+--
+-- THE MATCH STATE HAS THE LAST WORD, and that is the second half of #107. ShouldReveal stops a
+-- snapshot from STARTING a reveal it should not, but a reveal that started legitimately — the vote
+-- closing at MatchService's `VoteService.Close()`, just after the state goes to Loading — used to run
+-- its full three seconds whatever the match did meanwhile. A battle royale hides it behind the drop
+-- picker; a respawn mode (TDM, King of the Hill) has no picker, so on a map that built in under three
+-- seconds the winner panel sat over the first seconds of live play. Now it is drawn only while the
+-- match is still Loading (or, for a remote that arrives a beat early, Countdown), and never over the
+-- drop picker.
+--
+-- The interactive vote is drawn only during the lobby countdown, whatever the snapshot says: the
+-- server's `open` and the match's `Countdown` arrive on two different remotes, and requiring both
+-- means neither can put the vote over a match on its own.
+function VoteReveal.View(match, voteOpen, revealing)
+	local state = type(match) == "table" and match.state or nil
+	local open = voteOpen == true and state == "Countdown"
+	local showReveal = revealing == true
+		and (state == "Loading" or state == "Countdown")
+		and not (type(match) == "table" and match.dropSelect == true)
+	return open, showReveal
+end
+
 return VoteReveal

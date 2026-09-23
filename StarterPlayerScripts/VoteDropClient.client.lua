@@ -138,16 +138,12 @@ local function isReady()
 end
 
 local function renderVote()
-	local decided = nil
-	if revealId and tick() < revealUntil then
-		decided = revealId
-	end
-	-- The reveal never shares the screen with the picker. It normally ends long before the map is
-	-- built, but a map that built in under three seconds would otherwise leave the winner sitting
-	-- behind the picker's own dimming overlay.
-	if matchState.dropSelect then
-		decided = nil
-	end
+	-- Both faces of the screen are gated on the MATCH state, in Shared/VoteReveal.View so a harness
+	-- can run it (tools/vote_open_check.py): the interactive vote only in the lobby countdown, the
+	-- winner reveal only while the match is still loading and never behind the drop picker. Without
+	-- the second half, a respawn mode on a quick-building map had the reveal over live play (#107).
+	local stateOpen, showReveal = VoteReveal.View(matchState, voteState.open, revealId ~= nil and tick() < revealUntil)
+	local decided = showReveal and revealId or nil
 	-- The shop, the inventory and the merge dialog all raise `MenuOpen`, and this screen is drawn
 	-- above every one of them (DisplayOrder 30). A vote panel sitting on top of the menu somebody
 	-- opened is a worse bug than a vote panel they have to close the menu to see, so it stands aside
@@ -160,7 +156,7 @@ local function renderVote()
 	-- holder set, never from a count — see VoteCursor.ShouldStandAside.
 	local menuUp = VoteCursor.ShouldStandAside(
 		MenuOpenClaims.Holders(), MenuOpenClaims.LegacyHolder(), VoteCursor.ClaimName)
-	local open = voteState.open == true and matchState.state == "Countdown" and not menuUp
+	local open = stateOpen and not menuUp
 	if menuUp then
 		decided = nil
 	end
