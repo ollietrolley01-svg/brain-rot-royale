@@ -481,6 +481,10 @@ local function onStuck(info)
 		return
 	end
 	entry.stuck = { part = info.part, localPosition = info.position, localNormal = info.normal }
+	-- Its timer lights now, not before: unlit, the one in your hand isn't mistaken for a detonator.
+	if entry.model then
+		entry.glows = ThrowableModels.Arm(entry.model)
+	end
 	entry.body.resting = true
 	entry.body.velocity = Vector3.zero
 	entry.smooth = Vector3.zero
