@@ -655,6 +655,81 @@ function LootService.Populate(mapInfo)
 end
 
 --------------------------------------------------------------------------------
+-- Team bases (Oliver, 2026-09-23: "make there be way more loot around the spawns of the teams in the
+-- team gamemodes, and make the bots go for it")
+--------------------------------------------------------------------------------
+
+-- What a base cache is made of, per team. GameMode stocks it once at the start and tops it back up
+-- while the match runs, so a team that respawns later still finds gear at home.
+LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 3 }
+LootService.BaseRadius = 85
+
+local function baseKind(item)
+	local name = item.Name
+	if name == "GroundWeapon" then
+		return "weapon"
+	elseif name == "Chest" then
+		return "chest"
+	elseif name == "HealPickup" then
+		return "heal"
+	elseif name == "ItemPickup" then
+		return "item"
+	end
+	return nil
+end
+
+-- How many of each kind of unclaimed pickup lie within `radius` of `centre` (flat distance).
+function LootService.CountNear(centre, radius)
+	local counts = { weapon = 0, heal = 0, item = 0, chest = 0 }
+	if not container or not container.Parent then
+		return counts
+	end
+	local flat = Vector3.new(centre.X, 0, centre.Z)
+	for _, item in ipairs(container:GetChildren()) do
+		if item:IsA("BasePart") and not item:GetAttribute("Claimed") then
+			local kind = baseKind(item)
+			if kind and (Vector3.new(item.Position.X, 0, item.Position.Z) - flat).Magnitude <= radius then
+				counts[kind] += 1
+			end
+		end
+	end
+	return counts
+end
+
+-- Puts one pickup of `kind` at each of `spots` (ground positions). Yields between batches like
+-- Populate, and stops if the loot is cleared under it. Returns how many it placed.
+function LootService.SeedAt(spots, kind)
+	ensureContainer()
+	local generation = populateGeneration
+	local placed = 0
+	for _, position in ipairs(spots) do
+		if generation ~= populateGeneration then
+			break
+		end
+		local ok, err = pcall(function()
+			if kind == "chest" then
+				spawnChest(CFrame.new(position + Vector3.new(0, 1, 0)) * CFrame.Angles(0, math.random() * math.pi * 2, 0))
+			elseif kind == "weapon" then
+				spawnGroundWeapon(position + Vector3.new(0, 1, 0))
+			elseif kind == "heal" then
+				spawnConsumable(position + Vector3.new(0, 1, 0), ItemData.RollRecovery().id)
+			else
+				spawnConsumable(position + Vector3.new(0, 1, 0), rollGroundItem().id)
+			end
+		end)
+		if ok then
+			placed += 1
+		else
+			warn("[LootService] base loot failed: " .. tostring(err))
+		end
+		if placed % POPULATE_BATCH == 0 then
+			task.wait()
+		end
+	end
+	return placed
+end
+
+--------------------------------------------------------------------------------
 -- Drops
 --------------------------------------------------------------------------------
 

@@ -1940,6 +1940,52 @@ local function findLoot(bot, position, radius, heals, center, circleRadius, now)
 	return best
 end
 
+-- Team modes: the loot stocked round the bot's own base (Oliver, 2026-09-23: "make the bots go for
+-- it"). A bot at or near home takes any gun that beats the one it carries, any chest, and loose heals
+-- while it is carrying fewer than three. Returns the nearest such pickup, or nil. A field rather than
+-- a local, for the file's local budget.
+function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
+	local teams = lazy("ModeTeams")
+	local base = teams and teams.BaseOf and teams.BaseOf(modeState.team)
+	if not base then
+		return nil
+	end
+	local baseRadius = (LootService.BaseRadius or 85) + 10
+	local flatBase = Vector3.new(base.X, 0, base.Z)
+	local here = root.Position
+	if (Vector3.new(here.X, 0, here.Z) - flatBase).Magnitude > baseRadius + 70 then
+		return nil
+	end
+	local myRank = bot.weapon and (Rarity.Index[bot.weapon.rarity] or 0) or -1
+	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < 3
+	local best, bestDistance = nil, 160
+	for _, entry in ipairs(lootItems(now)) do
+		local item = entry.item
+		local position = entry.position
+		if (Vector3.new(position.X, 0, position.Z) - flatBase).Magnitude <= baseRadius then
+			local distance = (position - here).Magnitude
+			if distance < bestDistance and item.Parent and not item:GetAttribute("Claimed") then
+				local wanted = false
+				if entry.kind == "heal" then
+					wanted = wantHeals and item:GetAttribute("HealId") ~= nil
+				elseif item.Name == "Chest" then
+					wanted = true
+				else
+					local id = item:GetAttribute("WeaponId")
+					local def = id and WeaponData.Get(id)
+					wanted = def ~= nil and (Rarity.Index[def.rarity] or 0) > myRank
+						and not def.staged and not BOT_WEAPON_HOLD[def.id]
+						and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile]) and true or false
+				end
+				if wanted and lootAllowed(bot, item, distance, center, circleRadius, now) then
+					best, bestDistance = item, distance
+				end
+			end
+		end
+	end
+	return best
+end
+
 -- Stand at the pickup for as long as a player would have to hold the prompt, then take it.
 -- Returns true while holding.
 local function holdLoot(bot, humanoid, root, now)
@@ -2563,6 +2609,13 @@ local function updateBot(bot)
 		end
 		if not item and underArmed then
 			item = findLoot(bot, root.Position, empty and LOOT_SEEK_RANGE * 1.6 or LOOT_SEEK_RANGE, false, center, circleRadius, now)
+		end
+		-- Team modes: raid the home base's stock first (upgrades, chests, heals).
+		if not item and teamMode then
+			local modeState = BotService.ModeState(bot)
+			if modeState then
+				item = BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
+			end
 		end
 		-- Oliver 15:27: "bots dont open crates or supply drops". An armed bot now also opens the nearest
 		-- unopened chest in range, not just a bot that is short of guns.

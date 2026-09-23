@@ -23,6 +23,7 @@ local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local ModeKingOfTheHill = require(script.Parent:WaitForChild("ModeKingOfTheHill"))
 local ModeTeams = require(script.Parent:WaitForChild("ModeTeams"))
+local LootService = require(script.Parent:WaitForChild("LootService"))
 local QuestService = require(script.Parent:WaitForChild("QuestService"))
 local StateSync = require(script.Parent:WaitForChild("StateSync"))
 local StormService = require(script.Parent:WaitForChild("StormService"))
@@ -399,6 +400,8 @@ end
 
 local KOTH_TICK = 0.25
 
+local BASE_RESTOCK = 45
+
 local function startWorld(mapInfo)
 	-- No storm. Stop() sets the broadcast status to "Idle", which is what makes the HUD's storm
 	-- line and the client's ring disappear on their own with no client change at all.
@@ -411,6 +414,34 @@ local function startWorld(mapInfo)
 	deadlineMs = nowMs() + (current.timeLimit or 480) * 1000
 
 	local centre, radius = ModeTeams.Setup(current, mapInfo)
+
+	-- Base loot (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Each base is
+	-- stocked at the start and topped back up every BASE_RESTOCK seconds while the match runs, so
+	-- whoever respawns later still finds something at home. Off the main thread: seeding yields.
+	local stockGeneration = generation
+	task.spawn(function()
+		local first = true
+		while running and generation == stockGeneration do
+			for team = 1, GameModes.TeamCount do
+				local base = ModeTeams.BaseOf(team)
+				if base then
+					local have = LootService.CountNear(base, LootService.BaseRadius)
+					for kind, want in pairs(LootService.BaseStock) do
+						-- A top-up refills to about two thirds, so a base is never a bottomless well.
+						local target = first and want or math.ceil(want * 0.66)
+						local missing = target - (have[kind] or 0)
+						if missing > 0 then
+							local inner = kind == "chest" and 20 or 10
+							local gap = kind == "chest" and 14 or 6
+							LootService.SeedAt(ModeTeams.BaseLootSpots(team, missing, inner, LootService.BaseRadius - 5, gap), kind)
+						end
+					end
+				end
+			end
+			first = false
+			task.wait(BASE_RESTOCK)
+		end
+	end)
 
 	-- The arena boundary: a circle that never shrinks, drawn through the storm's own broadcast so
 	-- the ring, the minimap circle and the bots' rotation logic all work with nothing new.
@@ -490,8 +521,8 @@ local function placeAtStart(player, character, index)
 	if not ok then
 		warn("[GameMode] opening loadout failed for " .. Combatants.GetName(player) .. ": " .. tostring(err))
 	end
-	announce(StateSync.Notify, player, string.format("%s — %s", current.name,
-		GameModes.TeamName(ModeTeams.TeamOf(player) or 1)))
+	announce(StateSync.Notify, player, string.format("%s — you're on %s. Teammates are green, enemies red.", current.name,
+		string.upper(GameModes.TeamName(ModeTeams.TeamOf(player) or 1))))
 	return index
 end
 

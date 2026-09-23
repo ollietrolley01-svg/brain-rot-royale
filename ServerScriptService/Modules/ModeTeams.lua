@@ -86,6 +86,8 @@ local mode = nil
 local arenaCentre = Vector3.zero
 local arenaRadius = 0
 local pads = { {}, {} }
+-- Each team's base point (the centre its pads were looked for around), for the base loot.
+local bases = {}
 
 -- token -> 1 or 2
 local teamOf = {}
@@ -218,7 +220,9 @@ function ModeTeams.Setup(currentMode, mapInfo)
 		local heading = axis + (team - 1) * math.pi
 		local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * BASE_FRACTION)
 		pads[team] = ModeTeams.BuildPads(base, mapInfo)
+		bases[team] = base
 	end
+	ModeTeams.MapRiver = mapInfo and mapInfo.river
 
 	return arenaCentre, arenaRadius, #pads[1], #pads[2]
 end
@@ -283,9 +287,58 @@ function ModeTeams.RefusePad(x, z, river)
 	return nil
 end
 
+-- The team's base point, or nil outside a team match.
+function ModeTeams.BaseOf(team)
+	return active and bases[team] or nil
+end
+
+-- Where the base loot goes (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Up to
+-- `count` open-ground spots between `inner` and `outer` studs from the team's base, each passing the
+-- same checks a spawn pad does (inside the arena, real ground, not in the river, nothing built on it)
+-- and kept `gap` studs apart so pickups never sit in one another.
+function ModeTeams.BaseLootSpots(team, count, inner, outer, gap)
+	local base = bases[team]
+	if not active or not base then
+		return {}
+	end
+	inner, outer, gap = inner or 12, outer or 80, gap or 6
+	local spots = {}
+	for _ = 1, count * 10 do
+		if #spots >= count then
+			break
+		end
+		local angle = math.random() * math.pi * 2
+		local reach = inner + math.sqrt(math.random()) * (outer - inner)
+		local x, z = base.X + math.cos(angle) * reach, base.Z + math.sin(angle) * reach
+		if not ModeTeams.RefusePad(x, z, ModeTeams.MapRiver) then
+			local spot = Vector3.new(x, terrainAt(x, z) or 0, z)
+			local clear = true
+			-- Never on a spawn pad: a chest there would block the pad, and a gun there is grabbed
+			-- by accident on every respawn.
+			for _, pad in ipairs(pads[team] or {}) do
+				if (Vector3.new(pad.X, 0, pad.Z) - Vector3.new(x, 0, z)).Magnitude < 7 then
+					clear = false
+					break
+				end
+			end
+			for _, other in ipairs(spots) do
+				if (other - spot).Magnitude < gap then
+					clear = false
+					break
+				end
+			end
+			if clear then
+				table.insert(spots, spot)
+			end
+		end
+	end
+	return spots
+end
+
 function ModeTeams.Teardown()
 	active = false
 	mode = nil
+	table.clear(bases)
 	table.clear(teamOf)
 	table.clear(protectedUntil)
 	table.clear(downed)
