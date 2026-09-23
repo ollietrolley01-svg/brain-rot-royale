@@ -88,6 +88,8 @@ local function modules()
 	}
 end
 
+local godWatched = {}
+
 -- Each handler returns a short string for the log, or nil if it did nothing. None of them trusts
 -- its argument: every one is a lookup in a real table before anything is granted.
 local HANDLERS = {
@@ -178,6 +180,44 @@ local HANDLERS = {
 		end
 		pcall(m.StateSync.Push, player)
 		return "crate " .. tier
+	end,
+
+	-- God mode (Oliver, 2026-09-22). An invisible ForceField on the character: Humanoid:TakeDamage does
+	-- nothing while one is present, and every damage path in the game goes through TakeDamage
+	-- (CombatService.DealDamage for guns, blasts, companions and hazards; StormService for the storm).
+	-- The `AdminGod` attribute carries it across respawns until it's switched off.
+	God = function(player, payload)
+		local on = payload == true
+		player:SetAttribute("AdminGod", on or nil)
+		local function apply(character)
+			if not character then
+				return
+			end
+			local existing = character:FindFirstChild("AdminGod")
+			if player:GetAttribute("AdminGod") then
+				if not existing then
+					local field = Instance.new("ForceField")
+					field.Name = "AdminGod"
+					field.Visible = false
+					field.Parent = character
+				end
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					humanoid.Health = humanoid.MaxHealth
+				end
+			elseif existing then
+				existing:Destroy()
+			end
+		end
+		apply(player.Character)
+		if not godWatched[player] then
+			godWatched[player] = true
+			player.CharacterAdded:Connect(function(character)
+				character:WaitForChild("Humanoid", 5)
+				apply(character)
+			end)
+		end
+		return "god " .. tostring(on)
 	end,
 
 	Fly = function(player, payload)
