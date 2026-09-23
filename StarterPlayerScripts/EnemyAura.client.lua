@@ -32,10 +32,13 @@ local ENEMY = Color3.fromRGB(232, 92, 92)
 -- Teammates are green, whichever team you are on (Oliver, 2026-09-22: "change the friendly color for the
 -- team gamemodes to green"). It used to be the team's own colour.
 local FRIEND = Color3.fromRGB(80, 230, 110)
--- Enemies are filled; friends are outlined only. A fill on every teammate is a wash of colour over
--- half the screen in a 6v6, and the question "is that one mine" is answered by an edge just as well.
-local ENEMY_FILL, FRIEND_FILL = 0.65, 1
-local ENEMY_OUTLINE, FRIEND_OUTLINE = 0.15, 0.25
+-- Enemies are filled and outlined. Friends get a light green fill and NO outline (Oliver, 2026-09-23
+-- 16:11: "a bunch of the foliage and stuff is outlined the same way a friendly bot is"). With DepthMode
+-- Occluded, Roblox traces the outline along the edge of whatever is in front of the character, so a bush,
+-- fence or leaf covering a teammate got a green outline of its own. A fill is only drawn on the character's
+-- own visible pixels, so it cannot spill onto anything else.
+local ENEMY_FILL, FRIEND_FILL = 0.65, 0.72
+local ENEMY_OUTLINE, FRIEND_OUTLINE = 0.15, 1
 
 local marks = {}
 
@@ -217,7 +220,7 @@ task.spawn(function()
 				else
 					local pivot = character:GetPivot().Position
 					local distance = eye and (pivot - eye).Magnitude or 0
-					if mark.highlight.FillTransparency < 1 then
+					if mark.highlight.OutlineTransparency < 1 then -- enemies (only they have an outline)
 						distance *= 0.8
 					end
 					table.insert(list, { mark = mark, distance = distance })
