@@ -1692,7 +1692,9 @@ local function startMatch()
 			-- thread moves on, so clearing it here would be too early); a timer clears it if it never does.
 			local openingStamp = os.clock()
 			player:SetAttribute("OpeningSpawn", openingStamp)
-			task.delay(3, function()
+			-- Longer than the waits below (10 s for the body, 10 s for its Humanoid), so a slow load
+			-- can't outlast the mark and be treated as a respawn.
+			task.delay(25, function()
 				if player:GetAttribute("OpeningSpawn") == openingStamp then
 					player:SetAttribute("OpeningSpawn", nil)
 				end

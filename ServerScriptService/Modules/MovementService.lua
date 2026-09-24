@@ -873,9 +873,10 @@ function MovementService.ClientParkour(player, kind, rise, duration)
 	end
 	local paid = MovementService.SpendStamina(player, cost, kind == "mantle")
 	MovementService.SetParkourPose(character, kind, math.clamp(duration, 0.1, 1.2) + 0.1)
-	-- Only a paid vault breaks glass: the remote is the client's word, so without this a stationary
-	-- client could fire "vault" three times a second to shatter the panes beside it for free.
-	if kind == "vault" and paid then
+	-- The glass breaks whether or not the ledger paid: the client has already vaulted on its own
+	-- prediction, and a pane kept here would leave it on the far side of glass everyone else sees
+	-- whole. Abuse is bounded by the 0.3 s gate above and breakVaultGlass only reaching panes ahead.
+	if kind == "vault" then
 		breakVaultGlass(player, character)
 	end
 	return paid
