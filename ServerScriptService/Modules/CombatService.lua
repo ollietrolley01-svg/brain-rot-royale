@@ -349,13 +349,14 @@ function CombatService.ClearAttacker(token)
 end
 
 -- Who last hurt `token` within ATTACKER_MEMORY seconds, with what, and when: the third value is the
--- os.clock() of that hit (compare with os.clock() on the server, never the client's clock).
+-- tick() of that hit -- wall time, the clock BotService's bot timeline runs on and compares it with
+-- (compare with tick() on the server, never the client's clock).
 function CombatService.GetLastAttacker(token)
 	local record = lastAttacker[token]
 	if not record then
 		return nil
 	end
-	if os.clock() - record.at > ATTACKER_MEMORY then
+	if tick() - record.at > ATTACKER_MEMORY then
 		return nil
 	end
 	return record.token, record.weaponId, record.at
@@ -464,7 +465,7 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 	-- Only another combatant's hit counts as who got you: your own splash, the storm or a fall
 	-- (and a leaver's round, whose owner is gone) must not wipe the credit of whoever shot you.
 	if attackerToken ~= nil and attackerToken ~= victimToken then
-		lastAttacker[victimToken] = { token = attackerToken, at = os.clock(), weaponId = weaponId }
+		lastAttacker[victimToken] = { token = attackerToken, at = tick(), weaponId = weaponId }
 	end
 
 	local victimRoot = Combatants.GetRoot(victimToken)
