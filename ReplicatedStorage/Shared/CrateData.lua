@@ -267,9 +267,12 @@ function CrateData.OddsLine(crate, luck, boosted)
 	for _, rarity in ipairs(Rarity.Order) do
 		local chance = effective[rarity]
 		if chance and chance > 0 then
-			-- Fractions of a percent (Secret odds) need the extra digit to not read as 0.
-			table.insert(parts, boosted and rarity:sub(1, 4)
-				or string.format(chance < 1 and "%s %.2f%%" or "%s %.1f%%", rarity:sub(1, 4), chance))
+			-- Fractions of a percent (Secret odds) need the extra digit to not read as 0. The full rarity
+			-- word, not its first four letters: "Unco", "Lege" and "Secr" are not words a first-time player
+			-- knows, and these are the disclosed odds of a paid random item (player's-eye review, #86).
+			-- The card labels wrap and grow, so the longer line costs a line, not legibility.
+			table.insert(parts, boosted and rarity
+				or string.format(chance < 1 and "%s %.2f%%" or "%s %.1f%%", rarity, chance))
 		end
 	end
 	if crate.accessoryChance and crate.accessoryChance > 0 then

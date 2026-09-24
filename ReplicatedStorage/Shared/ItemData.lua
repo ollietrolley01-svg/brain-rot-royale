@@ -26,7 +26,7 @@ ItemData.Items = {
 		pickup = 3,
 		weight = 45,
 		color = Color3.fromRGB(236, 226, 200),
-		description = "+30 health, up to 75.",
+		description = "+30 health, up to 75% of your max health.",
 	},
 	MedKit = {
 		name = "Med Kit",
@@ -109,7 +109,7 @@ ItemData.Items = {
 		pickup = 2,
 		weight = 18,
 		color = Color3.fromRGB(255, 90, 220),
-		description = "A lightning-fast 44-stud dash the way you're facing. You come out still moving, and it cancels a fall.",
+		description = "A lightning-fast 44-stud dash the way you're facing. You come out still moving, and it cancels a fall. It stops short of walls.",
 	},
 	BounceBoots = {
 		name = "Bounce Boots",

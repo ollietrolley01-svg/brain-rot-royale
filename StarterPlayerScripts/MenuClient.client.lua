@@ -1054,7 +1054,13 @@ local function renderTradeSession()
 	local headerButtons = makeRow(0,
 		"Trading with " .. trade.partner,
 		C.Accent,
-		trade.theyConfirmed and "They have confirmed — waiting on you." or "Neither side has confirmed yet.")
+		-- Both flags, four states. With only theirs, the header still read "Neither side has confirmed
+		-- yet." straight after your own CONFIRM turned green, and a player who doubts the press toggles
+		-- it off again -- which cancels a trade both wanted if the partner confirms in between (#86).
+		(trade.youConfirmed and trade.theyConfirmed and "Both confirmed — trading…")
+			or (trade.youConfirmed and ("You've confirmed — waiting on " .. trade.partner .. "."))
+			or (trade.theyConfirmed and (trade.partner .. " has confirmed — waiting on you."))
+			or "Neither side has confirmed yet.")
 
 	addButton(headerButtons, 1, trade.youConfirmed and "UNCONFIRM" or "CONFIRM",
 		trade.youConfirmed and C.Green or C.Accent, function()
@@ -1265,12 +1271,15 @@ local BEST_DROPS_SHOWN = 5
 -- this file ticks it in place rather than redrawing the whole tab every second.
 local stockTimerLabel = nil
 
-local function stockHeader(order, text)
-	stockTimerLabel = create("TextLabel", {
+-- `noTimer` is for a tab whose stock never rotates (the Style Crates are always in stock, and
+-- renderStyleCrates never reads the rotation): a countdown there promised a change that never came,
+-- and players waited on it (#86). It still clears stockTimerLabel so the ticker leaves it alone.
+local function stockHeader(order, text, noTimer)
+	local label = create("TextLabel", {
 		Size = UDim2.new(1, -8, 0, 26),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold,
-		Text = text .. "  •  new stock in " .. ShopRotation.FormatTimeLeft(),
+		Text = noTimer and text or (text .. "  •  new stock in " .. ShopRotation.FormatTimeLeft()),
 		TextColor3 = C.Accent,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextTruncate = Enum.TextTruncate.AtEnd,
@@ -1278,7 +1287,8 @@ local function stockHeader(order, text)
 		LayoutOrder = order,
 		Parent = content,
 	})
-	stockTimerLabel:SetAttribute("Prefix", text)
+	label:SetAttribute("Prefix", text)
+	stockTimerLabel = not noTimer and label or nil
 end
 
 local function renderCrates()
@@ -1318,6 +1328,16 @@ local function renderCrates()
 		or "CRATE SHOP  •  rarer crates are in stock less often")
 	for index, tier in ipairs(CrateData.Order) do
 		local crate = CrateData.Get(tier)
+		-- Two cards this tab should not draw (#86). The Style tiers have their own STYLE CRATES tab,
+		-- and here the "You own" line counted CosmeticData.OfKind("Cosmetic") -- no such kind -- so a
+		-- crate selling for 8,000 coins read "You own 0 / 0". And a Robux-only crate whose product id
+		-- is still 0 is hidden the way the Robux Shop hides it (shopVisible), not shown as a first card
+		-- whose only button is a greyed price beside "ALWAYS IN STOCK". Studio still shows it.
+		local robuxProduct = crate.robuxOnly and crate.productKey and GamepassConfig.Products[crate.productKey]
+		if crate.category == "Cosmetic"
+			or (crate.robuxOnly and not (robuxProduct and robuxProduct.id > 0) and not RunService:IsStudio()) then
+			continue
+		end
 		local owned = profile and (profile.crates[tier] or 0) or 0
 		local inStock = ShopRotation.IsCrateInStock(tier)
 		local color = crate.color or Rarity.Color(tier)
@@ -1626,7 +1646,9 @@ local function renderCosmetics()
 			if item.kind == "Accessory" then
 				subtitle = string.format("%s Accessory  •  %s", item.rarity, item.description)
 			else
-				subtitle = string.format("%s %s  •  %s", item.rarity or "", item.kind, item.description)
+				-- A word, not the kind's code id: "Legendary GunSkin" read as an identifier (#86).
+				local KIND_WORDS = { GunSkin = "Gun Skin", KillAnimation = "Kill Animation" }
+				subtitle = string.format("%s %s  •  %s", item.rarity or "", KIND_WORDS[item.kind] or item.kind, item.description)
 			end
 
 			local buttons = makeRow(order, item.name, item.rarity and Rarity.Color(item.rarity) or item.color, subtitle)
@@ -1654,7 +1676,12 @@ local function renderCosmetics()
 					renderTab()
 				end)
 			elseif sectionIndex == 3 then
-				addButton(buttons, 1, "CRATES", C.PanelAlt, nil, false)
+				-- Live, like its BUNDLES and HOW neighbours: a greyed CRATES that did nothing left the
+				-- player unsure how to get the item. The kind crates (Gun Skin, Aura, ...) are on Crates.
+				addButton(buttons, 1, "FROM CRATES", C.Accent, function()
+					activeTab = "Crates"
+					renderTab()
+				end)
 			elseif sectionIndex == 1 then
 				local canAfford = profile and profile.coins >= item.price
 				addButton(buttons, 1, formatNumber(item.price) .. " C", C.Accent, function()
@@ -1695,7 +1722,17 @@ local function describeReward(reward)
 	elseif reward.kind == "Crate" then
 		return reward.crate .. " Crate"
 	end
-	return "Cosmetic"
+	-- Name the cosmetic this claim will actually give: the first in the pool not yet owned, the same
+	-- walk BattlePassService's grantCosmetic makes, and its 1,000-coin fallback. "Cosmetic" told the
+	-- player nothing about what they were working towards (#86).
+	local owned = profile and profile.cosmetics and profile.cosmetics.owned or {}
+	for _, id in ipairs(BattlePassData.CosmeticPools[reward.pool] or {}) do
+		if not owned[id] then
+			local item = CosmeticData.Get(id)
+			return "Cosmetic: " .. (item and item.name or id)
+		end
+	end
+	return "1,000 SahurCoins (every cosmetic on this track owned)"
 end
 
 local function renderPass()
@@ -1787,8 +1824,12 @@ local function renderPass()
 			invoke(claimDaily)
 		end,
 		profile.daily.available)
-	makeRow(0.5, string.format("Daily Spin  •  day %d streak", profile.daily.streak or 0), C.Green,
-		"Coins, a Rare or Epic Crate, an accessory, a Rare/Epic brainrot, or any pass for 24 hours. Each streak day adds +10% to the coin prizes (up to 2x). The wheel at the Market Row booth is the same spin.")
+	-- The prize list follows DailySpinData.Segments: it used to leave out the wheel's two headline
+	-- wedges (the Legendary Crate and the Legendary brainrot roll), and "day 0 streak" on a profile
+	-- that has never spun read as an error (#86).
+	local streak = profile.daily.streak or 0
+	makeRow(0.5, streak > 0 and string.format("Daily Spin  •  day %d streak", streak) or "Daily Spin  •  no streak yet", C.Green,
+		"Coins (1,200 to 15,000), a Rare, Epic or Legendary Crate, an accessory, a Rare/Epic/Legendary brainrot, or any pass for 24 hours. Each streak day adds +10% to the coin prizes (up to 2x). The wheel at the Market Row booth is the same spin.")
 
 	if not pass.premium then
 		local passDef = GamepassConfig.Passes.BrainrotPassPremium
@@ -2002,8 +2043,10 @@ local function renderQuests()
 			local buttons = makeRow(order,
 				string.format("%s  —  \"%s\"", achievement.name, achievement.title),
 				achievement.unlocked and C.Accent or C.Muted,
-				string.format("%s  •  %s / %s  •  +%s C", achievement.description,
-					formatNumber(achievement.progress), formatNumber(achievement.target), formatNumber(achievement.coins)))
+				string.format("%s  •  %s  •  +%s C", achievement.description,
+					achievement.progressText
+						or (formatNumber(achievement.progress) .. " / " .. formatNumber(achievement.target)),
+					formatNumber(achievement.coins)))
 			if not achievement.unlocked then
 				addButton(buttons, 1, "LOCKED", C.PanelAlt, nil, false)
 			elseif equipped then
@@ -2502,6 +2545,9 @@ local function settingsRow(order, label)
 		Text = label,
 		TextColor3 = C.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
+		-- Cut with an ellipsis inside its 45%: unclipped, a long label ("Crouch - slides if you're
+		-- sprinting") ran on under the 150 px key button, which painted over its tail (#86).
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextSize = 14,
 		Parent = row,
 	})
@@ -2711,7 +2757,7 @@ local STYLE_TIERS = { "Style", "DeluxeStyle", "PrestigeStyle" }
 
 local function renderStyleCrates()
 	local _, width = narrowContent()
-	stockHeader(0, "STYLE CRATES  •  accessories, gun skins, auras and parachutes, never one you own")
+	stockHeader(0, "STYLE CRATES  •  accessories, gun skins, auras and parachutes, never one you own", true)
 	for index, tier in ipairs(STYLE_TIERS) do
 		local crate = CrateData.Get(tier)
 		local owned = profile and (profile.crates[tier] or 0) or 0
@@ -3523,12 +3569,21 @@ tradeInvite.OnClientEvent:Connect(function(invite)
 	inviteToken += 1
 	local token = inviteToken
 
-	inviteLabel.Text = invite.fromName .. " wants to trade brainrots with you."
 	invitePanel.Visible = true
 
-	task.delay(30, function()
-		if token == inviteToken then
-			invitePanel.Visible = false
+	-- A live countdown to the server's 30 s expiry (TradeService INVITE_TIMEOUT): the invite used to
+	-- vanish without warning, and both players thought the other had ignored them (#86). Wall-clock
+	-- seconds, not os.clock (CPU time in Roblox); a newer invite's token ends this loop.
+	task.spawn(function()
+		local expiresAt = os.time() + 30
+		while token == inviteToken do
+			local left = expiresAt - os.time()
+			if left <= 0 then
+				invitePanel.Visible = false
+				return
+			end
+			inviteLabel.Text = string.format("%s wants to trade brainrots with you.\nExpires in %ds", invite.fromName, left)
+			task.wait(1)
 		end
 	end)
 end)

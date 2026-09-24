@@ -345,7 +345,9 @@ if "local luck = profile and profile.crateLuck or 1" not in menu or "CrateData.O
     problems.append("MenuClient's crate cards don't build their odds line with CrateData.OddsLine at the player's crateLuck")
 # The one place the odds line is built, so a card can never print a number the roll didn't use.
 _odds_line = re.search(r"function CrateData\.OddsLine\(crate, luck, boosted\)(.*?)\nend\n", crates, re.S)
-if not _odds_line or "boosted and rarity:sub(1, 4)" not in _odds_line.group(1):
+# The full rarity word since #86 ("Unco" / "Lege" were not words a player knows); the rule is that
+# a boosted crate prints the NAME alone, with no percentage beside it.
+if not _odds_line or not re.search(r"boosted and rarity\s*\n", _odds_line.group(1)):
     problems.append("CrateData.OddsLine must print rarity names only for a boosted crate")
 for use in re.findall(r"crate\.odds\[[^\]]+\][^\n]*", menu):
     if "> 0" not in use: problems.append(f"MenuClient reads raw crate.odds for something other than 'can this rarity drop': {use.strip()}")
