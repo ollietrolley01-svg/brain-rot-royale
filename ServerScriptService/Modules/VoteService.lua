@@ -71,13 +71,16 @@ local function shuffled(list)
 	return copy
 end
 
+-- Only readied players' votes count, checked HERE and not only when the vote was cast: a player
+-- who votes and then un-readies is staying in the lobby, and their vote used to go on counting
+-- (and on deciding the match) anyway.
 local function tally()
 	local counts = {}
 	for _, candidate in ipairs(candidates) do
 		counts[candidate.id] = 0
 	end
-	for _, id in pairs(votes) do
-		if counts[id] then
+	for token, id in pairs(votes) do
+		if counts[id] and isReady(token) then
 			counts[id] += 1
 		end
 	end
@@ -282,5 +285,19 @@ function VoteService.Forget(token)
 end
 
 Players.PlayerRemoving:Connect(VoteService.Forget)
+
+-- Un-readying withdraws the vote too, so the cards' counts go down on every screen at once (tally
+-- already ignores it; this is what tells the clients) and re-readying starts from no vote.
+local function watchReady(player)
+	player:GetAttributeChangedSignal("Ready"):Connect(function()
+		if not isReady(player) then
+			VoteService.Forget(player)
+		end
+	end)
+end
+Players.PlayerAdded:Connect(watchReady)
+for _, player in ipairs(Players:GetPlayers()) do
+	watchReady(player)
+end
 
 return VoteService

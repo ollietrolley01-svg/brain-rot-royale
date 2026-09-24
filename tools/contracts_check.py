@@ -438,12 +438,7 @@ CHECKS = [check_attributes, check_remotes, check_tags, check_sounds, check_modul
 
 # Findings that are true of the working branch today and already assigned, by the start of the message.
 # They print as notes. When one stops matching anything the tool says so: the entry is stale, delete it.
-KNOWN = {
-    'C1 attribute "BotIgnore"': "BotService reads it on loot items and nothing sets it (always nil, so harmless); "
-                                "delete the read or have LootService set it",
-    'C1 attribute "Gunner"': "PENDING the vehicles worker (VehicleService makes GunnerSeat with Gunner = true)",
-    "C7 the gunner seat": "PENDING the vehicles worker (VehicleService makeSeat(\"Seat\", \"GunnerSeat\", ...))",
-}
+KNOWN = {}
 
 
 def run(root, known=True):

@@ -31,6 +31,8 @@ The checks, at every size:
      above its name; KOTH's per-objective line from the
      server's status string, from MY side, clear of the team tags; the recap's "DOWNED BY X — BACK IN n"
      counting down off RespawnAt (or the recap's own respawnDelay) and gone when it runs out.
+  8. During a live match the minimap and compass are drawn for a player with a loadout or a spectator
+     (InMatch), never for a lobby player (B14).
 
     python3 tools/hud_layout_check.py .            the checks
     python3 tools/hud_layout_check.py . --plant    the planted faults; every one must be caught
@@ -470,6 +472,7 @@ def check(root, sources, dump=False, quiet=False):
         problems.append("the effects pill stays up after every effect has ended")
 
     problems += check_player_eye(root, sources, quiet)
+    problems += check_match_map(root, sources, sites_by_var)
 
     # 4. static: writers of droppable pieces go through the gate
     hud = sources["HudClient.client.lua"]
@@ -735,6 +738,52 @@ def check_player_eye(root, sources, quiet=False):
     return problems
 
 
+def check_match_map(root, sources, sites_by_var):
+    """Check 8 (B14): the minimap and compass are for the match's own players. During a live match they
+    are drawn for someone with a loadout, or an eliminated player spectating (no loadout, `InMatch` still
+    true), and never for a lobby player (no loadout, `InMatch` false)."""
+    problems = []
+    world = World(root, SIZES[0], sources)
+    shown = world.run("""
+        local sites = select(2, ...)
+        local function visible(site)
+            for _, inst in ipairs(W.created) do
+                if W.instSite(inst) == site then
+                    local node = inst
+                    while node and W.instClass(node) ~= 'ScreenGui' do
+                        if not node.Visible then return false end
+                        node = node.Parent
+                    end
+                    return true
+                end
+            end
+            return nil
+        end
+        local out = {}
+        local function look(case)
+            W.frame(2)
+            out[case] = tostring(visible(sites.minimap)) .. ',' .. tostring(visible(sites.compass))
+        end
+        W.player.Character = W.character
+        W.character.Parent = W.workspace
+        W.player:SetAttribute('InMatch', false)
+        W.fire('MatchChanged', { state = 'InProgress', mode = 'BattleRoyale', mapRadius = 600, aliveCount = 12,
+            playerCount = 12, countdown = 0, minPlayers = 2, mapName = 'Test' })
+        look('lobby')
+        W.player:SetAttribute('InMatch', true)
+        look('spectator')
+        W.fire('LoadoutChanged', { slots = { { kind = 'gun', id = 'Rifle', name = 'Rifle', mag = 12, reserve = 60,
+            rarity = 'Common' } }, equipped = 1, ammo = {}, maxHealth = 100, health = 100 })
+        look('playing')
+        return out
+    """, world.lua.table_from({"minimap": sites_by_var["minimap"], "compass": sites_by_var["compass"]}))
+    want = {"lobby": "false,false", "spectator": "true,true", "playing": "true,true"}
+    for case, good in want.items():
+        if shown[case] != good:
+            problems.append(f"match map: minimap,compass drawn {shown[case]} for a {case} player during a live match, want {good}")
+    return problems
+
+
 # Planted faults, each aimed at an invariant the code must keep forever, not at the bug as it was.
 PLANTS = [
     ("the HUD's crosshair staying up while the vehicle gun is yours",
@@ -773,6 +822,8 @@ PLANTS = [
      "HudClient.client.lua", "refs.tier.Text = (slot and", "refs.tier.Text = '' or (slot and"),
     ("the objectives line ignoring which side I am on",
      "ModeScoreHud.client.lua", 'word = owner == mine and "YOU" or "FOE"', 'word = owner == 1 and "YOU" or "FOE"'),
+    ("the match map drawn for a lobby player (B14)",
+     "HudClient.client.lua", '\n\t\tor not (loadout or player:GetAttribute("InMatch") == true) then', " then"),
     ("the recap countdown ignoring RespawnAt",
      "HudClient.client.lua", 'local at = recap.backAt or player:GetAttribute("RespawnAt")', "local at = recap.backAt"),
     ("the bag card's gun detail without its reach",

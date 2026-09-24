@@ -191,10 +191,11 @@ local function runCounters(token, stillShowing)
 	local list = counters
 	counters = {}
 	task.spawn(function()
-		local started = os.clock()
+		-- Wall time, not os.clock (CPU time in Roblox): a busy frame must not slow the count-up.
+		local started = tick()
 		local duration = 0.9
 		while stillShowing(token) do
-			local t = math.clamp((os.clock() - started) / duration, 0, 1)
+			local t = math.clamp((tick() - started) / duration, 0, 1)
 			local eased = 1 - (1 - t) ^ 3
 			for _, entry in ipairs(list) do
 				entry.label.Text = entry.format(entry.target * eased)

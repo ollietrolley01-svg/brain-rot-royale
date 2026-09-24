@@ -326,8 +326,12 @@ local function onPlayerRemoving(player)
 	-- this player before their profile is released below.
 	StateSync.Flush(player)
 	profileSnapshots[player] = nil
+	-- Pairs are "<from>><to>" UserIds. Matched exactly, one side at a time: a substring match on the id
+	-- also cleared every pair whose OTHER id merely contained it (UserId 12 cleared 3120>77's cooldown).
+	local leaving = tostring(player.UserId)
 	for pair in pairs(tradeInviteAt) do
-		if string.find(pair, tostring(player.UserId), 1, true) then
+		local from, to = string.match(pair, "^(%-?%d+)>(%-?%d+)$")
+		if from == leaving or to == leaving then
 			tradeInviteAt[pair] = nil
 		end
 	end
@@ -433,7 +437,7 @@ end
 LobbyService.OnReadyPad = function(player)
 	MatchService.SetReady(player, true)
 end
--- Cloud Climb obby: the time every clear, and 250 SahurCoins the first clear per server.
+-- Cloud Climb obby: the time every clear, and 250 SahurCoins the first clear per profile.
 LobbyService.OnObbyComplete = function(player, seconds, firstClear, isRecord)
 	-- The clear is announced whatever happens, and the coins are their own line. It used to hand the
 	-- whole sentence to AwardBonusCoins as the bracketed "reason", which read as
@@ -517,8 +521,10 @@ Remotes.Event("ReloadWeapon").OnServerEvent:Connect(function(player)
 end)
 
 -- Right-clicking a hotbar cell drops what's in it at your feet, for making room.
+-- Only while the match is being played: during Loading everyone is already alive to IsAlive, and a drop
+-- then put their kit on the ground at the pier or in mid-air before they had landed.
 Remotes.Event("DropSlot").OnServerEvent:Connect(function(player, slotIndex)
-	if not RateLimit.Take(player, "DropSlot") or not MatchService.IsAlive(player) then
+	if not RateLimit.Take(player, "DropSlot") or not MatchService.IsPlaying(player) then
 		return
 	end
 	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -624,10 +630,11 @@ Remotes.Function("GetDropMap").OnServerInvoke = function(player)
 	return DropMapService.Current()
 end
 
--- A click with an item in hand: start using it. Only while alive in a match. Refusals that are
--- worth explaining ("already at full health") come back as a toast.
+-- A click with an item in hand: start using it. Only while alive in a match that is being played (not
+-- the Loading drop-in, when IsAlive is already true). Refusals that are worth explaining ("already at
+-- full health") come back as a toast.
 Remotes.Event("UseSelected").OnServerEvent:Connect(function(player, aimPoint, slotIndex)
-	if not RateLimit.Take(player, "UseSelected") or not MatchService.IsAlive(player) then
+	if not RateLimit.Take(player, "UseSelected") or not MatchService.IsPlaying(player) then
 		return
 	end
 	-- Any component NaN or infinite is refused, not just a wrong type (see SafeValue).
@@ -1115,7 +1122,8 @@ RewardService.IsTrading = TradeService.InSession
 
 TradeService.OnTradeComplete = function()
 	ShowcaseService.Refresh()
-	-- A traded-away companion has to go home with its new owner's collection.
+	-- A traded-away companion has to go home with its new owner's collection. Only the player whose
+	-- companion left is touched; everyone else's (and its health boon) is left alone.
 	CompanionService.RefreshAll()
 	-- A trade can complete a set for either side.
 	for _, player in ipairs(Players:GetPlayers()) do

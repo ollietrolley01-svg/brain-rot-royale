@@ -252,7 +252,7 @@ function BotNav.Request(bot, destination, priority)
 	end
 
 	nav.nextId += 1
-	local fresh = { destination = destination, priority = priority, at = os.clock(), id = nav.nextId }
+	local fresh = { destination = destination, priority = priority, at = tick(), id = nav.nextId }
 	if not pending then
 		table.insert(waiting, bot)
 	else
@@ -339,18 +339,19 @@ local function compute(bot, request)
 	nav.computing = request.id
 	nav.computingTo = request.destination
 	inFlight += 1
-	local waited = os.clock() - request.at
+	local waited = tick() - request.at
 	STATS.queueWait += waited
 	STATS.queueWaitMax = math.max(STATS.queueWaitMax, waited)
 
 	task.spawn(function()
 		local path = PathfindingService:CreatePath(AGENT)
-		local started = os.clock()
+		local started = tick()
 		local from = bot.character:GetPivot().Position
 		local ok = pcall(function()
 			path:ComputeAsync(from, request.destination)
 		end)
-		STATS.pathTime += os.clock() - started
+		-- Wall time, like `started`: ComputeAsync yields, so CPU time across it measures other work.
+		STATS.pathTime += tick() - started
 		inFlight -= 1
 
 		-- Dropped, replaced, or the bot is gone: this answer is for a question nobody is asking now.
@@ -390,7 +391,7 @@ local function compute(bot, request)
 			nav.waypoints = nil
 			nav.routeEnd = nil
 			nav.lastFailure = request.destination
-			nav.lastFailureAt = os.clock()
+			nav.lastFailureAt = tick()
 		end
 	end)
 end
@@ -443,7 +444,7 @@ end
 -- Whether the last compute toward (near) this destination failed within `window` seconds.
 function BotNav.RecentlyFailed(bot, destination, window)
 	local nav = bot.nav
-	return nav ~= nil and nav.lastFailure ~= nil and os.clock() - nav.lastFailureAt < (window or 5)
+	return nav ~= nil and nav.lastFailure ~= nil and tick() - nav.lastFailureAt < (window or 5)
 		and (nav.lastFailure - destination).Magnitude < REUSE_RADIUS
 end
 
@@ -821,7 +822,7 @@ end
 -- ("idle" for a wandering or looting bot, "navigation" otherwise; see BotNav.CastRay).
 function BotNav.Follow(bot, humanoid, root, goal, now, priority)
 	local nav = bot.nav
-	now = now or os.clock()
+	now = now or tick()
 
 	-- Watching a jump for the moment to climb: keep going the way it was going.
 	if nav.climbing then
@@ -923,8 +924,8 @@ function climbFromJump(bot, humanoid, root, forward, onFail)
 	nav.climbing = true
 	humanoid.Jump = true
 	task.spawn(function()
-		local started = os.clock()
-		while os.clock() - started < CLIMB_WATCH_SECONDS do
+		local started = tick()
+		while tick() - started < CLIMB_WATCH_SECONDS do
 			RunService.Heartbeat:Wait()
 			if bot.nav ~= nav or not root.Parent or humanoid.Health <= 0 then
 				nav.climbing = false
@@ -935,7 +936,7 @@ function climbFromJump(bot, humanoid, root, forward, onFail)
 				if BotNav.TryParkour(bot.character, forward, groundY) then
 					STATS.parkour += 1
 					STATS.parkourFromJump += 1
-					nav.recheckRouteAt = os.clock()
+					nav.recheckRouteAt = tick()
 				else
 					onFail()
 				end
@@ -1079,8 +1080,8 @@ function BotNav.Progress(bot, humanoid, root, target, now)
 		-- over it the way a player would with a Rot Rocket. Bots are simulated by the server, so the
 		-- push can be applied directly. The fallback when climbing and vaulting don't apply.
 		local function hopOver()
-			if humanoid.Health > 0 and humanoid.FloorMaterial ~= Enum.Material.Air and os.clock() - nav.lastHopAt > 6 then
-				nav.lastHopAt = os.clock()
+			if humanoid.Health > 0 and humanoid.FloorMaterial ~= Enum.Material.Air and tick() - nav.lastHopAt > 6 then
+				nav.lastHopAt = tick()
 				STATS.hops += 1
 				hop(root, humanoid)
 			end

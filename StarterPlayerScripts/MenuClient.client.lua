@@ -2422,7 +2422,9 @@ local function renderRobuxShop()
 
 	local products = {}
 	for _, product in ipairs(sortedByOrder(GamepassConfig.Products)) do
-		if not product.featured and not product.brainrotShop and shopVisible(product) then
+		-- A one-match boost that can't beat a pass they own would never be spent (GamepassConfig.PlanBoosts).
+		if not product.featured and not product.brainrotShop and shopVisible(product)
+			and not GamepassConfig.Outclassed(product, profile and profile.ownedPasses, profile and profile.tempPasses) then
 			table.insert(products, product)
 		end
 	end

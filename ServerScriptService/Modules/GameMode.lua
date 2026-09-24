@@ -533,8 +533,14 @@ local function retireBot(bot)
 	local character = bot and bot.character
 	host.RemoveCombatant(bot)
 	ModeTeams.Forget(bot)
+	-- Out of BotService's think list now (a replacement is a new bot): BotService.Clear never sees a
+	-- retired bot, so what it would have done at the end of the match happens here and below.
+	BotService.Forget(bot)
 	-- Long enough for the death effect to play out, matching the battle royale's own timing.
 	task.delay(7, function()
+		-- After the death's own credit (kill, assists) has long been paid: what CombatService remembers
+		-- about this token goes, as BotService.Clear does for a bot still in the list.
+		CombatService.ForgetToken(bot)
 		if character and character.Parent then
 			Combatants.Unregister(character)
 			character:Destroy()
@@ -590,6 +596,15 @@ local function onDeath(token, killerToken, method)
 	local victimTeam = ModeTeams.TeamOf(token)
 	local killerTeam = killerToken and ModeTeams.TeamOf(killerToken) or nil
 
+	-- Rewards bookkeeping (kills, assists, streaks, revenge, defends) while both teams are still known.
+	-- Protected: a bookkeeping error must never stop the death being scored and the respawn scheduled.
+	-- BEFORE the score: the winning kill's addScore runs FinishNow synchronously, and the payout reads
+	-- the ledgers, so credited after it the kill that won the match was missing from the killer's card.
+	local credited, creditError = pcall(creditDeath, token, killerToken, victimTeam, killerTeam)
+	if not credited then
+		warn("[GameMode] team reward bookkeeping failed: " .. tostring(creditError))
+	end
+
 	-- Team Deathmatch scores eliminations. King of the Hill scores the hill, so a kill there is
 	-- worth nothing on the scoreboard and everything in practice.
 	if current.id == "TeamDeathmatch" then
@@ -600,13 +615,6 @@ local function onDeath(token, killerToken, method)
 			-- there is no way to stall by dying to the world.
 			addScore(GameModes.OtherTeam(victimTeam), 1)
 		end
-	end
-
-	-- Rewards bookkeeping (kills, assists, streaks, revenge, defends) while both teams are still known.
-	-- Protected: a bookkeeping error must never stop the death being scored and the respawn scheduled.
-	local credited, creditError = pcall(creditDeath, token, killerToken, victimTeam, killerTeam)
-	if not credited then
-		warn("[GameMode] team reward bookkeeping failed: " .. tostring(creditError))
 	end
 
 	ModeTeams.MarkDown(token)

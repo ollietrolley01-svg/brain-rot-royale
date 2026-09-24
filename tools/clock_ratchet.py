@@ -27,23 +27,26 @@ import subprocess
 import sys
 
 # file -> how many wall-clock os.clock() sites the CLOCK_WALL_TIME rule reports for it today.
-# LOWER these as they are converted; never raise one. Measured 2026-09-21 22:4x.
+# LOWER these as they are converted; never raise one. Measured 2026-09-21 22:4x; set to the counts
+# after the 2026-09-24 bug-hunt conversions (LobbyService included, converted by the economy fixes).
 CLOCK_BASELINE = {
-    "ReplicatedStorage/Shared/CosmeticPreview.lua": 1,
+    "ReplicatedStorage/Shared/CosmeticPreview.lua": 0,
     "ReplicatedStorage/Shared/ZFight.lua": 1,
     "ServerScriptService/Bootstrap.server.lua": 3,
-    "ServerScriptService/Modules/BotNav.lua": 9,
-    "ServerScriptService/Modules/BotService.lua": 6,
+    "ServerScriptService/Modules/BotNav.lua": 0,
+    # Not deadlines: the think loop's CPU-cost readings (`started`, `began`), which is what os.clock is
+    # for. The bot timeline itself is tick(), shared with BotNav and CombatService's hit stamps.
+    "ServerScriptService/Modules/BotService.lua": 2,
     "ServerScriptService/Modules/BrainrotShopService.lua": 1,
-    "ServerScriptService/Modules/CombatService.lua": 4,
-    "ServerScriptService/Modules/CompanionService.lua": 2,
+    "ServerScriptService/Modules/CombatService.lua": 1,
+    "ServerScriptService/Modules/CompanionService.lua": 0,
     "ServerScriptService/Modules/DefenseService.lua": 1,
     "ServerScriptService/Modules/GlobalBoardService.lua": 2,
-    "ServerScriptService/Modules/HazardService.lua": 1,
+    "ServerScriptService/Modules/HazardService.lua": 0,
     "ServerScriptService/Modules/Landmarks.lua": 1,
-    "ServerScriptService/Modules/LobbyService.lua": 4,
-    "ServerScriptService/Modules/MapWilds.lua": 1,
-    "ServerScriptService/Modules/MatchService.lua": 15,
+    "ServerScriptService/Modules/LobbyService.lua": 0,
+    "ServerScriptService/Modules/MapWilds.lua": 0,
+    "ServerScriptService/Modules/MatchService.lua": 13,
     "ServerScriptService/Modules/MovementSanity.lua": 6,
     "ServerScriptService/Modules/MovementService.lua": 6,
     # The one remaining site is `tostring(os.clock())` building a Studio JobId. Nothing waits on
@@ -51,20 +54,20 @@ CLOCK_BASELINE = {
     "ServerScriptService/Modules/PlayerData.lua": 1,
     "ServerScriptService/Modules/ProgressionService.lua": 1,
     "ServerScriptService/Modules/RangeService.lua": 1,
-    "ServerScriptService/Modules/StatusEffects.lua": 1,
+    "ServerScriptService/Modules/StatusEffects.lua": 0,
     "ServerScriptService/Modules/TownThemes.lua": 1,
-    "ServerScriptService/Modules/TradeService.lua": 1,
+    "ServerScriptService/Modules/TradeService.lua": 0,
     "ServerScriptService/Modules/WeaponService.lua": 4,
     "StarterPlayerScripts/AmbientClient.client.lua": 1,
-    "StarterPlayerScripts/CombatClient.client.lua": 9,
+    "StarterPlayerScripts/CombatClient.client.lua": 8,
     "StarterPlayerScripts/CompanionFxClient.client.lua": 0,
     "StarterPlayerScripts/DefensePreview.lua": 1,
-    "StarterPlayerScripts/GlassFxClient.client.lua": 1,
+    "StarterPlayerScripts/GlassFxClient.client.lua": 0,
     "StarterPlayerScripts/HudClient.client.lua": 6,
     "StarterPlayerScripts/MenuClient.client.lua": 8,
     "StarterPlayerScripts/MovementClient.client.lua": 19,
     "StarterPlayerScripts/ProgressionPanel.lua": 6,
-    "StarterPlayerScripts/ProjectileClient.client.lua": 13,
+    "StarterPlayerScripts/ProjectileClient.client.lua": 12,
 }
 
 # `<file>:<line>: CLOCK_WALL_TIME os.clock (<n> wall-clock use(s) ...)`. The count is the number in

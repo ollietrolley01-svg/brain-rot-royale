@@ -128,7 +128,11 @@ Color3 = { fromRGB = function(r, g, b) return { r, g, b } end, new = function(r,
 CFrame = { new = function() return {} end }
 task = { wait = function() end, spawn = function(f) f() end }
 warn = function() end
-tick = os.time
+-- BotService's bot timeline is tick() (wall time; BotNav and CombatService's hit stamps share it). Here it
+-- is the sim's own clock, so a function that reads the time itself (`now or tick()`) agrees with the `now`
+-- the sim hands the rest; the scenarios set SIM_NOW wherever they move `now`.
+SIM_NOW = 0
+tick = function() return SIM_NOW end
 
 -- Shared data modules, the real files, required by name.
 local loaded = {}
@@ -564,6 +568,7 @@ local function runMatch(isLegacy, rotationOnly)
 	local now = 0
 	while now < 600 do
 		now = now + DT
+		SIM_NOW = now
 		local stormDps = stepStorm(now)
 		if (now > 180 and cratesDropped == 0) or (now > 360 and cratesDropped == 1) then
 			cratesDropped = cratesDropped + 1
@@ -785,6 +790,7 @@ local function unitChecks()
 		return bot
 	end
 	local now = 1000
+	SIM_NOW = now
 	-- Dials in order.
 	out.healOrder = LR.healBelow(botOf("Survivor")) > LR.healBelow(botOf("Anchor"))
 		and LR.healBelow(botOf("Anchor")) > LR.healBelow(botOf("Flanker"))
@@ -818,6 +824,7 @@ local function unitChecks()
 	local pickS = LR.pickLoot(survivor, survivor.humanoid, survivor.root, false, false, nil, nil, now)
 	local pickO = LR.pickLoot(opportunist, opportunist.humanoid, opportunist.root, false, false, nil, nil, now)
 	now = now + 5 -- a fresh loot snapshot for the chest below
+	SIM_NOW = now
 	out.supplySurvivorLeaves = pickS ~= crate
 	out.supplyOpportunistGoes = pickO == crate
 	crate:Destroy()
@@ -874,6 +881,7 @@ local function baseScenario(useLegacy)
 	end
 	lazyModules.ModeTeams = { BaseOf = function() return base end }
 	local now = 2000 + (useLegacy and 0 or 10)
+	SIM_NOW = now
 	local targets = {}
 	for _, bot in ipairs(squad) do
 		local item

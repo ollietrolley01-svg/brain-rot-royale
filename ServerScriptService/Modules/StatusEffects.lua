@@ -112,8 +112,8 @@ end
 -- Echo and ratio (the gun rework)
 --------------------------------------------------------------------------------
 
--- Server game time (os.clock is CPU time in Roblox and drifts from the wall under load); swappable for the
--- harness, as Delay is (task.delay, which the harness runs by hand).
+-- Server game time (os.clock is CPU time in Roblox and drifts from the wall under load), for the chill's
+-- timers as well as these; swappable for the harness, as Delay is (task.delay, which the harness runs by hand).
 StatusEffects.Clock = function()
 	return time()
 end
@@ -251,7 +251,7 @@ local function onDamage(attacker, victim, dealt, weaponId, _headshot, shieldHit)
 		startDot("ignite", attacker, victim, weaponId, def.ignite)
 	end
 	if type(def.chill) == "table" then
-		applyChill(victim, def.chill, os.clock())
+		applyChill(victim, def.chill, StatusEffects.Clock())
 	end
 	if type(def.echo) == "table" and attacker then
 		scheduleEcho(attacker, victim, weaponId, def)
@@ -293,7 +293,7 @@ local function tickAll()
 			end
 		end
 	end
-	local now = os.clock()
+	local now = StatusEffects.Clock()
 	for victim, state in pairs(chills) do
 		if not Combatants.Exists(victim) then
 			chills[victim] = nil

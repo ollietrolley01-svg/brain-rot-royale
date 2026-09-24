@@ -71,6 +71,8 @@ end
 
 local loadouts = {}
 local lastInstantAt = {}
+-- Players with a PushSoon waiting for the end of this frame.
+local pushQueued = {}
 
 local loadoutChanged = Remotes.Event("LoadoutChanged")
 local itemUsed = Remotes.Event("ItemUsed")
@@ -114,6 +116,7 @@ end
 
 function WeaponService.Clear(player)
 	loadouts[player] = nil
+	pushQueued[player] = nil
 	lastInstantAt[player] = nil
 	syncShield(player, 0)
 end
@@ -144,6 +147,7 @@ local function loadoutFor(player)
 end
 
 function WeaponService.Push(player)
+	pushQueued[player] = nil
 	local loadout = loadouts[player]
 	if not loadout then
 		loadoutChanged:FireClient(player, nil)
@@ -202,6 +206,24 @@ function WeaponService.Push(player)
 			remaining = math.max(0, using.startedAt + using.duration - os.clock()),
 		} or nil,
 	})
+end
+
+-- The same snapshot, once per frame however many times it is asked for. A shot spends a round and a hit
+-- soaks the shield, and each used to send the WHOLE loadout: a shotgun's pellets or an SMG's rate into a
+-- shielded target was several full snapshots a frame for one change the client only draws once.
+-- Deferred like StateSync.Push: every change this frame lands in the one snapshot sent at its end.
+function WeaponService.PushSoon(player)
+	if pushQueued[player] then
+		return
+	end
+	pushQueued[player] = true
+	task.defer(function()
+		-- Cleared by a Push that went out in the meantime, or by Clear when they left.
+		if pushQueued[player] and player.Parent then
+			WeaponService.Push(player)
+		end
+		pushQueued[player] = nil
+	end)
 end
 
 --------------------------------------------------------------------------------
@@ -1745,7 +1767,7 @@ function WeaponService.AbsorbDamage(player, amount)
 	local absorbed = math.min(loadout.shield, amount)
 	loadout.shield -= absorbed
 	syncShield(player, loadout.shield)
-	WeaponService.Push(player)
+	WeaponService.PushSoon(player)
 	return amount - absorbed, absorbed
 end
 
@@ -1841,7 +1863,7 @@ function WeaponService.ConsumeAmmo(player)
 		return false
 	end
 	slot.mag -= 1
-	WeaponService.Push(player)
+	WeaponService.PushSoon(player)
 	return true
 end
 

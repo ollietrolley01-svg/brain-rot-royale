@@ -204,6 +204,13 @@ local function groundUnder(position)
 	return hit and hit.Position or position
 end
 
+-- A mine's arming delay and lifetime are wall time: os.clock is CPU time in Roblox and drifts from the
+-- wall under load, so a busy server armed mines late and left them out past their lifetime. Server time,
+-- the clock CompanionService's cooldowns use.
+local function clockNow()
+	return workspace:GetServerTimeNow()
+end
+
 -- Arms a mine on the ground under `position`, owned by `ownerToken` (a player or a bot; nil for
 -- one nobody owns, which anyone can set off). Returns the model, or nil if it couldn't be built.
 function HazardService.Mine(parent, position, ownerToken)
@@ -228,7 +235,7 @@ function HazardService.Mine(parent, position, ownerToken)
 	end
 	model.Parent = parent
 
-	local now = os.clock()
+	local now = clockNow()
 	local entry = {
 		kind = "mine",
 		health = MINE_HEALTH,
@@ -488,7 +495,7 @@ end
 task.spawn(function()
 	while true do
 		task.wait(MINE_POLL)
-		stepMines(os.clock())
+		stepMines(clockNow())
 	end
 end)
 

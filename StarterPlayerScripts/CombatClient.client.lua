@@ -815,8 +815,9 @@ end)
 -- The server widens the spread the same way (CombatService bloom).
 local spray = { shots = 0, lastAt = 0 }
 
+-- Wall time for the spray window (here and in the recovery below), not os.clock: CPU time in Roblox.
 function addRecoil(def)
-	local now = os.clock()
+	local now = tick()
 	if now - spray.lastAt > math.max(0.3, 2.2 / math.max(def.fireRate, 0.1)) then
 		spray.shots = 0
 	end
@@ -862,7 +863,7 @@ RunService:BindToRenderStep("BRR_Recoil", Enum.RenderPriority.Camera.Value + 1, 
 	appliedRecoil = offset
 
 	-- Mid-spray the kick barely recovers, so it builds; once the trigger is let go it settles fast.
-	local spraying = os.clock() - spray.lastAt < 0.18
+	local spraying = tick() - spray.lastAt < 0.18
 	local decay = math.clamp(delta * (spraying and 3 or 12), 0, 1)
 	recoilPitch -= recoilPitch * decay
 	recoilYaw -= recoilYaw * decay
@@ -1492,7 +1493,7 @@ end
 do
 	local recentTinks = {}
 	GunFx.OnCasingLand = function(_, casing)
-		local now = os.clock()
+		local now = tick() -- wall time: a one-second window, not CPU time
 		while recentTinks[1] and now - recentTinks[1] > 1 do
 			table.remove(recentTinks, 1)
 		end

@@ -1850,7 +1850,7 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	if not hostile(bot, target) then
 		return
 	end
-	local now = os.clock()
+	local now = tick()
 
 	if now < bot.nextShotAt then
 		return
@@ -2794,13 +2794,6 @@ local function blacklistLoot(bot, item, seconds, now)
 end
 
 local function lootAllowed(bot, item, distance, center, radius, now)
-	-- Tagged by the map as somewhere a bot can't get to (a chest on a summit steeper than the agent's
-	-- slope). The blacklist below still catches anything nobody tagged, but this costs nothing and
-	-- stops the walk before it starts.
-	if item:GetAttribute("BotIgnore") == true then
-		STATS.lootIgnored += 1
-		return false
-	end
 	local banned = bot.lootBlacklist[item]
 	if banned and now < banned then
 		return false
@@ -2855,7 +2848,7 @@ local function lootItems(now)
 end
 
 function BotService.SpatialQuery.Loot(position, radius, kind, now)
-	lootItems(now or os.clock())
+	lootItems(now or tick())
 	if radius == math.huge then
 		-- No circle to read: the whole snapshot, filtered.
 		local list, n = lootSnapshot.grid.scratch, 0
@@ -3698,7 +3691,7 @@ function BotService.TakeoverAllowed(bot, player)
 		local mine, theirs = Vehicles.teamOf(bot), Vehicles.teamOf(player)
 		return mine ~= nil and mine == theirs
 	end
-	Vehicles.refreshFoes(bot, os.clock())
+	Vehicles.refreshFoes(bot, tick())
 	return bot.vehicleFoes[player] == nil
 end
 
@@ -3720,7 +3713,7 @@ function Vehicles.leaveRide(bot, reason, cooldown)
 	if humanoid and humanoid.SeatPart then
 		humanoid.Sit = false
 	end
-	bot.noVehicleUntil = os.clock() + (cooldown or VEHICLE.REBOARD)
+	bot.noVehicleUntil = tick() + (cooldown or VEHICLE.REBOARD)
 	bot.lastVehicleExit = reason
 	STATS.vehicleExits += 1
 	if bot.nav then
@@ -3738,7 +3731,7 @@ function BotService.YieldSeat(bot, player, seat)
 	end
 	STATS.vehicleTakeovers += 1
 	if ride.role == "driver" then
-		ride.yieldTo = { player = player, at = os.clock() }
+		ride.yieldTo = { player = player, at = tick() }
 	else
 		Vehicles.leaveRide(bot, "takeover")
 	end
@@ -3877,7 +3870,7 @@ function Vehicles.ensureServo()
 		return
 	end
 	Vehicles.servo = RunService.Heartbeat:Connect(function(dt)
-		local now = os.clock()
+		local now = tick()
 		for bot, ride in pairs(riders) do
 			local humanoid = bot.humanoid
 			if humanoid and humanoid.Health > 0 and humanoid.SeatPart == ride.seat then
@@ -4609,7 +4602,7 @@ end
 -- between asks the last answer stands, so a dial read costs a table lookup. A bot dealt nothing
 -- (a probe's bare record) takes a kind from its slot, so six kinds are always in a lobby.
 function BotService.Loot.archetypeOf(bot, now)
-	now = now or os.clock()
+	now = now or tick()
 	if bot.lootKind and now - (bot.lootKindAt or -math.huge) < 5 then
 		return bot.lootKind
 	end
@@ -5174,7 +5167,7 @@ function BotService.Loot.pickDrop(bot, targets, from)
 	if not targets or #targets == 0 then
 		return nil
 	end
-	local now = os.clock()
+	local now = tick()
 	local ranked = {}
 	for _, spot in ipairs(targets) do
 		local dx, dz = spot.X - from.X, spot.Z - from.Z
@@ -5335,7 +5328,7 @@ local function updateBot(bot)
 		return
 	end
 
-	local now = os.clock()
+	local now = tick()
 	local head = bot.character:FindFirstChild("Head") or root
 
 	-- Oliver: "bots teleport around a lot". Welding a gun or companion on changes the assembly and
@@ -5947,11 +5940,11 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				weapon = nil,
 				loadoutWeapon = false, -- true once SpawnLoadout hands over a gun: sufficient at any rarity
 				spawnWeapon = weapon,
-				nextShotAt = os.clock() + math.random() * 1.5,
+				nextShotAt = tick() + math.random() * 1.5,
 				burstLeft = 0,
 				acquiredAt = 0,
 				strafeDir = math.random() < 0.5 and 1 or -1,
-				strafeFlipAt = os.clock() + math.random() * 2,
+				strafeFlipAt = tick() + math.random() * 2,
 				wanderTarget = nil,
 				wanderAt = 0,
 				wanderGoal = nil,
@@ -5988,7 +5981,7 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				backup = nil, -- second gun, of another class than `weapon` (BotService.Loot.takeGun)
 				backupMag = nil,
 				gunSwapAt = 0,
-				landedAt = os.clock(), -- reset when a dropped-in bot lands
+				landedAt = tick(), -- reset when a dropped-in bot lands
 				lootKind = nil, -- the archetype's name as the loot code last read it (BotService.Loot.archetypeOf)
 				-- Perception
 				target = nil,
@@ -6121,7 +6114,7 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				if not MovementService.BotDrop(character, target, function()
 					bot.dropping = false
 					-- The looting phase (BotService.Loot.lootPhase) runs from the landing.
-					bot.landedAt = os.clock()
+					bot.landedAt = tick()
 					-- The canopy came off, so the assembly changed; claim it again.
 					claimPhysics(character)
 				end) then
@@ -6220,6 +6213,13 @@ function BotService.Start()
 			if not running or generation ~= loopGeneration then
 				break
 			end
+			-- CPU COST, measured on purpose: `started`, `began`, `took` and `spent` below are os.clock()
+			-- readings of how much processor a think slice and each bot's think take (STATS, the probes'
+			-- budget numbers), which is the legitimate use of os.clock. The clock-ratchet counts these two
+			-- lines as wall-clock sites; they are exempt, not a deadline. They never meet the bot timeline:
+			-- every time a bot is JUDGED by (LodDefers, thoughtAt, all of updateBot) is tick(), the one clock
+			-- BotService, BotNav and CombatService's hit stamps (GetLastAttacker) share. `startedWall` is
+			-- the wall figure.
 			local started = os.clock()
 			local startedWall = tick()
 			BotNav.Pump()
@@ -6227,16 +6227,17 @@ function BotService.Start()
 			refreshCombatants()
 			local updated = 0
 			for index, bot in ipairs(bots) do
-				if index % THINK_SLICES == slice and not BotService.LodDefers(bot, started) then
+				if index % THINK_SLICES == slice and not BotService.LodDefers(bot, startedWall) then
 					updated += 1
 					bot.branch = "idle"
 					local began = os.clock()
+					local beganWall = tick()
 					local ok, err = pcall(updateBot, bot)
 					if not ok then
 						warn("[BotService] Bot update failed: " .. tostring(err))
 					end
 					bot.lastBranch = bot.branch
-					bot.thoughtAt = began
+					bot.thoughtAt = beganWall
 					-- Where the think time goes, for tools/bot_probe.lua; the slowest single think and
 					-- its branch, for tools/perf_tick_probe.lua (the 42.6 ms tick is still unexplained).
 					local took = os.clock() - began
@@ -6260,6 +6261,31 @@ function BotService.Start()
 			STATS.maxTickWall = math.max(STATS.maxTickWall, tick() - startedWall)
 		end
 	end)
+end
+
+-- A bot retired mid-match (a team mode's dead bot, GameMode.retireBot): out of the think list, its nav,
+-- its ride and its loot claims, as Clear does for every bot at the end. Without this the list only ever
+-- grew -- a respawn mode appends a replacement for every death -- and every dead bot stayed in every
+-- think slice for the rest of the match. The body is the caller's: GameMode leaves it for the death
+-- effect and unregisters it itself.
+function BotService.Forget(bot)
+	local index = table.find(bots, bot)
+	if not index then
+		return false
+	end
+	table.remove(bots, index)
+	if riders[bot] or bot.ride then
+		Vehicles.leaveRide(bot, "retired")
+	end
+	BotNav.Drop(bot)
+	pcall(setSprint, bot, false)
+	pcall(setCrouch, bot, false)
+	for item, holder in pairs(lootClaims) do
+		if holder == bot then
+			lootClaims[item] = nil
+		end
+	end
+	return true
 end
 
 function BotService.Clear()

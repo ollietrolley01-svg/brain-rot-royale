@@ -680,15 +680,29 @@ end
 -- collision damage applies whoever is driving. entry.lastFlatSpeed is nil on a vehicle's first step
 -- and is set to 0 by checkHonest's own anti-cheat correction so a teleport-back is never misread as
 -- a 100-studs/s "impact".
-local function checkCollisionDamage(entry, flatSpeed)
+--
+-- A client-owned vehicle's velocity reaches the server in bursts: after a network stall it has not
+-- changed for several frames and then drops all at once, and ordinary braking over the whole stall read
+-- as one crash (bug hunt A2: a spurious 48 damage). So the floor grows with the time the last reading
+-- went unchanged beyond this step: the handling's own `brake` (studs/s^2) times that time is braking
+-- the stall could have hidden. An unchanged reading is not a new one and judges nothing.
+local function checkCollisionDamage(entry, flatSpeed, now, dt)
 	local last = entry.lastFlatSpeed
+	if last ~= nil and flatSpeed == last then
+		return
+	end
+	local since = entry.lastFlatSpeedAt
 	entry.lastFlatSpeed = flatSpeed
+	entry.lastFlatSpeedAt = now
 	if not last then
 		return
 	end
+	local stale = since and math.max(0, now - since - (dt or 0)) or 0
+	local brake = entry.rig.handling and entry.rig.handling.brake or 0
+	local floor = COLLISION_FLOOR + brake * stale
 	local drop = last - flatSpeed
-	if drop > COLLISION_FLOOR then
-		damageVehicle(entry, (drop - COLLISION_FLOOR) * COLLISION_DAMAGE_PER)
+	if drop > floor then
+		damageVehicle(entry, (drop - floor) * COLLISION_DAMAGE_PER)
 	end
 end
 
@@ -970,6 +984,8 @@ local function updateOwnership(entry, now)
 		entry.lastMoveAt = now
 		entry.lastGood = entry.model:GetPivot()
 		entry.overSpeedFor = 0
+		-- And the collision check: the new owner's first reading is not a drop from the old one's last.
+		entry.lastFlatSpeed = nil
 	end
 end
 
@@ -1032,7 +1048,7 @@ local function checkHonest(entry, dt, now)
 		entry.lastGood = entry.model:GetPivot()
 	end
 	if not corrected then
-		checkCollisionDamage(entry, flat)
+		checkCollisionDamage(entry, flat, now, dt)
 	end
 end
 
@@ -1102,7 +1118,7 @@ local function step(entry, dt, now)
 		input = { throttle = 0, steer = 0, parked = true }
 	end
 	local telemetry = VehicleDynamics.Step(rig, input, dt)
-	checkCollisionDamage(entry, Vector3.new(chassis.AssemblyLinearVelocity.X, 0, chassis.AssemblyLinearVelocity.Z).Magnitude)
+	checkCollisionDamage(entry, Vector3.new(chassis.AssemblyLinearVelocity.X, 0, chassis.AssemblyLinearVelocity.Z).Magnitude, now, dt)
 
 	if telemetry.flippedFor > (occupant and RIGHT_OCCUPIED_AFTER or RIGHT_EMPTY_AFTER) then
 		if occupant or next(entry.occupants) == nil then

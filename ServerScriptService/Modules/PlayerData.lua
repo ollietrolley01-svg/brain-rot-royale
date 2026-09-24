@@ -53,7 +53,9 @@ local function defaultData()
 		Cosmetics = { owned = {}, gunSkin = nil, aura = nil, accessory = nil, parachute = nil, killAnimation = nil },
 		Pass = { xp = 0, claimedFree = {}, claimedPremium = {} },
 		Daily = { lastClaimDay = 0, streak = 0 },
-		Stats = { wins = 0, kills = 0, matches = 0 },
+		-- `climbs` (lifetime Cloud Climb clears) was added 2026-09-24, so the first-clear coins are paid
+		-- once per profile rather than once per server visited; older saves have none and start at 0.
+		Stats = { wins = 0, kills = 0, matches = 0, climbs = 0 },
 		-- Team-mode record (lifetime team wins, matches, current win streak): team rewards v2.
 		TeamRewards = { wins = 0, matches = 0, streak = 0 },
 		-- One-match boosts: Health/Speed from the shop and the Starter Bundle, the Pro pair
@@ -561,6 +563,27 @@ local function tryClaim(key)
 	return "ok", profileOut, versionOut, nil, tookOver
 end
 
+-- Undoes a claim an orphaned Load just made for a player who has LEFT (not rejoined). Their Release
+-- ran while the claim was in flight and found nothing to write, so without this the lock stays on
+-- the key and their next server turns them away ("still being saved") until it goes stale. Cleared
+-- only while it is still exactly the claim we made (our job, the version we read) and no newer
+-- session for the UserId exists on this server: a rejoin here re-claims the key with the same job
+-- id, and its lock must not be touched. Best effort; a failure leaves the lock to go stale as before.
+local function releaseOrphanClaim(key, userId, claimedVersion)
+	local ok, err = pcall(function()
+		store:UpdateAsync(key, function(saved)
+			local profile, lock, version = unpackEnvelope(saved)
+			if owners[userId] ~= nil or not lock or lock.jobId ~= JOB_ID or version ~= claimedVersion then
+				return nil
+			end
+			return envelope(profile, version, false)
+		end)
+	end)
+	if not ok then
+		warn(string.format("[PlayerData] Couldn't release the lock for user %d after they left mid-load: %s", userId, tostring(err)))
+	end
+end
+
 function PlayerData.Load(player)
 	local key = keyFor(player)
 	local saved, loaded, lockedOut = nil, false, false
@@ -587,6 +610,11 @@ function PlayerData.Load(player)
 		local deadline = wallNow() + LOCK_WAIT_SECONDS
 		local errors = 0
 		while true do
+			-- The player left while we waited (Release clears owners[]) or a newer session took over:
+			-- stop here rather than waiting out the lock, or claiming it, for nobody.
+			if owners[player.UserId] ~= player then
+				return reconcile(nil)
+			end
 			-- tryClaim already takes over a lock older than LOCK_STALE_SECONDS: a live server refreshes
 			-- `at` on every autosave (60 s), so anything that old belongs to a server that is gone. It is
 			-- NOT enough that the holder wrote nothing while we waited — a live server with nothing to
@@ -596,7 +624,11 @@ function PlayerData.Load(player)
 				-- A newer session for this UserId took over while we waited (the player left and rejoined
 				-- this server): this load is an orphan. Hand back a throwaway profile and register
 				-- nothing, so nothing of ours can touch the new session. A lock we may have just claimed
-				-- is this server's own, which the new session's claim takes over.
+				-- is this server's own, which the new session's claim takes over; if there is no new
+				-- session (the player left), nobody will ever release it, so it is released here.
+				if status == "ok" and owners[player.UserId] == nil then
+					releaseOrphanClaim(key, player.UserId, version)
+				end
 				return reconcile(nil)
 			end
 			if status == "ok" then

@@ -10,6 +10,7 @@
 --   Ballistics.LeadAim(spec, origin, target, targetVelocity, gravity)   a point to aim at so the round hits
 --   Ballistics.ThrowOrigin(head, direction)    where a thrown item leaves the hand
 --   Ballistics.ThrowVelocity(spec, origin, aimPoint, carrierVelocity)
+--   Ballistics.CarrierVelocity(velocity)       the thrower's run as a throw may carry it (flat, capped)
 --   Ballistics.LobVelocity(origin, target, gravity, gravityScale)       lands on `target` (bots)
 --   Ballistics.StepBody(body, dt, gravity, cast)   one step of a bouncing thrown body
 --   Ballistics.BlastScale(distance, innerRadius, radius)   damage multiplier at a distance from a blast
@@ -298,12 +299,35 @@ function Ballistics.ThrowOrigin(head, direction)
 	return head + direction * 1.2
 end
 
+-- The fastest a thrower's own run is taken to be: MatchConfig.BaseWalkSpeed 18 x SprintMultiplier 1.45 x
+-- MovementConfig.Slide.PeakMultiplier 1.75 = 45.7, a flat-out slide. A player's root velocity is written
+-- by their own client, so uncapped a modified client could report any speed and throw a grenade across the
+-- map; faster legitimate carriers (a boosted sprint, a passenger in a car) carry this much and no more.
+-- tools/throw_carry_check.py keeps this in step with those three numbers.
+Ballistics.MaxCarrierSpeed = 46
+
+-- The part of a thrower's velocity a throw inherits before `inherit` scales it: horizontal only, and never
+-- faster than MaxCarrierSpeed. Anything that isn't a finite velocity carries nothing.
+function Ballistics.CarrierVelocity(velocity)
+	if not velocity then
+		return Vector3.zero
+	end
+	local flat = Vector3.new(velocity.X, 0, velocity.Z)
+	local speed = flat.Magnitude
+	if speed ~= speed or speed == math.huge then
+		return Vector3.zero
+	end
+	if speed > Ballistics.MaxCarrierSpeed then
+		return flat * (Ballistics.MaxCarrierSpeed / speed)
+	end
+	return flat
+end
+
 -- The launch velocity of a throw toward `aimPoint` from a head at `head`, by someone moving at
--- `carrierVelocity` (only its horizontal part carries into the throw).
+-- `carrierVelocity` (its horizontal part, capped, carries into the throw: CarrierVelocity).
 function Ballistics.ThrowVelocity(spec, head, aimPoint, carrierVelocity)
 	local direction = Ballistics.ThrowDirection(spec, head, aimPoint)
-	local carry = carrierVelocity and Vector3.new(carrierVelocity.X, 0, carrierVelocity.Z) * (spec.inherit or 0) or Vector3.zero
-	return direction * spec.speed + carry
+	return direction * spec.speed + Ballistics.CarrierVelocity(carrierVelocity) * (spec.inherit or 0)
 end
 
 -- A lob from `origin` that comes down on `target`: longer throws hang longer. For bots, which know

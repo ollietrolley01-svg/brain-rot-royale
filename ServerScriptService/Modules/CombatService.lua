@@ -349,13 +349,14 @@ function CombatService.ClearAttacker(token)
 end
 
 -- Who last hurt `token` within ATTACKER_MEMORY seconds, with what, and when: the third value is the
--- os.clock() of that hit (compare with os.clock() on the server, never the client's clock).
+-- tick() of that hit -- wall time, the clock BotService's bot timeline runs on and compares it with
+-- (compare with tick() on the server, never the client's clock).
 function CombatService.GetLastAttacker(token)
 	local record = lastAttacker[token]
 	if not record then
 		return nil
 	end
-	if os.clock() - record.at > ATTACKER_MEMORY then
+	if tick() - record.at > ATTACKER_MEMORY then
 		return nil
 	end
 	return record.token, record.weaponId, record.at
@@ -464,7 +465,7 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 	-- Only another combatant's hit counts as who got you: your own splash, the storm or a fall
 	-- (and a leaver's round, whose owner is gone) must not wipe the credit of whoever shot you.
 	if attackerToken ~= nil and attackerToken ~= victimToken then
-		lastAttacker[victimToken] = { token = attackerToken, at = os.clock(), weaponId = weaponId }
+		lastAttacker[victimToken] = { token = attackerToken, at = tick(), weaponId = weaponId }
 	end
 
 	local victimRoot = Combatants.GetRoot(victimToken)
@@ -500,7 +501,8 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 			recent[victimToken] = list
 		end
 		table.insert(list, {
-			at = os.clock(),
+			-- The recap's own clock (CombatService.Clock, server game time), read back only by sendRecap.
+			at = CombatService.Clock(),
 			name = attackerToken and Combatants.GetName(attackerToken) or nil,
 			weaponId = weaponId,
 			amount = dealt,
@@ -901,6 +903,17 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 			break
 		end
 
+		-- A team-mate (the mode's friendly-fire veto) lets the shot through, like their companion above:
+		-- it used to stop on them, dealing 0, so a teammate in front shielded the enemy behind.
+		if CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, victimToken, def.id) then
+			local filter = params.FilterDescendantsInstances
+			table.insert(filter, victimCharacter)
+			params.FilterDescendantsInstances = filter
+			currentOrigin = result.Position + direction * 0.05
+			stopped = nil
+			continue
+		end
+
 		local damage = def.damage * through
 		local headshot = result.Instance.Name == "Head"
 		if headshot then
@@ -1097,7 +1110,7 @@ function CombatService.RecordEnvironmentDamage(victimToken, amount, source)
 		list = {}
 		recent[victimToken] = list
 	end
-	table.insert(list, { at = os.clock(), name = source, amount = amount, environment = true })
+	table.insert(list, { at = CombatService.Clock(), name = source, amount = amount, environment = true })
 	if #list > RECAP_HITS then
 		table.remove(list, 1)
 	end
@@ -1109,7 +1122,7 @@ local function sendRecap(victimToken, killerToken, weaponId)
 	if not (Combatants.IsPlayer(victimToken) and victimToken.Parent) then
 		return
 	end
-	local now = os.clock()
+	local now = CombatService.Clock()
 	local total, bySource, last = 0, {}, nil
 	for _, hit in ipairs(recent[victimToken] or {}) do
 		if now - hit.at <= RECAP_WINDOW then
