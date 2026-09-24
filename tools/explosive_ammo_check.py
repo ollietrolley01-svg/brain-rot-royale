@@ -8,8 +8,9 @@ a goto here), in lupa against tools/hitreg_mocks.lua:
      of a kill as its comment wants.
   B. CombatService.firePellet: one blast per bullet, where it stopped (the victim, the wall behind a
      broken pane), none for a bullet that flew off into the open or broke a pane and flew on, none for
-     a gun without the ammo; the blast carries the ammo's numbers, not the bullet's; and the pellet
-     hands its rewind instant (#97) to LagCompensation.Raycast untouched.
+     a gun without the ammo; the blast carries the ammo's numbers, not the bullet's; the pellet
+     hands its rewind instant (#97) to LagCompensation.Raycast untouched; and a bullet through a
+     team-mate (the mode's veto) flies on to the enemy behind them instead of stopping.
   C. ProjectileService's blast (the one launchers use) as the ammo's blast drives it: damage falls off
      with distance to a fifth at the edge and nothing past it, cover stops it, the owner takes half,
      and DestructibleService.DamageInRadius hurts each wall pool within half the radius ONCE.
@@ -87,6 +88,8 @@ local blasts, dealt, rays = {}, {}, {}
 local script_ = {}
 local victimChar = M.character("Victim", M.CFrame.new(0, 3, -20))
 local victimToken = { isBot = true }
+local mateChar = M.character("Mate", M.CFrame.new(0, 3, -10))
+local mateToken = { isBot = true, mate = true }
 local glass = M.instance("Part", "WindowGlass", nil, {})
 local wall = M.instance("Part", "Wall", nil, {})
 local queue = {}
@@ -96,7 +99,7 @@ local env = setmetatable({
     Enum = M.Enum,
     workspace = { FindFirstChild = function() return nil end },
     Combatants = {
-        FromCharacter = function(c) return c == victimChar and victimToken or nil end,
+        FromCharacter = function(c) return (c == victimChar and victimToken) or (c == mateChar and mateToken) or nil end,
         IsAlive = function() return true end,
         GetRoot = function() return nil end,
     },
@@ -109,7 +112,9 @@ local env = setmetatable({
         DestructibleFromPart = function(p) if p == glass or p == wall then return p end end,
         DestructiblePassesThrough = function(p) return p == glass end,
         DamageDestructible = function() end,
-        DealDamage = function(_, token, amount) table.insert(dealt, amount) return amount end,
+        DealDamage = function(_, token, amount) table.insert(dealt, { token = token, amount = amount }) return amount end,
+        -- The mode's friendly-fire veto: the shooter's team-mate takes nothing.
+        DamageVeto = function(_, token) return token == mateToken end,
         Explode = function(blast) table.insert(blasts, blast) return {} end,
     },
 }, { __index = _G })
@@ -149,6 +154,14 @@ b = shot(cannon, {})
 note(#b == 0, string.format("a miss into the sky: %d blast(s)", #b))
 b = shot(pistol, { hit(body, -19.5) })
 note(#b == 0, string.format("a gun without explosive ammo: %d blast(s)", #b))
+-- A team-mate between the shooter and an enemy: the bullet passes them (the veto) and hits the enemy.
+for k in pairs(dealt) do dealt[k] = nil end
+shot(pistol, { hit(mateChar:FindFirstChild("UpperTorso"), -10), hit(body, -19.5) })
+local toMate, toEnemy = 0, 0
+for _, d in ipairs(dealt) do
+    if d.token == mateToken then toMate = toMate + 1 elseif d.token == victimToken then toEnemy = toEnemy + 1 end
+end
+note(toEnemy == 1 and toMate == 0, string.format("a shot through a team-mate hits the enemy behind (enemy %d hit(s), mate %d)", toEnemy, toMate))
 local total = 0
 for _ = 1, 8 do total = total + #shot(cannon, { hit(wall, -30) }) end
 note(total == 8, string.format("eight bullets into a wall: %d blasts (one each)", total))
@@ -396,6 +409,9 @@ def main():
             ("no falloff", dict(bsrc=swap(bs, "return 1 - t * (1 - Ballistics.EdgeScale)", "return 1"))),
             ("cover ignored", dict(psrc=swap(ps, "if not passable then\n\t\t\treturn false", "if false then\n\t\t\treturn false"))),
             ("a pool hit once per part", dict(dsrc=swap(ds, "\t\t\tseen[key] = true\n", ""))),
+            ("a team-mate soaks the bullet", dict(combat=swap(
+                cs, "if CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, victimToken, def.id) then",
+                "if false then"))),
         ]
         caught = 0
         for name, kw in plants:

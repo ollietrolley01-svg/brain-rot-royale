@@ -901,6 +901,17 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 			break
 		end
 
+		-- A team-mate (the mode's friendly-fire veto) lets the shot through, like their companion above:
+		-- it used to stop on them, dealing 0, so a teammate in front shielded the enemy behind.
+		if CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, victimToken, def.id) then
+			local filter = params.FilterDescendantsInstances
+			table.insert(filter, victimCharacter)
+			params.FilterDescendantsInstances = filter
+			currentOrigin = result.Position + direction * 0.05
+			stopped = nil
+			continue
+		end
+
 		local damage = def.damage * through
 		local headshot = result.Instance.Name == "Head"
 		if headshot then
