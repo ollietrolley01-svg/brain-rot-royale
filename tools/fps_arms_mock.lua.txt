@@ -107,7 +107,10 @@ function CF.Inverse(c)
 end
 function CF.ToObjectSpace(a, b) return a:Inverse() * b end
 function CF.ToWorldSpace(a, b) return a * b end
-function CF.PointToObjectSpace(a, v) return a:Inverse() * v end
+function CF.PointToObjectSpace(a, v)
+	if getmetatable(v) ~= V3 then error("invalid argument #2 (Vector3 expected, got " .. typeof(v) .. ")", 2) end
+	return a:Inverse() * v
+end
 function CF.PointToWorldSpace(a, v) return a * v end
 function CF.VectorToWorldSpace(a, v) return rot(a, v) end
 function CF.VectorToObjectSpace(a, v) return rot(a:Inverse(), v) end

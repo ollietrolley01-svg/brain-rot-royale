@@ -220,7 +220,7 @@ local function setup()
 	-- Planted: a slab lifted a stud off the ground must be reported floating.
 	local sample = nil
 	for _, part in ipairs(state.ruins[1].model:GetDescendants()) do
-		if part.Name == "Paving" then
+		if part:IsA("BasePart") and part.Name == "Paving" then
 			sample = part
 			break
 		end

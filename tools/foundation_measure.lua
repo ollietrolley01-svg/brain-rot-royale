@@ -45,6 +45,9 @@ local BAND = 1.5
 local INSET = 0.3
 
 local structures, trees, obstacles, carriageways, planks, slabs = {}, {}, {}, {}, {}, {}
+-- A car park's made ground (ParkingLots): its surface, aprons, walkway and curbs.
+local LOT_GROUND = { LotSurface = true, LotApron = true, Walkway = true, WalkwayRamp = true, LotCurb = true, IslandCurb = true,
+	IslandSoil = true, TimberEdging = true }
 local SLAB_NAMES = { Pavement = true, PavementTaper = true, Paving = true, Cobbles = true, Kerb = true, Asphalt = true,
 	JunctionAsphalt = true, Crossing = true, RoadSurface = true, RoadEdge = true, RoadCurve = true, BridgeDeck = true,
 	BridgeRoad = true, FootbridgePlank = true }
@@ -291,8 +294,16 @@ for _, top in ipairs(map:GetChildren()) do
 				elseif child.Name == "ExplosiveBarrel" then
 					measureModel(child, "town:yardprop", "Town")
 				elseif child.Name == "ParkingLot" then
+					-- Its surface and aprons are a carriageway; what stands on it (lamps, trees, fences, the pay
+					-- machine) is an obstacle, like the streets' own furniture.
 					for _, d in ipairs(child:GetDescendants()) do
-						if d:IsA("BasePart") then table.insert(carriageways, { entry = entryOf(d), what = "parking" }) end
+						if d:IsA("BasePart") then
+							if LOT_GROUND[d.Name] then
+								table.insert(carriageways, { entry = entryOf(d), what = "parking" })
+							elseif d.CanCollide then
+								table.insert(obstacles, entryOf(d))
+							end
+						end
 					end
 				elseif child.Name == "ParkedCar" or child.Name == "RotVendor" then
 					for _, d in ipairs(child:GetDescendants()) do
@@ -461,7 +472,7 @@ end
 for _, top in ipairs(map:GetChildren()) do
 	if top.Name == "Town" or top.Name == "Roads" or top.Name == "River" then
 		for _, d in ipairs(top:GetDescendants()) do
-			if d:IsA("BasePart") and (SLAB_NAMES[d.Name] or (d.Parent and d.Parent.Name == "ParkingLot")) then
+			if d:IsA("BasePart") and (SLAB_NAMES[d.Name] or (d.Parent and d.Parent.Name == "ParkingLot" and LOT_GROUND[d.Name])) then
 				table.insert(slabs, entryOf(d))
 			end
 		end

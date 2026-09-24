@@ -69,9 +69,11 @@ PLANTS = [
      "SahurSprings", 101, "tree", ""),
     ("a set piece's entrance stays clear of street furniture: the entrance check off",
      [("TownThemes", "local function entranceClear(ctx, at, front, halfDepth, reach)\n", "local function entranceClear(ctx, at, front, halfDepth, reach)\n\tdo return true end\n")],
-     # Seed 1: on seed 2 no set-piece candidate's entrance meets street furniture any more (0 -> 0 with
-     # the check off, already so at 38f0551), so the plant could not bite there. Seed 1: 0 -> 1.
-     "BombardiroBay", 1, "door", "theme:setpiece"),
+     # Seed 6: which seed has a set-piece candidate whose entrance meets street furniture moves whenever
+     # the town layout draws differently (seed 2 stopped at 38f0551; seed 1 when the car parks moved into
+     # the street lots, 09-24). Searched BombardiroBay, TralalaTown, SahurSprings, RotRidge and
+     # PatapimPlains seeds 1-6 then: BombardiroBay 6 and TralalaTown 6 bite, 0 -> 1.
+     "BombardiroBay", 6, "door", "theme:setpiece"),
     ("a shed's doorway faces downhill and clears the ground at it (critic C9): facing ignored",
      [("MapDecor", "\t\t\tif y and y < lowest then\n", "\t\t\tif false then\n")],
      "PatapimPlains", 303, "door", "decor:hut"),
