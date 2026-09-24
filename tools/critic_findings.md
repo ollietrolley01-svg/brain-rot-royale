@@ -129,8 +129,8 @@ Line numbers are at branch tip `7e61c81` unless a finding says otherwise.
 
 ### C5 (major, ROUTE: guns worker, CombatClient/Viewmodel) The "fps models missing" root cause is not proven, and nothing stops the next one
 - ac4b982 says the viewmodel vanished because `Arms.LookOf` read `MeshPart.MeshId` and "a read the client
-  is refused throws". Per the Roblox API, `MeshPart.MeshId` is **readable** by any script (it is WRITE-
-  restricted: PluginSecurity); game scripts compare MeshIds routinely. So the stated cause is very likely
+  is refused throws". Roblox's own API dump (tools/roblox_api_subset.json, from Full-API-Dump.json) gives `MeshPart.MeshId`
+  Security Read **None**, Write NotAccessibleSecurity: any script may read it (only writing is barred). So the stated cause is very likely
   wrong, and if Oliver's next playtest still has no first-person gun the real fault is elsewhere in
   `Viewmodel.new` / `Arms.new` (61a001f's new arm copy is the only new code on that path).
 - Whatever it is, one throw anywhere in `Viewmodel.new` still costs the whole gun: `CombatClient
