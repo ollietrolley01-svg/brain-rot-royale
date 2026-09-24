@@ -3716,6 +3716,8 @@ local recapPanel = create("Frame", {
 	Parent = screenGui,
 }, { rounded(12), padding(12) })
 
+-- Scaled down to fit rather than cut off: "DOWNED BY <a long display name> — BACK IN 5" is wider than
+-- the panel at 22 pt.
 local recapTitle = create("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 28),
 	BackgroundTransparency = 1,
@@ -3723,10 +3725,11 @@ local recapTitle = create("TextLabel", {
 	Text = "",
 	TextColor3 = C.Red,
 	TextSize = 22,
+	TextScaled = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	ZIndex = 13,
 	Parent = recapPanel,
-})
+}, { create("UITextSizeConstraint", { MaxTextSize = 22 }) })
 
 local recapBody = create("TextLabel", {
 	Position = UDim2.new(0, 0, 0, 30),
@@ -3743,11 +3746,46 @@ local recapBody = create("TextLabel", {
 	Parent = recapPanel,
 })
 
-local recapToken = 0
+-- `token` retires an old recap's hide timer; `killer`, `title` and `backAt` feed the respawn countdown.
+local recap = { token = 0 }
+
+-- In a respawn mode the recap says when you are back (#86 M32): "DOWNED BY RIVAL — BACK IN 4", counting
+-- down. The wait used to be only in a 2.6 s toast. The time comes from the recap's own `respawnDelay`
+-- when it carries one, else from the RespawnAt attribute GameMode puts on the player at the moment it
+-- schedules the respawn (server time; GetServerTimeNow is the same clock here). The two can arrive in
+-- either order, so the title is re-judged every frame while the panel is up, and a stale RespawnAt
+-- from an earlier death is already in the past and says nothing.
+do
+	local function respawnIn()
+		local at = recap.backAt or player:GetAttribute("RespawnAt")
+		if type(at) ~= "number" then
+			return nil
+		end
+		local left = math.ceil(at - workspace:GetServerTimeNow())
+		return left > 0 and left or nil
+	end
+	function recap.update()
+		local left = respawnIn()
+		local text = recap.title or ""
+		if left then
+			text = (recap.killer and ("DOWNED BY " .. string.upper(recap.killer)) or "DOWNED") .. " — BACK IN " .. left
+		end
+		if recapTitle.Text ~= text then
+			recapTitle.Text = text
+		end
+	end
+	RunService.Heartbeat:Connect(function()
+		if recapPanel.Visible then
+			recap.update()
+		end
+	end)
+end
 
 deathRecap.OnClientEvent:Connect(function(info)
-	recapToken += 1
-	local token = recapToken
+	recap.token += 1
+	local token = recap.token
+	recap.killer = info.killer
+	recap.backAt = type(info.respawnDelay) == "number" and (workspace:GetServerTimeNow() + info.respawnDelay) or nil
 
 	local lines = {}
 	if info.killer then
@@ -3782,10 +3820,12 @@ deathRecap.OnClientEvent:Connect(function(info)
 			#sources > 0 and ("  —  " .. table.concat(sources, ", ")) or ""))
 	end
 	recapBody.Text = table.concat(lines, "\n")
+	recap.title = recapTitle.Text
+	recap.update()
 	recapPanel.Visible = true
 
 	task.delay(10, function()
-		if recapToken == token then
+		if recap.token == token then
 			recapPanel.Visible = false
 		end
 	end)

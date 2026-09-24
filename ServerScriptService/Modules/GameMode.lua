@@ -357,7 +357,15 @@ local function onDeath(token, killerToken, method)
 			-- respawn grants a clean kit.
 			local delay = current.respawnDelay or 5
 			local myGeneration = generation
+			-- For the death recap's countdown, "DOWNED BY <name> — BACK IN n" (#86 M32). The recap itself
+			-- is CombatService's and has gone out already by now (HandleDeath sends it before the death
+			-- reaches a mode), so the time rides beside it on the player. Server time: the client reads it
+			-- against workspace:GetServerTimeNow(), the same clock.
+			token:SetAttribute("RespawnAt", workspace:GetServerTimeNow() + delay)
 			task.delay(delay, function()
+				if token.Parent then
+					token:SetAttribute("RespawnAt", nil)
+				end
 				if running and generation == myGeneration and token.Parent and host.IsParticipant(token) then
 					pcall(function()
 						token:LoadCharacter()
