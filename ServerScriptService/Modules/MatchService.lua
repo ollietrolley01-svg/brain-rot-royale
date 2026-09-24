@@ -33,6 +33,7 @@ local RewardService = require(script.Parent:WaitForChild("RewardService"))
 local StateSync = require(script.Parent:WaitForChild("StateSync"))
 local StormService = require(script.Parent:WaitForChild("StormService"))
 local SupplyDropService = require(script.Parent:WaitForChild("SupplyDropService"))
+local VendorService = require(script.Parent:WaitForChild("VendorService"))
 local VoteService = require(script.Parent:WaitForChild("VoteService"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 -- S1. The mode table this file consults; it never consults this file back. Required after
@@ -1769,6 +1770,8 @@ local function startMatch()
 	local event = currentEvent or {}
 	applyEventKnobs(event)
 	CombatService.ResetStats()
+	-- The vendors' per-player caps (2 heals, 1 shield) are per match.
+	VendorService.ResetMatch()
 
 	-- Who's in is fixed the moment loading begins. Readying up or down during the few seconds
 	-- of map generation applies to the match after this one.
