@@ -605,8 +605,16 @@ function Arms.new(parent, character)
 	return self
 end
 
--- What the avatar's arms look like, as one string: each arm part's colour, material, size and mesh, and
--- the shirt. Two equal strings mean a copy made from either looks the same.
+-- What the avatar's arms look like, as one string: each arm part's colour, material and size, and the
+-- shirt. Two equal strings mean a copy made from either looks the same.
+--
+-- ONLY PROPERTIES A LOCALSCRIPT MAY READ. This used to read MeshPart.MeshId too, and it runs inside
+-- Viewmodel.new: a read the client is refused throws, and a throw there is not a grey arm, it is no
+-- viewmodel at all -- the gun and both arms, on every draw, for anyone with an R15 avatar (whose arms
+-- are MeshParts), while the edit-mode gallery (stand-in arms) and the offline check (whose mock allowed
+-- the read) never saw it. Oliver's playtest, 09-24: "fps models aren't showing up". A body package
+-- changes the parts' sizes, which is read here, so the mesh is not needed to see it. And the callers
+-- pcall this: working out whether to re-copy the arms must never be able to take the gun with it.
 local LOOK_PARTS = {
 	"RightUpperArm", "RightLowerArm", "RightHand", "LeftUpperArm", "LeftLowerArm", "LeftHand", "Right Arm", "Left Arm",
 }
@@ -619,8 +627,8 @@ function Arms.LookOf(character)
 	for _, name in ipairs(LOOK_PARTS) do
 		local part = character:FindFirstChild(name)
 		if part and part:IsA("BasePart") then
-			out[#out + 1] = string.format("%s|%s|%s|%s|%s", name, tostring(part.Color), tostring(part.Material),
-				tostring(part.Size), part:IsA("MeshPart") and part.MeshId or "")
+			out[#out + 1] = string.format("%s|%s|%s|%s", name, tostring(part.Color), tostring(part.Material),
+				tostring(part.Size))
 		end
 	end
 	local shirt = character:FindFirstChildOfClass("Shirt")
@@ -1066,7 +1074,8 @@ function Viewmodel.new(def, options)
 	-- The player's own arms (their avatar, when there is one), in a model of their own under the gun.
 	self.character = options.character
 	self.arms = Arms.new(model, options.character)
-	self.armsLook = Arms.LookOf(options.character)
+	local lookOk, look = pcall(Arms.LookOf, options.character)
+	self.armsLook = lookOk and look or ""
 	self.lookCheckAt = 0
 
 	-- Animation state.
@@ -1850,13 +1859,17 @@ function Viewmodel:Update(dt, input)
 	-- they have changed.
 	if self.character and now >= self.lookCheckAt then
 		self.lookCheckAt = now + LOOK_CHECK
-		local look = Arms.LookOf(self.character)
-		if look ~= self.armsLook then
+		local lookOk, look = pcall(Arms.LookOf, self.character)
+		if lookOk and look ~= self.armsLook then
 			self.armsLook = look
-			self.arms.model:Destroy()
-			self.arms = Arms.new(self.model, self.character)
-			if self.hidden then
-				self.arms:SetHidden(true)
+			-- Built first and swapped in only once built: a copy that fails leaves the arms there are.
+			local builtOk, arms = pcall(Arms.new, self.model, self.character)
+			if builtOk then
+				self.arms.model:Destroy()
+				self.arms = arms
+				if self.hidden then
+					self.arms:SetHidden(true)
+				end
 			end
 		end
 	end

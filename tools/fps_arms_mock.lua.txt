@@ -366,8 +366,15 @@ Instance = { new = function(c, parent)
 	return i
 end }
 -- An Attachment's Position is its CFrame's.
+-- Properties a LocalScript is refused, as Roblox refuses them: reading one throws. A viewmodel that reads
+-- one inside Viewmodel.new is no viewmodel at all in a real client (09-24, MeshPart.MeshId).
+RESTRICTED = { MeshPart = { MeshId = true, TextureID = true }, SurfaceAppearance = { ColorMap = true, NormalMap = true } }
 local attachIndex = Inst.__index
 Inst.__index = function(i, k)
+	local restricted = RESTRICTED[rawget(i, "props").ClassName]
+	if restricted and restricted[k] then
+		error(string.format("The current thread cannot access '%s' (lacking capability Plugin)", k), 2)
+	end
 	if k == "Position" and rawget(i, "props").ClassName == "Attachment" then return rawget(i, "props").CFrame.p end
 	return attachIndex(i, k)
 end

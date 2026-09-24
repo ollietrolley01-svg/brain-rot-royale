@@ -26,6 +26,9 @@ actually is (tools/fps_arms_measure.lua.txt) and holds these, every one of them 
   H2  each hand on a grip or a handguard shows at least two fingers -- closed round what it holds, or
       lying along it where there is no room to close -- rather than a bare palm with every finger parked
       inside it (an R6 arm has no hand, so no fingers);
+  V1  every gun builds and poses, on every rig and at every moment, without an error -- with the mock
+      refusing the properties a real LocalScript is refused (MeshPart.MeshId and the like: reading one
+      throws). One throw in Viewmodel.new is no gun and no arms on screen at all; that shipped on 09-24;
   A1  (#44) an avatar's arms keep its colours -- upper arm, forearm and hand each the colour of the part it
       was copied from, the fingers the hand's -- and its shirt (a Humanoid and the Shirt in the arms
       model), at the viewmodel's arm thickness; and when the appearance lands after the gun is drawn (a
@@ -92,22 +95,29 @@ def run(repo, src, rigs=RIGS, moments=MOMENTS, only=None):
         table[name] = luau_to_lua(text)
     weapons = lua.eval('loadModule("WeaponData")')
     vm = lua.eval('loadModule("Viewmodel")')
-    measure = lua.globals().measure
+    # Protected: a pose that throws is a finding (V1), not the end of the run.
+    measure = lua.eval("function(...) return pcall(measure, ...) end")
+    late_look = lua.eval("function(...) return pcall(lateLook, ...) end")
     ids = [i for i in sorted(weapons.Weapons.keys()) if not only or i in only]
     faults, examined = [], 0
     for gun in ids:
         definition = weapons.Get(gun)
         for rig in rigs:
             for name, state, fov in moments:
-                out = measure(vm, definition, rig, lua.table_from(state), fov, RING)
+                ok, out = measure(vm, definition, rig, lua.table_from(state), fov, RING)
                 examined += 1
+                if not ok:
+                    faults.append("V1 %s %s %s : the viewmodel did not build or pose: %s" % (gun, rig, name, str(out).split("\n")[0][:160]))
+                    continue
                 faults += judge(gun, rig, name, out)
     # A1, late: the appearance lands after the gun is drawn (a character spawns grey), on one gun of each
     # hold class; the arms must follow within a couple of seconds, with no second set left behind.
-    late = lua.globals().lateLook
     for gun in [g for g in ("SahurPistol", "CrocodiloRifle", "CameloLMG") if g in ids]:
-        out = late(vm, weapons.Get(gun))
+        ok, out = late_look(vm, weapons.Get(gun))
         examined += 1
+        if not ok:
+            faults.append("V1 %s r15 late : the viewmodel did not build or run on: %s" % (gun, str(out).split("\n")[0][:160]))
+            continue
         if out.upper != out.want or out.hand != out.wantHand or not out.shirt or out.models != 1:
             faults.append("A1 %s r15 late : arms %s / hand %s after the avatar dressed as %s / %s, shirt %s, %d arms models"
                           % (gun, out.upper, out.hand, out.want, out.wantHand, out.shirt, out.models))
@@ -182,6 +192,10 @@ PLANTS = [
     ("J5 a charging handle taken with the fingers straight down", "GunModels",
      'g:hand("ChargeHand", V(40, 26, -80), V(0.41, -0.74, -0.53), V(0.57, -0.25, 0.78))',
      'g:hand("ChargeHand", V(40, 26, -80), V(0.2, -1, 0.1), V(0.3, 0.2, 1))'),
+    # The 09-24 shipped fault exactly: the look read MeshPart.MeshId, unguarded, inside Viewmodel.new.
+    ("V1 the arms' look read from a property the client may not read, unguarded", "Viewmodel",
+     ("tostring(part.Size))", "local lookOk, look = pcall(Arms.LookOf, options.character)"),
+     ("tostring(part.Size), part:IsA(\"MeshPart\") and part.MeshId or \"\")", "local lookOk, look = true, Arms.LookOf(options.character)")),
     ("A1 the arms never look at the avatar again", "Viewmodel",
      "local LOOK_CHECK = 1\n", "local LOOK_CHECK = math.huge\n"),
     ("A1 copied arms lose the avatar's colour", "Viewmodel",
@@ -197,11 +211,17 @@ def main():
     if "--plant" in sys.argv:
         caught = 0
         for name, target, old, new in PLANTS:
-            if old not in src[target]:
+            # A plant is one edit, or several (a tuple of olds and a tuple of news) made together.
+            olds, news = (old, new) if isinstance(old, tuple) else ((old,), (new,))
+            missing = [o for o in olds if o not in src[target]]
+            if missing:
                 print("PLANT %s: the text to break is not in %s any more" % (name, target))
                 continue
             broken = dict(src)
-            broken[target] = src[target].replace(old, new, 1)
+            text = src[target]
+            for o, n in zip(olds, news):
+                text = text.replace(o, n, 1)
+            broken[target] = text
             code = name.split()[0]
             faults, examined, guns = run(repo, broken, rigs=("r15", "standin"))
             hit = [f for f in faults if f.startswith(code + " ")]
