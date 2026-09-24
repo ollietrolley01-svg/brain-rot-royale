@@ -81,7 +81,7 @@ for _, key in ipairs({
 	"reloads", "flees", "hunts", "searches", "coverSearches", "coverFound", "coverReached",
 	"lootBlacklisted", "combatReplans", "badMoves", "sprints", "slides", "dangerDodges", "coverRouted",
 	"launcherShots", "launcherMisses", "coverUnreachable", "crouches", "lootIgnored", "lootFarReach",
-	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate",
+	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate", "quickShots",
 }) do
 	STATS[key] = STATS[key] or 0
 end
@@ -622,9 +622,15 @@ local THREAT_WINDOW = 3
 
 -- Returns visible, computed, entry: `entry` is the cache row, which findTarget also uses to keep
 -- the barricade test (coverBetween) on the same cadence as the sight ray it follows.
-local function sightOf(bot, head, token, character, now)
+-- `recheck` skips the cache: findTarget passes it for its best-scored candidate only, so the one a
+-- bot most wants to fight is looked at every think (someone stepping out from a corner is seen on
+-- the next think, not up to two later: the 0.4 s row outlived one ~0.267 s think). It spends the
+-- same LOS_CHECKS_PER_THINK budget, so a think's worst case is unchanged (#75/#81). Not for a row
+-- that already found a barricade in the way: that target is being fought through the cover anyway.
+local function sightOf(bot, head, token, character, now, recheck)
 	local entry = bot.sight[token]
-	if entry and not entry.visible and now - entry.at < SIGHT_CACHE_SECONDS then
+	local fresh = recheck and not (entry and entry.cover)
+	if entry and not entry.visible and not fresh and now - entry.at < SIGHT_CACHE_SECONDS then
 		return false, false, entry
 	end
 	STATS.sightChecks += 1
@@ -715,8 +721,8 @@ local function findTarget(bot, root, head, now)
 
 	local look = flatLook(root)
 	local fresh = 0
-	for _, candidate in ipairs(candidates) do
-		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now)
+	for index, candidate in ipairs(candidates) do
+		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now, index == 1)
 		if computed then
 			fresh += 1
 		end
@@ -1142,6 +1148,12 @@ local function finishReload(bot, now)
 	end
 end
 
+-- Aim starts settling this long after a target is picked up. It is the old BotReactionTime, pinned
+-- here on its own: #75/#81 made bots react faster, and Oliver's ruling is that aim must not move with
+-- it (#40). Read off BotReactionTime, the faster reaction would have settled aim earlier in every fight.
+-- tools/bot_aggression_check.py fails if the hit chance at any range and moment changes.
+local AIM_SETTLE_DELAY = 0.28
+
 local function shootAt(bot, target, targetRoot, distance, head)
 	local def = bot.weapon
 	-- Empty-handed until it finds something on the map.
@@ -1234,7 +1246,7 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	-- 105% after about 1.5 s), and a target moving fast is harder to hit, so strafing and jumping pay
 	-- off for a player (Oliver, 2026-09-22: "aim a little better", "more strategic").
 	local chance = accuracyAt(distance)
-	local settle = math.clamp((now - (bot.acquiredAt or now) - MatchConfig.BotReactionTime) / 1.5, 0, 1)
+	local settle = math.clamp((now - (bot.acquiredAt or now) - AIM_SETTLE_DELAY) / 1.5, 0, 1)
 	chance *= 0.9 + 0.15 * settle
 	local velocity = targetRoot.AssemblyLinearVelocity
 	if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > 18 or math.abs(velocity.Y) > 8 then
@@ -2114,6 +2126,45 @@ end
 local CROUCH_MIN_RANGE = 25
 
 -- Seen and noticed, gun in range: fight. Returns having issued this think's movement.
+-- Reaction time is a time, not a count of thinks (#75/#81). A bot thinks every ~0.267 s (BotThinkInterval,
+-- rounded up to frames by the THINK_SLICES waits), so a reaction ending between two thinks used to
+-- wait for the second one: 0.28 s was really 0.53. When the reaction ends before the next think, this
+-- fires the first shot on a timer at the right moment instead. Bounded: at most once per acquisition
+-- (bot.quickShotFor), one line-of-sight ray, and only from the plain reaction hold, facing a target
+-- inside the front cone (a bot still turning round, taking cover or building waits for its think).
+local function quickFirstShot(bot, candidate, head, now)
+	local acquiredAt = bot.acquiredAt
+	if bot.quickShotFor == acquiredAt then
+		return
+	end
+	local remaining = acquiredAt + MatchConfig.BotReactionTime - now
+	if remaining >= MatchConfig.BotThinkInterval then
+		return
+	end
+	bot.quickShotFor = acquiredAt
+	local target, targetCharacter, targetRoot = candidate.token, candidate.character, candidate.root
+	task.delay(math.max(0, remaining), function()
+		if not running or bot.acquiredAt ~= acquiredAt or bot.target ~= target or not bot.weapon then
+			return
+		end
+		local character = bot.character
+		local root = character and character.Parent and character:FindFirstChild("HumanoidRootPart")
+		if not (root and head.Parent and targetRoot.Parent and bot.humanoid.Health > 0) then
+			return
+		end
+		local to = flat(targetRoot.Position - root.Position)
+		if to.Magnitude > 1 and flatLook(root):Dot(to.Unit) < FRONT_CONE_COS then
+			return
+		end
+		STATS.sightChecks += 1
+		if not hasLineOfSight(head, targetCharacter, character) then
+			return
+		end
+		STATS.quickShots += 1
+		shootAt(bot, target, targetRoot, (targetRoot.Position - root.Position).Magnitude, head)
+	end)
+end
+
 local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	local target, targetRoot, distance = candidate.token, candidate.root, candidate.distance
 	local eye = targetRoot.Position + Vector3.new(0, 1.5, 0)
@@ -2201,8 +2252,8 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 		end
 	end
 	local targetHumanoid = candidate.character and candidate.character:FindFirstChildOfClass("Humanoid")
-	bot.pushing = targetHumanoid ~= nil and targetHumanoid.Health < targetHumanoid.MaxHealth * 0.35
-		and humanoid.Health > humanoid.MaxHealth * 0.5 and not bot.reloadUntil
+	bot.pushing = targetHumanoid ~= nil and targetHumanoid.Health < targetHumanoid.MaxHealth * MatchConfig.BotPushTargetBelow
+		and humanoid.Health > humanoid.MaxHealth * MatchConfig.BotPushHealthAbove and not bot.reloadUntil
 	local wantsCover = (humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth and now - bot.lastHurtAt < 2)
 		or (bot.reloadUntil ~= nil and distance < 100)
 		or outnumbered >= 2
@@ -2248,6 +2299,7 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	if now - bot.acquiredAt < MatchConfig.BotReactionTime then
 		holdStill(bot, humanoid, root, now)
 		faceTarget(bot, humanoid, root, targetRoot)
+		quickFirstShot(bot, candidate, head, now)
 		return
 	end
 
@@ -2662,7 +2714,7 @@ local function updateBot(bot)
 
 	-- Unarmed, or too hurt to go looking for whoever's shooting: get out of their sight. A pickup
 	-- right at our feet is still worth grabbing on the way.
-	local low = humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth
+	local low = humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotFleeHealth
 	local grabbing = bot.lootTarget and (bot.lootTarget.Position - root.Position).Magnitude < 13
 	if shotAtRecently and (not bot.weapon or low) and not grabbing then
 		-- Unarmed, a gun close by is the better way out, as long as it isn't toward the shooter: go and

@@ -136,12 +136,21 @@ MatchConfig.BotThinkInterval = 0.25
 MatchConfig.BotAccuracyNear = 0.71
 MatchConfig.BotAccuracyFar = 0.22
 MatchConfig.BotAccuracyFalloff = 120
-MatchConfig.BotReactionTime = 0.28
+-- #75/#81 (Oliver: "increase bots reaction speed and their aggressiveness"). Was 0.28, which a
+-- bot could only honour in whole thinks (one every ~0.267 s), so it was really two thinks. 0.12 is a
+-- real time now: BotService fires the first shot on a short timer when the reaction ends between
+-- thinks. Aim does NOT move with it: BotService's aim settle is pinned to the old 0.28 (#40).
+MatchConfig.BotReactionTime = 0.12
 MatchConfig.BotBurstRest = 0.48
 
 MatchConfig.BotVisionRange = 260
-MatchConfig.BotEngagePreferred = 70
-MatchConfig.BotRetreatHealth = 26
+-- Aggression is commitment, not lethality (#75/#81 ruling). Closer fights (was 70) and a later
+-- retreat (was 26 hp). 55 not 45: closing in raises the hit rate through the distance falloff
+-- (base chance 0.42 at 70 studs, 0.49 at 55, 0.53 at 45), and 45 buys more of that than the ruling
+-- allows. Guns with a short reach fight at 0.6 of it either way. tools/bot_aggression_ab.lua
+-- measures 55 and 45 against the old values.
+MatchConfig.BotEngagePreferred = 55
+MatchConfig.BotRetreatHealth = 15
 
 -- Regen only starts after a bot has been out of a fight for a while, which keeps chip damage
 -- meaningful without making a wounded bot a permanent free kill. It's the slow fallback;
@@ -163,12 +172,22 @@ MatchConfig.BotDamageScale = 0.8
 -- BotRearNoticeTime, unless it's the one shooting, so sneaking up on a bot works. When a target
 -- breaks line of sight the bot goes to where it last saw them, for BotMemorySeconds plus the time
 -- it takes to walk there, instead of tracking them through walls.
-MatchConfig.BotRearNoticeTime = 1.2
-MatchConfig.BotMemorySeconds = 6
+-- #75/#81: rear notice 1.2 -> 0.7 (sneaking up still works, for less long); hunting a lost target
+-- 6 -> 10 s plus the walk, so a bot chases instead of going back to looting.
+MatchConfig.BotRearNoticeTime = 0.7
+MatchConfig.BotMemorySeconds = 10
 
 -- Below this share of max health, a bot that's being hit looks for cover (or builds some).
 -- Oliver, 2026-09-22 21:35: "make them take cover". Was 0.6.
 MatchConfig.BotCoverHealth = 0.8
+-- #75/#81: a bot being shot by someone it can't see used to run whenever it was under BotCoverHealth
+-- (0.8 since 21:35, so at 79 hp). That's cover in a fight, which stays; running from an unseen
+-- shooter now waits until half health, and above that the bot goes looking for them.
+MatchConfig.BotFleeHealth = 0.5
+-- Pushing a nearly dead target, which overrides taking cover: the target under this share of its
+-- health, the bot over that share of its own. Were 0.35 and 0.5 (#75/#81: push earlier).
+MatchConfig.BotPushTargetBelow = 0.5
+MatchConfig.BotPushHealthAbove = 0.4
 -- Team modes: how long a freshly spawned bot spends gearing up at its base (chests first) before it
 -- heads for the fight. Ends early once the base has nothing it wants.
 MatchConfig.BotBaseGearSeconds = 30
