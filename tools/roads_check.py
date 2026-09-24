@@ -760,13 +760,12 @@ def measure(geo, show=False):
     r["deck"] = deck_bad
 
     # Access: car parks and driveways.
-    lot_parts = defaultdict(list)
-    for p in parts:
-        if "/ParkingLot" in p["chain"] and p["name"] == "Part" and p["size"][1] < 0.1:
-            lot_parts[p["chain"]].append(p)
+    # Each car park is its asphalt (ParkingLots' LotSurface): every car park's pieces share one chain
+    # (Town/ParkingLot), so they are told apart by that one piece each, not by chain.
+    lots = [p for p in parts if p["name"] == "LotSurface" and "ParkingLot" in p["chain"]]
     # A car park or driveway is connected when a dropped kerb stands at a street's edge in front of it
     # and nothing solid stands on the way between them. A pavement is 5 studs; a car park's asphalt
-    # reaches EDGE (2) past its outermost lines.
+    # starts behind its own front kerb (0.8), with its apron across the pavement.
     drive_cells = set(cells)
     dropped = [Piece(p) for p in parts if p["name"] == "DroppedKerb"]
     solid = []
@@ -808,8 +807,8 @@ def measure(geo, show=False):
                     break
             return dk, blocked
         return None, None
-    for chain, ps in lot_parts.items():
-        poly = hull([(c[0], c[2]) for p in ps for c in corners(p)])
+    for lot in lots:
+        poly = hull([(c[0], c[2]) for c in corners(lot)])
         r["lots"] += 1
         centre = (sum(q[0] for q in poly) / len(poly), sum(q[1] for q in poly) / len(poly))
         dk, blocked = way_in(poly, 5.0 + 2.0 + 1.5, "car park")
@@ -1048,8 +1047,9 @@ PLANTS = [
      {"MapDecor": [("\treach = reach or 12\n\tlocal dropped = 0\n", "\treach = reach or 12\n\tlocal dropped = 0\n\tif reach then return 0 end\n")]}),
     ("no kerb ever dropped, seen from the driveways", "driveway_unconnected",
      {"MapDecor": [("\treach = reach or 12\n\tlocal dropped = 0\n", "\treach = reach or 12\n\tlocal dropped = 0\n\tif reach then return 0 end\n")]}),
-    ("car parks laid 1.5 above their street", "pad_under",
-     {"ParkingLots": [("height = site.kerb.Y, margin = 2", "height = site.kerb.Y + 1.5, margin = 2")]}),
+    ("a car park's sign stood in the middle of its way in", "lot_unconnected",
+     {"ParkingLots": [("local signAt = (base * CFrame.new(aisleX + signSide * (AISLE / 2 + 1.6), 0.5, -depth / 2 + KERB / 2)).Position",
+                       "local signAt = (base * CFrame.new(aisleX, 0.5, -depth / 2 + KERB / 2)).Position")]}),
     ("the street's kerb cap left off", "end_raw",
      {"MapDecor": [("\tif startSpec.closed then\n\t\tclose(true)\n\tend\n\tif endSpec.closed then\n\t\tclose(false)\n\tend",
                     "")]}),

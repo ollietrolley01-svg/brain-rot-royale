@@ -322,6 +322,11 @@ CombatService.DamageDestructiblesInRadius = nil
 -- Also set by DestructibleService: true for window glass, which breaks and lets the shot through.
 CombatService.DestructiblePassesThrough = nil
 
+-- Set by VehicleService: a vehicle's body and armour take a bullet (VehicleArmor says how much of it).
+--   VehicleFromPart(part) -> model or nil;  DamageVehicle(attacker, model, amount, class, weaponId, position)
+CombatService.VehicleFromPart = nil
+CombatService.DamageVehicle = nil
+
 -- Set by HazardService: explosive barrels take bullets and splash, and go up.
 CombatService.HazardFromPart = nil
 CombatService.DamageHazard = nil
@@ -882,6 +887,14 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		if hazard then
 			CombatService.DamageHazard(shooterToken, hazard, def.damage)
 			fireAbility(shooterToken, def, nil, result.Position, def.damage)
+			break
+		end
+
+		-- A vehicle's body or armour takes the bullet (its glass lets it through to whoever is inside,
+		-- unless the glass is armour). A heavier round than a bullet is not a hand gun's.
+		local vehicle = CombatService.VehicleFromPart and CombatService.VehicleFromPart(result.Instance)
+		if vehicle then
+			CombatService.DamageVehicle(shooterToken, vehicle, def.damage * through, "bullet", def.id, result.Position)
 			break
 		end
 

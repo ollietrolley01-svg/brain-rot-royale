@@ -78,6 +78,9 @@ RateLimit.Budgets = {
 	-- client can. VehicleClient self-limits to about once a second already; this is the floor under
 	-- that, not the real limiter.
 	VehicleJolt = { burst = 6, rate = 1, peak = "one per genuine jolt while driving, client-detected" },
+	-- A driver's client going through someone at speed (RoadkillPass): one per body, and a crowd is
+	-- several at once. The server judges each against its own view (VehicleService.onRoadkillReport).
+	VehicleRoadkill = { burst = 8, rate = 4, peak = "driving through a crowd, one per body" },
 }
 
 -- What an unknown budget falls back to. A remote asking for a key that doesn't exist is a wiring

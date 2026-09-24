@@ -132,21 +132,24 @@ local KINDS = {
 }
 DestructibleService.Kinds = KINDS
 
--- Material families: how tough each is, and what BreakFxClient throws when it goes.
+-- Material families: how tough each is, and what its colour weathers toward. EVERY part material has
+-- one (tools/crack_check.py holds this table, CrackFxClient's and BreakFxClient's to the full list);
+-- what each material LOOKS like cracking and breaking is its own, in those two clients.
+local M = Enum.Material
 local CLASS_OF = {
-	[Enum.Material.Wood] = "wood", [Enum.Material.WoodPlanks] = "wood",
-	[Enum.Material.Brick] = "stone", [Enum.Material.Concrete] = "stone", [Enum.Material.Slate] = "stone",
-	[Enum.Material.Rock] = "stone", [Enum.Material.Cobblestone] = "stone", [Enum.Material.Granite] = "stone",
-	[Enum.Material.Marble] = "stone", [Enum.Material.Pebble] = "stone", [Enum.Material.Basalt] = "stone",
-	[Enum.Material.Limestone] = "stone", [Enum.Material.Sandstone] = "stone", [Enum.Material.Pavement] = "stone",
-	[Enum.Material.Asphalt] = "stone", [Enum.Material.CrackedLava] = "stone",
-	[Enum.Material.Metal] = "metal", [Enum.Material.DiamondPlate] = "metal", [Enum.Material.CorrodedMetal] = "metal",
-	[Enum.Material.Foil] = "metal",
-	[Enum.Material.Grass] = "foliage", [Enum.Material.LeafyGrass] = "foliage", [Enum.Material.Ground] = "foliage",
-	[Enum.Material.Fabric] = "cloth",
-	[Enum.Material.Glass] = "glass", [Enum.Material.Ice] = "glass", [Enum.Material.Neon] = "glass",
+	[M.Wood] = "wood", [M.WoodPlanks] = "wood",
+	[M.Brick] = "stone", [M.Concrete] = "stone", [M.Slate] = "stone", [M.Rock] = "stone", [M.Cobblestone] = "stone",
+	[M.Granite] = "stone", [M.Marble] = "stone", [M.Pebble] = "stone", [M.Basalt] = "stone", [M.Limestone] = "stone",
+	[M.Sandstone] = "stone", [M.Pavement] = "stone", [M.Asphalt] = "stone", [M.CrackedLava] = "stone", [M.Salt] = "stone",
+	[M.Plaster] = "stone", [M.CeramicTiles] = "stone", [M.ClayRoofTiles] = "stone", [M.RoofShingles] = "stone",
+	[M.Metal] = "metal", [M.DiamondPlate] = "metal", [M.CorrodedMetal] = "metal", [M.Foil] = "metal",
+	[M.Grass] = "foliage", [M.LeafyGrass] = "foliage",
+	[M.Ground] = "soil", [M.Sand] = "soil", [M.Snow] = "soil", [M.Mud] = "soil",
+	[M.Fabric] = "cloth", [M.Carpet] = "cloth", [M.Leather] = "cloth", [M.Cardboard] = "cloth",
+	[M.Glass] = "glass", [M.Ice] = "glass", [M.Glacier] = "glass", [M.Neon] = "glass", [M.ForceField] = "glass",
+	[M.Plastic] = "plastic", [M.SmoothPlastic] = "plastic", [M.Rubber] = "plastic",
 }
-local CLASS_TOUGHNESS = { stone = 2, metal = 1.6, wood = 1, plastic = 1, foliage = 0.55, cloth = 0.4, glass = 0.3 }
+local CLASS_TOUGHNESS = { stone = 2, metal = 1.6, wood = 1, plastic = 1, soil = 0.7, foliage = 0.55, cloth = 0.4, glass = 0.3 }
 
 local function classOf(material)
 	return CLASS_OF[material] or "plastic"
@@ -162,6 +165,7 @@ local STAGE_TINT = {
 	wood = { Color3.fromRGB(58, 42, 28), 0.08 },
 	metal = { Color3.fromRGB(38, 36, 34), 0.07 },
 	foliage = { Color3.fromRGB(132, 108, 54), 0.16 },
+	soil = { Color3.fromRGB(78, 62, 46), 0.08 },
 	plastic = { Color3.fromRGB(76, 76, 76), 0.06 },
 	cloth = { Color3.fromRGB(64, 60, 56), 0.07 },
 }
@@ -173,16 +177,88 @@ DestructibleService.StageTint = STAGE_TINT
 local HEALTH_BASE, HEALTH_PER_STUD, SIZE_CAP = 20, 14, 12
 local MIN_HEALTH, MAX_HEALTH = 15, 1500
 
--- Never breakable, by the part's own name or any ancestor's inside the Map.
+-- WHAT NEVER BREAKS (Oliver 2026-09-24: "make EVERYTHING breakable other than spawns, the lobby,
+-- storm zone, and map edges"). By the part's own name or any ancestor's inside the match root:
+--   spawns      SpawnLocation, a "Spawn" model (a team base's bunker), SpawnPad...
+--   the lobby   (it isn't under the Map anyway; the name is the backstop)
+--   the storm   (likewise)
+-- and the MAP EDGES, which are not parts: the terrain at the edge of the world and the bedrock under
+-- every crater's dig floor (see the craters). Everything else breaks -- roads, kerbs, paving, parking
+-- lots, bridges and decks, foundations, footings, plinths, ground floors, stepping stones, ziplines,
+-- the props round an objective (its zone is a sum on positions, not a part, and keeps working).
+-- tools/destruct_coverage_probe.lua asserts that these are the only reasons anything is kept whole.
 local NEVER = {
-	Asphalt = true, Kerb = true, Paving = true, Road = true, Street = true, Junction = true, Crossing = true,
-	Bridge = true, Deck = true, Footbridge = true, SteppingStone = true,
-	Ground = true, Footing = true, Foundation = true, Plinth = true, Pad = true,
-	SpawnLocation = true, Spawn = true, Lobby = true, Storm = true, Objective = true, Zipline = true,
+	SpawnLocation = true, Spawn = true, Lobby = true, Storm = true,
 }
 DestructibleService.Never = NEVER
--- A tagged pool wider than this is somebody's floor, not a prop.
+-- ...and names that START with one of these as a word (the next letter a capital or a digit):
+-- SpawnPad, SpawnBeacon, LobbyFloor, StormWall -- but not Spawner... or Stormcaller.
+local NEVER_PREFIX = { "Spawn", "Lobby", "Storm" }
+DestructibleService.NeverPrefix = NEVER_PREFIX
+DestructibleService.KeptReasons = { spawn = true, lobby = true, storm = true, ["map edge"] = true }
+
+local function neverName(name)
+	if NEVER[name] then
+		return true
+	end
+	for _, prefix in ipairs(NEVER_PREFIX) do
+		if string.sub(name, 1, #prefix) == prefix then
+			local next = string.sub(name, #prefix + 1, #prefix + 1)
+			if next ~= "" and string.match(next, "[%u%d]") then
+				return true
+			end
+		end
+	end
+	return false
+end
+DestructibleService.NeverName = neverName
+
+-- Which of the four a NEVER name is, for the audit.
+local function keptReason(name)
+	for _, word in ipairs({ "Spawn", "Lobby", "Storm" }) do
+		if string.sub(name, 1, #word) == word then
+			return string.lower(word)
+		end
+	end
+	return "spawn"
+end
+
+-- Models that break under their own health rather than a pool's: an explosive barrel is
+-- HazardService's (a bullet must reach it to set it off), a vehicle VehicleService's.
+local OWN_HEALTH_MODELS = { ExplosiveBarrel = "hazard (HazardService)" }
+DestructibleService.OwnHealthModels = OWN_HEALTH_MODELS
+
+-- Past this across, a single part breaks in pieces where it is hit (SUBDIVIDE, below), not whole.
 local MAX_POOL_SPAN = 90
+
+-- EVERYTHING ELSE BREAKS. An anchored part in the Map that collides or can be shot, and that no rule
+-- above keeps whole, is a pool of its own, found on its first hit like any other:
+--
+--   a thing     the biggest Model round it that is compact (THING_SPAN across, THING_HEIGHT tall,
+--               THING_PARTS parts at most, with no building's walls or floors in it): a flag and its
+--               footing, a turbine, a fountain, a hut. It comes down whole, dressing and all. A
+--               zipline is always one thing, however long: any piece of it going snaps the line.
+--   a part      otherwise the part alone (a building's corner post, a chimney, an awning, a step),
+--               health from its own size and material; its dressing goes with it (dropDressing).
+--   a piece     a part bigger than SUBDIVIDE_OVER across (a road, a plaza, a bridge deck, a long
+--               wall) is cut, on its first hit, into a grid of TILE-stud tiles along its two long
+--               axes, each a pool of its own; the hit lands on the tile it struck. So a rocket holes
+--               a road where it lands, and the rest of the road stays. Lazy: nothing is cut until
+--               it is hit, and a part is cut once.
+--
+-- `Destructible = false` (a builder's "never") is no longer honoured: the only things kept whole
+-- are the four above. Spawns are spawns by name.
+--
+-- NOTHING IS LEFT IN THE AIR, and buildings fall over: see the support pass and CollapseService.
+local THING_SPAN, THING_HEIGHT, THING_PARTS = 24, 40, 48
+local GROUND_SLAB_THICK, GROUND_SLAB_WIDE, GROUND_SLAB_REACH = 3, 8, 3
+local SUBDIVIDE_OVER, TILE = 16, 8
+DestructibleService.SubdivideOver, DestructibleService.Tile = SUBDIVIDE_OVER, TILE
+local WHOLE_MODELS = { Zipline = true }
+local SUPPORT_MARGIN = 0.35
+local SUPPORT_CHECKS, SUPPORT_FALLS = 1200, 24
+DestructibleService.ThingSpan = THING_SPAN
+DestructibleService.SupportChecks, DestructibleService.SupportFalls = SUPPORT_CHECKS, SUPPORT_FALLS
 -- The most parts one pool's break draws debris for (the biggest ones); the rest just go.
 local FX_PER_POOL = 10
 
@@ -194,8 +270,10 @@ local ATTACHED = {
 	Balcony = true, BalconyRail = true, Railing = true, RidgeCap = true, Coping = true,
 	StairSoffit = true, StairHeader = true,
 }
--- How far apart two parts may be and still count as attached: trim sits a hair off its wall.
+-- How far apart two parts may be and still count as attached: trim sits a hair off its wall. To hold
+-- a piece of trim up, a part must be closer than that (HOLD_MARGIN): really touching it.
 local ATTACH_MARGIN = 0.35
+local HOLD_MARGIN = 0.06
 -- A pane only overlaps the wall bands round its opening by a tenth of a stud.
 local PANE_MARGIN = 0.02
 
@@ -222,8 +300,13 @@ DestructibleService.MaxSitesPerPool = MAX_SITES_PER_POOL
 local HITS_PER_FRAME = 40
 DestructibleService.HitsPerFrame = HITS_PER_FRAME
 
--- Anything inside these is fair game; anything else on the map is scenery and stays put.
+-- Anything inside these is fair game; anything else on the map is scenery and stays put. Everything
+-- a match builds is under workspace.Map: the towns, wilds, landmarks, roads and props
+-- (MapGenerator), and in a team match the battleground (TeamBattleground.Build) and both bases
+-- (TeamBaseRuins.Build), which parent into mapInfo.map. tools/destruct_coverage_probe.lua lists
+-- whatever else stands under workspace, so geometry parented somewhere new shows up.
 local ROOTS = { Map = true }
+DestructibleService.Roots = ROOTS
 
 -- pool key -> { health, max, broken, members, target }. The key is the part (a single part), the
 -- Model (a tagged Model) or the tag string (a group). Strong keys, dropped when the pool's first
@@ -232,19 +315,20 @@ local ROOTS = { Map = true }
 local damaged = {}
 
 -- The Map this part stands in, or nil if it's outside one or anything on the way is off limits.
+-- Second value: why not ("never:<name>" or "outside the match roots").
 local function mapRootOf(part)
-	if NEVER[part.Name] then
-		return nil
+	if neverName(part.Name) then
+		return nil, keptReason(part.Name)
 	end
 	local node = part.Parent
 	while node and node.Parent ~= workspace do
-		if NEVER[node.Name] then
-			return nil
+		if neverName(node.Name) then
+			return nil, keptReason(node.Name)
 		end
 		node = node.Parent
 	end
 	if not node or node.Parent ~= workspace or not ROOTS[node.Name] then
-		return nil
+		return nil, "outside the match roots"
 	end
 	return node
 end
@@ -253,15 +337,177 @@ local function positiveNumber(value)
 	return type(value) == "number" and value > 0 and value or nil
 end
 
+-- Caches for the opt-out rules, each filled on a part's (or Model's) first hit and dropped when it
+-- is destroyed, so nothing is looked at before someone shoots it and nothing outlives its map.
+local thingCache, slabCache = {}, {}
+
+local function cacheUntil(cache, instance, value)
+	if cache[instance] == nil then
+		instance.Destroying:Connect(function()
+			cache[instance] = nil
+		end)
+	end
+	cache[instance] = value
+	return value
+end
+
+-- A part's reach along a world axis from its centre (half its extent that way), turned or not.
+local function halfAlong(part, axis)
+	local cf, size = part.CFrame, part.Size
+	return (math.abs(cf.RightVector:Dot(axis)) * size.X + math.abs(cf.UpVector:Dot(axis)) * size.Y
+		+ math.abs(cf.LookVector:Dot(axis)) * size.Z) / 2
+end
+
+local UP, EAST, NORTH = Vector3.new(0, 1, 0), Vector3.new(1, 0, 0), Vector3.new(0, 0, 1)
+
+-- What owns this part if not us: a Model in OWN_HEALTH_MODELS round it, or whatever CombatService's
+-- hooks for hazards, deployables and companions claim. nil if nobody.
+local function ownerElsewhere(part)
+	local node = part.Parent
+	while node and node ~= workspace do
+		local why = OWN_HEALTH_MODELS[node.Name]
+		if why then
+			return why
+		end
+		if node:GetAttribute("VehicleMaxHealth") ~= nil then
+			return "vehicle (VehicleService)"
+		end
+		node = node.Parent
+	end
+	if CombatService.HazardFromPart and CombatService.HazardFromPart(part) then
+		return "hazard (HazardService)"
+	end
+	if CombatService.StructureFromPart and CombatService.StructureFromPart(part) then
+		return "deployable (DefenseService)"
+	end
+	if CombatService.CompanionFromPart and CombatService.CompanionFromPart(part) then
+		return "companion"
+	end
+	return nil
+end
+
+-- Whether a Model is one compact thing (see THING_SPAN above). Cached per Model.
+local function compact(model)
+	local cached = thingCache[model]
+	if cached ~= nil then
+		return cached
+	end
+	local ok = true
+	if #model:GetChildren() > THING_PARTS then
+		ok = false
+	else
+		local count = 0
+		local low, high = nil, nil
+		for _, d in ipairs(model:GetDescendants()) do
+			if d:IsA("BasePart") then
+				count += 1
+				local name = d.Name
+				-- A building (its own walls, floors, roofs), or a slab someone stands on, is never a
+				-- thing: its pieces break one by one.
+				if count > THING_PARTS or CARRIES_DRESSING[name] or d:GetAttribute("Destructible") ~= nil then
+					ok = false
+					break
+				end
+				local hx, hy, hz = halfAlong(d, EAST), halfAlong(d, UP), halfAlong(d, NORTH)
+				if hy * 2 <= GROUND_SLAB_THICK and hx * 2 >= GROUND_SLAB_WIDE and hz * 2 >= GROUND_SLAB_WIDE and d.CanCollide then
+					ok = false
+					break
+				end
+				local p = d.Position
+				local a, b = p - Vector3.new(hx, hy, hz), p + Vector3.new(hx, hy, hz)
+				low = low and low:Min(a) or a
+				high = high and high:Max(b) or b
+			end
+		end
+		if ok and low then
+			local span = high - low
+			ok = math.max(span.X, span.Z) <= THING_SPAN and span.Y <= THING_HEIGHT
+		elseif not low then
+			ok = false
+		end
+	end
+	return cacheUntil(thingCache, model, ok)
+end
+
+-- The biggest compact Model round a part, or nil. Never one of the Map's own children (Town, Props,
+-- Roads, Landmarks, a team base): those hold everything else, however small a test map makes them.
+local function thingOf(part)
+	local best = nil
+	local node = part.Parent
+	while node and node.Parent and node.Parent ~= workspace and node.Parent.Parent ~= workspace do
+		if node:IsA("Model") and WHOLE_MODELS[node.Name] then
+			return node
+		end
+		if node:IsA("Model") then
+			if compact(node) then
+				best = node
+			else
+				break
+			end
+		end
+		node = node.Parent
+	end
+	return best
+end
+DestructibleService.ThingOf = thingOf
+
+-- Whether a part is ground someone stands on: a thin, wide slab lying on the terrain, or on
+-- something that never breaks (a foundation, a plinth, a road). Cached per part.
+local groundParams = nil
+local function groundSlab(part)
+	local cached = slabCache[part]
+	if cached ~= nil then
+		return cached
+	end
+	local hy = halfAlong(part, UP)
+	local slab = false
+	if hy * 2 <= GROUND_SLAB_THICK and halfAlong(part, EAST) * 2 >= GROUND_SLAB_WIDE and halfAlong(part, NORTH) * 2 >= GROUND_SLAB_WIDE then
+		groundParams = groundParams or RaycastParams.new()
+		groundParams.FilterType = Enum.RaycastFilterType.Exclude
+		groundParams.FilterDescendantsInstances = { part }
+		groundParams.IgnoreWater = true
+		local bottom = part.Position - Vector3.new(0, hy, 0)
+		local hit = workspace:Raycast(bottom + Vector3.new(0, 0.2, 0), Vector3.new(0, -GROUND_SLAB_REACH, 0), groundParams)
+		if hit then
+			local under = hit.Instance
+			slab = under == workspace.Terrain or (under:IsA("BasePart") and (mapRootOf(under) == nil
+				or under:GetAttribute("Destructible") == false))
+		end
+	end
+	return cacheUntil(slabCache, part, slab)
+end
+DestructibleService.GroundSlab = groundSlab
+
+-- A slab with nothing at all under it, ground or part, as far down as the world goes: breaking it
+-- would open a hole to the void, so it never breaks (see "NO HOLE IN THE MAP" by the craters).
+-- Cached per part.
+local voidCache = {}
+local voidParams = nil
+local function overVoid(part)
+	local cached = voidCache[part]
+	if cached ~= nil then
+		return cached
+	end
+	local hy = halfAlong(part, UP)
+	local void = false
+	if hy * 2 <= GROUND_SLAB_THICK and halfAlong(part, EAST) * 2 >= GROUND_SLAB_WIDE and halfAlong(part, NORTH) * 2 >= GROUND_SLAB_WIDE then
+		voidParams = voidParams or RaycastParams.new()
+		voidParams.FilterType = Enum.RaycastFilterType.Exclude
+		voidParams.FilterDescendantsInstances = { part }
+		voidParams.IgnoreWater = false
+		void = workspace:Raycast(part.Position - Vector3.new(0, hy - 0.1, 0), Vector3.new(0, -600, 0), voidParams) == nil
+	end
+	return cacheUntil(voidCache, part, void)
+end
+DestructibleService.OverVoid = overVoid
+
 -- The nearest Model above `part` (inside the Map) tagged as one pool, if any.
 local function taggedModel(part)
 	local node = part.Parent
 	while node and node.Parent ~= workspace do
 		if node:IsA("Model") then
 			local tag = node:GetAttribute("Destructible")
-			if tag == false then
-				return nil, true
-			elseif type(tag) == "string" or positiveNumber(node:GetAttribute("DestructibleHealth")) then
+			if type(tag) == "string" or positiveNumber(node:GetAttribute("DestructibleHealth")) then
 				return node
 			end
 		end
@@ -270,9 +516,11 @@ local function taggedModel(part)
 	return nil
 end
 
--- Which pool a part belongs to, cheaply (no search): (key, kind, owner, explicit health) or nil.
--- The key is the part itself, the tagged Model, or the group's tag string; `owner` is where the
--- members are found (the Model, or the part's parent for a group), nil for a pool of one.
+-- Which pool a part belongs to, cheaply (no search): (key, kind, owner, explicit health, auto) or
+-- nil. The key is the part itself, the tagged Model, or the group's tag string; `owner` is where the
+-- members are found (the Model, or the part's parent for a group), nil for a pool of one. `auto` is
+-- true for the opt-out pools (nothing tagged it and it has no HEALTH name): see "EVERYTHING ELSE
+-- BREAKS" above.
 local function keyOf(part)
 	if not part or not part:IsA("BasePart") or not part.Anchored then
 		return nil
@@ -281,10 +529,8 @@ local function keyOf(part)
 	if part.Name == DestructibleService.GlassName then
 		return (part.CanCollide and mapRootOf(part)) and part or nil, nil, nil, HEALTH[part.Name]
 	end
+	-- (`false` is a builder's old "never", no longer honoured: it reads as no tag at all.)
 	local tag = part:GetAttribute("Destructible")
-	if tag == false then
-		return nil
-	end
 	if type(tag) == "string" then
 		if not (part.CanCollide or part.CanQuery) then
 			return nil
@@ -295,10 +541,7 @@ local function keyOf(part)
 		end
 		return tag, kind, part.Parent, part:GetAttribute("DestructibleHealth")
 	end
-	local model, refused = taggedModel(part)
-	if refused then
-		return nil
-	end
+	local model = taggedModel(part)
 	if model then
 		if not (part.CanCollide or part.CanQuery) then
 			return nil
@@ -313,9 +556,33 @@ local function keyOf(part)
 			return part, nil, nil, own or HEALTH[part.Name]
 		end
 	end
-	return nil
+	-- Everything else that collides or can be shot: the compact thing round it, or itself. (Trim
+	-- neither collides nor takes a ray: it goes with whatever it hangs on.)
+	if not (part.CanCollide or part.CanQuery) then
+		return nil
+	end
+	local thing = thingOf(part)
+	if thing then
+		return thing, "Prop", thing, nil, true
+	end
+	return part, "Prop", nil, nil, true
 end
 DestructibleService.KeyOf = keyOf
+
+-- Why a part that has a pool key still may not be hurt, cheaply (the ground-slab ray is cast once per
+-- part and remembered), or nil: it is outside the Map or NEVER, something else owns it, or -- for
+-- the opt-out pools only, which nobody chose on purpose -- nobody can see it, or it is ground.
+local function refusalOf(part, auto)
+	local root, why = mapRootOf(part)
+	if not root then
+		return why
+	end
+	local owner = ownerElsewhere(part)
+	if owner then
+		return "own health: " .. owner
+	end
+	return nil
+end
 
 -- Every part in a pool, found once, on its first hit.
 local function membersOf(key, part, owner)
@@ -374,9 +641,44 @@ local function boundsOf(members)
 	return CFrame.new((low + high) / 2), high - low
 end
 
+-- What a part's pool would be, worked out the way its first hit works it out, without keeping it:
+-- (pool, key) or (nil, why). The pool is { max, members, tagged, auto, target }.
+local function resolvePool(part)
+	local key, kind, owner, explicit, auto = keyOf(part)
+	if not key then
+		return nil, "no pool"
+	end
+	-- Only things standing on the map itself, so lobby furniture and deployables are untouched.
+	local refusal = refusalOf(part, auto)
+	if refusal then
+		return nil, refusal
+	end
+	local members = membersOf(key, part, owner)
+	local max = explicit
+	if kind ~= nil then
+		local _, span = boundsOf(members)
+		if owner ~= nil and math.max(span.X, span.Z) > MAX_POOL_SPAN and not WHOLE_MODELS[typeof(key) == "Instance" and key.Name or ""] then
+			-- Too wide to be one thing (a slab something else stands on): the part hit breaks alone.
+			key, owner, members, explicit = part, nil, { part }, nil
+			max = nil
+		end
+		max = max or poolHealth(kind, members)
+	end
+	if type(max) ~= "number" or max <= 0 then
+		return nil, "no health"
+	end
+	-- A pool of several parts (or a Model) breaks as one (shatterPool); a pool of one part breaks as
+	-- a part does, taking its dressing with it (shatter).
+	return { max = max, members = members, tagged = owner ~= nil, auto = auto == true,
+		target = typeof(key) == "Instance" and key:IsA("Model") and key or nil }, key
+end
+
+-- Defined with the support pass, below; subdivide (by Damage) forgets what it cuts up.
+local forget
+
 -- The pool entry for a part, made on its first hit; nil if the part can't be broken.
 local function entryFor(part)
-	local key, kind, owner, explicit = keyOf(part)
+	local key = keyOf(part)
 	if not key then
 		return nil
 	end
@@ -384,28 +686,20 @@ local function entryFor(part)
 	if entry then
 		return entry, key
 	end
-	-- Only things standing on the map itself, so lobby furniture and deployables are untouched.
-	if not mapRootOf(part) then
+	local pool
+	pool, key = resolvePool(part)
+	if not pool then
 		return nil
 	end
-	local tagged = kind ~= nil
-	local members = membersOf(key, part, owner)
-	local max = explicit
-	if tagged then
-		local _, span = boundsOf(members)
-		if math.max(span.X, span.Z) > MAX_POOL_SPAN then
-			return nil
-		end
-		max = max or poolHealth(kind, members)
+	-- (A part of a pool too wide to be one thing is a pool of its own, under its own key.)
+	if damaged[key] then
+		return damaged[key], key
 	end
-	if type(max) ~= "number" or max <= 0 then
-		return nil
-	end
-	entry = { health = max, max = max, members = members, tagged = tagged, stage = 0,
-		target = typeof(key) == "Instance" and key:IsA("Model") and key or nil }
+	entry = { health = pool.max, max = pool.max, members = pool.members, tagged = pool.tagged, auto = pool.auto, stage = 0,
+		target = pool.target }
 	damaged[key] = entry
 	-- Dropped when the pool's anchor goes: the part itself, the Model, or the group's first member.
-	local anchor = typeof(key) == "Instance" and key or members[1]
+	local anchor = typeof(key) == "Instance" and key or pool.members[1]
 	anchor.Destroying:Connect(function()
 		if damaged[key] == entry then
 			damaged[key] = nil
@@ -414,10 +708,11 @@ local function entryFor(part)
 	return entry, key
 end
 
--- Answers without looking anything up beyond the part and its parents: whether it is worth
--- sending the hit here. (An oversized pool is only refused on the hit itself, which then deals 0.)
+-- Answers without looking anything up beyond the part and its parents (and, for a big flat part,
+-- one ray down, once): whether it is worth sending the hit here. (An oversized pool is only refused
+-- on the hit itself, which then deals 0.)
 function DestructibleService.FromPart(part)
-	local key = keyOf(part)
+	local key, _, _, _, auto = keyOf(part)
 	if not key then
 		return nil
 	end
@@ -425,7 +720,45 @@ function DestructibleService.FromPart(part)
 	if entry then
 		return not entry.broken and part or nil
 	end
-	return mapRootOf(part) and part or nil
+	return refusalOf(part, auto) == nil and part or nil
+end
+
+-- For the coverage audit (tools/destruct_coverage_probe.lua): what the service makes of a part, and
+-- why. ("breakable", how, pool key) | ("excluded", the rule that keeps it whole) | ("trim", ...) for
+-- dressing that neither collides nor takes a ray | ("unexplained", why) for a hole in the rules.
+local KEPT = DestructibleService.KeptReasons
+function DestructibleService.Explain(part)
+	if not part:IsA("BasePart") then
+		return "excluded", "not a part"
+	end
+	if not part.Anchored then
+		return "excluded", "unanchored (own health or none: vehicles, deployables, debris)"
+	end
+	local root, why = mapRootOf(part)
+	if not root then
+		return KEPT[why] and "excluded" or "outside", why
+	end
+	local owner = ownerElsewhere(part)
+	if owner then
+		-- It breaks, under its own health (a barrel goes up, a vehicle is wrecked).
+		return "breakable", "own health: " .. owner
+	end
+	if not (part.CanCollide or part.CanQuery) then
+		return "trim", "goes with what it hangs on"
+	end
+	local key = keyOf(part)
+	local entry = key ~= nil and damaged[key] or nil
+	if entry then
+		return "breakable", entry.auto and "auto" or "tagged/named", key
+	end
+	local pool, found = resolvePool(part)
+	if not pool then
+		if KEPT[found] then
+			return "excluded", found
+		end
+		return "unexplained", found
+	end
+	return "breakable", pool.auto and (pool.target and "auto: thing" or "auto: part") or "tagged/named", found
 end
 
 -- Glass doesn't stop a shot: the pane breaks and the bullet goes on to whatever is behind it.
@@ -530,18 +863,29 @@ end
 -- Defined further down, beside the rest of the breaking; dropDressing needs them for solid pieces.
 local queueFx, tellBroken
 
+-- Any part that breaks alone takes its dressing, not only a building's walls and floors (the trim on
+-- a chimney, the lamp head on a signal pole): its siblings are walked, unless there are more of
+-- them than DRESSING_SCAN (a whole town's loose props), where the walk would cost more than a frame
+-- should.
+local DRESSING_SCAN = 800
+
 local function dropDressing(part, from)
 	local building = part.Parent
-	if not building or not CARRIES_DRESSING[part.Name] then
+	if not building then
 		return
 	end
 	local children = building:GetChildren()
+	if not CARRIES_DRESSING[part.Name] and #children > DRESSING_SCAN then
+		return
+	end
 	local gone = { [part] = true }
 
+	-- Held = really touching something solid that stays (not just near its edge: a shutter beside a
+	-- window that lost its wall is not held by the wall past the window).
 	local function heldBySolid(trim)
 		for _, other in ipairs(children) do
 			if not gone[other] and other:IsA("BasePart") and other.CanCollide and other.Name ~= DestructibleService.GlassName
-				and not ATTACHED[other.Name] and attached(other, trim, ATTACH_MARGIN) then
+				and not ATTACHED[other.Name] and attached(other, trim, HOLD_MARGIN) then
 				return true
 			end
 		end
@@ -589,6 +933,41 @@ local partBrokenListeners = {}
 -- Switched off by tools/audit_loot_resettle.lua for its planted round, so it can show that what it
 -- measures really does fail when nothing settles. Always on in the game.
 DestructibleService.PartBrokenEnabled = true
+
+-- A piece of road or bridge gone (broken, or fallen into a hole): told to whoever drives on the
+-- roads (BotService hands it to BotNav, which closes that stretch of the network to bot drivers).
+-- A road is a part named Road..., Junction... or Bridge..., or a slab in the map's Roads model.
+local roadListeners = {}
+function DestructibleService.OnRoadBroken(fn)
+	table.insert(roadListeners, fn)
+	return fn
+end
+
+local ROAD_WORDS = { "Road", "Junction", "Bridge" }
+local function isRoad(part)
+	for _, word in ipairs(ROAD_WORDS) do
+		if string.sub(part.Name, 1, #word) == word then
+			return true
+		end
+	end
+	local node = part.Parent
+	while node and node ~= workspace do
+		if node.Name == "Roads" then
+			return halfAlong(part, UP) * 2 <= GROUND_SLAB_THICK
+		end
+		node = node.Parent
+	end
+	return false
+end
+DestructibleService.IsRoad = isRoad
+
+local function roadBroken(part)
+	if #roadListeners > 0 and isRoad(part) then
+		for _, listener in ipairs(roadListeners) do
+			task.spawn(listener, part.Position, part.Size)
+		end
+	end
+end
 
 function DestructibleService.OnPartBroken(fn)
 	table.insert(partBrokenListeners, fn)
@@ -678,13 +1057,42 @@ queueFx = function(part, from, stage)
 	end
 end
 
+-- What broke this frame, by box, for the support pass (runSupport, below Damage).
+local pendingSupport = nil
+local runSupport
+-- While a support pass runs, what it breaks (and whatever it had no budget left for) waits for the
+-- next frame, so one pass never sets off another in the same frame.
+local supportRunning, nextFrameBoxes = false, nil
+
+local function queueSupport(cframe, size)
+	if supportRunning then
+		nextFrameBoxes = nextFrameBoxes or {}
+		table.insert(nextFrameBoxes, { cframe, size })
+		return
+	end
+	if not pendingSupport then
+		pendingSupport = {}
+		task.defer(function()
+			runSupport()
+		end)
+	end
+	table.insert(pendingSupport, { cframe, size })
+end
+
 tellBroken = function(cframe, size)
 	if DestructibleService.PartBrokenEnabled then
 		for _, listener in ipairs(partBrokenListeners) do
 			task.spawn(listener, cframe, size)
 		end
 	end
+	if DestructibleService.SupportEnabled then
+		queueSupport(cframe, size)
+	end
 end
+
+-- Switched off only by a check's planted round (tools/destruct_map_check.py), to show that its
+-- floating measurement fails when nothing comes down. Always on in the game.
+DestructibleService.SupportEnabled = true
 
 -- A part coming apart: it's gone at once for everyone, and each client throws its debris.
 local function shatter(part, from, stage, at, normal)
@@ -693,6 +1101,7 @@ local function shatter(part, from, stage, at, normal)
 		return
 	end
 	tellBroken(part.CFrame, part.Size)
+	roadBroken(part)
 	dropDressing(part, from)
 	queueFx(part, from, stage)
 	part:Destroy()
@@ -839,15 +1248,111 @@ local function recordHit(entry, part, from, at, normal)
 	table.insert(pendingHits.list, hit)
 end
 
+-- BIG PARTS BREAK IN PIECES (see "a piece" in the rules above). A single-part pool bigger than
+-- SUBDIVIDE_OVER along any of its axes is cut, the first time it is hit, into a grid of tiles no
+-- more than TILE studs along each long axis (its short axis stays whole: a road stays one slab
+-- deep), each a clone of it in place (same name, material, colour, attributes, textures; decals,
+-- guis and prompts stay off the tiles), and the part itself goes. Blocks only: a wedge or a
+-- cylinder is not cut. At most MAX_TILES tiles; a bigger part gets bigger tiles. Returns the tiles
+-- (or nil when the part is not one to cut).
+local MAX_TILES = 256
+local KEEP_ON_TILE = { Texture = true, Attachment = false }
+DestructibleService.Subdivided = 0
+
+local function subdividable(part)
+	if not part:IsA("Part") or part.Shape ~= Enum.PartType.Block or not part.Anchored or part.Name == DestructibleService.GlassName then
+		return false
+	end
+	local size = part.Size
+	if math.max(size.X, size.Y, size.Z) <= SUBDIVIDE_OVER then
+		return false
+	end
+	local key, _, owner = keyOf(part)
+	return key == part and owner == nil and damaged[part] == nil
+end
+
+local function subdivide(part)
+	if not subdividable(part) or not mapRootOf(part) then
+		return nil
+	end
+	local size = part.Size
+	local tile = TILE
+	local function count(length)
+		return length > SUBDIVIDE_OVER and math.ceil(length / tile) or 1
+	end
+	while count(size.X) * count(size.Y) * count(size.Z) > MAX_TILES do
+		tile *= 1.5
+	end
+	local nx, ny, nz = count(size.X), count(size.Y), count(size.Z)
+	local step = Vector3.new(size.X / nx, size.Y / ny, size.Z / nz)
+	local tiles = {}
+	local parent = part.Parent
+	-- The clone to copy from: the part without what must not repeat on every tile.
+	local proto = part:Clone()
+	for _, child in ipairs(proto:GetChildren()) do
+		if not KEEP_ON_TILE[child.ClassName] then
+			child:Destroy()
+		end
+	end
+	proto:SetAttribute("Subdivided", true)
+	for i = 1, nx do
+		for j = 1, ny do
+			for k = 1, nz do
+				local tilePart = proto:Clone()
+				tilePart.Size = step
+				local offset = Vector3.new((i - 0.5) * step.X - size.X / 2, (j - 0.5) * step.Y - size.Y / 2, (k - 0.5) * step.Z - size.Z / 2)
+				tilePart.CFrame = part.CFrame * CFrame.new(offset)
+				tilePart.Parent = parent
+				table.insert(tiles, tilePart)
+			end
+		end
+	end
+	proto:Destroy()
+	forget(part)
+	part:Destroy()
+	DestructibleService.Subdivided += 1
+	return tiles
+end
+DestructibleService.Subdivide = subdivide
+
+-- The tile of `tiles` nearest a point (the one a shot struck).
+local function tileAt(tiles, point)
+	local best, bestDistance = tiles[1], math.huge
+	for _, tilePart in ipairs(tiles) do
+		local l = tilePart.CFrame:PointToObjectSpace(point)
+		local h = tilePart.Size / 2
+		local d = Vector3.new(math.max(0, math.abs(l.X) - h.X), math.max(0, math.abs(l.Y) - h.Y), math.max(0, math.abs(l.Z) - h.Z)).Magnitude
+		if d < bestDistance then
+			best, bestDistance = tilePart, d
+		end
+	end
+	return best, bestDistance
+end
+
 -- Returns the damage actually taken. `from` (optional) is where the shot or blast came from; `at`
 -- and `normal` (optional) the exact point and surface normal it struck, when the caller has them.
 function DestructibleService.Damage(part, amount, attackerToken, from, at, normal)
 	if amount <= 0 then
 		return 0
 	end
+	if subdividable(part) then
+		local tiles = subdivide(part)
+		if tiles then
+			local point = typeof(at) == "Vector3" and at or (typeof(from) == "Vector3" and from or part.Position)
+			part = tileAt(tiles, point)
+		end
+	end
 	local entry = entryFor(part)
 	if not entry or entry.broken then
 		return 0
+	end
+	if not entry.noted then
+		-- A building's first hit: what it stands on is written down (the frame after), so a later
+		-- break can tell a sliver of it (the support pass, below).
+		entry.noted = true
+		task.defer(function()
+			pcall(DestructibleService.NoteBaseline, part)
+		end)
 	end
 
 	local dealt = math.min(entry.health, amount)
@@ -873,61 +1378,1053 @@ function DestructibleService.Damage(part, amount, attackerToken, from, at, norma
 	return dealt
 end
 
--- Craters: a blast on open ground scoops a little terrain out. Capped per Map (a new map is a new
--- Map instance, which resets it), sized off the blast, and never where the ground is a road, paving,
--- water or ice, or where the blast first meets something built rather than terrain.
-local CRATER_CAP = 40
-local CRATER_SHARE, CRATER_MIN, CRATER_MAX = 0.3, 1.5, 4.5
-local NO_CRATER = {
-	[Enum.Material.Asphalt] = true, [Enum.Material.Pavement] = true, [Enum.Material.Concrete] = true,
-	[Enum.Material.Cobblestone] = true, [Enum.Material.Brick] = true, [Enum.Material.Water] = true,
-	[Enum.Material.Glacier] = true, [Enum.Material.Ice] = true, [Enum.Material.Salt] = true,
-}
-DestructibleService.CraterCap = CRATER_CAP
-local craterMap, craterCount = nil, 0
+--------------------------------------------------------------------------------
+-- Nothing left in the air, and buildings fall over (see "EVERYTHING ELSE BREAKS" in the header)
+--------------------------------------------------------------------------------
+--
+-- STRUCTURE, worked out lazily. What touches what (adjacency) is found with one box query per part
+-- the first time the support pass or a building's first hit needs it, and kept until the part moves
+-- or breaks; whether a part is an ANCHOR (it stands on terrain, or it never breaks: a foundation, a
+-- road, a ground floor on its levelled ground, anything floating on purpose) likewise. Nothing is
+-- looked at before a building is first hit.
+--
+-- After every break (tellBroken queues its box) the support pass looks round it:
+--   HELD?      each solid part near the break is followed through what it touches until an anchor
+--              turns up (SUPPORT_REACH parts at most; past that it is taken as held). A chunk with
+--              no anchor in it is cut loose: it FALLS (CollapseService.Drop).
+--   STANDING?  a held chunk (TOPPLE_REACH parts at most) is weighed: its centre of mass against the
+--              footprint of what it stands on (the patches where its parts rest on anchors). It
+--              TOPPLES over the nearest edge when its weight is past that footprint or within
+--              TOPPLE_MARGIN of its edge, or when what it stands on is under TOPPLE_AREA of what it
+--              stood on when it was first hit (a sliver).
+-- Everything that goes with a chunk goes with it: every member of each pool in it (a thing's
+-- dressing, a tree's leaves), and each part's own dressing and panes (walked in its parent, as
+-- dropDressing does). Without CollapseService (a check that leaves it out) a loose chunk breaks into
+-- debris instead, as it always did.
 
-local function craterAt(position, radius, map)
-	if craterMap ~= map then
-		craterMap, craterCount = map, 0
+local supportParams = nil
+local SUPPORT_REACH, TOPPLE_REACH = 400, 500
+local TOPPLE_MARGIN, TOPPLE_AREA = 0.08, 0.3
+DestructibleService.ToppleMargin, DestructibleService.ToppleArea = TOPPLE_MARGIN, TOPPLE_AREA
+
+local okCollapse, CollapseService = pcall(function()
+	return require(script.Parent:WaitForChild("CollapseService", 5))
+end)
+if not okCollapse or type(CollapseService) ~= "table" or type(CollapseService.Drop) ~= "function" then
+	CollapseService = nil
+end
+DestructibleService.Collapse = CollapseService
+
+-- Caches: weak-keyed, so a miss only costs a query again.
+local adjacency = setmetatable({}, { __mode = "k" })
+local anchorCache = setmetatable({}, { __mode = "k" })
+-- A building's footprint when first hit: state, not a cache, so kept until the building goes.
+local baseline = {}
+
+-- Whether terrain (not water) is right under a part's underside: a short ray down from just above
+-- it finds the ground within half a stud of it (a wall on a one-stud ground floor is NOT on the
+-- ground: the floor is); failing that (a part sunk into the ground, where the ray starts inside the
+-- terrain), the voxel half a stud under its underside is mostly solid.
+local terrainParams = nil
+local function onTerrain(part)
+	local bottom = part.Position - Vector3.new(0, halfAlong(part, UP), 0)
+	terrainParams = terrainParams or RaycastParams.new()
+	terrainParams.FilterType = Enum.RaycastFilterType.Include
+	terrainParams.FilterDescendantsInstances = { workspace.Terrain }
+	terrainParams.IgnoreWater = true
+	local hit = workspace:Raycast(bottom + Vector3.new(0, 0.3, 0), Vector3.new(0, -0.9, 0), terrainParams)
+	if hit and hit.Instance == workspace.Terrain then
+		return true
 	end
-	if craterCount >= CRATER_CAP then
+	local below = bottom - Vector3.new(0, 0.5, 0)
+	local ok, materials, occupancies = pcall(function()
+		return workspace.Terrain:ReadVoxels(Region3.new(below - Vector3.new(0.1, 0.1, 0.1), below + Vector3.new(0.1, 0.1, 0.1)):ExpandToGrid(4), 4)
+	end)
+	if not ok or not materials or not materials[1] or not materials[1][1] then
 		return false
 	end
-	local size = math.clamp(radius * CRATER_SHARE, CRATER_MIN, CRATER_MAX)
+	local material, occupancy = materials[1][1][1], occupancies[1][1][1]
+	return material ~= nil and material ~= Enum.Material.Air and material ~= Enum.Material.Water and (occupancy or 0) > 0.3
+end
+DestructibleService.OnTerrain = onTerrain
+
+-- Meant to hang in the air (an obby platform, a sign on a wire): the attribute on it or round it.
+local function floatsOnPurpose(part)
+	local node = part
+	while node and node ~= workspace do
+		if node:GetAttribute("IntentionalFloat") then
+			return true
+		end
+		node = node.Parent
+	end
+	return false
+end
+
+-- Holds everything touching it up.
+local function anchors(part)
+	local cached = anchorCache[part]
+	if cached ~= nil then
+		return cached
+	end
+	local key, _, _, _, auto = keyOf(part)
+	-- (A ground slab counts too: a floor lying on the ground or on a footing holds up what stands on
+	-- it, and can no more tip over than the ground can, though it can be shot out.)
+	local result = key == nil or refusalOf(part, auto) ~= nil or floatsOnPurpose(part) or onTerrain(part) or groundSlab(part)
+	anchorCache[part] = result
+	return result
+end
+DestructibleService.Anchors = anchors
+
+local function useRoots()
+	local roots = {}
+	for name in pairs(ROOTS) do
+		local root = workspace:FindFirstChild(name)
+		if root then
+			table.insert(roots, root)
+		end
+	end
+	supportParams = supportParams or OverlapParams.new()
+	supportParams.FilterType = Enum.RaycastFilterType.Include
+	supportParams.FilterDescendantsInstances = roots
+	return roots
+end
+
+local function solid(part)
+	return part.Parent ~= nil and part.Anchored and part.CanCollide and part.Name ~= DestructibleService.GlassName
+end
+
+local function worldBox(part)
+	local hx, hy, hz = halfAlong(part, EAST), halfAlong(part, UP), halfAlong(part, NORTH)
+	local p = part.Position
+	return p - Vector3.new(hx, hy, hz), p + Vector3.new(hx, hy, hz)
+end
+
+-- Flat and wide: a slab (a floor, a road, a paving stone, a deck, a tile of one).
+local function slabLike(lo, hi)
+	return hi.Y - lo.Y <= GROUND_SLAB_THICK and hi.X - lo.X >= 4 and hi.Z - lo.Z >= 4
+end
+
+-- How two touching parts hold each other up, if they do:
+--   "rest"   one sits on the other (its underside at the other's top, over some of it)
+--   "side"   side by side over most of a stud of their height (a wall into a wall, a floor between
+--            walls, a sign on a wall)
+--   "joint"  two slabs edge to edge (a floor cut into tiles, two road slabs): it carries only so far
+--            (JOINT_HOPS slabs from anything resting on something), so a slab over a crater or a
+--            floor with its walls gone does not hang in the air on its neighbours' edges
+--   nil      only grazing (a kerb along a road, a thin trim edge): not a support at all
+local JOINT_HOPS = 2
+local function contactKind(a, b)
+	local alo, ahi = worldBox(a)
+	local blo, bhi = worldBox(b)
+	local overlapX = math.min(ahi.X, bhi.X) - math.max(alo.X, blo.X)
+	local overlapZ = math.min(ahi.Z, bhi.Z) - math.max(alo.Z, blo.Z)
+	if overlapX > 0.05 and overlapZ > 0.05 and (math.abs(alo.Y - bhi.Y) <= 0.6 or math.abs(blo.Y - ahi.Y) <= 0.6) then
+		return "rest"
+	end
+	local overlapY = math.min(ahi.Y, bhi.Y) - math.max(alo.Y, blo.Y)
+	if slabLike(alo, ahi) and slabLike(blo, bhi) then
+		return overlapY > 0.05 and "joint" or nil
+	end
+	if overlapY >= 0.9 then
+		return "side"
+	end
+	return nil
+end
+DestructibleService.ContactKind = contactKind
+
+-- The solid anchored parts holding this one up or held by it, with how (found once, kept until it
+-- moves). Returns (list of { part, kind }, fresh query spent).
+local function neighbours(part)
+	local list = adjacency[part]
+	if list then
+		return list, 0
+	end
+	list = {}
+	local grown = part.Size + Vector3.new(2, 2, 2) * SUPPORT_MARGIN
+	for _, other in ipairs(workspace:GetPartBoundsInBox(part.CFrame, grown, supportParams)) do
+		if other ~= part and solid(other) then
+			local kind = contactKind(part, other)
+			if kind then
+				table.insert(list, { other, kind })
+			end
+		end
+	end
+	adjacency[part] = list
+	return list, 1
+end
+
+-- Forgets what is known about a part's place in its structure (it is moving, or has moved).
+forget = function(part)
+	local list = adjacency[part]
+	if list then
+		for _, pair in ipairs(list) do
+			adjacency[pair[1]] = nil
+		end
+	end
+	adjacency[part] = nil
+	anchorCache[part] = nil
+end
+DestructibleService.Forget = forget
+
+-- Held up = joined to an anchor through parts that hold each other up (contactKind), at most
+-- JOINT_HOPS slab joints in a row. Bounded search from `start`; stops at the first anchor. `memo`
+-- keeps every answer for the rest of the pass. (held, searched, cost).
+local function heldUp(start, memo)
+	if memo[start] ~= nil then
+		return memo[start], nil, 0
+	end
+	local hops = { [start] = 0 }
+	local queue, head = { start }, 1
+	local held, cost, pruned = false, 0, false
+	while head <= #queue do
+		local node = queue[head]
+		head += 1
+		cost += 1
+		if memo[node] == true or anchors(node) then
+			held = true
+			break
+		end
+		if #queue > SUPPORT_REACH then
+			held = true
+			break
+		end
+		local list, spent = neighbours(node)
+		cost += spent
+		for _, pair in ipairs(list) do
+			local other, kind = pair[1], pair[2]
+			if solid(other) then
+				local h = kind == "joint" and hops[node] + 1 or 0
+				if h > JOINT_HOPS then
+					pruned = true
+				elseif hops[other] == nil or h < hops[other] then
+					if hops[other] == nil then
+						table.insert(queue, other)
+					end
+					hops[other] = h
+				end
+			end
+		end
+	end
+	-- A found anchor answers for everything joined to the start without a slab joint (their way to it
+	-- is the start's); anything reached across joints may have used up its hops on the way here.
+	-- "Not held" is only certain for the start (a part further out may reach ground by a way the hop
+	-- limit closed from here).
+	if held then
+		for _, node in ipairs(queue) do
+			if memo[node] == nil and hops[node] == 0 then
+				memo[node] = true
+			end
+		end
+	elseif not pruned then
+		-- Nothing was cut off by the hop limit: everything searched is one chunk with no anchor.
+		for _, node in ipairs(queue) do
+			memo[node] = false
+		end
+	else
+		memo[start] = false
+	end
+	return held, queue, cost, pruned
+end
+
+-- Everything joined to `start` that is not an anchor (the chunk), and where it rests on anchors:
+-- (parts, contacts {part, anchor}, cost), or nil past TOPPLE_REACH.
+local function chunkOf(start)
+	local seen, queue, head = { [start] = true }, { start }, 1
+	local contacts, cost = {}, 0
+	while head <= #queue do
+		local node = queue[head]
+		head += 1
+		local list, spent = neighbours(node)
+		cost += 1 + spent
+		for _, pair in ipairs(list) do
+			local other = pair[1]
+			if not seen[other] and solid(other) then
+				seen[other] = true
+				if anchors(other) then
+					table.insert(contacts, { node, other })
+				else
+					table.insert(queue, other)
+					if #queue > TOPPLE_REACH then
+						return nil, nil, cost
+					end
+				end
+			end
+		end
+	end
+	return queue, contacts, cost
+end
+
+-- The convex hull of points in the ground plane (x, z), counter-clockwise.
+local function hull2d(points)
+	table.sort(points, function(a, b)
+		return a.X < b.X or (a.X == b.X and a.Y < b.Y)
+	end)
+	if #points < 3 then
+		return points
+	end
+	local function cross(o, a, b)
+		return (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X)
+	end
+	local lower, upper = {}, {}
+	for _, p in ipairs(points) do
+		while #lower >= 2 and cross(lower[#lower - 1], lower[#lower], p) <= 0 do
+			table.remove(lower)
+		end
+		table.insert(lower, p)
+	end
+	for index = #points, 1, -1 do
+		local p = points[index]
+		while #upper >= 2 and cross(upper[#upper - 1], upper[#upper], p) <= 0 do
+			table.remove(upper)
+		end
+		table.insert(upper, p)
+	end
+	table.remove(lower)
+	table.remove(upper)
+	for _, p in ipairs(upper) do
+		table.insert(lower, p)
+	end
+	return lower
+end
+
+-- How far point p lies inside the hull (negative: outside), and the nearest point on its edge.
+local function insideBy(hull, p)
+	if #hull < 3 then
+		return -math.huge, nil
+	end
+	local best, nearest = math.huge, nil
+	for index = 1, #hull do
+		local a, b = hull[index], hull[index % #hull + 1]
+		local edge = b - a
+		local length = edge.Magnitude
+		if length > 1e-6 then
+			-- Counter-clockwise: the inside is to the left of each edge.
+			local signed = (edge.X * (p.Y - a.Y) - edge.Y * (p.X - a.X)) / length
+			if signed < best then
+				best = signed
+				local t = math.clamp((p - a):Dot(edge) / (length * length), 0, 1)
+				nearest = a + edge * t
+			end
+		end
+	end
+	return best, nearest
+end
+
+-- A chunk's balance: its mass and centre of mass, and the patches where it rests on anchors.
+local function balanceOf(parts, contacts)
+	local mass, weighted = 0, Vector3.new(0, 0, 0)
+	for _, part in ipairs(parts) do
+		local m = part:GetMass()
+		mass += m
+		weighted += part.Position * m
+	end
+	if mass <= 0 then
+		return nil
+	end
+	local com = weighted / mass
+	local points, area, centroid, restY, fixed = {}, 0, Vector3.new(0, 0, 0), -math.huge, false
+	for _, contact in ipairs(contacts) do
+		local nlo, nhi = worldBox(contact[1])
+		local alo, ahi = worldBox(contact[2])
+		local resting = ahi.Y >= nlo.Y - 0.6 and ahi.Y <= nlo.Y + 0.6
+		-- Fixed to it: an anchor beside it, over a stud of its height (a sign on a wall that never
+		-- breaks, a porch roof into a foundation). A kerb along a wall's foot is lower than that.
+		if not resting and math.min(nhi.Y, ahi.Y) - math.max(nlo.Y, alo.Y) >= 1 then
+			fixed = true
+		end
+		-- Resting on it: the anchor's top at the part's underside.
+		if resting then
+			local x0, x1 = math.max(nlo.X, alo.X), math.min(nhi.X, ahi.X)
+			local z0, z1 = math.max(nlo.Z, alo.Z), math.min(nhi.Z, ahi.Z)
+			if x1 > x0 and z1 > z0 then
+				local a = (x1 - x0) * (z1 - z0)
+				area += a
+				centroid += Vector3.new((x0 + x1) / 2, 0, (z0 + z1) / 2) * a
+				restY = math.max(restY, ahi.Y)
+				for _, corner in ipairs({ Vector2.new(x0, z0), Vector2.new(x1, z0), Vector2.new(x1, z1), Vector2.new(x0, z1) }) do
+					table.insert(points, corner)
+				end
+			end
+		end
+	end
+	if area <= 0 then
+		return nil, fixed
+	end
+	return { mass = mass, com = com, area = area, centroid = centroid / area, hull = hull2d(points), restY = restY, fixed = fixed }
+end
+DestructibleService.BalanceOf = balanceOf
+
+-- The Model a chunk is a building of: where its biggest part sits.
+local function structureOf(parts)
+	local biggest, volume = nil, -1
+	for _, part in ipairs(parts) do
+		local v = part.Size.X * part.Size.Y * part.Size.Z
+		if v > volume then
+			biggest, volume = part, v
+		end
+	end
+	return biggest and biggest.Parent or nil
+end
+
+-- Whether a held chunk stands badly: (topple spec or nil, why).
+local function judge(parts, contacts)
+	local balance = balanceOf(parts, contacts)
+	if not balance or balance.fixed then
+		-- Hanging off the side of an anchor, or fixed to one: it stays as long as that does.
+		return nil, "fixed"
+	end
+	local structure = structureOf(parts)
+	local first = structure and baseline[structure]
+	if structure and not first then
+		first = cacheUntil(baseline, structure, balance.area)
+	end
+	local p = Vector2.new(balance.com.X, balance.com.Z)
+	local inside, nearest = insideBy(balance.hull, p)
+	local size = math.sqrt(balance.area)
+	local why = nil
+	if inside < 0 then
+		why = "weight past its footprint"
+	elseif inside < TOPPLE_MARGIN * size then
+		why = "weight at the edge of its footprint"
+	elseif first and balance.area < TOPPLE_AREA * first then
+		why = string.format("standing on %.0f%% of what it stood on", balance.area / first * 100)
+	end
+	if not why then
+		return nil, "stands"
+	end
+	local lean
+	if nearest and inside < TOPPLE_MARGIN * size then
+		local towards = p - nearest
+		lean = inside < 0 and towards or -towards
+		if lean.Magnitude < 1e-3 then
+			lean = p - Vector2.new(balance.centroid.X, balance.centroid.Z)
+		end
+	else
+		lean = p - Vector2.new(balance.centroid.X, balance.centroid.Z)
+	end
+	if lean.Magnitude < 1e-3 then
+		lean = Vector2.new(1, 0)
+	end
+	local pivot = nearest and Vector3.new(nearest.X, balance.restY, nearest.Y) or Vector3.new(balance.centroid.X, balance.restY, balance.centroid.Z)
+	return { direction = Vector3.new(lean.X, 0, lean.Y).Unit, pivot = pivot, why = why }, why
+end
+DestructibleService.Judge = judge
+
+-- A building's footprint written down on its first hit (lazily, the frame after), so "a sliver of
+-- what it stood on" has something to be a sliver of.
+local function noteBaseline(part)
+	if not part.Parent or not part.Anchored or anchors(part) then
+		return
+	end
+	useRoots()
+	local parts, contacts, _cost = chunkOf(part)
+	if parts then
+		local structure = structureOf(parts)
+		if structure and not baseline[structure] then
+			local balance = balanceOf(parts, contacts)
+			if balance then
+				cacheUntil(baseline, structure, balance.area)
+			end
+		end
+	end
+end
+DestructibleService.NoteBaseline = noteBaseline
+
+-- Everything that goes with a set of solid parts: their pools' members, and their own dressing and
+-- panes in their parents (up to DRESSING_SCAN siblings each).
+local function gather(parts)
+	local out, seen = {}, {}
+	local function add(part)
+		if part and part.Parent and not seen[part] then
+			seen[part] = true
+			table.insert(out, part)
+		end
+	end
+	local byParent = {}
+	for _, part in ipairs(parts) do
+		add(part)
+		local key, _, owner = keyOf(part)
+		if key ~= nil and owner ~= nil then
+			local entry = damaged[key]
+			for _, member in ipairs(entry and entry.members or membersOf(key, part, owner)) do
+				add(member)
+			end
+		end
+		if part.Parent then
+			byParent[part.Parent] = byParent[part.Parent] or {}
+			table.insert(byParent[part.Parent], part)
+		end
+	end
+	for parent, hosts in pairs(byParent) do
+		local children = parent:GetChildren()
+		if #children <= DRESSING_SCAN or CARRIES_DRESSING[hosts[1].Name] then
+			for _, child in ipairs(children) do
+				if child:IsA("BasePart") and not seen[child] and child.Anchored then
+					local glass = child.Name == DestructibleService.GlassName
+					if glass or isTrim(child) then
+						for _, host in ipairs(hosts) do
+							if attached(host, child, glass and PANE_MARGIN or ATTACH_MARGIN) then
+								add(child)
+								break
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return out
+end
+DestructibleService.Gather = gather
+
+-- A part the support pass has given up on: without CollapseService it breaks, the old way.
+local function breakLoose(part)
+	if not part.Parent then
+		return
+	end
+	local entry = entryFor(part)
+	if entry and not entry.broken then
+		entry.broken = true
+		entry.health = 0
+		if entry.tagged then
+			shatterPool(entry, nil)
+		else
+			shatter(part, nil, entry.stage)
+		end
+	elseif part.Parent then
+		-- Dressing or glass with no pool of its own.
+		if part.Name == DestructibleService.GlassName then
+			breakPane(part, nil)
+		else
+			queueFx(part, nil)
+			part:Destroy()
+		end
+	end
+end
+
+DestructibleService.SupportStats = { passes = 0, checks = 0, fell = 0, toppled = 0, worst = 0 }
+
+-- For the checks, the probes and the coverage audit: whether a part is held up right now, and how its
+-- chunk stands: (held, parts in its chunk, verdict, balance).
+function DestructibleService.HeldUp(part)
+	useRoots()
+	return (heldUp(part, {}))
+end
+
+function DestructibleService.Standing(part)
+	useRoots()
+	if not heldUp(part, {}) then
+		return false, 0, "loose"
+	end
+	if anchors(part) then
+		return true, 0, "anchor"
+	end
+	local parts, contacts = chunkOf(part)
+	if not parts then
+		return true, -1, "too big to weigh"
+	end
+	local _, why = judge(parts, contacts)
+	return true, #parts, why, balanceOf(parts, contacts)
+end
+
+local supportPass
+
+runSupport = function()
+	local boxes = pendingSupport
+	pendingSupport = nil
+	if not boxes then
+		return
+	end
+	supportRunning = true
+	local ok, problem = pcall(supportPass, boxes)
+	supportRunning = false
+	if not ok then
+		warn("[DestructibleService] support pass failed: " .. tostring(problem))
+	end
+	if nextFrameBoxes then
+		local carry = nextFrameBoxes
+		nextFrameBoxes = nil
+		task.delay(0, function()
+			for _, box in ipairs(carry) do
+				queueSupport(box[1], box[2])
+			end
+		end)
+	end
+end
+
+supportPass = function(boxes)
+	-- CPU spent (os.clock is CPU time: what this costs the server, not when it happened).
+	local cpuAtStart = os.clock()
+	local roots = useRoots()
+	if #roots == 0 then
+		return
+	end
+	local stats = DestructibleService.SupportStats
+	stats.passes += 1
+	local memo, judged, cost, drops = {}, {}, 0, 0
+	local function drop(parts, topple)
+		drops += 1
+		for _, part in ipairs(parts) do
+			roadBroken(part)
+		end
+		local all = gather(parts)
+		if CollapseService then
+			local how = CollapseService.Drop(all, topple)
+			if how == "toppled" then
+				stats.toppled += 1
+			else
+				stats.fell += 1
+			end
+		else
+			stats.fell += 1
+			for _, part in ipairs(all) do
+				breakLoose(part)
+			end
+		end
+	end
+	for index, box in ipairs(boxes) do
+		if cost >= SUPPORT_CHECKS or drops >= SUPPORT_FALLS then
+			-- Over budget: this box and the rest go round again next frame.
+			for rest = index, #boxes do
+				queueSupport(boxes[rest][1], boxes[rest][2])
+			end
+			break
+		end
+		local around = workspace:GetPartBoundsInBox(box[1], box[2] + Vector3.new(2, 2, 2) * SUPPORT_MARGIN, supportParams)
+		for _, part in ipairs(around) do
+			-- Whatever touched the part that went has lost a neighbour.
+			if adjacency[part] then
+				adjacency[part] = nil
+			end
+		end
+		for _, part in ipairs(around) do
+			if solid(part) and memo[part] == nil and not judged[part] then
+				local held, searched, spent, pruned = heldUp(part, memo)
+				cost += spent
+				if not held and searched then
+					local loose = {}
+					for _, p in ipairs(searched) do
+						-- Past the slab-joint limit some of these may yet be held another way: asked
+						-- one by one (the start is already known not to be).
+						local looseToo = p == part or not pruned
+						if not looseToo and cost < SUPPORT_CHECKS then
+							local ok, _, more = heldUp(p, memo)
+							cost += more
+							looseToo = not ok
+						end
+						if looseToo and p.Parent and p.Anchored then
+							table.insert(loose, p)
+						end
+					end
+					drop(loose, nil)
+				elseif held and not anchors(part) then
+					local parts, contacts, spentChunk = chunkOf(part)
+					cost += spentChunk
+					if parts then
+						for _, p in ipairs(parts) do
+							judged[p] = true
+						end
+						local topple = judge(parts, contacts)
+						if topple then
+							drop(parts, topple)
+						end
+					end
+				end
+			end
+		end
+	end
+	stats.checks += cost
+	stats.worst = math.max(stats.worst, os.clock() - cpuAtStart)
+end
+
+--------------------------------------------------------------------------------
+-- The ground (Oliver 2026-09-24: "the ground breaks too", "make sure you can't blow a hole in the
+-- map and fall through", "make the craters be able to get pretty deep")
+--------------------------------------------------------------------------------
+--
+-- A blast that goes off on open ground digs, and a bowl that keeps being hit keeps deepening. Each
+-- blast takes the bowl under it DEEPEN x its crater size deeper (craterSize: off the weapon's blast
+-- reach and wall damage, so a rocket digs deeper than a grenade, a grenade than a drumlet), down to
+-- DIG_DEPTH under the ground as the map built it. The ground goes for everyone (Terrain:FillCylinder
+-- with Air, which the engine replicates). Bullets never write terrain: they only scuff it, on each
+-- client (CombatClient's bullet marks, through GroundFx). The server sends one CraterFx event per
+-- crater, { surface, radius, material, normal, depth }, for the clods, dust, torn turf and spray.
+--
+-- A BOWL, NEVER A SHAFT: you can always get out. Every crater is a cone: a flat floor FLOOR_RADIUS
+-- across, then walls rising a stud for every WALL_RUN out (1 in 2, 27 degrees: walkable on
+-- foot and drivable; a humanoid walks slopes to 89 and a vehicle climbs 35), carved as stacked
+-- STEP_UP-stud rings that the terrain smooths into a slope. A deeper bowl is a WIDER bowl: 24 deep is
+-- 45 studs out at the rim. It stops short of anything standing within its rim that is taller than
+-- LIMIT_TALL (a wall, a tree, a post: it would undermine it); a slab on the ground there (a road, a
+-- floor, paving) is dug out from under and comes down into the hole (the support pass).
+--
+-- DIG_DEPTH is 24: four bodies deep, so a player at the bottom is out of the fire of anyone on flat
+-- ground not at its rim, and its 45-stud rim still fits between the blocks of a town. Under it the
+-- ground is 45 studs thick or more everywhere a match is played (MapGenerator lays it 72 deep; the
+-- deepest the relief, river and lakes cut is about 20; tools/ground_probe.lua measured the thinnest
+-- at 69), and at least BEDROCK must remain under the floor or nothing is dug there at all.
+--
+-- NO HOLE IN THE MAP, in layers:
+--   (a) the DIG FLOOR and BEDROCK. The first crater near a spot writes down the height of every
+--       4-stud cell under its bowl BEFORE it digs (originalSurface), so later craters find the floor
+--       where the ground first was. The bowl's floor is raised wherever its cone would pass a cell's
+--       floor (the ground there as built, less DIG_DEPTH); a blast that can't take it a stud deeper
+--       digs nothing ("bottomed out"). Terrain under the floor is never written: it is the bedrock.
+--   (b) a ground floor has the levelled terrain (MapTerrain.FlattenPad) right under it, and a road or
+--       a slab over terrain breaks into a hole onto that terrain, which can then be cratered.
+--   (c) water, and the map's EDGE (a cell within the rim with no terrain under it: the end of the
+--       world), are never dug: the rim is pulled in short of them.
+--   (d) the safety net (Rescue, below): anyone found under WORLD_FLOOR_Y is put back on the ground
+--       above where they fell, unhurt.
+
+local CRATER_CAP = 400
+local CRATER_BURST, CRATER_WINDOW = 16, 1
+local CRATER_FROM_REACH, CRATER_FROM_DAMAGE = 0.55, 1 / 60
+local CRATER_MIN, CRATER_MAX = 1.5, 7
+local DIG_DEPTH, BEDROCK = 24, 16
+local DEEPEN = 0.8
+local FLOOR_RADIUS, WALL_RUN, STEP_UP = 2.5, 2, 2
+local LIMIT_TALL = 3
+local CELL = 4
+local NO_CRATER = { [Enum.Material.Water] = true }
+DestructibleService.CraterCap = CRATER_CAP
+DestructibleService.DigDepth, DestructibleService.Bedrock = DIG_DEPTH, BEDROCK
+DestructibleService.CraterMax = CRATER_MAX
+DestructibleService.WallRun = WALL_RUN
+
+local craterFx = Remotes.Event("CraterFx")
+
+-- A weapon's crater size from its blast: the reach its walls take damage in (half its blast
+-- radius) and its wall damage. A rocket (150 at reach ~7) about 6.4; a grenade about 5; a drumlet
+-- about 2.3; the smallest thing that digs at all 1.5. A blast deepens its bowl by DEEPEN of it.
+local function craterSize(reach, damage)
+	return math.clamp(CRATER_FROM_REACH * (reach or 0) + CRATER_FROM_DAMAGE * (damage or 0), CRATER_MIN, CRATER_MAX)
+end
+DestructibleService.CraterSize = craterSize
+
+-- One map's digging: how many craters, the recent burst, and the ground as it was built, per cell.
+local ground = { map = nil, count = 0, burst = {}, original = {} }
+DestructibleService.GroundState = ground
+
+local downParams, upParams = nil, nil
+local function terrainRay(origin, direction)
+	downParams = downParams or RaycastParams.new()
+	downParams.FilterType = Enum.RaycastFilterType.Include
+	downParams.FilterDescendantsInstances = { workspace.Terrain }
+	downParams.IgnoreWater = true
+	return workspace:Raycast(origin, direction, downParams)
+end
+
+-- The ground's height at a cell as the map built it (written down the first time any crater comes
+-- near it, before that crater digs), or nil where there is no ground (off the map's edge).
+local function originalSurface(cx, cz, above)
+	local key = cx .. ":" .. cz
+	local height = ground.original[key]
+	if height == nil then
+		local x, z = (cx + 0.5) * CELL, (cz + 0.5) * CELL
+		local hit = terrainRay(Vector3.new(x, above + 120, z), Vector3.new(0, -500, 0))
+		height = hit and hit.Position.Y or false
+		ground.original[key] = height
+	end
+	return height or nil
+end
+DestructibleService.OriginalSurface = originalSurface
+
+-- The underside of the terrain at (x, z): a ray up from under the world.
+local function terrainUnderside(x, z)
+	upParams = upParams or RaycastParams.new()
+	upParams.FilterType = Enum.RaycastFilterType.Include
+	upParams.FilterDescendantsInstances = { workspace.Terrain }
+	upParams.IgnoreWater = true
+	local hit = workspace:Raycast(Vector3.new(x, -600, z), Vector3.new(0, 700, 0), upParams)
+	return hit and hit.Position.Y or nil
+end
+DestructibleService.TerrainUnderside = terrainUnderside
+
+-- Any water in the box round a bowl?
+local function waterNear(centre, radius, depth)
+	local reach = radius + 2
+	local ok, materials = pcall(function()
+		return workspace.Terrain:ReadVoxels(Region3.new(centre - Vector3.new(reach, depth + 2, reach), centre + Vector3.new(reach, 4, reach)):ExpandToGrid(4), 4)
+	end)
+	if not ok or not materials then
+		return true
+	end
+	for x = 1, #materials do
+		for y = 1, #materials[x] do
+			for z = 1, #materials[x][y] do
+				if materials[x][y][z] == Enum.Material.Water then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+-- What a crater changes the ground under: forgotten, so the support pass sees it as it is now.
+local function forgetAround(centre, radius, map)
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { map }
+	for _, part in ipairs(workspace:GetPartBoundsInBox(CFrame.new(centre), Vector3.new(radius * 2 + 2, 60, radius * 2 + 2), params)) do
+		forget(part)
+		slabCache[part] = nil
+		voidCache[part] = nil
+	end
+end
+
+-- Digs (deeper) the bowl a blast at `position` makes, if it may: (dug, why not / how deep now).
+local function craterAt(position, reach, damage, map)
+	if ground.map ~= map then
+		ground.map, ground.count, ground.burst, ground.original = map, 0, {}, {}
+	end
+	if ground.count >= CRATER_CAP then
+		return false, "cap"
+	end
+	-- Wall clock (tick): os.clock is CPU time in Roblox, and time() stands still in edit mode.
+	local clock = tick()
+	for index = #ground.burst, 1, -1 do
+		if clock - ground.burst[index] > CRATER_WINDOW then
+			table.remove(ground.burst, index)
+		end
+	end
+	if #ground.burst >= CRATER_BURST then
+		return false, "burst"
+	end
+	local size = craterSize(reach, damage)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
 	params.FilterDescendantsInstances = { map, workspace.Terrain }
 	params.IgnoreWater = false
 	local hit = workspace:Raycast(position + Vector3.new(0, 1, 0), Vector3.new(0, -(size + 2), 0), params)
-	if not hit or hit.Instance ~= workspace.Terrain or NO_CRATER[hit.Material] then
-		return false
+	if not hit or hit.Instance ~= workspace.Terrain then
+		return false, "not open ground"
 	end
-	craterCount += 1
-	-- Whatever lay on the ground there (loot, a supply crate) settles into the hole.
-	tellBroken(CFrame.new(hit.Position - Vector3.new(0, 0.5, 0)), Vector3.new(size * 2, 1, size * 2))
-	workspace.Terrain:FillBall(hit.Position, size, Enum.Material.Air)
-	return true
+	if NO_CRATER[hit.Material] then
+		return false, "water"
+	end
+	local surface = hit.Position
+	local original = originalSurface(math.floor(surface.X / CELL), math.floor(surface.Z / CELL), surface.Y)
+	if not original then
+		return false, "map edge"
+	end
+	-- How deep this blast would take the bowl under it, then everything that holds it shallower.
+	local depthNow = math.max(0, original - surface.Y)
+	local target = math.min(DIG_DEPTH, depthNow + size * DEEPEN)
+	local function rimOf(depth)
+		return FLOOR_RADIUS + depth * WALL_RUN
+	end
+	-- (a) + (c): every cell under the rim: its own floor, and the edge of the world.
+	local reachOut = rimOf(target)
+	local lowX, highX = math.floor((surface.X - reachOut) / CELL), math.floor((surface.X + reachOut) / CELL)
+	local lowZ, highZ = math.floor((surface.Z - reachOut) / CELL), math.floor((surface.Z + reachOut) / CELL)
+	for cx = lowX, highX do
+		for cz = lowZ, highZ do
+			local nx = math.max(0, math.abs(surface.X - (cx + 0.5) * CELL) - CELL / 2)
+			local nz = math.max(0, math.abs(surface.Z - (cz + 0.5) * CELL) - CELL / 2)
+			local near = math.sqrt(nx * nx + nz * nz)
+			if near < rimOf(target) then
+				local here = originalSurface(cx, cz, surface.Y)
+				if not here then
+					-- The edge of the world: the rim stays a stud short of it.
+					target = math.min(target, (near - 1 - FLOOR_RADIUS) / WALL_RUN)
+				else
+					-- The cone's bottom over this cell is (original - target) + (near - FLOOR_RADIUS) /
+					-- WALL_RUN; it may not pass the cell's floor.
+					local rise = math.max(0, near - FLOOR_RADIUS) / WALL_RUN
+					target = math.min(target, original - (here - DIG_DEPTH) + rise)
+				end
+			end
+		end
+	end
+	-- Anything tall standing inside the rim holds it back.
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Include
+	overlap.FilterDescendantsInstances = { map }
+	local box = rimOf(target) * 2
+	for _, part in ipairs(workspace:GetPartBoundsInBox(CFrame.new(surface + Vector3.new(0, 3, 0)), Vector3.new(box, 8, box), overlap)) do
+		if part.Anchored and part.CanCollide and halfAlong(part, UP) * 2 >= LIMIT_TALL then
+			local l = part.Position - surface
+			local reachX, reachZ = halfAlong(part, EAST), halfAlong(part, NORTH)
+			local dx, dz = math.max(0, math.abs(l.X) - reachX), math.max(0, math.abs(l.Z) - reachZ)
+			local distance = math.sqrt(dx * dx + dz * dz)
+			target = math.min(target, (distance - 1 - FLOOR_RADIUS) / WALL_RUN)
+		end
+	end
+	if target < depthNow + 0.75 then
+		return false, "bottomed out"
+	end
+	local apexY = original - target
+	local rim = rimOf(target)
+	if waterNear(Vector3.new(surface.X, surface.Y, surface.Z), rim, target) then
+		return false, "water"
+	end
+	local underside = terrainUnderside(surface.X, surface.Z)
+	if not underside or apexY - underside < BEDROCK then
+		return false, "thin ground"
+	end
+	ground.count += 1
+	table.insert(ground.burst, clock)
+	-- Whatever lay on the ground there (loot, a supply crate) settles into the hole; the slabs dug out
+	-- from under come down (the support pass, after the dig).
+	local top = math.max(surface.Y, original) + STEP_UP
+	local layers = math.ceil((top - apexY) / STEP_UP)
+	for layer = 0, layers - 1 do
+		local y0 = apexY + layer * STEP_UP
+		workspace.Terrain:FillCylinder(CFrame.new(surface.X, y0 + STEP_UP / 2, surface.Z), STEP_UP, FLOOR_RADIUS + layer * STEP_UP * WALL_RUN, Enum.Material.Air)
+	end
+	forgetAround(surface, rim, map)
+	tellBroken(CFrame.new(Vector3.new(surface.X, (apexY + top) / 2, surface.Z)), Vector3.new(rim * 2, top - apexY + 2, rim * 2))
+	craterFx:FireAllClients({ surface, math.max(size, FLOOR_RADIUS + (target - depthNow) * WALL_RUN), hit.Material, hit.Normal, target })
+	return true, target
 end
+DestructibleService.CraterAt = craterAt
 
 -- Each pool once per blast, however many of its parts the blast reaches: a tree is one tree, not
--- one hit per leaf.
+-- one hit per leaf. Then the ground under it, if it is open ground.
 function DestructibleService.DamageInRadius(position, radius, amount, attackerToken)
-	local map = workspace:FindFirstChild("Map")
-	if not map then
+	local roots = {}
+	for name in pairs(ROOTS) do
+		local root = workspace:FindFirstChild(name)
+		if root then
+			table.insert(roots, root)
+		end
+	end
+	if #roots == 0 then
 		return
 	end
 	local region = OverlapParams.new()
 	region.FilterType = Enum.RaycastFilterType.Include
-	region.FilterDescendantsInstances = { map }
+	region.FilterDescendantsInstances = roots
 	local seen = {}
+	local hits = {}
 	for _, part in ipairs(workspace:GetPartBoundsInRadius(position, radius, region)) do
-		local key = keyOf(part)
+		-- A big part is cut first, and only its tiles in reach are hurt: a blast holes a road.
+		local tiles = subdividable(part) and subdivide(part)
+		if tiles then
+			for _, tilePart in ipairs(tiles) do
+				local _, distance = tileAt({ tilePart }, position)
+				if distance <= radius then
+					table.insert(hits, tilePart)
+				end
+			end
+		else
+			table.insert(hits, part)
+		end
+	end
+	for _, part in ipairs(hits) do
+		local key = part.Parent and keyOf(part)
 		if key and not seen[key] then
 			seen[key] = true
 			DestructibleService.Damage(part, amount, attackerToken, position)
 		end
 	end
-	craterAt(position, radius, map)
+	local map = workspace:FindFirstChild("Map")
+	if map then
+		craterAt(position, radius, amount, map)
+	end
+end
+
+--------------------------------------------------------------------------------
+-- (d) The safety net: nobody stays under the world
+--------------------------------------------------------------------------------
+
+-- The terrain's underside is 72 studs under the surface (about -74); under WORLD_FLOOR_Y is under the
+-- world, whatever put them there. Checked RESCUE_EVERY for every combatant (players and bots).
+local WORLD_FLOOR_Y = -90
+local RESCUE_EVERY = 0.25
+local RESCUE_STEP, RESCUE_TRIES = 24, 80
+DestructibleService.WorldFloorY = WORLD_FLOOR_Y
+DestructibleService.Rescued = 0
+
+local rescueParams = nil
+-- The ground (or anything standing in a match root) straight above/below a point, from high up; if
+-- there is none there, the nearest ground walking back toward the middle of the map.
+local function groundNear(position)
+	rescueParams = rescueParams or RaycastParams.new()
+	rescueParams.FilterType = Enum.RaycastFilterType.Include
+	local include = { workspace.Terrain }
+	for name in pairs(ROOTS) do
+		local root = workspace:FindFirstChild(name)
+		if root then
+			table.insert(include, root)
+		end
+	end
+	rescueParams.FilterDescendantsInstances = include
+	rescueParams.IgnoreWater = false
+	local flat = Vector3.new(position.X, 0, position.Z)
+	local inward = flat.Magnitude > 1 and -flat.Unit or Vector3.new(0, 0, 0)
+	for try = 0, RESCUE_TRIES do
+		local at = flat + inward * (try * RESCUE_STEP)
+		local hit = workspace:Raycast(Vector3.new(at.X, 1200, at.Z), Vector3.new(0, -1400, 0), rescueParams)
+		if hit and hit.Position.Y > WORLD_FLOOR_Y then
+			return hit.Position
+		end
+		if inward.Magnitude == 0 then
+			break
+		end
+	end
+	return nil
+end
+DestructibleService.GroundNear = groundNear
+
+-- Puts a character that is under the world back on the ground above it, still and unhurt (the game
+-- has no fall damage; its speed is zeroed so it doesn't land hard either). Returns true if it moved.
+function DestructibleService.Rescue(character)
+	if typeof(character) ~= "Instance" or not character.Parent then
+		return false
+	end
+	local root = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+	if not root or root.Position.Y > WORLD_FLOOR_Y then
+		return false
+	end
+	local spot = groundNear(root.Position)
+	if not spot then
+		return false
+	end
+	local ok, sanity = pcall(require, script.Parent:FindFirstChild("MovementSanity"))
+	if ok and type(sanity) == "table" and sanity.Expect then
+		local player = game:GetService("Players"):GetPlayerFromCharacter(character)
+		pcall(sanity.Expect, player or character, 1.5)
+	end
+	local _, yaw, _ = root.CFrame:ToOrientation()
+	character:PivotTo(CFrame.new(spot + Vector3.new(0, 4, 0)) * CFrame.Angles(0, yaw, 0))
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+			part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+		end
+	end
+	DestructibleService.Rescued += 1
+	return true
+end
+
+do
+	local RunService = game:GetService("RunService")
+	local Combatants = nil
+	local since = 0
+	RunService.Heartbeat:Connect(function(dt)
+		since += dt
+		if since < RESCUE_EVERY then
+			return
+		end
+		since = 0
+		if Combatants == nil then
+			local ok, found = pcall(require, script.Parent:FindFirstChild("Combatants"))
+			Combatants = ok and type(found) == "table" and found or false
+		end
+		if Combatants and Combatants.All then
+			for character in pairs(Combatants.All()) do
+				pcall(DestructibleService.Rescue, character)
+			end
+		end
+		for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+			if player.Character then
+				pcall(DestructibleService.Rescue, player.Character)
+			end
+		end
+	end)
 end
 
 -- How many are damaged but still standing (for the build check).
@@ -953,5 +2450,31 @@ CombatService.DamageDestructible = function(shooterToken, part, amount, from, at
 	return dealt
 end
 CombatService.DamageDestructiblesInRadius = DestructibleService.DamageInRadius
+
+if CollapseService then
+	local Combatants = nil
+	CollapseService.Init({
+		breakPart = breakLoose,
+		queueFx = queueFx,
+		tellBroken = tellBroken,
+		damagePart = function(part, amount, from)
+			return DestructibleService.Damage(part, amount, nil, from)
+		end,
+		roots = useRoots,
+		forget = forget,
+		combatants = function()
+			if Combatants == nil then
+				local ok, found = pcall(require, script.Parent:FindFirstChild("Combatants"))
+				Combatants = ok and type(found) == "table" and found or false
+			end
+			return Combatants and Combatants.All and Combatants.All() or {}
+		end,
+		dealDamage = function(token, amount)
+			if CombatService.DealDamage then
+				CombatService.DealDamage(nil, token, amount, "Rubble")
+			end
+		end,
+	})
+end
 
 return DestructibleService

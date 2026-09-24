@@ -104,6 +104,8 @@ MapDecor.PavingTop = 0.4
 MapDecor.CobblesTop = 0.46
 MapDecor.PavementTop = 0.35
 local KERB = 0.8
+-- The kerb's width, for anything edged with the streets' own kerb (ParkingLots).
+MapDecor.KerbWidth = KERB
 -- How far every kerb and pavement reaches under the ground it stands on (from -0.06), so nothing
 -- standing at ground level shares its underside.
 local KERB_SINK = 0.06
@@ -733,6 +735,49 @@ function MapDecor.DropKerb(parent, centre, across, halfWidth, reach)
 	end
 	currentName = "Part"
 	return dropped
+end
+
+-- A pavement cut for a way in wider than a driveway: a car park's aisle meets its street through a gap
+-- in the pavement, where the car park lays an asphalt apron flush with the street and the dropped kerb
+-- (ParkingLots), the way a real car park's entrance is road surface right across rather than a
+-- driveway's crossing over the footway. Every Pavement piece the line crosses square-on, within `reach`
+-- studs of `centre` (a point on the line, half way across the pavement), is replaced by the pieces
+-- either side of the opening: the same section, line and height, so the pavement still runs up to the
+-- way in from both sides and nothing is laid over anything. Returns how many pieces it cut.
+function MapDecor.CutPavement(parent, centre, across, halfWidth, reach)
+	reach = reach or 3
+	local cut = 0
+	for _, piece in ipairs(parent:GetChildren()) do
+		if piece.Name == "Pavement" and piece:IsA("BasePart") then
+			local cf, size = piece.CFrame, piece.Size
+			local lengthAxis = size.Z >= size.X and cf.LookVector or cf.RightVector
+			local length = math.max(size.X, size.Z)
+			local offset = piece.Position - centre
+			local along = offset.X * lengthAxis.X + offset.Z * lengthAxis.Z
+			local out = offset.X * across.X + offset.Z * across.Z
+			if math.abs(lengthAxis.X * across.X + lengthAxis.Z * across.Z) < 0.01 and math.abs(out) <= reach then
+				local o0 = math.max(-length / 2, -along - halfWidth)
+				local o1 = math.min(length / 2, -along + halfWidth)
+				if o1 - o0 > 0.05 then
+					local frame = CFrame.lookAt(piece.Position, piece.Position + Vector3.new(lengthAxis.X, 0, lengthAxis.Z))
+					local width = math.min(size.X, size.Z)
+					for _, span in ipairs({ { -length / 2, o0 }, { o1, length / 2 } }) do
+						local from, to = span[1], span[2]
+						if to - from > 0.05 then
+							currentName = "Pavement"
+							-- Local -Z runs along lengthAxis, as in DropKerb.
+							clutter(makePart(parent, Vector3.new(width, size.Y, to - from), frame * CFrame.new(0, 0, -(from + to) / 2),
+								piece.Color, piece.Material))
+						end
+					end
+					piece:Destroy()
+					cut += 1
+				end
+			end
+		end
+	end
+	currentName = "Part"
+	return cut
 end
 
 -- The box where streets or roads meet, and its corners, laid so every piece butts the arms
@@ -1554,13 +1599,19 @@ function MapDecor.Driveways(town, houses, setback, sidewalk, lane, groundHeightA
 end
 
 -- Static cars in a town's car park, round whatever drivable ones VehicleService.ParkInTowns already
--- stood there (it marks each bay it takes, `ParkingBayTaken_<i>`), so the car park reads as in use:
--- filled to somewhere between LOT_FILL_MIN and LOT_FILL_MAX of its bays, never every one, the bays
--- taken at random rather than in a row. Kept to about half full because each of these is a real
--- design (#121: 200 to 290 parts a car), and a town's kerb, driveways and car park together should
--- cost about what its four kerbside cars used to. Each car is square to its bay, nose the bay's way, centred in
+-- stood there (it marks each bay it takes, `ParkingBayTaken_<i>`), so the car park reads as in use --
+-- and as a real one does, not all alike (Oliver 09-24: "the parking lots don't all need to be full"):
+-- each is filled to its own ParkingFill, dealt across the map's car parks by ParkingLots.DealFills (a
+-- nearly empty one, a busy one, the rest between), never past LOT_FILL_MAX of its bays and never to
+-- the last bay. Where the drivable cars already take more than that, none are added.
+-- A car park fills from the way in back: the free bays are taken in ParkingLots' order (nearest the
+-- street first) with the pick leaning to the front of what's left (FRONT_LEAN), so the back rows are
+-- the emptier ones, as in any car park, without the front being stamped full. Every one is a real
+-- design (#121: 200 to 290 parts a car), square to its bay, nose the bay's way (nose-in), centred in
 -- it. `fill` (optional) fixes the share, for tests. Returns how many it parked.
-local LOT_FILL_MIN, LOT_FILL_MAX = 0.35, 0.6
+local LOT_FILL_MAX = 0.7
+local LOT_FILL_DEFAULT = 0.35
+local FRONT_LEAN = 2.5
 local BOX_CORNERS = {}
 for _, x in ipairs({ -1, 1 }) do
 	for _, y in ipairs({ -1, 1 }) do
@@ -1590,9 +1641,22 @@ local function touching(one, other)
 	return one[1] < other[2] + 0.2 and other[1] < one[2] + 0.2 and one[3] < other[4] + 0.2 and other[3] < one[4] + 0.2
 end
 
+-- How the parked scenery stands in its stall, the way real drivers leave cars (Oliver 09-24: "slightly
+-- off-centre, a few reverse-parked, one stall straddler"): a little off the middle and a degree or two
+-- askew, more so in a gravel lot with no lines to go by; REVERSE_SHARE of them backed in (nose to the
+-- aisle); and where MapGenerator asks for it, one car straddling a line across two stalls, or one in an
+-- accessible stall. Each car says how it was left in its `ParkStyle` attribute (centred, offset,
+-- reverse, straddle, accessible), which the tools read.
+local REVERSE_SHARE = 0.2
+local OFF_ACROSS, OFF_ALONG, OFF_YAW = 0.28, 0.35, math.rad(1.4)
+local LOOSE_ACROSS, LOOSE_ALONG, LOOSE_YAW = 0.4, 0.8, math.rad(3)
+local STRADDLE_YAW = math.rad(3)
+
 -- `others` (optional) are models already standing in the car parks (VehicleService's), which the
--- parked cars keep off.
-function MapDecor.ParkBays(town, others, fill)
+-- parked cars keep off. `options` (optional): `straddle` = park one car across two stalls, `accessible`
+-- = park one in an accessible stall.
+function MapDecor.ParkBays(town, others, fill, options)
+	options = options or {}
 	local count = tonumber(town:GetAttribute("ParkingBays")) or 0
 	if count < 2 then
 		return 0
@@ -1605,14 +1669,16 @@ function MapDecor.ParkBays(town, others, fill)
 			table.insert(free, index)
 		end
 	end
-	local share = fill or (LOT_FILL_MIN + math.random() * (LOT_FILL_MAX - LOT_FILL_MIN))
-	local target = math.clamp(math.floor(count * share + 0.5), 1, count - 1)
+	local share = fill or tonumber(town:GetAttribute("ParkingFill")) or LOT_FILL_DEFAULT
+	-- At least one car, at most LOT_FILL_MAX of the bays: 2 of 4, 4 of 6, 5 of 8, 8 of 12.
+	local target = math.clamp(math.floor(count * share + 0.5), 1, math.max(1, math.floor(count * LOT_FILL_MAX)))
 	-- Every car park's bays share their axes (a row faces one way or the other), so any bay's frame
 	-- measures them all. What's already standing near the car park, measured once.
 	local first = town:GetAttribute("ParkingBay_" .. (free[1] or 1))
 	if typeof(first) ~= "CFrame" then
 		return 0
 	end
+	local loose = town:GetAttribute("ParkingKind") == "gravel"
 	local across, along = first.RightVector, first.LookVector
 	local standing = {}
 	for _, other in ipairs(others or {}) do
@@ -1620,24 +1686,68 @@ function MapDecor.ParkBays(town, others, fill)
 			table.insert(standing, reach(other, across, along))
 		end
 	end
-	local parked = 0
-	while taken < target and #free > 0 do
-		local index = table.remove(free, math.random(1, #free))
-		local bay = town:GetAttribute("ParkingBay_" .. index)
-		local car = parkCentred(town, bay, parkedCarDesign(true))
+	-- Parks one car at `frame` unless it would stand mirror to mirror with one already there.
+	local function try(frame, style)
+		local car = parkCentred(town, frame, parkedCarDesign(true))
 		local box = reach(car, across, along)
-		local clash = false
 		for _, other in ipairs(standing) do
 			if touching(box, other) then
-				clash = true
+				car:Destroy()
+				return nil
+			end
+		end
+		car:SetAttribute("ParkStyle", style)
+		table.insert(standing, box)
+		return car
+	end
+	local parked = 0
+	local function isFree(index)
+		return table.find(free, index) ~= nil
+	end
+	-- The straddler first, if asked for: across the line between a free stall and the free one beside it.
+	if options.straddle and taken + 2 <= target then
+		for _, index in ipairs(table.clone(free)) do
+			local nextIndex = town:GetAttribute("ParkingBayNext_" .. index)
+			if nextIndex and isFree(nextIndex) then
+				local a, b = town:GetAttribute("ParkingBay_" .. index), town:GetAttribute("ParkingBay_" .. nextIndex)
+				local turn = (math.random() < 0.5 and -1 or 1) * STRADDLE_YAW
+				local frame = CFrame.new((a.Position + b.Position) / 2) * a.Rotation * CFrame.Angles(0, turn, 0)
+				if try(frame, "straddle") then
+					for _, used in ipairs({ index, nextIndex }) do
+						table.remove(free, table.find(free, used))
+						town:SetAttribute("ParkingBayTaken_" .. used, true)
+					end
+					taken += 2
+					parked += 1
+				end
 				break
 			end
 		end
-		if clash then
-			-- Mirror to mirror with its neighbour: this bay stays empty.
-			car:Destroy()
-		else
-			table.insert(standing, box)
+	end
+	-- One in an accessible stall, if asked for (never more).
+	if options.accessible and (tonumber(town:GetAttribute("ParkingAccessible")) or 0) > 0 then
+		local stall = town:GetAttribute("ParkingAccessible_1")
+		if typeof(stall) == "CFrame" and try(stall, "accessible") then
+			town:SetAttribute("ParkingAccessibleTaken_1", true)
+			parked += 1
+		end
+	end
+	while taken < target and #free > 0 do
+		local index = table.remove(free, math.floor(#free * math.random() ^ FRONT_LEAN) + 1)
+		local bay = town:GetAttribute("ParkingBay_" .. index)
+		local style = "offset"
+		local frame = bay
+		if math.random() < REVERSE_SHARE then
+			-- Backed in: the nose to the aisle.
+			style = "reverse"
+			frame = frame * CFrame.Angles(0, math.pi, 0)
+		end
+		local oa, ol, oy = OFF_ACROSS, OFF_ALONG, OFF_YAW
+		if loose then
+			oa, ol, oy = LOOSE_ACROSS, LOOSE_ALONG, LOOSE_YAW
+		end
+		frame = frame * CFrame.new((math.random() * 2 - 1) * oa, 0, (math.random() * 2 - 1) * ol) * CFrame.Angles(0, (math.random() * 2 - 1) * oy, 0)
+		if try(frame, style) then
 			town:SetAttribute("ParkingBayTaken_" .. index, true)
 			taken += 1
 			parked += 1

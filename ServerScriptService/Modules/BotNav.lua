@@ -1213,6 +1213,9 @@ end
 local function nearestOnNetwork(roads, point)
 	local best, bestEdge, bestDistance = nil, nil, math.huge
 	for _, edge in ipairs(roads.edges) do
+		if edge.blocked then
+			continue
+		end
 		local a, b = flat(edge.a.position), flat(edge.b.position)
 		local ab = b - a
 		local length = ab.Magnitude
@@ -1281,6 +1284,32 @@ end
 -- whether the leg ending there is road, and whether the network was used. `bounds` = { center, radius }
 -- keeps road nodes inside it; `preferRoads` takes the network whenever it reaches both ends (after a
 -- hazard stopped a straight run), rather than only when it is quicker.
+-- A piece of road or bridge broke at `position` (DestructibleService.OnRoadBroken): every edge of the
+-- network it lay on is closed to bot drivers for the rest of the map, so a route never takes a car
+-- into the hole or off the end of a fallen bridge. (Holes are for good: nothing rebuilds a road.)
+-- Returns how many edges it closed.
+function BotNav.BlockRoadAt(roads, position, size)
+	local edges = roads and roads.edges
+	if not edges then
+		return 0
+	end
+	local reach = (size and math.max(size.X, size.Z) / 2 or 0) + 12
+	local closed = 0
+	for _, edge in ipairs(edges) do
+		if not edge.blocked then
+			local a, b = flat(edge.a.position), flat(edge.b.position)
+			local ab = b - a
+			local length = ab.Magnitude
+			local t = length > 0.01 and math.clamp(flat(position - a):Dot(ab) / (length * length), 0, 1) or 0
+			if flatDistance(position, a + ab * t) <= reach then
+				edge.blocked = true
+				closed += 1
+			end
+		end
+	end
+	return closed
+end
+
 function BotNav.DriveRoute(roads, from, goal, bounds, preferRoads)
 	local direct = { flat(goal) }
 	local directFlags = { false }
@@ -1328,7 +1357,8 @@ function BotNav.DriveRoute(roads, from, goal, bounds, preferRoads)
 			done[node] = true
 			for _, edge in pairs(node.arms or {}) do
 				local other = edge.a == node and edge.b or edge.a
-				if not done[other] then
+				-- A road with a hole in it or a fallen bridge (BotNav.BlockRoadAt) is no road.
+				if not done[other] and not edge.blocked then
 					relax(other, best + edge.length, node)
 				end
 			end

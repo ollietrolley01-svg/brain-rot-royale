@@ -108,6 +108,9 @@ function ZiplineService.Create(parent, from, to, fromTop)
 	prompt.Parent = handle
 
 	prompt.Triggered:Connect(function(player)
+		if not model.Parent then
+			return
+		end
 		local character = player.Character
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -117,7 +120,9 @@ function ZiplineService.Create(parent, from, to, fromTop)
 		if (root.Position - handleAt).Magnitude > REACH then
 			return
 		end
-		ride:FireClient(player, { from = topA, to = topB, speed = RIDE_SPEED, hang = HANG })
+		-- `line`: the rider lets go if it is gone mid-ride (shot out: DestructibleService snaps the
+		-- whole line as one thing).
+		ride:FireClient(player, { from = topA, to = topB, speed = RIDE_SPEED, hang = HANG, line = model })
 	end)
 
 	model.Parent = parent

@@ -15,7 +15,7 @@ local VehicleWreckFx = require(game:GetService("ReplicatedStorage"):WaitForChild
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 
-local SHOW = SHOW_OVERRIDE or { "Rotster", "CrocodiloRanger", "TralalaGT", "SahurVan", "PatapimScrambler", "BananiniScoot", "BrrStreetfighter" }
+local SHOW = SHOW_OVERRIDE or { "Rotster", "CrocodiloRanger", "TralalaGT", "SahurVan", "PatapimScrambler", "BananiniScoot", "BrrStreetfighter", "TartarugaScout", "CameloCarrier" }
 local ORIGIN = Vector3.new(0, 420, 0)
 
 Lighting.ClockTime = 14.5

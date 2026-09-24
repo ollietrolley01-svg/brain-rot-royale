@@ -60,7 +60,8 @@ function(vm, id, how)
 				c.p.X, c.p.Y, c.p.Z, c.r.X, c.r.Y, c.r.Z, c.u.X, c.u.Y, c.u.Z, c.b.X, c.b.Y, c.b.Z,
 				p.Transparency or 0, joint, kind,
 				tostring(p:GetAttribute("Pivot") or ""), p:GetAttribute("Radius") or 0,
-				p:GetAttribute("Steer") == true, p:GetAttribute("Ratio") or 7, p.Anchored == true }
+				p:GetAttribute("Steer") == true, p:GetAttribute("Ratio") or 7, p.Anchored == true,
+				p:GetAttribute("RingRadius") or 0 }
 			table.insert(out, row)
 		end
 	end
@@ -117,11 +118,11 @@ class Model:
         self.parts = []
         for i in range(1, len(rows) + 1):
             r = rows[i]
-            v = [r[j] for j in range(1, 27)]
+            v = [r[j] for j in range(1, 28)]
             p = {"name": v[0], "cls": v[1], "shape": v[2].split(".")[-1], "size": list(v[3:6]), "pos": list(v[6:9]),
                  "cols": (list(v[9:12]), list(v[12:15]), list(v[15:18])), "transparency": v[18],
                  "joint": v[19], "kind": v[20], "pivot": v[21], "radius": v[22], "steer": v[23], "ratio": v[24],
-                 "anchored": v[25]}
+                 "anchored": v[25], "ring": v[26]}
             p["rest"] = frame(p)
             self.parts.append(p)
         self.by = {p["name"]: p for p in self.parts}
@@ -270,7 +271,7 @@ def floating(model, shown, pairs, bike):
     return bad
 
 
-def audit(rt, dump, handling, arcs, model_id, verbose=True):
+def audit(rt, dump, handling, arcs, model_id, verbose=True, driver_arcs=None):
     faults = []
     bike = rt.vm.Models[model_id].kind == "bike"
     for how in ("drive", "static"):
@@ -298,12 +299,16 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True):
                 for offset, what in ((h["travelUp"], "compressed"), (-h["travelDown"], "extended")):
                     poses.append((f"steer {steer:+.0f} deg, suspension {what}", model.chassis["rest"],
                                   wheel_transforms(model, h, steer, offset, math.pi / 2)))
-            if "TurretYaw" in model.by and model_id in arcs:
-                yaw_limit, pmin, pmax = arcs[model_id]
-                for yaw in range(-int(yaw_limit), int(yaw_limit) + 1, 30):
-                    for pitch in (pmin, (pmin + pmax) / 2, pmax):
-                        poses.append((f"turret yaw {yaw}, pitch {pitch:g}", model.chassis["rest"],
-                                      {"TurretYaw": angles(0, math.radians(yaw), 0), "TurretPitch": angles(math.radians(pitch), 0, 0)}))
+            # Both weapons through their arcs: the turret (30-degree steps) and the driver's gun (10).
+            for names, table, step, what in ((("TurretYaw", "TurretPitch"), arcs, 30, "turret"),
+                                             (("DriverGunYaw", "DriverGunPitch"), driver_arcs or {}, 10, "driver gun")):
+                if names[0] in model.by and model_id in table:
+                    yaw_limit, pmin, pmax, guard = table[model_id]
+                    for yaw in range(-int(yaw_limit), int(yaw_limit) + 1, step):
+                        low = max(pmin, guard[1]) if guard and abs(yaw) < guard[0] else pmin
+                        for pitch in (low, (low + pmax) / 2, pmax):
+                            poses.append((f"{what} yaw {yaw}, pitch {pitch:g}", model.chassis["rest"],
+                                          {names[0]: angles(0, math.radians(yaw), 0), names[1]: angles(math.radians(pitch), 0, 0)}))
         shown = [p for p in model.parts if p["transparency"] < 1]
         roots = [assembly_root(model, p) for p in shown]
         chains = {r: ancestors(model, r) for r in set(roots)}
@@ -326,6 +331,9 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True):
         # hangs from. A pivot built off to one side swings its assembly round thin air -- a steering
         # wheel orbiting its column -- which no contact at rest shows. Sliders only translate, and a
         # car's wheel hub has nothing of the body on its axle (the wheel turns free in its arch).
+        # A ring bearing (a pivot with RingRadius: the Rotster's hatch ring, the armoured cars' gun rings)
+        # has nothing on its axis -- a gunner stands there -- so it is its ring that must be really there:
+        # the circle of that radius round the axis, in the pivot's own XZ plane, is tested instead.
         if how == "drive":
             for pivot in model.parts:
                 if pivot["kind"] != "motor":
@@ -334,7 +342,12 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True):
                 if axis is None:
                     continue
                 R, origin = pivot["rest"]
-                line = [list(origin + R[:, axis] * (t / 20)) for t in range(-30, 31)]
+                if pivot["ring"]:
+                    ring = pivot["ring"]
+                    line = [list(origin + (R[:, 0] * math.cos(a) + R[:, 2] * math.sin(a)) * ring)
+                            for a in (k * math.pi / 24 for k in range(48))]
+                else:
+                    line = [list(origin + R[:, axis] * (t / 20)) for t in range(-30, 31)]
                 own = [q for q in shown if assembly_root(model, q) == pivot["name"]]
                 parent_root = assembly_root(model, model.by[pivot["joint"]])
                 up = [q for q in shown if assembly_root(model, q) == parent_root]
@@ -362,6 +375,12 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True):
             posed = [posed_part(p, frames[p["name"]]) for p in shown]
             pairs = rest_pairs if not T else contacts(posed)
             for assembly, needed in joins.items():
+                # A ring bearing is carried all round: any of its segments on what carries it will do,
+                # not the very pairs that touched at rest (turned 180 degrees, every one has moved on).
+                if model.by[assembly]["ring"] and any(
+                        (roots[i] == assembly and roots[j] in chains[assembly]) or (roots[j] == assembly and roots[i] in chains[assembly])
+                        for i, j in pairs):
+                    continue
                 if not (needed & pairs) and ("join", assembly) not in seen:
                     seen.add(("join", assembly))
                     faults.append(f"{label}/{assembly}: comes away from what carries it at {what} "
@@ -382,11 +401,13 @@ def run(sources, only=None, verbose=True):
     dump = rt.lua.eval(DUMP)
     handling = handling_of(sources["VehicleDynamics"])
     arcs = ax.weapon_arcs(sources["VehicleWeaponData"])
+    driver_arcs = ax.weapon_arcs(sources["VehicleWeaponData"], "DriverByModel")
+    assert arcs and driver_arcs, "no weapon arcs read from VehicleWeaponData"
     faults = []
     for model_id in rt.ids:
         if only and model_id != only:
             continue
-        found = audit(rt, dump, handling, arcs, model_id, verbose)
+        found = audit(rt, dump, handling, arcs, model_id, verbose, driver_arcs)
         if verbose:
             for f in found:
                 print("  FAULT " + f)
@@ -417,8 +438,14 @@ def main(repo="."):
         ("fork uppers back to 1.45 (the legs part with the wheel hanging)", "PatapimScrambler",
          'b:tube("ForkUpper" .. n, P(-0.42, s * 0.36), P(2.0, s * 0.36), 0.3, "gold")',
          'b:tube("ForkUpper" .. n, P(-0.42, s * 0.36), P(1.45, s * 0.36), 0.3, "gold")', "suspension extended"),
-        ("turret without its trunnion (the gun hangs between the cheeks)", "Rotster",
-         'b:cyl("TurretTrunnion", spread + 0.2, 0.18, CF(at), "trim")', "", "Gun"),
+        ("the roof gun lifted off its pintle (floating over the ring)", "Rotster",
+         'muzzleZ, frames = machineGun(b, "Gun", pitchAt, 1, {})', 'muzzleZ, frames = machineGun(b, "Gun", pitchAt + V(0, 0.6, 0), 1, {})', "Gun"),
+        ("the Ranger's launcher lifted off its pins (floating over the yoke)", "CrocodiloRanger",
+         '\t\tlocal function P(x, y, z)\n\t\t\treturn pitchAt + V(x, y, z)\n\t\tend\n\t\ttrunnion(b, "TurretTrunnion", pitchAt, 2.28, 0.2)',
+         '\t\tlocal function P(x, y, z)\n\t\t\treturn pitchAt + V(x, y + 0.9, z)\n\t\tend\n\t\ttrunnion(b, "TurretTrunnion", pitchAt, 2.28, 0.2)', "Pod"),
+        ("the Ranger's bonnet gun lifted out of its cowl (the ball in the air over it)", "CrocodiloRanger",
+         'local at = V(base.X, base.Y + 0.36, frontZ + 0.08)', 'local at = V(base.X, base.Y + 1.0, frontZ + 0.08)',
+         "DriverGun"),
         ("steering wheel pivot off the column", "TralalaGT",
          'local frame = CFrame.lookAt(center, center - column)\n\tlocal pivot = self:pivot(name, frame,',
          'local frame = CFrame.lookAt(center, center - column)\n\tlocal pivot = self:pivot(name, frame * CF(0, 0.6, 0),', "SteeringWheel"),

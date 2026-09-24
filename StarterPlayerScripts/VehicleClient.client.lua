@@ -24,6 +24,9 @@ local VehicleDynamics = require(Shared:WaitForChild("VehicleDynamics"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 local VehicleWreckFx = require(Shared:WaitForChild("VehicleWreckFx"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+-- Through someone at speed with the car's momentum: this client simulates the car it drives, so the
+-- bodies ahead are let through here, before the physics meets them (the server is told of each hit).
+local RoadkillPass = require(Shared:WaitForChild("RoadkillPass"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 local player = Players.LocalPlayer
@@ -335,6 +338,9 @@ local function stopDriving()
 		driving.skidLoop = nil
 	end
 	setHandbrake(false)
+	if driving.roadkill then
+		driving.roadkill:Destroy()
+	end
 	if driving.rig and driving.rig.chassis.Parent and not driving.model:GetAttribute("ServerControl") then
 		VehicleDynamics.Idle(driving.rig)
 	end
@@ -377,6 +383,9 @@ local function startDriving(model, seat)
 	end
 	rigs[model] = rig
 	driving = { model = model, rig = rig, seat = seat }
+	driving.roadkill = RoadkillPass.new(model, rig.chassis, function(character, speed)
+		Remotes.Event("VehicleRoadkill"):FireServer(model, character, speed)
+	end)
 	local def = VehicleModels.Models[model:GetAttribute("VehicleModel")]
 	nameLabel.Text = string.upper(def and def.displayName or "")
 	gui.Enabled = true
@@ -481,6 +490,7 @@ RunService.Stepped:Connect(function(_, dt)
 		return
 	end
 	VehicleDynamics.SetIgnore(rig, { player.Character })
+	driving.roadkill:Sweep(dt, tick())
 	local input = {
 		throttle = seat.ThrottleFloat,
 		steer = seat.SteerFloat,
@@ -681,10 +691,15 @@ local function poseRiders(model, focusDistance)
 		local character = occupant and occupant.Parent
 		if character then
 			local poseName
+			local turret = nil
 			if seat:IsA("VehicleSeat") then
 				poseName = model:GetAttribute("RiderPose") or (def.kind == "bike" and "BikeRider" or "CarDriver")
 			elseif def.kind == "bike" then
 				poseName = "BikePillion"
+			elseif seat.Name == "GunnerSeat" then
+				-- At the gun: standing (or kneeling at the mortar), and turned with it (below).
+				turret = model:FindFirstChild("TurretYaw")
+				poseName = turret and turret:GetAttribute("Stance") == "kneel" and "GunnerKneel" or "GunnerStand"
 			end
 			local pose = poseName and VehicleModels.Poses[poseName]
 			if pose then
@@ -694,6 +709,18 @@ local function poseRiders(model, focusDistance)
 					if joint and joint.Parent then
 						joint.Transform = transform
 					end
+				end
+				-- The gunner walks round with the gun: the whole body turned about the turret's own yaw axis
+				-- by what its yaw joint is turned now (VehicleWeaponClient sets it). The seat is fixed to the
+				-- chassis, so this goes on the root joint: T = J^-1 * R * J, where J is the root joint's frame
+				-- and R the turret's turn about its axis, Y0 * yaw * Y0^-1 (Y0 its yaw pivot at rest).
+				local yawJoint = turret and turret:FindFirstChild("Joint")
+				local root = joints.Root or joints.RootJoint
+				if yawJoint and yawJoint.Part0 and root and root.Part0 and root.Parent then
+					local restYaw = yawJoint.Part0.CFrame * yawJoint.C0
+					local turn = restYaw * yawJoint.Transform * restYaw:Inverse()
+					local frame = root.Part0.CFrame * root.C0
+					root.Transform = frame:Inverse() * turn * frame
 				end
 			end
 		end

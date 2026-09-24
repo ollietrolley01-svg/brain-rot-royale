@@ -2,10 +2,15 @@
 Shared/VehicleWeaponData.lua, Shared/SafeValue.lua and CombatService's own ShotCredit/SpendShot, cut
 out of CombatService.lua) against mocks, and checks what the server must hold a shot to:
 
-  * only the DRIVER fires: a passenger, someone whose SeatPart is stale, someone on foot are refused
-    -- for a Player and for a bot token alike;
+  * each seat works its own mount: the gunner's seat the turret, the driving seat the driver's gun
+    (a lone driver never the turret); a passenger, a stale SeatPart, someone on foot are refused --
+    for a Player and for a bot token alike;
   * the fire rate (CombatService's shot budget) and the magazine are enforced; the magazine recharges;
-  * the mount's aim clamp holds (yaw arc, pitch limits), in the vehicle's own frame;
+    a belt run dry overheats and holds fire until it has cooled back to its `overheat` share;
+  * the mount's aim clamp holds (yaw arc, pitch limits, the launcher's front-arc floor), in the
+    vehicle's own frame, from the mount's geometry as VehicleModels builds it;
+  * a barrel pushed into a wall fires into the wall; a bullet that meets another vehicle goes through
+    CombatService.DamageVehicle;
   * a bullet's damage goes through CombatService.DealDamage (and nothing else), a round goes through
     CombatService.LaunchProjectile (ProjectileService's launcher path);
   * the firing vehicle and its riders are excluded, from the bullet's trace and from the round's
@@ -84,6 +89,7 @@ function CF:VectorToObjectSpace(v)
   return Vector3.new(v.X*c + v.Z*s, v.Y, -v.X*s + v.Z*c)
 end
 function CF:PointToObjectSpace(p) return self:VectorToObjectSpace(p - self.Position) end
+function CF:PointToWorldSpace(p) return self.Position + self:VectorToWorldSpace(p) end
 function frame(pos, yaw) return setmetatable({ Position = pos, yaw = yaw, UpVector = Vector3.new(0, 1, 0) }, CF) end
 
 function typeof(v)
@@ -203,6 +209,10 @@ function CombatService.LaunchProjectile(owner, def, origin, direction)
   if spec.onLaunch then spec.onLaunch(entry, {}) end
   table.insert(LOG, { what = "round", owner = owner, def = def, origin = origin, direction = direction, filter = entry.filter })
 end
+function CombatService.VehicleFromPart(part) return part.vehicleOf end
+function CombatService.DamageVehicle(a, model, amount, class, weaponId)
+  table.insert(LOG, { what = "vehicle", attacker = a, model = model, amount = amount, class = class, weaponId = weaponId }); return amount
+end
 MODULES.CombatService = CombatService
 
 -- The world: a vehicle, its riders, a victim --------------------------------------------
@@ -215,14 +225,20 @@ function makeVehicle(modelId, heading, at)
   new("Part", "TurretYaw", v, { Position = world(yawAt), CFrame = frame(world(yawAt), heading) })
   new("Part", "TurretPitch", v, { Position = world(pitchAt), CFrame = frame(world(pitchAt), heading) })
   new("Part", "TurretMuzzle", v, { Position = world(muzzleAt), CFrame = frame(world(muzzleAt), heading) })
+  -- The driver's own gun (VehicleModels.DriverMounts).
+  new("Part", "DriverGunYaw", v, { Position = world(mount.dyaw), CFrame = frame(world(mount.dyaw), heading) })
+  new("Part", "DriverGunPitch", v, { Position = world(mount.dpitch), CFrame = frame(world(mount.dpitch), heading) })
+  new("Part", "DriverGunMuzzle", v, { Position = world(mount.dmuzzle), CFrame = frame(world(mount.dmuzzle), heading) })
   -- Bodywork right in front of the muzzle, where a shot straight ahead would meet it.
   local hood = new("Part", "Chassis", v, { Position = world(muzzleAt + Vector3.new(0, 0, -2)), radius = 1.5 })
   table.insert(WORLD, hood)
   v.PrimaryPart = hood
   local seat = new("VehicleSeat", "DriverSeat", v, { Position = world(Vector3.new(-1.5, 2.6, 0.5)), CFrame = frame(at, heading) })
   local passenger = new("Seat", "PassengerSeat1", v, { Position = world(Vector3.new(1.5, 2.6, 0.5)) })
+  local gunner = new("Seat", "GunnerSeat", v, { Position = world(yawAt + Vector3.new(0, 0, 1.5)) })
+  gunner:SetAttribute("Gunner", true)
   table.insert(tagged, v)
-  return v, seat, passenger
+  return v, seat, passenger, gunner
 end
 
 function makeCharacter(isBot, name, pos)
@@ -239,28 +255,19 @@ end
 TAKE_DAMAGE = 0
 """
 
-# Mount geometry per model: pivot and muzzle positions, model space, taken from VehicleModels.Mounts
-# by the same arithmetic buildMount uses (read from the source, not restated).
+# Mount geometry per model: the pivots and muzzles of both mounts, model space, read off the REAL
+# VehicleModels build (the axis check's mock runs it), so a mount's shape is never restated here.
 def mounts_from_source():
-    src = read("ReplicatedStorage/Shared/VehicleModels.lua")
-    block = re.search(r"VehicleModels\.Mounts = \{(.*?)\n\}", src, re.S).group(1)
-    pitch_up = dict(re.findall(r"(\w+) = ([\d.]+)", re.search(r"yawAt \+ V\(0, \(\{(.*?)\}\)", src).group(1)))
-    muzzle = {}
-    body = re.search(r"local function buildMount.*?\nend\n", src, re.S).group(0)
-    # The pitch block is `if gun ... elseif pod ... else (mortar)`, each ending in its muzzleZ.
-    pitch_block = body[body.index("b:with(pitch"):]
-    styles = re.findall(r'mount\.style == "(\w+)"', pitch_block) + ["mortar"]
-    for style, z in zip(styles, re.findall(r"muzzleZ = (-?[\d.]+)", pitch_block)):
-        muzzle[style] = float(z)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import vehicle_models_axis_check as ax
+    rt = ax.Runtime(ax.load_sources(ROOT))
+    names = {"yaw": "TurretYaw", "pitch": "TurretPitch", "muzzle": "TurretMuzzle",
+             "dyaw": "DriverGunYaw", "dpitch": "DriverGunPitch", "dmuzzle": "DriverGunMuzzle"}
     out = {}
-    for model, style, bx, by, bz, rest in re.findall(r'(\w+) = \{ style = "(\w+)", base = V\(([-\d.]+), ([-\d.]+), ([-\d.]+)\)(.*?)\}', block):
-        col = re.search(r"column = ([\d.]+)", rest)
-        column = float(col.group(1)) if col else 0.0
-        top_y = float(by) + column
-        yaw = (float(bx), top_y + 0.28, float(bz))
-        pitch = (yaw[0], yaw[1] + float(pitch_up[style]), yaw[2])
-        out[model] = {"style": style, "yaw": yaw, "pitch": pitch, "muzzle": (pitch[0], pitch[1], pitch[2] + muzzle[style])}
-    return out, src
+    for model in sorted(rt.mounts):
+        parts = {q["name"]: q for q in rt.build(model, "drive")}
+        out[model] = {key: tuple(parts[name]["pos"]) for key, name in names.items() if name in parts}
+    return out, read("ReplicatedStorage/Shared/VehicleModels.lua")
 
 
 def build_runtime(vw_src, data_src):
@@ -272,7 +279,10 @@ def build_runtime(vw_src, data_src):
         lua.execute(
             f'MOUNTS["{model}"] = {{ yaw = Vector3.new({m["yaw"][0]}, {m["yaw"][1]}, {m["yaw"][2]}), '
             f'pitch = Vector3.new({m["pitch"][0]}, {m["pitch"][1]}, {m["pitch"][2]}), '
-            f'muzzle = Vector3.new({m["muzzle"][0]}, {m["muzzle"][1]}, {m["muzzle"][2]}) }}'
+            f'muzzle = Vector3.new({m["muzzle"][0]}, {m["muzzle"][1]}, {m["muzzle"][2]}), '
+            f'dyaw = Vector3.new({m["dyaw"][0]}, {m["dyaw"][1]}, {m["dyaw"][2]}), '
+            f'dpitch = Vector3.new({m["dpitch"][0]}, {m["dpitch"][1]}, {m["dpitch"][2]}), '
+            f'dmuzzle = Vector3.new({m["dmuzzle"][0]}, {m["dmuzzle"][1]}, {m["dmuzzle"][2]}) }}'
         )
     lua.execute("MODULES.SafeValue = (function() " + luau_to_lua(read("ReplicatedStorage/Shared/SafeValue.lua")) + " end)()")
     lua.execute("MODULES.VehicleWeaponData = (function() " + luau_to_lua(data_src) + " end)()")
@@ -289,125 +299,194 @@ local function reset() LOG = {}; TAKE_DAMAGE = 0; ENABLED = true end
 local function count(what) local n = 0; for _, e in ipairs(LOG) do if e.what == what then n = n + 1 end end; return n end
 local function last(what) for i = #LOG, 1, -1 do if LOG[i].what == what then return LOG[i] end end end
 local function contains(list, x) for _, v in ipairs(list) do if v == x then return true end end return false end
+local specs = MODULES.VehicleWeaponData.Weapons
 
--- A Rotster facing -Z at the origin; its driver, a passenger, a bot, and a victim straight ahead.
-local car, seat, pseat = makeVehicle("Rotster", 0, Vector3.new(0, 0, 0))
-local driver, dh, dc = makeCharacter(false, "Driver", Vector3.new(-1.5, 4.5, 0.5))
+-- A Rotster facing -Z at the origin; its driver, gunner and a passenger, a walker, and victims ahead:
+-- one on the roof gun's line, one low on the nose gun's.
+local car, seat, pseat, gseat = makeVehicle("Rotster", 0, Vector3.new(0, 0, 0))
+local driver, dh = makeCharacter(false, "Driver", Vector3.new(-1.5, 4.5, 0.5))
+local gunner, gh = makeCharacter(false, "Gunner", MOUNTS.Rotster.yaw + Vector3.new(0, 1.2, 1.5))
 local passenger, ph = makeCharacter(false, "Passenger", Vector3.new(1.5, 4.5, 0.5))
 local walker = makeCharacter(false, "Walker", Vector3.new(30, 3, 0))
 -- 30 studs out: the roof gun's 1.6 degree cone stays inside a 1.2 stud head, so no shot is left to chance.
 local victim = makeCharacter(false, "Victim", Vector3.new(0, 6.9, -30))
-seat:Sit(dh); pseat:Sit(ph)
+local low = makeCharacter(false, "LowVictim", Vector3.new(0, MOUNTS.Rotster.dmuzzle.Y, -34))
 local aim = Vector3.new(0, 6.9, -30)
+local lowAim = Vector3.new(0, MOUNTS.Rotster.dmuzzle.Y, -34)
+seat:Sit(dh); pseat:Sit(ph)
 
+-- A lone driver: the driving seat works the driver's gun, never the turret (the gun's seat is empty).
+reset(); CLOCK = 900
+local okd = VW.Fire(driver, lowAim)
+local dd = last("damage")
+R.driver_fires_driver_gun = okd == true and dd ~= nil and dd.weaponId == "Rotster Nose Gun" and dd.victim.Character.Name == "LowVictim"
+R.lone_driver_not_turret = car:GetAttribute("WeaponAmmo") == nil and car:GetAttribute("DriverGunAmmo") ~= nil
+local dshot = last("shot")
+R.driver_shot_from_its_muzzle = dshot ~= nil and (dshot.origin - MOUNTS.Rotster.dmuzzle).Magnitude < 0.05
+-- The driver's gun's arc (20 degrees): aimed square to the side it stops at the edge.
+reset(); CLOCK = 950
+VW.Fire(driver, Vector3.new(-60, MOUNTS.Rotster.dmuzzle.Y, 0))
+R.driver_yaw_clamp = math.abs((car:GetAttribute("DriverAimYaw") or 0) - 20) < 0.01
+
+-- The gunner works the turret.
+gseat:Sit(gh)
 reset(); CLOCK = 1000
-local ok, why = VW.Fire(driver, aim)
+local ok, why = VW.Fire(gunner, aim)
 local dmg = last("damage")
-R.driver_fires = ok == true
-R.hitscan_through_dealdamage = dmg ~= nil and dmg.attacker == driver and dmg.victim ~= nil and dmg.victim.Character ~= nil
+R.gunner_fires = ok == true
+R.hitscan_through_dealdamage = dmg ~= nil and dmg.attacker == gunner and dmg.victim ~= nil and dmg.victim.Character ~= nil
   and dmg.victim.Character.Name == "Victim" and dmg.weaponId == "Rotster Roof Gun" and TAKE_DAMAGE == 0
--- The hood sits right in the line of fire and the driver's head beside it: neither may stop the shot.
+-- The hood sits right in the line of fire and the riders beside it: neither may stop the shot.
 R.self_excluded_bullet = dmg ~= nil and dmg.victim.Character.Name == "Victim"
 local shot = last("shot")
-R.shot_broadcast_from_muzzle = shot ~= nil and shot.shooter == nil and (shot.origin - Vector3.new(0, 6.88, -1.05)).Magnitude < 0.05
+R.shot_broadcast_from_muzzle = shot ~= nil and shot.shooter == nil and (shot.origin - MOUNTS.Rotster.muzzle).Magnitude < 0.05
 
 reset(); CLOCK = 2000
 R.passenger_refused = select(2, VW.Fire(passenger, aim)) == "not driving" and count("damage") == 0
 R.walker_refused = select(2, VW.Fire(walker, aim)) == "not driving"
 -- A stale SeatPart: the humanoid thinks it is seated, the seat says someone else is.
 local stale, sh = makeCharacter(false, "Stale", Vector3.new(-1.5, 4.5, 0.5))
-sh.SeatPart = seat
+sh.SeatPart = gseat
 R.stale_seat_refused = select(2, VW.Fire(stale, aim)) == "not driving"
 
 -- Lobby: combat off.
 reset(); ENABLED = false; CLOCK = 3000
-R.lobby_refused = select(2, VW.Fire(driver, aim)) == "disabled" and count("damage") == 0
+R.lobby_refused = select(2, VW.Fire(gunner, aim)) == "disabled" and count("damage") == 0
 
 -- Fire rate: the budget allows two back-to-back (CombatService's FIRE_BURST), then one per interval.
 reset(); CLOCK = 5000
 local burst = 0
-for _ = 1, 5 do if VW.Fire(driver, aim) then burst = burst + 1 end end
+for _ = 1, 5 do if VW.Fire(gunner, aim) then burst = burst + 1 end end
 CLOCK = CLOCK + 0.1
-local after = VW.Fire(driver, aim)
-R.fire_rate = burst == 2 and after == true and select(2, VW.Fire(driver, aim)) == "rate"
+local after = VW.Fire(gunner, aim)
+R.fire_rate = burst == 2 and after == true and select(2, VW.Fire(gunner, aim)) == "rate"
 
 -- Magazine: 40 rounds at the full rate, then dry (the gaps are inside the recharge delay).
 reset(); CLOCK = 10000
-local spec = MODULES.VehicleWeaponData.Weapons.RotsterRoofGun
+local spec = specs.RotsterRoofGun
 local fired, firedAt = 0, nil
 for _ = 1, spec.magazine + 3 do
   CLOCK = CLOCK + 1 / spec.fireRate
-  if VW.Fire(driver, aim) then fired = fired + 1; firedAt = CLOCK end
+  if VW.Fire(gunner, aim) then fired = fired + 1; firedAt = CLOCK end
 end
 CLOCK = CLOCK + 1 / spec.fireRate
-local _, dryWhy = VW.Fire(driver, aim)
+local _, dryWhy = VW.Fire(gunner, aim)
 R.magazine_limit = fired == spec.magazine and dryWhy == "ammo" and car:GetAttribute("WeaponAmmo") < 1
+R.overheats_when_dry = car:GetAttribute("WeaponHot") == true
 
--- Recharge: after the delay plus one second, exactly `recharge` rounds are back.
--- Worked out here from the spec, not from the module's own AmmoAt.
-CLOCK = CLOCK + spec.rechargeDelay + 1
-local expected = math.floor(math.min(spec.magazine, (CLOCK + 1 / spec.fireRate - firedAt - spec.rechargeDelay) * spec.recharge))
-local back = 0
--- A few tries past it, all well inside the recharge delay, so nothing more comes back meanwhile.
-for _ = 1, expected + 3 do
-  CLOCK = CLOCK + 1 / spec.fireRate
-  if VW.Fire(driver, aim) then back = back + 1 end
+-- Overheat: run dry, it holds fire until the belt has cooled back to `overheat` of the magazine; one
+-- round short of that it is still refused, just past it it fires.
+local need = spec.magazine * spec.overheat
+CLOCK = firedAt + spec.rechargeDelay + (need - 1) / spec.recharge
+local _, hotWhy = VW.Fire(gunner, aim)
+CLOCK = firedAt + spec.rechargeDelay + (need + 0.2) / spec.recharge
+local cooled = VW.Fire(gunner, aim)
+R.overheat_holds = hotWhy == "ammo" and cooled == true and car:GetAttribute("WeaponHot") == nil
+
+-- Recharge: after the delay plus one second, exactly `recharge` rounds are back (worked out here
+-- from the spec, and read through AmmoOf, the count bots see).
+reset(); CLOCK = 15000
+local nose = specs.RotsterNoseGun
+local nfired, nAt = 0, nil
+for _ = 1, 20 do
+  CLOCK = CLOCK + 1 / nose.fireRate
+  if VW.Fire(driver, lowAim) then nfired = nfired + 1; nAt = CLOCK end
 end
-R.recharge = back == expected and expected >= 1
-RECHARGED = back; RECHARGE_EXPECTED = expected
+local have = nose.magazine - nfired
+CLOCK = nAt + nose.rechargeDelay + 1
+R.recharge = nfired >= 2 and math.abs(VW.AmmoOf(car, "driver") - (have + nose.recharge)) < 1e-6
+RECHARGED = VW.AmmoOf(car, "driver"); RECHARGE_EXPECTED = have + nose.recharge
 
 -- Wrecked vehicles don't fire.
 reset(); CLOCK = 20000
 car:SetAttribute("Wrecked", true)
-R.wrecked_refused = select(2, VW.Fire(driver, aim)) == "wrecked"
+R.wrecked_refused = select(2, VW.Fire(gunner, aim)) == "wrecked"
 car:SetAttribute("Wrecked", nil)
 
--- A bot at the wheel: the same function, the same checks.
-local van, vseat, vpseat = makeVehicle("SahurVan", math.rad(90), Vector3.new(200, 0, 0))
-local bot, bh = makeCharacter(true, "BotDriver", Vector3.new(200, 4.5, 1.5))
+-- A bullet that strikes another vehicle goes through CombatService.DamageVehicle, with its class.
+local other = new("Part", "Chassis", workspace, { Position = Vector3.new(0, 6.9, -20), radius = 2, vehicleOf = "OtherCar" })
+table.insert(WORLD, other)
+reset(); CLOCK = 21000
+VW.Fire(gunner, aim)
+local vhit = last("vehicle")
+R.vehicle_hit_through_damagevehicle = vhit ~= nil and vhit.model == "OtherCar" and vhit.class == "bullet"
+  and vhit.weaponId == "Rotster Roof Gun" and count("damage") == 0
+other.radius = nil
+
+-- A barrel pushed into a wall fires into the wall: the shot leaves where the barrel meets it.
+local wall = new("Part", "Wall", workspace, { Position = MOUNTS.Rotster.muzzle + Vector3.new(0, 0, 1.2), radius = 0.5, CanCollide = true })
+table.insert(WORLD, wall)
+reset(); CLOCK = 22000
+VW.Fire(gunner, aim)
+local blocked = last("shot")
+R.muzzle_blocked = blocked ~= nil and (blocked.origin - MOUNTS.Rotster.muzzle).Magnitude > 0.5 and count("damage") == 0
+wall.radius = nil
+
+-- A bot gunner on the van's mortar and a bot at its wheel: the same function, the same checks.
+local van, vseat, vpseat, vgseat = makeVehicle("SahurVan", math.rad(90), Vector3.new(200, 0, 0))
+local bot, bh = makeCharacter(true, "BotGunner", Vector3.new(200, 9.5, -6.5))
+local botDriver, bdh = makeCharacter(true, "BotDriver", Vector3.new(200, 4.5, 1.5))
 local botRider, brh = makeCharacter(true, "BotRider", Vector3.new(200, 4.5, -1.5))
-vseat:Sit(bh); vpseat:Sit(brh)
+vgseat:Sit(bh); vseat:Sit(bdh); vpseat:Sit(brh)
 reset(); CLOCK = 30000
 -- The van faces world -X (heading +90). Aim at a point far ahead of it and a little below level.
 local ok2 = VW.Fire(bot, Vector3.new(100, 0, 0))
 local round = last("round")
-R.bot_driver_fires = ok2 == true
+R.bot_gunner_fires = ok2 == true
 R.explosive_through_launch = round ~= nil and round.owner == bot and round.def.projectile == "grenade"
   and round.def.id == "Sahur Van Mortar" and count("damage") == 0
 R.bot_passenger_refused = select(2, VW.Fire(botRider, Vector3.new(100, 0, 0))) == "not driving"
--- Round flight filter: the vehicle and both riders, alongside the owner the launcher path adds itself.
+-- Round flight filter: the vehicle and every rider, alongside the owner the launcher path adds itself.
 R.self_excluded_round = round ~= nil and contains(round.filter, van) and contains(round.filter, bot.Character)
-  and contains(round.filter, botRider.Character)
+  and contains(round.filter, botRider.Character) and contains(round.filter, botDriver.Character)
 -- Mortar pitch floor (10 deg): aimed below level, it still leaves at +10, and toward the van's front (-X).
 R.pitch_clamp = round ~= nil and math.abs(van:GetAttribute("AimPitch") - 10) < 0.01
   and round.direction.X < -0.9 and math.abs(math.deg(math.asin(round.direction.Y)) - 10) < 0.6
+reset(); CLOCK = 30500
+local okb = VW.Fire(botDriver, Vector3.new(100, 2, 0))
+local bd = last("shot")
+local vanMuzzle = Vector3.new(200, 0, 0) + frame(Vector3.new(), math.rad(90)):VectorToWorldSpace(MOUNTS.SahurVan.dmuzzle)
+R.bot_driver_fires_driver_gun = okb == true and count("round") == 0 and bd ~= nil and (bd.origin - vanMuzzle).Magnitude < 0.05
 
--- Rocket pod yaw arc (150 deg): aimed straight behind, it stops at the edge of its arc.
-local ranger, rseat = makeVehicle("CrocodiloRanger", 0, Vector3.new(-200, 0, 0))
-local rd, rdh = makeCharacter(false, "RangerDriver", Vector3.new(-201.5, 4.5, 0.5))
-rseat:Sit(rdh)
+-- The rocket launcher's front-arc floor (4 deg inside 40 of ahead): aimed low straight ahead, it
+-- leaves at 4 up; turned 90 degrees to the side it may go down to its -8.
+local ranger, rseat, _, rgseat = makeVehicle("CrocodiloRanger", 0, Vector3.new(-200, 0, 0))
+local rg, rgh = makeCharacter(false, "RangerGunner", Vector3.new(-200, 8, 5))
+rgseat:Sit(rgh)
 reset(); CLOCK = 40000
-VW.Fire(rd, Vector3.new(-200.5, 8, 80))
-local rr = last("round")
-local yawDeg = math.abs(ranger:GetAttribute("AimYaw") or 0)
-local backward = rr and math.deg(math.atan(rr.direction.X, -rr.direction.Z))
-R.yaw_clamp = rr ~= nil and math.abs(yawDeg - 150) < 0.01 and math.abs(math.abs(backward) - 150) < 0.6
+VW.Fire(rg, Vector3.new(-200, 0, -60))
+local front = ranger:GetAttribute("AimPitch")
+CLOCK = CLOCK + 1
+VW.Fire(rg, Vector3.new(-260, 0, MOUNTS.CrocodiloRanger.yaw.Z))
+local side = ranger:GetAttribute("AimPitch")
+R.front_guard = front ~= nil and side ~= nil and math.abs(front - 4) < 0.01 and side < -3
+-- A magazine with no overheat to fall back on: four rockets at the full rate, and the fifth refused.
+reset(); CLOCK = 45000
+local pod = specs.RangerRocketPod
+local rockets = 0
+for _ = 1, pod.magazine + 1 do
+  CLOCK = CLOCK + 1 / pod.fireRate
+  if VW.Fire(rg, Vector3.new(-260, 0, MOUNTS.CrocodiloRanger.yaw.Z)) then rockets = rockets + 1 end
+end
+R.magazine_limit = R.magazine_limit and rockets == pod.magazine
 
 -- The remote path: a client's fire reaches the same function.
 reset(); CLOCK = 50000
-for _, fn in ipairs(REMOTES.VehicleWeaponFire.OnServerEvent.fns) do fn(driver, aim) end
+for _, fn in ipairs(REMOTES.VehicleWeaponFire.OnServerEvent.fns) do fn(gunner, aim) end
 R.remote_fires = count("damage") == 1
-for _, fn in ipairs(REMOTES.VehicleWeaponFire.OnServerEvent.fns) do fn(driver, Vector3.new(0/0, 0, 0)) end
+for _, fn in ipairs(REMOTES.VehicleWeaponFire.OnServerEvent.fns) do fn(gunner, Vector3.new(0/0, 0, 0)) end
 R.remote_rejects_nan = count("damage") == 1 and count("shot") == 1
 return R
 """
 
 CHECKS = [
-    "driver_fires", "hitscan_through_dealdamage", "self_excluded_bullet", "shot_broadcast_from_muzzle",
+    "driver_fires_driver_gun", "lone_driver_not_turret", "driver_shot_from_its_muzzle", "driver_yaw_clamp",
+    "gunner_fires", "hitscan_through_dealdamage", "self_excluded_bullet", "shot_broadcast_from_muzzle",
     "passenger_refused", "walker_refused", "stale_seat_refused", "lobby_refused", "fire_rate",
-    "magazine_limit", "recharge", "wrecked_refused", "bot_driver_fires", "explosive_through_launch",
-    "bot_passenger_refused", "self_excluded_round", "pitch_clamp", "yaw_clamp", "remote_fires",
-    "remote_rejects_nan",
+    "magazine_limit", "overheats_when_dry", "overheat_holds", "recharge", "wrecked_refused",
+    "vehicle_hit_through_damagevehicle", "muzzle_blocked", "bot_gunner_fires", "explosive_through_launch",
+    "bot_passenger_refused", "self_excluded_round", "pitch_clamp", "bot_driver_fires_driver_gun",
+    "front_guard", "remote_fires", "remote_rejects_nan",
 ]
 
 
@@ -416,24 +495,32 @@ def run(vw_src, data_src):
     results = lua.execute(SCENARIOS)
     out = {name: bool(results[name]) for name in CHECKS}
     # Data agreement: mounts and weapons name the same models, and no bike is armed.
-    weapons = set(re.findall(r"^\t(\w+) = \"\w+\",$", re.search(r"ByModel = \{(.*?)\n\}", data_src, re.S).group(1), re.M))
+    def table_keys(name):
+        return set(re.findall(r"^\t(\w+) = \"\w+\",$", re.search(r"\nVehicleWeaponData\." + name + r" = \{(.*?)\n\}", data_src, re.S).group(1), re.M))
+    weapons, drivers = table_keys("ByModel"), table_keys("DriverByModel")
     bikes = set(re.findall(r"VehicleModels\.Models\.(\w+) = \{\n\tkind = \"bike\"", models_src))
-    out["mounts_match_weapons"] = weapons == set(mounts) and len(weapons) >= 3
+    out["mounts_match_weapons"] = weapons == set(mounts) and len(weapons) >= 5
+    out["driver_guns_match"] = drivers == {m for m, g in mounts.items() if "dyaw" in g} and drivers == weapons
     out["no_bike_armed"] = not (weapons & bikes) and len(bikes) >= 1
     return out, len(bikes), len(mounts)
 
 
 FAULTS = [
-    ("VW", "seat.Occupant ~= humanoid", "false", "stale_seat_refused", "driver check ignores who the seat holds"),
-    ("VW", 'not seat:IsA("VehicleSeat") or ', "", "passenger_refused", "any seat counts as the driving seat"),
+    ("VW", "seat.Occupant ~= humanoid", "false", "stale_seat_refused", "seat check ignores who the seat holds"),
+    ("VW", 'elseif seat:IsA("VehicleSeat") then', "elseif true then", "passenger_refused", "any seat works the driver's gun"),
+    ("VW", "if seat == VehicleWeapons.GunnerSeatOf(vehicle) then", 'if seat == VehicleWeapons.GunnerSeatOf(vehicle) or seat:IsA("VehicleSeat") then', "driver_fires_driver_gun", "a lone driver works the turret again"),
     ("VW", "if credit < 1 then", "if credit < -1 then", "fire_rate", "shot budget not enforced"),
-    ("VW", "if ammo < 1 then", "if ammo < -1000 then", "magazine_limit", "magazine not enforced"),
+    ("DATA", "if ammo < 1 then", "if ammo < -1000 then", "magazine_limit", "magazine not enforced"),
     ("DATA", "ammo + idle * spec.recharge", "ammo", "recharge", "magazine never recharges"),
-    ("DATA", "yaw = math.clamp(yaw, -yawLimit, yawLimit)", "yaw = yaw", "yaw_clamp", "yaw arc not clamped"),
-    ("DATA", "pitch = math.clamp(pitch, math.rad(spec.pitchMin), math.rad(spec.pitchMax))", "pitch = pitch", "pitch_clamp", "pitch not clamped"),
+    ("DATA", "if hot and spec.overheat and ammo < spec.magazine * spec.overheat then", "if false then", "overheat_holds", "an overheated belt fires again at once"),
+    ("DATA", "\tyaw = math.clamp(yaw, -yawLimit, yawLimit)\n\tpitch = math.clamp(pitch, VehicleWeaponData.PitchFloor(spec, yaw), math.rad(spec.pitchMax))\n\tlocal origin", "\tpitch = math.clamp(pitch, VehicleWeaponData.PitchFloor(spec, yaw), math.rad(spec.pitchMax))\n\tlocal origin", "driver_yaw_clamp", "yaw arc not clamped"),
+    ("DATA", "\tpitch = math.clamp(pitch, VehicleWeaponData.PitchFloor(spec, yaw), math.rad(spec.pitchMax))\n\tlocal origin", "\tlocal origin", "pitch_clamp", "pitch not clamped"),
+    ("DATA", "if guard and math.abs(yaw) < math.rad(guard.arc) then", "if false then", "front_guard", "the launcher fires into its own cab"),
     ("VW", "local list = { vehicle }", "local list = {}", "self_excluded_bullet", "bullet trace hits its own vehicle"),
     ("VW", "table.insert(entry.filter, instance)", "local _ = instance", "self_excluded_round", "round flight hits its own vehicle"),
     ("VW", "CombatService.DealDamage(token, victim, amount, spec.id, headshot)", "Combatants.GetHumanoid(victim):TakeDamage(amount)", "hitscan_through_dealdamage", "bullet damage bypasses CombatService.DealDamage"),
+    ("VW", "local struck = CombatService.VehicleFromPart and CombatService.VehicleFromPart(part)", "local struck = nil", "vehicle_hit_through_damagevehicle", "a bullet goes through the car it hits"),
+    ("VW", "origin = clearMuzzle(token, vehicle, pivotWorld, origin)", "origin = origin", "muzzle_blocked", "a barrel in a wall fires through it"),
     ("VW", "pcall(CombatService.LaunchProjectile, token,", "pcall(CombatService.DealDamage, token,", "explosive_through_launch", "rounds bypass ProjectileService's launcher path"),
     ("VW", "if not CombatService.IsEnabled() then", "if false then", "lobby_refused", "fires in the lobby"),
     ("VW", "if not SafeValue.Vector3(aimPoint) then\n\t\treturn false, \"aim\"", "if false then\n\t\treturn false, \"aim\"", "remote_rejects_nan", "NaN aim accepted"),

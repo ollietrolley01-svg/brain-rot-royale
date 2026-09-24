@@ -151,7 +151,20 @@ groundParams.IgnoreWater = true
 local function terrainAt(x, z)
 	groundParams.FilterDescendantsInstances = { workspace.Terrain }
 	local hit = workspace:Raycast(Vector3.new(x, 2000, z), Vector3.new(0, -4000, 0), groundParams)
-	return hit and hit.Position.Y or nil
+	local ray = hit and hit.Position.Y or nil
+	-- A terrain raycast straight after Terrain:WriteVoxels still reads the ground as it was BEFORE the
+	-- write (measured in Studio, 2026-09-24: round both compounds the rays read the untouched slope,
+	-- up to 14 studs off the pad the voxels hold). The compounds reshape the ground round them
+	-- (TeamBaseRuins.Build) in the same frame this is asked where the base loot and pads go, so the
+	-- voxels are read too, the way MapTerrain measures every pad, and trusted whenever the ray is
+	-- further off them than a rough material draws its surface (Rock, up to 1.1).
+	if MapTerrain.PadCost then
+		local ok, _, _, mean = pcall(MapTerrain.PadCost, CFrame.new(x, 0, z), Vector3.zero, { shape = "round", margin = 2.9 })
+		if ok and mean and (not ray or math.abs(mean - ray) > 1.5) then
+			return mean
+		end
+	end
+	return ray
 end
 
 -- Anything solid standing in the 12 studs above a pad: a building, a wall, a parked car. A bounds
@@ -185,6 +198,10 @@ local BASE_FRACTION = 0.72
 -- Where a team's pads are looked for around its base. The first number is the original
 -- spacing; the rest are only reached when that pass finds nothing at all.
 local PAD_SPREADS = { 60, 110, 180 }
+-- How many of the best pairs of compound sites (ModeTeams.RankBaseAxes) Setup builds on before giving
+-- up on compounds: a site FlattenPad refuses after all (SiteCost samples every 8 studs, FlattenPad
+-- every 4) sends both compounds to the next pair.
+local RUIN_TRIES = 4
 
 -- The arena: a disc centred on town 1. MapGenerator's placeTowns puts town index 1 at distance 0
 -- (plus a +/-40 jitter) on every map and every seed, so it is the one stable anchor there is, and
@@ -231,16 +248,30 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	-- in a field is not a fair start, so both fall back to the open-ground pads.
 	local withRuins = TeamBaseRuins ~= nil and currentMode ~= nil and currentMode.teams == true
 		and mapInfo ~= nil and mapInfo.map ~= nil
+	-- The pairs of sites to build on, best first; a compound whose site FlattenPad refuses after all
+	-- (Build returns nil) sends both to the next pair, RUIN_TRIES pairs at most.
+	local candidates = { { axis = axis, fraction = fraction } }
 	if withRuins then
-		axis, fraction = ModeTeams.PickBaseAxis(axis, mapInfo)
+		local ranked = ModeTeams.RankBaseAxes(axis, mapInfo)
+		if #ranked > 0 then
+			candidates = ranked
+		end
 	end
 	local ruinSeed = withRuins and math.random(1, 2147483646) or nil
-	for team = 1, GameModes.TeamCount do
-		local heading = axis + (team - 1) * math.pi
-		bases[team] = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
-		if withRuins then
-			ModeTeams.BuildRuin(team, bases[team], mapInfo, ruinSeed)
+	local tries = withRuins and math.min(RUIN_TRIES, #candidates) or 1
+	for attempt = 1, tries do
+		axis, fraction = candidates[attempt].axis, candidates[attempt].fraction
+		for team = 1, GameModes.TeamCount do
+			local heading = axis + (team - 1) * math.pi
+			bases[team] = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
+			if withRuins then
+				ModeTeams.BuildRuin(team, bases[team], mapInfo, ruinSeed)
+			end
 		end
+		if not withRuins or (ruins[1] and ruins[2]) or attempt == tries then
+			break
+		end
+		ModeTeams.ClearRuins()
 	end
 	if withRuins and not (ruins[1] and ruins[2]) then
 		ModeTeams.ClearRuins()
@@ -346,11 +377,17 @@ end
 -- The compounds (TeamBaseRuins)
 --------------------------------------------------------------------------------
 
--- Other axes tried when the rolled one puts a compound on a road, in the river or over a town (8
--- more, every 22.5 degrees, since the two bases are opposite), at the usual distance and a little
--- nearer the middle. The rolled axis wins any tie, so the base still moves about from match to match.
-local RUIN_AXES = 8
-local RUIN_FRACTIONS = { BASE_FRACTION, 0.64 }
+-- Other axes tried when the rolled one puts a compound on a road, in the river, over a town or on a
+-- slope (16, every 11.25 degrees, since the two bases are opposite), at the usual distance and nearer
+-- the middle. The rolled axis wins any tie, so the base still moves about from match to match. The
+-- compounds are built flush with the ground (TeamBaseRuins.Build), so a sloping site costs banks and
+-- gate ramps rather than a plinth: more candidates find ground that needs less of either.
+local RUIN_AXES = 16
+local RUIN_FRACTIONS = { BASE_FRACTION, 0.66, 0.6 }
+-- A pair of sites costing under this is as good as it gets (flat, clear ground: SiteCost is the
+-- ground's rise plus half the surroundings'), and RUIN_TRIES of them end the search: every SiteCost
+-- reads a few hundred thousand voxels, and 96 pairs of them is seconds.
+local RUIN_GOOD = 6
 -- A chest or pickup lying within this of a compound's spot means the spot is taken.
 local RUIN_SPOT_TAKEN = 3
 -- GameMode asks for chests with this gap (and nothing else with it). Read as "chest" only when the
@@ -364,38 +401,54 @@ local function ruinFrame(base)
 	return CFrame.lookAt(at, Vector3.new(arenaCentre.X, ground, arenaCentre.Z))
 end
 
--- The axis (and distance from the centre, as a fraction of the arena's radius) whose two sites suit
--- a compound best, starting from the rolled `axis`. Returns the rolled axis unchanged when no pair
--- of sites is usable at all; Build then stands the compounds on plinths.
-function ModeTeams.PickBaseAxis(axis, mapInfo)
-	local best, bestFraction, bestCost = axis, BASE_FRACTION, math.huge
+-- The pairs of sites (an axis, and a distance from the centre as a fraction of the arena's radius) that
+-- suit the compounds, best first, starting from the rolled `axis`: { { axis, fraction, cost }... }.
+-- The search stops once RUIN_TRIES pairs cost under RUIN_GOOD. Empty when no pair is usable at all.
+function ModeTeams.RankBaseAxes(axis, mapInfo)
+	local ranked, good = {}, 0
 	for step = 0, RUIN_AXES - 1 do
 		local candidate = axis + step * math.pi / RUIN_AXES
-		for _, fraction in ipairs(RUIN_FRACTIONS) do
-			local total = step * 0.01 + (fraction == BASE_FRACTION and 0 or 0.5)
+		for index, fraction in ipairs(RUIN_FRACTIONS) do
+			local total = step * 0.01 + (index - 1) * 0.5
 			for team = 1, GameModes.TeamCount do
 				local heading = candidate + (team - 1) * math.pi
 				local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
-				local cost = TeamBaseRuins.SiteCost(ruinFrame(base), mapInfo)
+				local cost = total < math.huge and TeamBaseRuins.SiteCost(ruinFrame(base), mapInfo) or nil
 				total = cost and total + cost or math.huge
 			end
-			if total < bestCost then
-				best, bestFraction, bestCost = candidate, fraction, total
+			if total < math.huge then
+				table.insert(ranked, { axis = candidate, fraction = fraction, cost = total })
+				if total < RUIN_GOOD then
+					good += 1
+				end
 			end
 		end
-		-- Flat, clear ground on the rolled axis (or near it) is as good as it gets.
-		if bestCost < 4 then
+		if good >= RUIN_TRIES then
 			break
 		end
 	end
-	return best, bestFraction
+	table.sort(ranked, function(a, b)
+		return a.cost < b.cost
+	end)
+	return ranked
+end
+
+-- The best axis and fraction (RankBaseAxes' first), or the rolled axis unchanged when no pair of sites
+-- is usable at all (the bases then fall back to open-ground pads).
+function ModeTeams.PickBaseAxis(axis, mapInfo)
+	local best = ModeTeams.RankBaseAxes(axis, mapInfo)[1]
+	if best then
+		return best.axis, best.fraction
+	end
+	return axis, BASE_FRACTION
 end
 
 -- Builds `team`'s compound at `base`. Returns it, or nil (warned) when it could not be built.
 function ModeTeams.BuildRuin(team, base, mapInfo, seed)
-	local ok, ruin = pcall(TeamBaseRuins.Build, ruinFrame(base), GameModes.TeamColor(team), mapInfo, seed)
+	local ok, ruin, why = pcall(TeamBaseRuins.Build, ruinFrame(base), GameModes.TeamColor(team), mapInfo, seed)
 	if not ok or type(ruin) ~= "table" or #ruin.pads == 0 then
-		warn("ModeTeams: team " .. team .. "'s base was not built: " .. tostring(ok and "no pads" or ruin))
+		-- Build returns nil and why when its site cannot be levelled (Setup then tries the next pair).
+		warn("ModeTeams: team " .. team .. "'s base was not built: " .. tostring(ok and (ruin == nil and why or "no pads") or ruin))
 		if ok and type(ruin) == "table" and ruin.model then
 			ruin.model:Destroy()
 		end
@@ -630,12 +683,13 @@ local BASE_VEHICLE_RETRY_MS = 5000
 -- A bay with a base vehicle standing this close to its centre is taken.
 local BAY_TAKEN = 6
 -- The box over a bay that must be empty of anything solid before a vehicle is put in it: the biggest
--- vehicle's footprint (Sahur Van 9.0 wide, Crocodilo Ranger 17.4 long, measured from VehicleModels by
--- tools/team_base_ruins_check.py) with half a stud all round, 8 high, from 0.6 over the floor. A car
+-- vehicle's footprint (Sahur Van 9.0 wide; Crocodilo Ranger 19.04 long, its bull-bar gun's muzzle
+-- included -- 17.4 before it had one; measured from VehicleModels by tools/team_base_ruins_check.py)
+-- with half a stud all round, 8 high, from 0.6 over the floor. A car
 -- put into a wreck, a driven-back car, a player or a deployable is two assemblies in one place, and
 -- the physics shoves them apart into a pile (Oliver's playtest, 2026-09-24: "the vehicles in the team
 -- bases are all messed up, like piled together").
-local BAY_CLEAR = Vector3.new(10, 8, 18.5)
+local BAY_CLEAR = Vector3.new(10, 8, 20.1)
 -- A vehicle put in a bay is held anchored this long, so nothing shoves it before it has settled.
 local BAY_SETTLE_SECONDS = 1.5
 
@@ -719,21 +773,25 @@ local function footprintClear(at, yaw)
 	return true
 end
 
--- The models for one base, rolled once and handed to both. "armed" is drawn from the cars that carry
--- a mount (VehicleModels.Mounts), in a fixed order so the roll is repeatable.
+-- The models for one base, rolled once and handed to both. "armed" is drawn from the ordinary cars that
+-- carry a mount (VehicleModels.Mounts), "armored" from the armoured cars (drivableOnly, with a mount),
+-- each in a fixed order so the roll is repeatable; "car" and "bike" are VehicleModels.Pick's, which
+-- never gives an armoured car.
 function ModeTeams.RollBaseVehicleModels(rng)
-	local armed = {}
+	local armed, armored = {}, {}
 	for id, def in pairs(VehicleModels.Models) do
 		if def.kind == "car" and VehicleModels.Mounts[id] then
-			table.insert(armed, id)
+			table.insert(def.drivableOnly and armored or armed, id)
 		end
 	end
 	table.sort(armed)
+	table.sort(armored)
 	local ids = {}
 	for _, slot in ipairs(MatchConfig.TeamBaseVehicles.Slots) do
 		local id
-		if slot == "armed" then
-			id = #armed > 0 and armed[rng:NextInteger(1, #armed)] or nil
+		if slot == "armed" or slot == "armored" then
+			local pool = (slot == "armored" and #armored > 0) and armored or armed
+			id = #pool > 0 and pool[rng:NextInteger(1, #pool)] or nil
 		else
 			id = VehicleModels.Pick(slot == "bike" and "bike" or "car", rng)
 		end

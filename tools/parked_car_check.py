@@ -196,7 +196,9 @@ def run(decor_faults=(), vehicle_faults=(), quiet=False):
             return n
         end""")
     examine = world.lua.eval("function(...) local f = assert(load(...)) return f end")(EXAMINE)
-    ids = sorted(k for k, v in vm.Models.items() if v.kind == "car")
+    # The kerb gets every car design MapDecor can pick: not the armoured cars, which VehicleModels.Pick
+    # only gives a caller that asks for drivable vehicles (VehicleService), never MapDecor's props.
+    ids = sorted(k for k, v in vm.Models.items() if v.kind == "car" and not v.drivableOnly)
 
     cases = [(False, 1)] + [(True, s) for s in range(1, 25)]
     fails, counts = [], {}

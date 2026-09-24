@@ -99,6 +99,19 @@ e.driverPlayer = { Parent = env.Players }
 own(e, dt)
 check_(e, 0, 2 * dt, dt)
 check(damage == 0, string.format("a new network owner's first reading: %.1f damage", damage))
+
+-- A roadkill (VehicleService's roadkill, RoadkillPass): the speed change through a body is never a crash,
+-- even a drop that would be one (the momentum rule's toll, or a body that came in from the side).
+damage = 0
+e, t = car(), 0
+check_(e, 84, t, dt)
+e.roadkillGraceUntil = t + 0.4
+t = t + dt; check_(e, 40, t, dt)
+check(damage == 0, string.format("a drop inside a roadkill's grace: %.1f damage", damage))
+-- ...and the grace ends: a wall after it still damages.
+for i = 1, 30 do t = t + dt; check_(e, 40 - i * 0.01, t, dt) end
+t = t + dt; check_(e, 0, t, dt)
+check(damage > 0, string.format("a wall after the roadkill grace still damages: %.1f", damage))
 return out
 """
 
@@ -119,6 +132,10 @@ PLANTS = [
     ("the allowance never ends (a crash after a stall is free)", "\tlocal floor = COLLISION_FLOOR + brake * stale\n",
      "\tlocal floor = COLLISION_FLOOR + brake * stale * 100\n"),
     ("the owner change keeps the last reading", "\t\tentry.lastFlatSpeed = nil\n\tend\nend", "\tend\nend"),
+    ("a roadkill's speed change scored as a crash", "\tif entry.roadkillGraceUntil and now < entry.roadkillGraceUntil then\n",
+     "\tif false then\n"),
+    ("the roadkill grace never ends", "\tif entry.roadkillGraceUntil and now < entry.roadkillGraceUntil then\n",
+     "\tif entry.roadkillGraceUntil then\n"),
 ]
 
 

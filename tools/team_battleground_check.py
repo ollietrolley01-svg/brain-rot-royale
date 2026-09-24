@@ -30,9 +30,13 @@ tools/team_base_ruins_check.py, then measures what was built:
   destruct    the real DestructibleService: walls, sandbags, crates, containers and props break; no
               floor, stair, ramp or structure does
   seed        the same seed builds the same battleground twice; more seeds pass the geometry checks
-  build       Build on a mock town: scenery cleared, streets cut back to the disc, landmarks, roads and
-              bases kept, the height FlattenPad returns used (and its town-level retry), a river site
-              refused, four ziplines hung
+  build       Build on a mock town: scenery cleared (queryable or not: the town's streets, signal heads
+              and lamp arms are non-queryable), every road reaching the disc cut SQUARE at the apron's
+              edge (all its pieces on one line) and finished (kerbs across the pavements, markings
+              stopped at a give-way line, a gateway whose beam clears the tallest vehicle), a road that
+              only passes by kept whole, no battleground part on a road; landmarks and bases kept, the
+              height FlattenPad returns used (and its town-level retry), a river site refused, four
+              ziplines hung
   botnav      the real BotNav.FindCover, handed the battleground's cover, takes it; every spot it
               returns is hidden from the threat by this file's own rays
 
@@ -56,7 +60,7 @@ from vehicle_models_axis_check import luau_to_lua  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
 
-BUDGET = (900, 1400)
+BUDGET = (900, 1620)
 RADIUS = 126.0
 EXTENT = 132.0
 GRID = 0.5
@@ -966,9 +970,22 @@ def check_cover(cols, info, log):
     return problems
 
 
-def check_objectives(walk, cols, info, log):
+def check_objectives(walk, cols, info, log, parts=None):
     problems = []
     a, b = info["objectives"]
+    # Objective A stands ON the keep's floor: a ray straight down at its exact middle (the gallery's
+    # measure) lands on a queryable top at its height. With every flagstone stopping 0.1 short of the
+    # mirror, the middle was the crack between the halves and the ray found nothing ("floor NONE").
+    # (B is the middle of the fountain, which it stands in by design.)
+    if parts is not None:
+        top = None
+        for p in parts:
+            lo, hi = p["aabb"]
+            if p["query"] and lo[0] + 1e-3 < a[0] < hi[0] - 1e-3 and lo[2] + 1e-3 < a[2] < hi[2] - 1e-3 and hi[1] <= a[1] + 3:
+                top = hi[1] if top is None else max(top, hi[1])
+        if top is None or abs(top - a[1]) > 0.05:
+            problems.append("objective A: a ray down at its middle finds %s, not the keep's floor at %.2f"
+                            % ("nothing" if top is None else "a top at %.2f" % top, a[1]))
     for name, o in (("A", a), ("B", b)):
         if abs(o[2]) > 1e-6:
             problems.append("objective %s is off the mirror (z %.3f): not equidistant from the bases" % (name, o[2]))
@@ -1205,6 +1222,7 @@ def local_rows(parts):
 # ------------------------------------------------------------------------------------------------
 
 SMOKE = r"""
+CF.PointToObjectSpace = CF.PointToObjectSpace or function(c, v) return c:Inverse() * v end
 function smoke(BG, mode)
     local out = {}
     local function fail(msg) table.insert(out, msg) end
@@ -1237,8 +1255,26 @@ function smoke(BG, mode)
     local far = inst("Model", "Building", town)
     rawget(far, "props").Extents = Vector3.new(30, 20, 24)
     part("Wall", far, Vector3.new(30, 12, 1), CFrame.new(centre + Vector3.new(400, 6, 0)))
-    -- A street along X straight through the middle, 420 long: cut back to the disc's edge each side.
-    local street = part("Asphalt", town, Vector3.new(420, 0.4, 18), CFrame.new(centre + Vector3.new(0, 0.2, 12)))
+    -- THE ROADS. A town street along X straight through the middle, 420 long, as MapDecor.Street lays
+    -- it: asphalt, a kerb and a pavement each side, dashes down the middle, every piece non-queryable.
+    local function clutter(p) p.CanQuery = false p.CanCollide = false return p end
+    local street = clutter(part("Asphalt", town, Vector3.new(420, 0.4, 18), CFrame.new(centre + Vector3.new(0, 0.2, 12))))
+    for _, side in ipairs({ -1, 1 }) do
+        clutter(part("Kerb", town, Vector3.new(420, 0.56, 0.8), CFrame.new(centre + Vector3.new(0, 0.22, 12 + side * 9.4))))
+        clutter(part("Pavement", town, Vector3.new(420, 0.41, 4.2), CFrame.new(centre + Vector3.new(0, 0.145, 12 + side * 11.9))))
+    end
+    for k = -11, 11 do
+        clutter(part("Dash", town, Vector3.new(6, 0.07, 0.6), CFrame.new(centre + Vector3.new(k * 18 + 2, 0.435, 12))))
+    end
+    -- The square's crossroads 83 south of the middle, its traffic lights' heads and arms non-queryable
+    -- (ClearSite's old box query took the queryable poles and left the heads in the air), and a street
+    -- lamp: the post queryable, its arm and lamp not, all three one tag group.
+    local junction = clutter(part("JunctionAsphalt", town, Vector3.new(18, 0.4, 18), CFrame.new(centre + Vector3.new(0, 0.2, -83))))
+    local signalPole = part("SignalPole", town, Vector3.new(15.5, 0.9, 0.9), CFrame.new(centre + Vector3.new(12, 7.75, -95)))
+    local signalHead = clutter(part("SignalHousing", town, Vector3.new(1.5, 4.3, 1.2), CFrame.new(centre + Vector3.new(6, 12, -95))))
+    local lampPost = part("LampPost", town, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-60, 7, 30)))
+    local lampArm = clutter(part("LampArm", town, Vector3.new(0.35, 0.35, 3.4), CFrame.new(centre + Vector3.new(-60, 13.6, 31.7))))
+    for _, p in ipairs({ lampPost, lampArm }) do p:SetAttribute("Destructible", "Lamp:D7") end
     local theme = inst("Model", "Theme", town)
     theme:SetAttribute("FootingGroup", true)
     local piece = inst("Model", "SetPiece", theme)
@@ -1249,7 +1285,20 @@ function smoke(BG, mode)
     rawget(tower, "props").Extents = Vector3.new(140, 60, 120)
     part("TowerWall", tower, Vector3.new(10, 40, 10), CFrame.new(centre + Vector3.new(120, 20, 60)))
     local roads = inst("Model", "Roads", map)
-    local road = part("Road", roads, Vector3.new(20, 1, 300), CFrame.new(centre + Vector3.new(-140, 0.5, 0)))
+    -- A road out of town from the square's north mouth, 144 out (as RoadNetwork starts one), running on
+    -- north: its slab and edge lines are cut square at the apron's edge, the rest kept.
+    local mouthRoad = part("RoadSurface", roads, Vector3.new(18, 0.8, 156), CFrame.new(centre + Vector3.new(0, 0, 144 + 78)))
+    local mouthEdges = {}
+    for _, side in ipairs({ -1, 1 }) do
+        table.insert(mouthEdges, part("RoadEdge", roads, Vector3.new(0.4, 0.07, 156), CFrame.new(centre + Vector3.new(side * 8.2, 0.435, 144 + 78))))
+    end
+    -- A road that only passes by, 137 west of the middle at its nearest (clear of the disc and its
+    -- margin): kept whole, but its lamp on the arena's side of it (133 out, in the apron) goes.
+    local road = part("RoadSurface", roads, Vector3.new(18, 0.8, 300), CFrame.new(centre + Vector3.new(-146, 0, 0)))
+    local innerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-133.2, 7, 20)))
+    innerLamp:SetAttribute("Destructible", "Lamp:D8")
+    local outerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-158.8, 7, -20)))
+    outerLamp:SetAttribute("Destructible", "Lamp:D9")
     local vehicles = inst("Model", "Vehicles", map)
     local car = inst("Model", "Car", vehicles)
     rawget(car, "props").Extents = Vector3.new(9, 6, 17)
@@ -1309,25 +1358,108 @@ function smoke(BG, mode)
     if piece.Parent then fail("a themes set piece in the disc was left standing") end
     if not theme.Parent then fail("the town's whole themes group went") end
     if not tower.Parent then fail("a landmark too big to clear was removed") end
-    if not road.Parent then fail("a road piece was removed") end
+    if not road.Parent then fail("a road passing by, clear of the disc, was removed") end
+    if road.Size.Z ~= 300 then fail("a road passing by, clear of the disc, was cut") end
+    if innerLamp.Parent then fail("a road's lamp standing in the apron was left") end
+    if not outerLamp.Parent then fail("a road's lamp on the far side of it went") end
+    if junction.Parent then fail("the square's crossroads (non-queryable) was left in the disc") end
+    if signalPole.Parent or signalHead.Parent then fail("a traffic light (its head non-queryable) was left in the disc") end
+    if lampPost.Parent or lampArm.Parent then fail("a street lamp in the disc was left, whole or in part") end
     if car.Parent then fail("a parked car in the disc was left") end
     if tree.Parent then fail("a tree in the disc was left") end
     if not woods.Parent then fail("a whole woods group went") end
     if not base.Parent then fail("a team base was touched") end
     if pickup.Parent then fail("loot in the disc was left lying") end
-    -- The street: two pieces, each ending at the disc's edge (plus half its width), the rest kept.
-    local pieces = {}
-    for _, kid in ipairs(town:GetChildren()) do if kid.Name == "Asphalt" then table.insert(pieces, kid) end end
-    if #pieces ~= 2 then fail(#pieces .. " pieces of the street left, want 2") else
-        local cut = BG.Radius + BG.Margin + 2
-        for _, p in ipairs(pieces) do
-            local inner = math.min(math.abs(p.CFrame.p.X - p.Size.X / 2 - centre.X), math.abs(p.CFrame.p.X + p.Size.X / 2 - centre.X))
-            local reach = math.sqrt(inner * inner + 12 * 12)
-            if math.abs(reach - (cut + 9)) > 0.05 then fail(("a street piece ends %.2f from the middle, want %.2f"):format(reach, cut + 9)) end
-            local outer = math.max(math.abs(p.CFrame.p.X - p.Size.X / 2 - centre.X), math.abs(p.CFrame.p.X + p.Size.X / 2 - centre.X))
-            if math.abs(outer - 210) > 0.05 then fail("a street piece lost its far end") end
+    -- THE ROADS AT THE ARENA. No road piece anywhere inside RoadReach; every road that reached the disc
+    -- ends square, all its pieces on one line at least RoadEnd out (on the terrain's 4-stud grid), each
+    -- such end finished with a gateway whose beam clears the carriageway; the pavements closed with a kerb.
+    local ROAD = { RoadSurface = true, RoadEdge = true, Asphalt = true, Kerb = true, Pavement = true, Dash = true, JunctionAsphalt = true }
+    local function plan(p)
+        local c, sz = p.CFrame, p.Size
+        local ex = math.abs(c.r.X) * sz.X / 2 + math.abs(c.u.X) * sz.Y / 2 + math.abs(c.b.X) * sz.Z / 2
+        local ez = math.abs(c.r.Z) * sz.X / 2 + math.abs(c.u.Z) * sz.Y / 2 + math.abs(c.b.Z) * sz.Z / 2
+        return c.p.X, c.p.Z, ex, ez
+    end
+    local roadLeft = {}
+    for _, kid in ipairs(map:GetDescendants()) do
+        if kid:IsA("BasePart") and ROAD[kid.Name] and not kid:GetAttribute("TeamBattleground") then
+            table.insert(roadLeft, kid)
+            local x, z, ex, ez = plan(kid)
+            local dx = math.max(0, math.abs(x - centre.X) - ex)
+            local dz = math.max(0, math.abs(z - centre.Z) - ez)
+            local near = math.sqrt(dx * dx + dz * dz)
+            if near < BG.RoadReach then fail(("a road piece (%s) is left %.1f from the middle, inside the disc"):format(kid.Name, near)) end
         end
     end
+    -- The street: its asphalt, kerbs and pavements each in two, every inner end on one line per side
+    -- (the pavements a kerb's width shorter: the kerb across their end stands there).
+    local ends = { [1] = {}, [-1] = {} }
+    for _, kid in ipairs(town:GetChildren()) do
+        if kid.Name == "Asphalt" or kid.Name == "Kerb" or kid.Name == "Pavement" then
+            local a0, a1 = kid.CFrame.p.X - kid.Size.X / 2 - centre.X, kid.CFrame.p.X + kid.Size.X / 2 - centre.X
+            local side = a0 > 0 and 1 or -1
+            table.insert(ends[side], { kid.Name, side > 0 and a0 or -a1, side > 0 and a1 or -a0 })
+        end
+    end
+    for side, list in pairs(ends) do
+        local asphalt = nil
+        for _, e in ipairs(list) do if e[1] == "Asphalt" then asphalt = e end end
+        if not asphalt then fail("the street's asphalt is gone on the " .. (side > 0 and "east" or "west")) else
+            if asphalt[2] < BG.RoadEnd - 1e-6 or asphalt[2] > BG.RoadEnd + 4 then
+                fail(("the street ends %.2f from the middle, want %.0f..%.0f"):format(asphalt[2], BG.RoadEnd, BG.RoadEnd + 4)) end
+            if math.abs(asphalt[3] - 210) > 0.05 then fail("the street lost its far end") end
+            for _, e in ipairs(list) do
+                local want = asphalt[2] + (e[1] == "Pavement" and 0.8 or 0)
+                if math.abs(e[2] - want) > 0.02 then fail(("the street's %s ends at %.2f, not square with its asphalt (%.2f)"):format(e[1], e[2], want)) end
+            end
+            if #list ~= 5 then fail(#list .. " pieces of the street's asphalt, kerbs and pavements left one side, want 5") end
+        end
+    end
+    -- The road from the north mouth: cut once, its slab and edge lines kept to the north.
+    if not mouthRoad.Parent then fail("the road out of the north mouth went entirely") else
+        local inner = mouthRoad.CFrame.p.Z - mouthRoad.Size.Z / 2 - centre.Z
+        if inner < BG.RoadEnd - 1e-6 or inner > BG.RoadEnd + 4 then fail(("the north road ends %.2f out, want %.0f..%.0f"):format(inner, BG.RoadEnd, BG.RoadEnd + 4)) end
+        for _, edge in ipairs(mouthEdges) do
+            local e = edge.Parent and (edge.CFrame.p.Z - edge.Size.Z / 2 - centre.Z) or nil
+            if not e or math.abs(e - (inner + 2.6)) > 0.02 then fail("an edge line of the north road does not stop at the give-way line") end
+        end
+    end
+    -- The finished ends: three (the street's two, the north road's), each with its gateway, a clear way in.
+    local roadEnds = info.roadEnds
+    local count = 0
+    if not roadEnds or roadEnds.Parent ~= info.model then fail("the road ends are not in the battleground") else
+        for _, e in ipairs(roadEnds:GetChildren()) do
+            if e.Name == "RoadEnd" then
+                count = count + 1
+                local pillars, beams, signs, kerbs = 0, 0, 0, 0
+                local beamBottom = math.huge
+                for _, p in ipairs(e:GetDescendants()) do
+                    if p.Name == "GatewayPillar" then pillars = pillars + 1 end
+                    if p.Name == "GatewaySign" then signs = signs + 1 end
+                    if p.Name == "Kerb" then kerbs = kerbs + 1 end
+                    if p.Name == "GatewayBeam" then beams = beams + 1 beamBottom = p.CFrame.p.Y - p.Size.Y / 2 end
+                end
+                if pillars ~= 2 or beams ~= 1 or signs ~= 1 then fail(("a road end has %d pillars, %d beams, %d signs"):format(pillars, beams, signs)) end
+                if beamBottom < 12 then fail(("a gateway's beam is %.1f over the road, under the tallest vehicle and its margin"):format(beamBottom)) end
+                if e:GetAttribute("RoadAxis") == "x" and kerbs ~= 2 then fail("the street's end has " .. kerbs .. " kerbs across its pavements, want 2") end
+            end
+        end
+    end
+    if count ~= 3 then fail(count .. " finished road ends, want 3 (the street's two and the north road's)") end
+    -- Nothing of the battleground on a road: no part's plan overlaps a road piece's.
+    local overlaps = 0
+    for _, p in ipairs(info.model:GetDescendants()) do
+        if p:IsA("BasePart") and not (roadEnds and p:IsDescendantOf(roadEnds)) and p.Parent and p.Parent.Name ~= "Zipline" then
+            local x, z, px, pz = plan(p)
+            for _, r in ipairs(roadLeft) do
+                if r.Parent then
+                    local rx, rz, ex, ez = plan(r)
+                    if math.abs(x - rx) < px + ex - 0.05 and math.abs(z - rz) < pz + ez - 0.05 then overlaps = overlaps + 1 end
+                end
+            end
+        end
+    end
+    if overlaps > 0 then fail(overlaps .. " battleground parts stand on a road") end
     -- Facing: team 1 along the LookVector, the objectives on the mirror at the floor heights.
     local lookFrame = info.frame
     local l = lookFrame.LookVector
@@ -1574,7 +1706,7 @@ def run(src, log, deep=True):
     problems += check_high_ground(walk, info, log)
     problems += check_sightlines(cols, log)
     problems += check_cover(cols, info, log)
-    problems += check_objectives(bots, cols, info, log)
+    problems += check_objectives(bots, cols, info, log, parts)
     problems += check_vehicles(cols, info, log)
     problems += check_loot(walk, cols, parts, info, log)
     problems += check_ziplines(walk, cols, info, log)
@@ -1664,7 +1796,7 @@ def run_only(src, names, log=lambda *_: None):
         "high_ground": lambda: check_high_ground(walk(), info, log),
         "sightlines": lambda: check_sightlines(cols(), log),
         "cover": lambda: check_cover(cols(), info, log),
-        "objectives": lambda: check_objectives(bots(), cols(), info, log),
+        "objectives": lambda: check_objectives(bots(), cols(), info, log, parts),
         "vehicles": lambda: check_vehicles(cols(), info, log),
         "loot": lambda: check_loot(walk(), cols(), parts, info, log),
         "ziplines": lambda: check_ziplines(walk(), cols(), info, log),
@@ -1749,11 +1881,27 @@ PLANTS = [
     ("unseeded wear", "bg", [("B.rng = Random.new(seed or 1)", "B.rng = Random.new((seed or 1) + math.random(1, 100000))")], ["seed"], "seed"),
     ("over budget", "bg",
      [('\tlocal middle = folder(root, "Middle", true)\n',
-       '\tlocal middle = folder(root, "Middle", true)\n\tfor i = 1, 30 do box(middle, "Junk", -0.5, 0.5, 0, 1, 150 + i * 2, 151 + i * 2, STONE, MAT.Slate, NEVER) end\n')],
+       '\tlocal middle = folder(root, "Middle", true)\n\tfor i = 1, 60 do box(middle, "Junk", -0.5, 0.5, 0, 1, 150 + i * 2, 151 + i * 2, STONE, MAT.Slate, NEVER) end\n')],
      ["budget"], "budget"),
-    ("the site not cleared", "bg", [("\tTeamBattleground.ClearSite(site, map)\n", "")], ["build"], "build"),
-    ("streets not cut back", "bg",
-     [("local function trimPart(part, centre, radius)\n", "local function trimPart(part, centre, radius)\n\tdo return 1 end\n")], ["build"], "build"),
+    ("the site not cleared", "bg", [("local _, _, _, roadEnds = TeamBattleground.ClearSite(site, map)", "local roadEnds = nil")], ["build"], "build"),
+    ("roads left running through", "bg",
+     [("if math.sqrt(along * along + lateral * lateral) <= TeamBattleground.RoadReach or stopsInside then", "if false then")],
+     ["build"], "inside the disc"),
+    ("only what a box query sees cleared", "bg",
+     [('if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") and not part:GetAttribute("TeamBattleground") then',
+       'if part:IsA("BasePart") and part.CanQuery ~= false and not part:GetAttribute("TeamBaseRuin") and not part:GetAttribute("TeamBattleground") then')],
+     ["build"], "non-queryable"),
+    ("a road passing by cut too", "bg",
+     [("TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 6",
+       "TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 30")], ["build"], "was cut"),
+    ("road ends left raw", "bg",
+     [("local built = roadEnd(model, spec.road, spec.cut, spec.outward, centre)", "local built = nil")], ["build"], "finished road ends"),
+    ("gateway beam under the tallest van", "bg", [("local GATEWAY_CLEAR = 12.3", "local GATEWAY_CLEAR = 9.5")], ["build"], "tallest vehicle"),
+    ("pavements left open", "bg", [('box(model, "Kerb", math.min(x0, x1)', 'box(model, "KerbCap", math.min(x0, x1)')], ["build"], "kerbs across"),
+    ("objective A on the crack", "bg",
+     [('\tbox(middle, "Paving", -3.9, 3.9, 0.5, KF, -3.9, 3.9, BASALT_LIGHT, MAT.Slate, NEVER)\n', ""),
+      ('box(keep, "Paving", x0 + 0.1, x0 + 7.9, 0.5, KF, -19.9, i == 2 and -4.1 or -0.1,', 'box(keep, "Paving", x0 + 0.1, x0 + 7.9, 0.5, KF, -19.9, -0.1,')],
+     ["objectives"], "objective A: a ray down"),
     ("the levelled height ignored", "bg",
      [("local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)",
        "local frame = CFrame.new(position.X, position.Y, position.Z) * CFrame.Angles(0, yaw, 0)")], ["build"], "build"),

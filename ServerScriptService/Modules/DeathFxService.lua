@@ -712,7 +712,11 @@ function DeathFxService.OnDeath(victimToken, killerToken, def)
 	end
 	local impulse = Vector3.new(0, 14, 0)
 	local killerRoot = killerToken and killerToken ~= victimToken and Combatants.GetRoot(killerToken) or nil
-	if killerRoot then
+	local thrown = character:GetAttribute("RoadkillThrow")
+	if typeof(thrown) == "Vector3" then
+		-- Run over (VehicleService's roadkill): the body goes the way the vehicle was going.
+		impulse = thrown
+	elseif killerRoot then
 		local away = positionOf(character) - killerRoot.Position
 		local flat = Vector3.new(away.X, 0, away.Z)
 		if flat.Magnitude > 0.5 then

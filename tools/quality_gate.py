@@ -58,6 +58,8 @@ TIMEOUTS = {
     "lua_static_check.py": 1200,
     "verify.py": 1200,
     "car_placement_check.py": 1800,
+    # 20 whole maps and 17 plants x 4 more, on a process pool: 110 s alone on a quiet machine.
+    "parking_lot_check.py": 900,
     "team_base_ruins_check.py": 1200,
     "vehicle_models_axis_check.py": 1200,
     "gun_tube_check.py": 1200,

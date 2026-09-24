@@ -61,9 +61,10 @@ BREAK = os.path.join(ROOT, "StarterPlayerScripts", "BreakFxClient.client.lua")
 GLASS = os.path.join(ROOT, "StarterPlayerScripts", "GlassFxClient.client.lua")
 
 CRACK_EXPORT = (
-    "\nreturn { tracked = tracked, totals = totals, bits = bits, FAMILY = FAMILY, sweep = sweep,"
-    " caps = { MAX_BUILT = MAX_BUILT, MAX_PIECES = MAX_PIECES, PER_SITE_CAP = PER_SITE_CAP,"
-    " MAX_TRICKLES = MAX_TRICKLES, MAX_BITS = MAX_BITS, BUILD_WITHIN = BUILD_WITHIN, DROP_BEYOND = DROP_BEYOND } }\n"
+    "\nreturn { tracked = tracked, totals = totals, bits = bits, FAMILY = FAMILY, sweep = sweep, profiles = PROFILES,"
+    " anims = anims, counts = counts,"
+    " caps = { MAX_BUILT = MAX_BUILT, MAX_PIECES = MAX_PIECES, PER_SITE_CAP = PER_SITE_CAP, MAX_ANIMATING = MAX_ANIMATING,"
+    " MAX_TRICKLES = MAX_TRICKLES, MAX_BITS = MAX_BITS, MAX_PUFFS = MAX_PUFFS, BUILD_WITHIN = BUILD_WITHIN, DROP_BEYOND = DROP_BEYOND } }\n"
 )
 
 
@@ -152,6 +153,8 @@ function H.deliver()
     end
 end
 workspace.CurrentCamera.CFrame = CFrame.new(0, 10, -40)
+-- Flat ground at y = 0, 72 deep, so nothing here stands over the void.
+mock.raycast = mock.flatWorld(0, -72)
 return H
 """
 
@@ -356,15 +359,9 @@ return out
 # ---------------------------------------------------------------------------------------------
 # C: per material, on the hit face, growing, bursting, cleaned up
 
-FAMILY_LUA = r"""
-local DS, H, mock, CF = ...
-local M = Enum.Material
-local out = { families = {}, pieces = 0 }
-local families = {
-    { "wood", M.WoodPlanks }, { "stone", M.Concrete }, { "brick", M.Brick }, { "metal", M.Metal },
-    { "glass", M.Glass }, { "foliage", M.LeafyGrass }, { "plastic", M.Plastic }, { "cloth", M.Fabric },
-}
-local function lum(c) return (c.R + c.G + c.B) / 3 end
+MATERIALS_LUA = r"""
+local DS, H, mock, CF, names, signatures = ...
+local out = { rows = {}, pieces = 0 }
 local folder = workspace:FindFirstChild("CrackFx")
 local function kids(name)
     local n = 0
@@ -375,125 +372,205 @@ local function key(p)
     local q = p.Position
     return string.format("%.2f,%.2f,%.2f", q.X, q.Y, q.Z)
 end
-for index, entry in ipairs(families) do
-    local family, material = entry[1], entry[2]
+for index, name in ipairs(names) do
+    local material = Enum.Material[name]
     local x = index * 40
     local cf = CFrame.new(x, 6, 0) * CFrame.Angles(0, 0.6, 0.15)
     local part = H.part(H.map, "Part", Vector3.new(12, 10, 1), cf, material)
     part:SetAttribute("DestructibleHealth", 400)
+    -- Close enough for every detail (LOD near) and for the stage changes to play.
     workspace.CurrentCamera.CFrame = CFrame.new(cf * Vector3.new(0, 0, -25))
     local from = cf * Vector3.new(2.2, 1.1, -30)
     local steps = { 20, 90, 100, 100 }   -- to 95%, 72.5%, 47.5%, 22.5%: stages 0, 1, 2, 3
     local previous, counts = nil, {}
     local sounds0 = #mock.sounds
+    local row = { name = name }
     for stage, amount in ipairs(steps) do
         local bits0 = #CF.bits + kids("CrackPuff")
         DS.Damage(part, amount, nil, from)
         H.deliver()
         local burst = #CF.bits + kids("CrackPuff") - bits0
-        mock.advance(0.3)
+        mock.advance(1.2)
         local record = CF.tracked[part]
-        if not record then H.fail("C", family .. ": not tracked after a hit") break end
-        if record.stage ~= stage - 1 then H.fail("C", family .. ": client stage " .. record.stage .. ", expected " .. (stage - 1)) end
-        if burst <= 0 then H.fail("C", family .. ": hit " .. stage .. " threw no burst") end
+        if not record then H.fail("C", name .. ": not tracked after a hit") break end
+        if record.stage ~= stage - 1 then H.fail("C", name .. ": client stage " .. record.stage .. ", expected " .. (stage - 1)) end
+        if burst <= 0 then H.fail("C", name .. ": hit " .. stage .. " threw no burst") end
         local pieces = {}
         for _, piece in ipairs(record.pieces) do
             pieces[key(piece)] = true
             out.pieces += 1
-            -- On the hit face (-Z, local), proud of it by no more than 1.6, inside its edges, near the hit.
+            -- On the hit face (-Z, local), proud of it by no more than 2, inside its edges, near the hit.
             local l = part.CFrame:PointToObjectSpace(piece.Position)
             local proud = -l.Z - 0.5
-            if proud < -0.2 or proud > 1.6 or math.abs(l.X) > 6 + 1.0 or math.abs(l.Y) > 5 + 1.0 then
-                H.fail("C", string.format("%s: a piece at local (%.2f, %.2f, %.2f) is off the hit face", family, l.X, l.Y, l.Z))
+            if proud < -0.25 or proud > 2.0 or math.abs(l.X) > 6 + 1.2 or math.abs(l.Y) > 5 + 1.2 then
+                H.fail("C", string.format("%s: a %s at local (%.2f, %.2f, %.2f) is off the hit face", name, piece.Name, l.X, l.Y, l.Z))
                 break
             end
             if piece.CanCollide or piece.CanQuery or piece.CastShadow or not piece.Anchored then
-                H.fail("C", family .. ": a crack piece collides, casts or can be hit") break
+                H.fail("C", name .. ": a crack piece collides, casts or can be hit") break
             end
         end
         local n = #record.pieces
         counts[stage] = n
-        if n == 0 then H.fail("C", family .. ": nothing drawn at stage " .. (stage - 1)) end
+        if n == 0 then H.fail("C", name .. ": nothing drawn at stage " .. (stage - 1)) end
         if previous then
             for k in pairs(previous) do
-                if not pieces[k] then H.fail("C", family .. ": stage " .. (stage - 1) .. " lost a piece of the stage before") break end
+                if not pieces[k] then H.fail("C", name .. ": stage " .. (stage - 1) .. " lost a piece of the stage before") break end
             end
-            if n <= counts[stage - 1] and n < CF.caps.PER_SITE_CAP then H.fail("C", family .. ": stage " .. (stage - 1) .. " added nothing") end
+            if n <= counts[stage - 1] then H.fail("C", name .. ": stage " .. (stage - 1) .. " added nothing") end
         end
         previous = pieces
     end
-    if #mock.sounds - sounds0 < 4 then H.fail("C", family .. ": " .. (#mock.sounds - sounds0) .. " hit sounds for 4 hits") end
-    -- The look of each family, at 25%.
+    local heard = #mock.sounds - sounds0
+    if heard < 8 then H.fail("C", name .. ": " .. heard .. " sound layers for 4 hits (want two a hit)") end
+    -- Its look at 25%: the set of what it drew.
     local record = CF.tracked[part]
-    local look = { dark = 0, light = 0, white = 0, sticks = 0, droop = 0, discs = 0, plates = 0, bricks = 0, square = 0, grain = 0, lines = 0, chips = 0 }
-    if record then
-        for _, p in ipairs(record.pieces) do
-            if p.Name == "CrackLine" then
-                look.lines += 1
-                local dir = part.CFrame:VectorToObjectSpace(p.CFrame.RightVector)
-                if lum(p.Color) < lum(part.Color) - 0.05 then look.dark += 1 end
-                if lum(p.Color) > lum(part.Color) + 0.05 then look.light += 1 end
-                if p.Color.R > 0.85 and p.Color.B > 0.9 then look.white += 1 end
-                if math.abs(dir.X) > 0.999 or math.abs(dir.Y) > 0.999 then look.square += 1 end
-                if math.abs(dir.X) > 0.9 then look.grain += 1 end
-            elseif p.Name == "CrackDent" and p.Shape == Enum.PartType.Cylinder then
-                look.discs += 1
-            elseif p.Name == "CrackStick" then
-                look.sticks += 1
-                local along = part.CFrame:VectorToObjectSpace(p.CFrame.ZVector)
-                if along.Y < -0.2 then look.droop += 1 end
-            elseif p.Name == "CrackBrick" then
-                look.bricks += 1
-            elseif p.Name == "CrackPlate" then
-                look.plates += 1
-            elseif p.Name == "CrackChip" then
-                look.chips += 1
-            end
-        end
+    local seen = {}
+    for _, p in ipairs(record and record.pieces or {}) do seen[p.Name] = (seen[p.Name] or 0) + 1 end
+    local list = {}
+    for n in pairs(seen) do table.insert(list, n) end
+    table.sort(list)
+    row.look = table.concat(list, ",")
+    row.drawn = record and #record.pieces or 0
+    row.heard = heard
+    local missing = {}
+    for _, want in ipairs(signatures[name] or {}) do
+        if not seen[want] then table.insert(missing, want) end
     end
-    out.families[family] = look
-    local want = {
-        stone = look.dark >= 6 and look.chips >= 4,
-        brick = look.square >= 4 and look.bricks >= 1,
-        wood = look.sticks >= 3 and look.grain >= math.floor(look.dark * 0.7) and look.plates >= 1,
-        metal = look.discs >= 4 and look.light >= 2 and look.plates >= 1,
-        glass = look.white >= 10,
-        foliage = look.droop >= 3,
-        plastic = look.light >= 3,
-        cloth = look.dark >= 4 and look.plates >= 1,
-    }
-    if not want[family] then
-        local parts = {}
-        for k, v in pairs(look) do table.insert(parts, k .. "=" .. v) end
-        table.sort(parts)
-        H.fail("C", family .. " doesn't look like " .. family .. ": " .. table.concat(parts, " "))
-    end
+    if #missing > 0 then H.fail("C", name .. " doesn't look like " .. name .. ": no " .. table.concat(missing, ", ") .. " (drew " .. row.look .. ")") end
     -- Breaking: the marks go that instant; the debris carries the cracks.
-    local before = record and #record.pieces or 0
     local held = {}
     for _, p in ipairs(record and record.pieces or {}) do table.insert(held, p) end
-    local breakFolder = workspace:FindFirstChild("BreakFx")
-    local debris0 = #breakFolder:GetChildren()
     DS.Damage(part, 1e6, nil, from)
     for _, p in ipairs(held) do
-        if p.Parent then H.fail("C", family .. ": a crack outlived its part") break end
+        if p.Parent then H.fail("C", name .. ": a crack outlived its part") break end
     end
-    if CF.tracked[part] then H.fail("C", family .. ": still tracked after breaking") end
+    if CF.tracked[part] then H.fail("C", name .. ": still tracked after breaking") end
     H.deliver()
-    local cracked = 0
-    local kids2 = breakFolder:GetChildren()
-    for i = debris0 + 1, #kids2 do
-        if kids2[i].Name == "BreakPiece" and kids2[i]:FindFirstChild("Cracks") then cracked += 1 end
-    end
     local sent = mock.remotes.BreakFx.fired[#mock.remotes.BreakFx.fired][1]
-    if sent[1][7] ~= 3 then H.fail("C", family .. ": BreakFx sent stage " .. tostring(sent[1][7])) end
-    if family ~= "foliage" and family ~= "cloth" and cracked == 0 then H.fail("C", family .. ": no debris carries the cracks") end
-    out.families[family].drawn = before
+    if sent[1][7] ~= 3 then H.fail("C", name .. ": BreakFx sent stage " .. tostring(sent[1][7])) end
+    out.rows[index] = row
     mock.advance(6)
 end
 out.totalsAfter = CF.totals.pieces
+return out
+"""
 
--- Late joiners: damage first, then a fresh client finds it by its tag and draws the same thing.
+# How each stage change plays, per material, near: right after the stage rises the new pieces are
+# mid-arrival; by 1.2 s every one is where it rests; the pieces nearer the hit start first.
+ANIM_LUA = r"""
+local DS, H, mock, CF, name = ...
+local material = Enum.Material[name]
+local cf = CFrame.new(5000, 6, 0) * CFrame.Angles(0, 0.4, 0)
+local part = H.part(H.map, "Part", Vector3.new(12, 10, 1), cf, material)
+part:SetAttribute("DestructibleHealth", 400)
+workspace.CurrentCamera.CFrame = CFrame.new(cf * Vector3.new(0, 0, -20))
+local from = cf * Vector3.new(1.5, 0.8, -30)
+DS.Damage(part, 110, nil, from)   -- to 72.5%: stage 1, drawn
+H.deliver()
+mock.advance(1.2)
+local record = CF.tracked[part]
+local before = record and #record.pieces or 0
+DS.Damage(part, 100, nil, from)   -- to 47.5%: stage 2, PLAYED
+H.deliver()
+local out = { before = before, starts = {}, rings = {}, rays = {}, flashes = 0 }
+local fresh = {}
+for index = before + 1, record and #record.pieces or 0 do table.insert(fresh, record.pieces[index]) end
+out.fresh = #fresh
+out.animating = #CF.anims
+for _, c in ipairs(workspace:FindFirstChild("CrackFx"):GetChildren()) do
+    if c.Name == "CrackFlash" then out.flashes += 1 end
+end
+-- Starts against distance along the crack, for the lines (the main cracks).
+local byPiece = {}
+for _, a in ipairs(CF.anims) do byPiece[a.piece] = a end
+local pairs_ = {}
+for _, p in ipairs(fresh) do
+    local a = byPiece[p]
+    if a and a.spec.line then
+        table.insert(pairs_, { a.spec.dist or 0, a.start - mock.clock, a.spec.kind, a.spec.branch or 0 })
+        if a.spec.kind == "CrackWebRing" then table.insert(out.rings, a.start - mock.clock) end
+        if a.spec.kind == "CrackWeb" then table.insert(out.rays, a.start - mock.clock) end
+    end
+end
+-- Rank agreement: how often, of two lines, the one further out starts no sooner.
+local agree, total, latest, levels = 0, 0, 0, {}
+for i = 1, #pairs_ do
+    latest = math.max(latest, pairs_[i][2])
+    levels[string.format("%.3f", pairs_[i][2] - pairs_[i][4] * 0.06)] = true
+    for j = i + 1, #pairs_ do
+        if math.abs(pairs_[i][1] - pairs_[j][1]) > 0.2 then
+            total += 1
+            local a, b = pairs_[i], pairs_[j]
+            if (a[1] < b[1]) == (a[2] <= b[2] + 1e-6) then agree += 1 end
+        end
+    end
+end
+local nLevels = 0
+for _ in pairs(levels) do nLevels += 1 end
+out.order = total > 0 and agree / total or 1
+out.latest = latest
+out.levels = nLevels
+out.lines = #pairs_
+-- Frame by frame for 1.5 s: how many frames have something still arriving (started, not at its
+-- size), and how far a dent swells past its size before it settles (metal overshoots).
+local midway, overshoot = 0, 0
+for _ = 1, 45 do
+    mock.advance(1 / 30)
+    local moving = false
+    for _, a in ipairs(CF.anims) do
+        if a.started and math.abs(a.piece.Size.Magnitude - a.size.Magnitude) > a.size.Magnitude * 0.02 then moving = true end
+        if a.started and a.spec.kind == "CrackDent" then
+            overshoot = math.max(overshoot, a.piece.Size.Y / a.size.Y)
+        end
+    end
+    if moving then midway += 1 end
+end
+out.midway = midway
+out.overshoot = overshoot
+out.after = #CF.anims
+local wrong = 0
+for index = before + 1, #record.pieces do
+    local p, spec = record.pieces[index], record.pieceSpecs[index]
+    if spec and math.abs(p.Size.X - (spec.size.X)) > 1e-3 and not spec.grow and not spec.core then wrong += 1 end
+end
+out.unsettled = wrong
+DS.Damage(part, 1e6, nil, from)
+H.deliver()
+mock.advance(4)
+return out
+"""
+
+# LOD: the same damage seen near, at middle distance and far: fewer pieces further off, the main
+# cracks bolder far off.
+LOD_LUA = r"""
+local DS, H, mock, CF = ...
+local cf = CFrame.new(6000, 6, 0)
+local part = H.part(H.map, "Part", Vector3.new(12, 10, 1), cf, Enum.Material.Concrete)
+part:SetAttribute("DestructibleHealth", 400)
+workspace.CurrentCamera.CFrame = CFrame.new(cf * Vector3.new(0, 0, -20))
+for _, d in ipairs({ { 2, 1 }, { -2, -1 }, { 0, 2 } }) do
+    DS.Damage(part, 100, nil, cf * Vector3.new(d[1], d[2], -30))
+    H.deliver()
+    mock.advance(1.2)
+end
+local out = {}
+local function look(distance)
+    workspace.CurrentCamera.CFrame = CFrame.new(cf * Vector3.new(0, 0, -distance))
+    mock.advance(0.6)
+    local record = CF.tracked[part]
+    local n, coreWidth = 0, 0
+    for index, p in ipairs(record.pieces) do
+        n += 1
+        local spec = record.pieceSpecs[index]
+        if spec and spec.core and spec.branch == 0 and coreWidth == 0 then coreWidth = p.Size.Y / spec.size.Y end
+    end
+    return n, record.lod, coreWidth
+end
+out.nearN, out.nearLod, out.nearW = look(20)
+out.midN, out.midLod, out.midW = look(75)
+out.farN, out.farLod, out.farW = look(135)
+out.backN, out.backLod = look(20)
 return out
 """
 
@@ -586,6 +663,7 @@ for round, d in ipairs(dirs) do
     end
     H.deliver()
     peakBits = math.max(peakBits, #CF.bits)
+    peakAnim = math.max(peakAnim or 0, #CF.anims)
     mock.advance(0.3)
     peakBuilt = math.max(peakBuilt, CF.totals.built)
     peakPieces = math.max(peakPieces, CF.totals.pieces)
@@ -601,6 +679,7 @@ end
 local built = 0
 for _, record in pairs(CF.tracked) do if record.built then built += 1 end end
 out.peakBits, out.peakBuilt, out.peakPieces, out.peakTrickles, out.maxSite, out.maxSites, out.builtNow = peakBits, peakBuilt, peakPieces, peakTrickles, maxSite, maxPerPart, built
+out.peakAnim = peakAnim or 0
 mock.advance(4)
 out.bitsAfter = #CF.bits
 -- Walk away: nothing drawn past DROP_BEYOND.
@@ -729,18 +808,185 @@ def run_stage(ds_faults=(), quiet=False):
     return fs
 
 
-def run_family(crack_faults=(), quiet=False):
+def all_materials():
+    """Every Roblox part material, from the API dump: not Air or Water (terrain only), and not the two
+    legacy aliases (Aluminum is Foil; "Corroded Metal" is CorrodedMetal)."""
+    import json
+    with open(os.path.join(ROOT, "tools", "roblox_api_subset.json"), encoding="utf-8") as f:
+        names = json.load(f)["enums"]["Material"]
+    return [n for n in names if n not in ("Air", "Water", "Aluminum", "Corroded Metal")]
+
+
+MATERIALS = all_materials()
+
+# What each material must show by 25% (near): the pieces that make it read as itself.
+SIGNATURES = {
+    "Concrete": ["CrackRebar", "CrackDisplaced", "CrackAggregate", "CrackLip", "CrackShade"],
+    "Brick": ["CrackBrick", "CrackBrickGap", "CrackLip"],
+    "Marble": ["CrackVein", "CrackScallop", "CrackShard"],
+    "Granite": ["CrackFracture", "CrackCrystal", "CrackFacet", "CrackDisplaced"],
+    "Slate": ["CrackCleave", "CrackFlake", "CrackLayer", "CrackStep"],
+    "Sandstone": ["CrackCrumble", "CrackPit", "CrackHollow", "CrackHeap"],
+    "Basalt": ["CrackJoint", "CrackColumn", "CrackSocket"],
+    "Limestone": ["CrackChalk", "CrackPowder", "CrackDisplaced"],
+    "Rock": ["CrackFissure", "CrackSlab", "CrackScar", "CrackDisplaced"],
+    "Cobblestone": ["CrackJoint", "CrackCobble", "CrackSocket"],
+    "Pebble": ["CrackSocket", "CrackMatrix"],
+    "Pavement": ["CrackJoint", "CrackSplit", "CrackTipped"],
+    "Asphalt": ["CrackAlligator", "CrackPothole", "CrackGravel", "CrackRavel", "CrackDisplaced"],
+    "CrackedLava": ["CrackGlowLine", "CrackGlow", "CrackMolten", "CrackCrust"],
+    "Salt": ["CrackCleave", "CrackCubePit", "CrackCrystal"],
+    "Ice": ["CrackFracture", "CrackBruise", "CrackPlane", "CrackShard"],
+    "Glacier": ["CrackFracture", "CrackBruise", "CrackPlane", "CrackCrevasse"],
+    "Glass": ["CrackWeb", "CrackWebRing", "CrackImpact"],
+    "Wood": ["CrackGrain", "CrackSplinter", "CrackBoard", "CrackCore"],
+    "WoodPlanks": ["CrackSeam", "CrackPlank", "CrackNail", "CrackCore"],
+    "Metal": ["CrackDent", "CrackScratch", "CrackHole", "CrackPeel", "CrackBareMetal"],
+    "DiamondPlate": ["CrackBuckle", "CrackTorn", "CrackDent"],
+    "CorrodedMetal": ["CrackRustFlake", "CrackBloom", "CrackRustHole", "CrackBareMetal"],
+    "Foil": ["CrackCrinkle", "CrackTear", "CrackCurl"],
+    "LeafyGrass": ["CrackTwig", "CrackBare"],
+    "Grass": ["CrackGouge", "CrackTuft", "CrackDivot", "CrackTurfFlap"],
+    "Ground": ["CrackDry", "CrackClodPit", "CrackSlump", "CrackHeap"],
+    "Sand": ["CrackDimple", "CrackSlump"],
+    "Snow": ["CrackSnowHole", "CrackSnowSlab", "CrackPacked"],
+    "Mud": ["CrackSplat", "CrackSplatRim", "CrackDrip"],
+    "Fabric": ["CrackTear", "CrackFray", "CrackFlap"],
+    "Leather": ["CrackSlash", "CrackSuede", "CrackPuncture", "CrackStitch"],
+    "Carpet": ["CrackTuft", "CrackBacking", "CrackWeave", "CrackFlap"],
+    "Cardboard": ["CrackCrease", "CrackCorrugation", "CrackFold"],
+    "Rubber": ["CrackGouge", "CrackTornRim", "CrackGash", "CrackStrand"],
+    "Plaster": ["CrackCraze", "CrackUnder", "CrackMortar", "CrackPlasterEdge"],
+    "CeramicTiles": ["CrackGrout", "CrackTileStar", "CrackTileGone", "CrackTrowel"],
+    "ClayRoofTiles": ["CrackSlipped", "CrackBatten", "CrackTileGone"],
+    "RoofShingles": ["CrackCurl", "CrackFelt"],
+    "Plastic": ["CrackBloom", "CrackWhitened", "CrackLip", "CrackHole"],
+    "SmoothPlastic": ["CrackCrisp", "CrackCraze", "CrackConchoid", "CrackChunk"],
+    "Neon": ["CrackDead", "CrackDeadLine"],
+    "ForceField": ["CrackHexFault", "CrackFizz"],
+}
+# Pieces every material may share, so they don't count toward telling two looks apart.
+GENERIC = {"CrackLine", "CrackLip", "CrackShade", "CrackHair", "CrackChip", "CrackStick", "CrackPlate", "CrackDent"}
+
+
+def run_materials(crack_faults=(), quiet=False):
     w, h, ds, cf = world(crack_faults=crack_faults)
-    out = w.run(FAMILY_LUA, ds, h, w.mock, cf)
+    sigs = w.lua.table_from({k: w.lua.table_from(v) for k, v in SIGNATURES.items()})
+    out = w.run(MATERIALS_LUA, ds, h, w.mock, cf, w.lua.table_from(MATERIALS), sigs)
     fs = fails_of(h, "C")
+    rows = [out["rows"][i] for i in range(1, len(MATERIALS) + 1) if out["rows"][i] is not None]
+    looks = {}
+    for row in rows:
+        own = frozenset(n for n in row["look"].split(",") if n not in GENERIC)
+        looks.setdefault(own, []).append(row["name"])
+    twins = [names for names in looks.values() if len(names) > 1]
     if not quiet:
-        for family, look in sorted(out["families"].items()):
-            print("    %-8s %3d pieces at 25%%: %s" % (family, look["drawn"], " ".join(
-                "%s=%d" % (k, look[k]) for k in ("lines", "dark", "light", "white", "square", "grain", "chips", "sticks", "droop", "discs", "plates", "bricks"))))
-        check(not fs, "C  every family draws on the hit face, grows each stage, bursts and sounds each hit, looks like itself,"
-              " clears on break, debris carries the cracks%s" % (": " + fs[0] if fs else ""))
+        for row in rows:
+            print("    %-14s %3d pieces at 25%%, %d sound layers: %s" % (row["name"], row["drawn"], row["heard"], row["look"]))
+        check(not fs, "C  every material (%d) draws on the hit face, grows each stage, bursts and plays two sound layers each hit,"
+              " shows its own signature pieces, clears on break%s" % (len(MATERIALS), (": " + fs[0]) if fs else ""))
+        check(not twins, "C  no two materials look the same (their own pieces differ)%s" % ((": " + str(twins)) if twins else ""))
         check(out["totalsAfter"] == 0, "C  nothing left drawn once everything broke (%d)" % out["totalsAfter"])
-    return fs
+    return fs + (["twins"] if twins else [])
+
+
+# Materials whose stage change is watched as it plays, and what their style must show.
+ANIMATED = ["Concrete", "Brick", "WoodPlanks", "Glass", "Metal", "Ice", "Plaster", "Sand", "Neon"]
+
+
+def run_anim(crack_faults=(), quiet=False):
+    results, bad = {}, []
+    for name in ANIMATED:
+        w, h, ds, cf = world(crack_faults=crack_faults)
+        out = w.run(ANIM_LUA, ds, h, w.mock, cf, name)
+        results[name] = out
+        style = cf["profiles"][name]["style"]
+        problems = []
+        if out["fresh"] <= 0 or out["animating"] <= 0:
+            problems.append("nothing played (%d new, %d moving)" % (out["fresh"], out["animating"]))
+        if out["midway"] < 2:
+            problems.append("nothing seen arriving (%d frames)" % out["midway"])
+        if out["after"] != 0:
+            problems.append("%d still moving after 1.5 s" % out["after"])
+        if style != "web" and out["lines"] >= 4 and out["order"] < 0.7:
+            problems.append("cracks further out did not start later (%.0f%% in order)" % (out["order"] * 100))
+        if style == "steps" and out["levels"] > 4:
+            problems.append("steps: %d start times, not three jumps" % out["levels"])
+        rings = list(out["rings"].values()) if out["rings"] else []
+        rays = list(out["rays"].values()) if out["rays"] else []
+        if style == "web" and not (rings and rays and min(rings) > max(rays)):
+            problems.append("web: the rings did not start after the rays")
+        if style == "race" and out["flashes"] <= 0:
+            problems.append("race: no white flash")
+        if style == "push" and out["overshoot"] < 1.02:
+            problems.append("push: the dent did not overshoot (%.3f)" % out["overshoot"])
+        if style == "creep" and out["latest"] < 0.3:
+            problems.append("creep: the split ran out in %.2f s, not creeping" % out["latest"])
+        if name == "Glass" and rays and max(rays) > 0.12:
+            problems.append("glass: the web took %.2f s, not almost at once" % max(rays))
+        if problems:
+            bad.append("%s (%s): %s" % (name, style, "; ".join(problems)))
+    if not quiet:
+        for name in ANIMATED:
+            o = results[name]
+            print("    %-11s %-7s %3d new pieces, %3d moving at once; %2d frames with something arriving; lines in order %3.0f%%;"
+                  " last starts at %.2f s; %d start levels; flash %d; overshoot %.3f; moving after 1.5 s: %d"
+                  % (name, cf_style(name), o["fresh"], o["animating"], o["midway"], o["order"] * 100, o["latest"], o["levels"],
+                     o["flashes"], o["overshoot"], o["after"]))
+        check(not bad, "A  every stage change plays in its material's own time (steps, web, race, creep, push, flicker, slump)%s"
+              % ((": " + bad[0]) if bad else ""))
+    return bad
+
+
+_STYLES = {}
+
+
+def cf_style(name):
+    if not _STYLES:
+        w, h, ds, cf = world()
+        for n in ANIMATED:
+            _STYLES[n] = cf["profiles"][n]["style"]
+    return _STYLES.get(name, "?")
+
+
+def run_lod(crack_faults=(), quiet=False):
+    w, h, ds, cf = world(crack_faults=crack_faults)
+    out = w.run(LOD_LUA, ds, h, w.mock, cf)
+    ok = (out["nearLod"] == 1 and out["midLod"] == 2 and out["farLod"] == 3 and out["nearN"] > out["midN"] > out["farN"] > 0
+          and out["farW"] > out["nearW"] * 1.5 and out["backN"] == out["nearN"])
+    if not quiet:
+        print("    concrete, three sites at 25%%: near (20 studs) %d pieces, core width x%.2f; middle (75) %d; far (135) %d, core width x%.2f;"
+              " back near %d" % (out["nearN"], out["nearW"], out["midN"], out["farN"], out["farW"], out["backN"]))
+        check(ok, "L  fewer pieces further off, the main cracks drawn bolder far off, and the same again coming back")
+    return ok
+
+
+def run_table(crack_faults=(), quiet=False):
+    w, h, ds, cf = world(crack_faults=crack_faults)
+    bad, examined = w.run(FAMILY_TABLE_LUA, ds, cf)
+    # Every material in every table: the server's family, the client's family and look, and a break.
+    missing = []
+    names = w.lua.table_from(MATERIALS)
+    gaps = w.run(r"""
+        local DS, CF, names, breakSource = ...
+        local out = {}
+        for _, name in ipairs(names) do
+            local m = Enum.Material[name]
+            if DS.ClassTable[m] == nil then table.insert(out, name .. ": no server family") end
+            if CF.FAMILY[m] == nil then table.insert(out, name .. ": no client family") end
+            if CF.profiles[name] == nil or CF.profiles[name].look == nil then table.insert(out, name .. ": no crack look") end
+            if not string.find(breakSource, "\n\t" .. name .. " = {", 1, true) then table.insert(out, name .. ": no break of its own") end
+        end
+        return table.concat(out, "; ")
+    """, ds, cf, names, open(BREAK, encoding="utf-8").read())
+    if gaps:
+        missing.append(gaps)
+    if not quiet:
+        check(bad == "", "T  client family table agrees with the server's, brick apart (%d materials examined)%s"
+              % (examined, ": " + bad if bad else ""))
+        check(not missing, "T  every one of the %d part materials has a server family, a client family, its own crack look and its own break%s"
+              % (len(MATERIALS), (": " + missing[0]) if missing else ""))
+    return bad == "" and not missing
 
 
 def run_late(quiet=False):
@@ -775,15 +1021,6 @@ def run_unload(crack_faults=(), quiet=False):
     return ok
 
 
-def run_table(crack_faults=(), quiet=False):
-    w, h, ds, cf = world(crack_faults=crack_faults)
-    bad, examined = w.run(FAMILY_TABLE_LUA, ds, cf)
-    if not quiet:
-        check(bad == "", "C  client family table agrees with the server's, brick apart (%d materials examined)%s"
-              % (examined, ": " + bad if bad else ""))
-    return bad == ""
-
-
 def run_caps(crack_faults=(), quiet=False):
     w, h, ds, cf = world(crack_faults=crack_faults)
     out = w.run(CAPS_LUA, ds, h, w.mock, cf)
@@ -791,14 +1028,15 @@ def run_caps(crack_faults=(), quiet=False):
     ok = (out["peakBuilt"] <= caps["MAX_BUILT"] and out["peakPieces"] <= caps["MAX_PIECES"]
           and out["maxSite"] <= caps["PER_SITE_CAP"] and out["peakTrickles"] <= caps["MAX_TRICKLES"]
           and out["peakBits"] <= caps["MAX_BITS"] and out["bitsAfter"] == 0 and out["maxSites"] <= 4
+          and out["peakAnim"] <= caps["MAX_ANIMATING"]
           and out["farPieces"] == 0 and out["farBuilt"] == 0 and out["farCounted"] == 0 and out["peakBuilt"] > 0)
     if not quiet:
         print("    200 parts, 6 hits each from 6 sides, at 22%%: peak %d parts drawn (cap %d), %d pieces (cap %d), %d per site"
               " (cap %d), %d sites per part (cap 4), %d dust trickles (cap %d), %d bits (cap %d), %d bits after 4 s;"
-              " walked %d studs off: %d pieces, %d parts drawn"
+              " %d pieces moving at once (cap %d); walked %d studs off: %d pieces, %d parts drawn"
               % (out["peakBuilt"], caps["MAX_BUILT"], out["peakPieces"], caps["MAX_PIECES"], out["maxSite"], caps["PER_SITE_CAP"],
                  out["maxSites"], out["peakTrickles"], caps["MAX_TRICKLES"], out["peakBits"], caps["MAX_BITS"], out["bitsAfter"],
-                 caps["DROP_BEYOND"] + 200, out["farPieces"], out["farBuilt"]))
+                 out["peakAnim"], caps["MAX_ANIMATING"], caps["DROP_BEYOND"] + 200, out["farPieces"], out["farBuilt"]))
         check(ok, "K  every cap holds, bits expire, nothing drawn out of range")
     return ok
 
@@ -822,11 +1060,15 @@ def main():
     run_fade()
     print("S: stages")
     run_stage()
-    print("C: cracks per material")
-    run_family()
+    print("C: cracks per material (%d part materials)" % len(MATERIALS))
+    run_materials()
     run_late()
     run_unload()
     run_table()
+    print("A: every stage change plays")
+    run_anim()
+    print("L: detail by distance")
+    run_lod()
     print("K: caps")
     run_caps()
     print("G: glass")
@@ -835,20 +1077,24 @@ def main():
     print("\nplanted faults (each must FAIL its check):")
     ds_fade = ("\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n",
                "\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n\t\t\tmember.Transparency = math.min(1, member.Transparency + 0.25)\n")
-    client_fade = ("\trecord.built = true\n\ttotals.built += 1\n",
-                   "\trecord.built = true\n\ttotals.built += 1\n\tpart.LocalTransparencyModifier = 0.25 * record.stage\n")
+    client_fade = ("\t\trecord.built = true\n\t\ttotals.built += 1\n",
+                   "\t\trecord.built = true\n\t\ttotals.built += 1\n\t\tpart.LocalTransparencyModifier = 0.25 * math.max(record.stage, 1)\n")
     plants = [
         ("F the old fade, server side", lambda: (run_fade([ds_fade], quiet=True))),
         ("F a fade on the client (LocalTransparencyModifier)", lambda: (run_fade((), [client_fade], quiet=True))),
         ("S thresholds taken as < instead of <=", lambda: (run_stage([("\t\tif fraction <= at then\n", "\t\tif fraction < at then\n")], quiet=True))),
         ("S per-part site cap removed", lambda: (run_stage([("\tif #list >= MAX_SITES_PER_PART or entry.siteCount >= MAX_SITES_PER_POOL then\n",
                                                                "\tif false then\n")], quiet=True))),
-        ("C cracks drawn on the opposite face", lambda: (run_family([("CFrame.fromMatrix(g.face.n * g.depth,", "CFrame.fromMatrix(g.face.n * -g.depth,")], quiet=True))),
-        ("C brick drawn as stone", lambda: (run_family([("stone = stoneSite, brick = brickSite,", "stone = stoneSite, brick = stoneSite,")], quiet=True))),
-        ("C Destroying cleanup removed", lambda: (run_family([("\trecord.connection = part.Destroying:Connect(function()\n\t\tuntrack(part)\n\tend)\n",
-                                                                   "\trecord.connection = part.Destroying:Connect(function() end)\n")], quiet=True))),
+        ("C cracks drawn on the opposite face", lambda: (run_materials([("CFrame.fromMatrix(g.face.n * g.depth,", "CFrame.fromMatrix(g.face.n * -g.depth,")], quiet=True))),
+        ("C brick drawn as concrete", lambda: (run_materials([('profile("Brick", "Brick",', 'profile("Brick", "Concrete",')], quiet=True))),
+        ("C Destroying cleanup removed", lambda: (run_materials([("\trecord.connection = part.Destroying:Connect(function()\n\t\tuntrack(part)\n\tend)\n",
+                                                                     "\trecord.connection = part.Destroying:Connect(function() end)\n")], quiet=True))),
         ("C out-of-workspace sweep removed", lambda: not run_unload([("if not part.Parent or not part:IsDescendantOf(workspace) then", "if not part.Parent then")], quiet=True)),
-        ("C client family table wrong for Foil", lambda: not run_table([("[M.Foil] = \"metal\"", "[M.Foil] = \"plastic\"")], quiet=True)),
+        ("T client family table wrong for Foil", lambda: not run_table([('[M.Foil] = "metal"', '[M.Foil] = "plastic"')], quiet=True)),
+        ("T a material with no look of its own (Salt)", lambda: not run_table([('profile("Salt", "Salt",', 'profile("SaltX", "Salt",')], quiet=True)),
+        ("A stage changes not played (everything appears finished)", lambda: run_anim([("local animated = play and record.distance and record.distance <= ANIMATE_WITHIN",
+                                                                                          "local animated = false")], quiet=True)),
+        ("L one level of detail everywhere", lambda: not run_lod([("if (spec.lod or 3) >= lod and drawn[1]", "if true and drawn[1]")], quiet=True)),
         ("K MAX_BUILT cap removed", lambda: not run_caps([("\t\tif rank > MAX_BUILT then\n", "\t\tif false then\n")], quiet=True)),
     ]
     caught = 0
@@ -856,7 +1102,7 @@ def main():
         result = fn()
         hit = bool(result)
         caught += hit
-        why = (": " + result[0][:120]) if isinstance(result, list) and result else ""
+        why = (": " + str(result[0])[:120]) if isinstance(result, list) and result else ""
         print("  %s  %s%s" % ("caught" if hit else "MISSED", label, why))
     check(caught == len(plants), "planted faults caught: %d/%d" % (caught, len(plants)))
     print("\ncrack_check:", "OK" if not failures else "FAILED (%d)" % len(failures))

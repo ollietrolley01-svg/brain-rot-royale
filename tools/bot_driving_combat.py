@@ -105,10 +105,9 @@ function moveBody(parts, at, velocity)
     p.AssemblyLinearVelocity = velocity
   end
 end
+-- The turret's seat (vehicle_weapons_check's makeVehicle gives every armed vehicle one).
 function gunSeat(v)
-  local seat = new("Seat", "GunnerSeat", v, { Position = v.PrimaryPart.Position + Vector3.new(0, 1, 1) })
-  seat:SetAttribute("Gunner", true)
-  return seat
+  return v:FindFirstChild("GunnerSeat")
 end
 """
 
@@ -227,7 +226,9 @@ function sameGrid()
   return worst, rows
 end
 
--- Who may fire, by seat, straight through VW.Fire.
+-- Who may fire what, by seat, straight through VW.Fire: the gunner's seat the turret, the driving seat
+-- the driver's gun (whether or not the turret is manned), a passenger nothing, a lone driver never the
+-- turret.
 function seatRules()
   WORLD = {}
   LOG = {}
@@ -242,33 +243,37 @@ function seatRules()
   driverSeat:Sit(dh); passengerSeat:Sit(rh)
   local aim = Vector3.new(500, 3, -40)
   local r = {}
-  -- The client's own rule (VehicleWeaponClient's drivenVehicle, which decides whether the gun's
-  -- controls and HUD come up) must agree with the server's at every step.
+  -- The client's own rule (VehicleWeaponClient's drivenVehicle, which decides which mount's controls
+  -- and HUD come up) must agree with the server's DrivenBy at every step, mount and all.
   r.clientAgrees = true
-  local function client(humanoid, serverSays)
+  local function client(humanoid, token)
     if CLIENT_DRIVEN then
       CLIENT_PLAYER.Character = { FindFirstChildOfClass = function() return humanoid end }
-      local says = CLIENT_DRIVEN() ~= nil
-      if says ~= serverSays then r.clientAgrees = false end
+      local _, _, clientMount = CLIENT_DRIVEN()
+      local _, _, _, _, serverMount = VW.DrivenBy(token)
+      if clientMount ~= serverMount then r.clientAgrees = false end
     end
   end
   CLOCK = CLOCK + 1
-  r.driverSolo = VW.Fire(driver, aim) == true
-  client(dh, r.driverSolo)
+  r.driverSolo = VW.Fire(driver, aim) == true and v:GetAttribute("DriverGunAmmo") ~= nil
+  r.driverNeverTurret = v:GetAttribute("WeaponAmmo") == nil
+  client(dh, driver)
   gun:Sit(gh)
   CLOCK = CLOCK + 1
-  r.gunnerFires = VW.Fire(gunner, aim) == true
-  client(gh, r.gunnerFires)
+  r.gunnerFires = VW.Fire(gunner, aim) == true and v:GetAttribute("WeaponAmmo") ~= nil
+  client(gh, gunner)
   CLOCK = CLOCK + 1
-  r.driverRefusedManned = select(2, VW.Fire(driver, aim)) == "not driving"
-  client(dh, not r.driverRefusedManned)
+  local before = v:GetAttribute("WeaponAmmo")
+  r.driverKeepsOwnGun = VW.Fire(driver, aim) == true and v:GetAttribute("WeaponAmmo") == before
+  client(dh, driver)
   CLOCK = CLOCK + 1
   r.passengerRefused = select(2, VW.Fire(rider, aim)) == "not driving"
-  client(rh, not r.passengerRefused)
+  client(rh, rider)
   gun.Occupant = nil; gh.SeatPart = nil
   CLOCK = CLOCK + 1
-  r.driverAgain = VW.Fire(driver, aim) == true
-  client(dh, r.driverAgain)
+  before = v:GetAttribute("WeaponAmmo")
+  r.driverAgain = VW.Fire(driver, aim) == true and v:GetAttribute("WeaponAmmo") == before
+  client(dh, driver)
   return r
 end
 """
@@ -285,7 +290,10 @@ def build(vw_src, data_src, bot_src, cfg_src):
         lua.execute(
             f'MOUNTS["{model}"] = {{ yaw = Vector3.new({m["yaw"][0]}, {m["yaw"][1]}, {m["yaw"][2]}), '
             f'pitch = Vector3.new({m["pitch"][0]}, {m["pitch"][1]}, {m["pitch"][2]}), '
-            f'muzzle = Vector3.new({m["muzzle"][0]}, {m["muzzle"][1]}, {m["muzzle"][2]}) }}')
+            f'muzzle = Vector3.new({m["muzzle"][0]}, {m["muzzle"][1]}, {m["muzzle"][2]}), '
+            f'dyaw = Vector3.new({m["dyaw"][0]}, {m["dyaw"][1]}, {m["dyaw"][2]}), '
+            f'dpitch = Vector3.new({m["dpitch"][0]}, {m["dpitch"][1]}, {m["dpitch"][2]}), '
+            f'dmuzzle = Vector3.new({m["dmuzzle"][0]}, {m["dmuzzle"][1]}, {m["dmuzzle"][2]}) }}')
     # Before Ballistics: its throwable specs build Color3 values at load time.
     lua.execute("Color3 = { fromRGB = function() return {} end, new = function() return {} end }")
     lua.execute("MODULES.SafeValue = (function() " + luau(read("ReplicatedStorage/Shared/SafeValue.lua")) + " end)()")
@@ -341,7 +349,9 @@ def run(vw_src, data_src, bot_src, cfg_src):
             ("mortar", "SahurVan", "grenade", 220, 0, 13), ("mortar far", "SahurVan", "grenade", 300, 0, 13)]:
         hitsNear = hitsTotal = missClear = missTotal = 0
         for seed in range(3):
-            o = G.engage(model, distance, 25 if model == "CrocodiloRanger" else 0, strafe, 20, 31 + seed)
+            # The pod's rockets off to the side (60 degrees): straight ahead over the cab it holds a 4-degree
+            # floor, which a body 70 studs out on level ground is under.
+            o = G.engage(model, distance, 60 if model == "CrocodiloRanger" else 0, strafe, 20, 31 + seed)
             for r in o.rounds.values():
                 best, landed = G.flyRound(kind, r, 0)
                 if kind == "grenade":
@@ -379,15 +389,16 @@ def run(vw_src, data_src, bot_src, cfg_src):
     if o.shots > 0:
         P.append(f"BURSTS: {o.shots} rockets fired at a target inside their own blast (10 studs)")
 
-    # ARC: the pod turns 150 degrees either way; straight behind is out of it.
-    o = G.engage("CrocodiloRanger", 70, 180, 0, 8, 9)
+    # ARC: the pod turns all the way round now, but over the cab it never tips below its front floor
+    # (4 degrees up): a target straight ahead and 10 degrees down, 25 studs out, is outside its arc.
+    o = G.engage("CrocodiloRanger", 25, 0, 0, 8, 9)
     res["arc"] = o.shots
     if o.shots > 0:
-        P.append(f"ARC: {o.shots} rockets fired at a target behind the pod, outside its arc")
+        P.append(f"ARC: {o.shots} rockets fired at a target under the pod's front floor, outside its arc")
 
     # SEATS
     seats = G.seatRules()
-    res["seats"] = {k: bool(seats[k]) for k in ("driverSolo", "gunnerFires", "driverRefusedManned", "passengerRefused", "driverAgain", "clientAgrees")}
+    res["seats"] = {k: bool(seats[k]) for k in ("driverSolo", "driverNeverTurret", "gunnerFires", "driverKeepsOwnGun", "passengerRefused", "driverAgain", "clientAgrees")}
     for key, ok in res["seats"].items():
         if not ok:
             P.append(f"SEATS: {key} failed")
@@ -402,7 +413,7 @@ CLIENT_SOURCE = [None]  # a planted copy of the client, while a plant runs
 def client_rule(src):
     # gunnerSeatOf and drivenVehicle, as the client has them, over a mock player.
     a = src.index("local function gunnerSeatOf(vehicle)")
-    b = src.index("-- What's under the middle of the view")
+    b = src.index("-- What's under the aim point on the screen")
     return ("CLIENT_PLAYER = {}\nlocal player = CLIENT_PLAYER\nlocal VehicleWeaponData = MODULES.VehicleWeaponData\n"
             + luau(src[a:b]) + "\nCLIENT_DRIVEN = drivenVehicle\n")
 VW = "ServerScriptService/Modules/VehicleWeapons.lua"
@@ -417,12 +428,13 @@ PLANTS = [
     ("the belt fired dry", BOT, "\tif ammo < 1 or (spec.magazine >= 10 and ammo < spec.magazine * 0.15) then", "\tif ammo < 0 then"),
     ("no rest between bursts", BOT, "ride.nextShotAt = now + (rounds and 1.0 + math.random() * 0.8 or MatchConfig.BotBurstRest + math.random() * 0.35)",
      "ride.nextShotAt = now"),
-    ("the arc ignored", BOT, "\tif not VehicleWeapons.InArc(vehicle, targetRoot.Position) then\n\t\treturn\n\tend\n", ""),
+    ("the arc ignored", BOT, "\tif not VehicleWeapons.InArc(vehicle, targetRoot.Position, mount) then\n\t\treturn\n\tend\n", ""),
     ("the gun seat ignored", VW, 'if child:IsA("Seat") and (child.Name == "GunnerSeat" or child:GetAttribute("Gunner") == true) then',
      "if false then"),
-    ("the client keeps the driver off an unmanned gun", CLIENT, "if not seat:IsA(\"VehicleSeat\") or (gunner ~= nil and gunner.Occupant ~= nil) then",
-     "if not seat:IsA(\"VehicleSeat\") or gunner ~= nil then"),
-    ("a solo driver cannot fire", VW, "local manned = gunner ~= nil and gunner.Occupant ~= nil", "local manned = gunner ~= nil"),
+    ("the client gives a lone driver the turret", CLIENT, "\tif seat == gunnerSeatOf(vehicle) then",
+     "\tif seat == gunnerSeatOf(vehicle) or seat:IsA(\"VehicleSeat\") then"),
+    ("a lone driver works the turret", VW, "if seat == VehicleWeapons.GunnerSeatOf(vehicle) then",
+     "if seat == VehicleWeapons.GunnerSeatOf(vehicle) or seat:IsA(\"VehicleSeat\") then"),
 ]
 
 
@@ -444,7 +456,7 @@ def main():
     print(f"ROUNDS mortar at 60 studs (inside its reach): {res['rounds']['mortar too near']} shots")
     shots, rests, fast, dry, min_ammo = res["bursts"]
     print(f"BURSTS: {shots} shots in 30 s, {rests} rests, {fast} back-to-back, {dry} dry pulls, belt low point {min_ammo:.1f}")
-    print(f"ARC: {res['arc']} shots at a target behind the rocket pod")
+    print(f"ARC: {res['arc']} shots at a target under the rocket pod's front floor")
     print(f"SEATS: {res['seats']}")
     for p in res["problems"]:
         print("PROBLEM", p)

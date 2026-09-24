@@ -13,6 +13,10 @@
 --   VehicleService.SeatsOf(model)                                  { driver, gunner, passengers }
 --   VehicleService.BotSit(humanoid, seat)                          sit a bot, with a player's checks
 --   VehicleService.BotYield                                        set by BotService (TAKING OVER below)
+--   VehicleService.DamageVehicle(attacker, model, amount, class, weaponId, position) -> dealt, wrecked
+--   VehicleService.BlastDamage(blast)                              every vehicle a blast reaches (ProjectileService)
+--   VehicleService.ShieldingVehicle(token)                         the armoured car round `token`, or nil
+--   VehicleService.CabinShield(character)                          the share of a blast that reaches them
 --
 -- Bodies come from Shared/VehicleModels and handling from Shared/VehicleDynamics; this file owns
 -- everything around them: seats and prompts, who simulates the physics, keeping drivers honest,
@@ -61,6 +65,10 @@ local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local RateLimit = require(script.Parent:WaitForChild("RateLimit"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local Ballistics = require(Shared:WaitForChild("Ballistics"))
+local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local VehicleArmor = require(Shared:WaitForChild("VehicleArmor"))
+local RoadkillPass = require(Shared:WaitForChild("RoadkillPass"))
 
 local VehicleService = {}
 
@@ -100,13 +108,21 @@ local BLAST_HOLD = 0.6
 -- StartHealth 100 + MaxShield 100 = 200 effective HP): at BaseWalkSpeed (18 studs/s) a graze deals
 -- (18-12)*1.8 = 10.8, nowhere near lethal; at the fastest bike's top speed (114) a single hit deals
 -- (114-12)*1.8 = 183.6, short of 200 -- a fully-armoured player can survive even the worst hit.
-local MAX_HEALTH_CAR = 300
-local MAX_HEALTH_BIKE = 150
+-- (Health itself is VehicleArmor's now: a car 1,400-1,650, a bike 600-660, the armoured cars 3,100 and
+-- 3,330, set against what shoots at them. Crash damage below keeps the share of health it was set
+-- against at 300 / 150: VehicleArmor.CollisionScale.)
 local COLLISION_FLOOR = 18        -- studs/s lost in one physics step before it counts as an impact
 local COLLISION_DAMAGE_PER = 1.5  -- damage per stud/s of speed lost past the floor
 local ROADKILL_FLOOR = 12         -- studs/s; at or under this, no damage is even considered
 local ROADKILL_DAMAGE_PER = 1.8   -- damage per stud/s of speed over the floor
 local ROADKILL_DEBOUNCE = 0.5     -- seconds, per victim
+-- Momentum through a roadkill (RoadkillPass): after a hit the vehicle's change of speed is the
+-- momentum rule's toll, never a crash, for this long; and a driver's report of a hit is believed
+-- only for a body the server has within this reach of the hull, plus this many seconds of travel
+-- (the two clients' views of each other are that far apart).
+local ROADKILL_GRACE = 0.4
+local ROADKILL_REACH = 10
+local ROADKILL_LAG = 0.3
 -- The client HUD warning threshold (share of MaxHealth) lives in VehicleDynamics.LOW_HEALTH_SHARE,
 -- not here: nothing on the server thresholds against it, and a bug-hunt finding (2026-09-21) was
 -- exactly this shape elsewhere -- two copies of one number drift, one source doesn't.
@@ -701,8 +717,12 @@ local function checkCollisionDamage(entry, flatSpeed, now, dt)
 	local brake = entry.rig.handling and entry.rig.handling.brake or 0
 	local floor = COLLISION_FLOOR + brake * stale
 	local drop = last - flatSpeed
+	if entry.roadkillGraceUntil and now < entry.roadkillGraceUntil then
+		-- A body went through at speed (roadkill): the momentum rule's toll, never a crash.
+		return
+	end
 	if drop > floor then
-		damageVehicle(entry, (drop - floor) * COLLISION_DAMAGE_PER)
+		damageVehicle(entry, (drop - floor) * COLLISION_DAMAGE_PER * (entry.collisionScale or 1))
 	end
 end
 
@@ -728,8 +748,31 @@ local function roadkillDriverToken(entry)
 	return (character and Combatants.FromCharacter(character)) or entry.driverPlayer
 end
 
-local function onChassisTouched(entry, hit)
-	local character = hit.Parent
+local hullDistance -- the weapons section's (below)
+
+-- The throw (MovementService.Launch, a player's own client applies it), required when first needed.
+local movementService = nil
+local function launch(character, velocity)
+	if movementService == nil then
+		local ok, module = pcall(function()
+			return require(script.Parent:WaitForChild("MovementService"))
+		end)
+		movementService = ok and module or false
+	end
+	if movementService then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid and not Players:GetPlayerFromCharacter(character) then
+			-- A bot's humanoid stands straight back up and walks off a launch (measured: thrown at 30, it
+			-- moved 0.2 studs): knocked down first, it flies. A player's own client does this for "blast".
+			humanoid:ChangeState(Enum.HumanoidStateType.FallingDown)
+		end
+		movementService.Launch(character, velocity, "blast")
+	end
+end
+
+-- A hit at `speed` (flat studs/s) by a vehicle doing `velocity`: from its chassis touching someone,
+-- from RoadkillPass on a vehicle the server simulates, or from the driver's own client (reported).
+local function roadkill(entry, character, speed, velocity)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then
 		return
@@ -739,8 +782,7 @@ local function onChassisTouched(entry, hit)
 			return
 		end
 	end
-	local chassis = entry.rig.chassis
-	local flat = Vector3.new(chassis.AssemblyLinearVelocity.X, 0, chassis.AssemblyLinearVelocity.Z).Magnitude
+	local flat = speed
 	if flat <= ROADKILL_FLOOR then
 		return
 	end
@@ -766,7 +808,215 @@ local function onChassisTouched(entry, hit)
 	if driverToken == victimToken then
 		return
 	end
+	-- (VehicleService.RoadkillPass = false is tools/roadkill_momentum_probe.lua's "before" switch: the
+	-- old behaviour, with no pass, no throw and no grace. Nothing in the game sets it.)
+	local momentum = VehicleService.RoadkillPass ~= false
+	local throw = nil
+	if momentum then
+		-- Whatever the body did to the vehicle's speed is the momentum rule's, not a crash.
+		entry.roadkillGraceUntil = now + ROADKILL_GRACE
+		-- Thrown along the direction of travel (and off to the side it stood on), not ploughed along: a
+		-- survivor by the launch, a body by its ragdoll (DeathFxService.OnDeath reads RoadkillThrow).
+		local root = character:FindFirstChild("HumanoidRootPart")
+		throw = RoadkillPass.Throw(velocity, root and (root.Position - entry.rig.chassis.Position) or nil)
+		character:SetAttribute("RoadkillThrow", throw)
+	end
 	CombatService.DealDamage(driverToken, victimToken, (flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER, "Roadkill", false)
+	if throw and humanoid.Health > 0 then
+		character:SetAttribute("RoadkillThrow", nil)
+		launch(character, throw)
+	elseif throw then
+		task.delay(2, function()
+			if character.Parent then
+				character:SetAttribute("RoadkillThrow", nil)
+			end
+		end)
+	end
+	-- Let the body through here as well: the server's constraints reach every machine, the victim's too.
+	if momentum and entry.roadkillPass then
+		entry.roadkillPass:Pass(character, now)
+	end
+end
+
+local function onChassisTouched(entry, hit)
+	local character = hit.Parent
+	local velocity = entry.rig.chassis.AssemblyLinearVelocity
+	roadkill(entry, character, Vector3.new(velocity.X, 0, velocity.Z).Magnitude, velocity)
+end
+
+-- A driver's client went through someone (RoadkillPass on the machine that simulates the car). Only
+-- the car's own driver, while their client simulates it, for a body the server has beside its hull;
+-- and the speed judged is the least of what the client says and what the server saw it doing.
+local function onRoadkillReport(player, model, character, speed)
+	local entry = typeof(model) == "Instance" and byModel[model] or nil
+	if not entry or entry.wrecked or entry.owner ~= player then
+		return
+	end
+	local driver = entry.seat.Occupant
+	if not driver or driver.Parent ~= player.Character then
+		return
+	end
+	if typeof(character) ~= "Instance" or not character:IsA("Model") or not SafeValue.Number(speed, 1000) then
+		return
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+	local velocity = entry.rig.chassis.AssemblyLinearVelocity
+	local seen = math.max(Vector3.new(velocity.X, 0, velocity.Z).Magnitude, entry.lastFlatSpeed or 0)
+	if hullDistance(entry, root.Position) > ROADKILL_REACH + seen * ROADKILL_LAG then
+		return
+	end
+	roadkill(entry, character, math.min(speed, seen * 1.15 + 4), velocity)
+end
+
+--------------------------------------------------------------------------------
+-- Weapons against vehicles (Oliver 09-24: "a balanced health pool that doesn't make them glass cannons
+-- but doesn't make them juggernauts either"; the numbers and why are VehicleArmor's)
+--------------------------------------------------------------------------------
+-- Until this, a bullet stopped on a vehicle as on a wall and a blast only shoved it: nothing but a
+-- crash ever took its health. Now a hit is handed here -- by CombatService's bullet (its hook
+-- DamageVehicle, with VehicleFromPart saying what was struck), a mounted gun's bullet (VehicleWeapons)
+-- and every blast (ProjectileService, BlastDamage) -- and becomes:
+--   amount x MatchConfig.CombatDamageScale (as any hit on a combatant) x VehicleArmor.Scale(model, class)
+-- where the class is "bullet", "heavy" (a heavy machine gun) or "explosive" (any blast).
+-- The friendly-fire rule follows whoever is inside: a vehicle carrying someone the attacker may not
+-- hurt, and nobody they may, is refused (the team veto and spawn protection, CombatService.DamageVeto,
+-- asked of each rider). An empty vehicle is anyone's to shoot at.
+
+local function ridersOf(entry)
+	local list = {}
+	for _, humanoid in pairs(entry.occupants) do
+		local character = humanoid and humanoid.Parent
+		local token = character and Combatants.FromCharacter(character)
+		if token then
+			table.insert(list, token)
+		end
+	end
+	return list
+end
+
+local function vetoed(entry, attacker)
+	if attacker == nil or not CombatService.DamageVeto then
+		return false
+	end
+	local list = ridersOf(entry)
+	if #list == 0 then
+		return false
+	end
+	for _, token in ipairs(list) do
+		if token == attacker or not CombatService.DamageVeto(attacker, token, nil) then
+			return false
+		end
+	end
+	return true
+end
+
+-- Hurts a vehicle this service made; returns what it took and whether that wrecked it. The attacker
+-- gets the hit marker (kind "vehicle": the HUD shows it apart from a hit on a person).
+function VehicleService.DamageVehicle(attacker, model, amount, class, weaponId, position)
+	local entry = byModel[model]
+	if not entry or entry.wrecked or type(amount) ~= "number" or amount <= 0 or amount ~= amount then
+		return 0, false
+	end
+	if vetoed(entry, attacker) then
+		return 0, false
+	end
+	local scaled = amount * VehicleArmor.Scale(model:GetAttribute("VehicleModel"), class or "bullet")
+	if attacker ~= nil then
+		scaled *= MatchConfig.CombatDamageScale or 1
+	end
+	local before = entry.health
+	damageVehicle(entry, scaled)
+	local dealt = math.floor(before - entry.health + 0.5)
+	if attacker ~= nil then
+		entry.lastAttacker = { token = attacker, weaponId = weaponId, at = tick() }
+		CombatService.ConfirmHit(attacker, dealt, entry.wrecked, position or entry.rig.chassis.Position, "vehicle")
+	end
+	return dealt, entry.wrecked
+end
+
+-- The distance from `point` to the nearest of a vehicle's colliders (the Chassis and its Hull_*
+-- boxes): what a blast's falloff is measured to, so a rocket bursting on a van's flank is a full hit
+-- whatever the distance to its middle.
+function hullDistance(entry, point)
+	local best = math.huge
+	local function test(part)
+		local here = part.CFrame:PointToObjectSpace(point)
+		local half = part.Size / 2
+		local outside = Vector3.new(math.max(0, math.abs(here.X) - half.X), math.max(0, math.abs(here.Y) - half.Y),
+			math.max(0, math.abs(here.Z) - half.Z))
+		best = math.min(best, outside.Magnitude)
+	end
+	test(entry.rig.chassis)
+	for _, hull in ipairs(entry.info.hulls or {}) do
+		if hull.Parent then
+			test(hull)
+		end
+	end
+	return best
+end
+
+-- A blast (ProjectileService's `blast`: owner, weaponId, position, normal, damage, radius,
+-- innerRadius, directVehicle, directBonus): every vehicle it reaches takes its explosive share, by the
+-- blasts' own falloff (Ballistics.BlastScale) measured to the vehicle's hull; the one it struck takes
+-- the round's impact bonus on top.
+function VehicleService.BlastDamage(blast)
+	if type(blast) ~= "table" or not SafeValue.Vector3(blast.position) or not SafeValue.Number(blast.radius, 1000) then
+		return
+	end
+	local centre = blast.position + (blast.normal or Vector3.zero) * 0.3
+	for _, entry in ipairs(active) do
+		local chassis = entry.rig and entry.rig.chassis
+		if chassis and chassis.Parent and not entry.wrecked then
+			local distance = hullDistance(entry, centre)
+			local scale = Ballistics.BlastScale(distance, blast.innerRadius or 0, blast.radius)
+			if scale > 0 then
+				local amount = (blast.damage or 0) * scale
+				if blast.directVehicle == entry.model then
+					amount += blast.directBonus or 0
+				end
+				local owner = blast.owner
+				-- Your own blast hurts your own vehicle at the launchers' half strength, as it hurts you.
+				if owner ~= nil and ridersOf(entry)[1] ~= nil then
+					for _, token in ipairs(ridersOf(entry)) do
+						if token == owner then
+							amount *= 0.5
+							break
+						end
+					end
+				end
+				VehicleService.DamageVehicle(owner, entry.model, amount, "explosive", blast.weaponId, centre)
+			end
+		end
+	end
+end
+
+-- The armoured car `token` sits inside (behind its armour, VehicleArmor.Protects), or nil: a bot's
+-- rolled shot at them hits the car instead (BotService), as a player's traced one does.
+function VehicleService.ShieldingVehicle(token)
+	local character = Combatants.GetCharacter(token)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	local model = seat and seat.Parent
+	local entry = model and byModel[model]
+	if entry and not entry.wrecked and VehicleArmor.Protects(model:GetAttribute("VehicleModel"), seat.Name) then
+		return model
+	end
+	return nil
+end
+
+-- The share of a blast that reaches `character`: VehicleArmor.CabinBlast inside an armoured cabin,
+-- all of it anywhere else (a car's cabin, a gunner's hatch, the open).
+function VehicleService.CabinShield(character)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	local model = seat and seat.Parent
+	if model and byModel[model] and VehicleArmor.Protects(model:GetAttribute("VehicleModel"), seat.Name) then
+		return VehicleArmor.CabinBlast
+	end
+	return 1
 end
 
 --------------------------------------------------------------------------------
@@ -792,7 +1042,8 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 			model:SetAttribute("StepModule", entryKind.spec.stepModule)
 		end
 	else
-		local modelId = VehicleModels.Pick(kind == "bike" and "bike" or "car", rng)
+		-- A drivable one can be an armoured car (rare: VehicleModels' weights); a parked prop never is.
+		local modelId = VehicleModels.Pick(kind == "bike" and "bike" or "car", rng, { drivable = true })
 		if type(options) == "table" and VehicleModels.Models[options.model] then
 			modelId = options.model
 		end
@@ -800,7 +1051,8 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	end
 	local chassis = info.chassis
 	local isBike = info.kind == "bike"
-	local maxHealth = isBike and MAX_HEALTH_BIKE or MAX_HEALTH_CAR
+	local modelId = model:GetAttribute("VehicleModel")
+	local maxHealth = VehicleArmor.HealthOf(modelId, info.kind)
 	model:SetAttribute("VehicleMaxHealth", maxHealth)
 	model:SetAttribute("VehicleHealth", maxHealth)
 
@@ -913,6 +1165,7 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		-- humanoid.Destroying, the same lifecycle hook DestructibleService uses for its part table.
 		maxHealth = maxHealth,
 		health = maxHealth,
+		collisionScale = VehicleArmor.CollisionScale(modelId, info.kind),
 		wrecked = false,
 		lastFlatSpeed = nil,
 		roadkillCooldown = {},
@@ -920,6 +1173,11 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	entry.groundParams = RaycastParams.new()
 	entry.groundParams.FilterType = Enum.RaycastFilterType.Exclude
 	entry.groundParams.FilterDescendantsInstances = { model }
+	-- Through a body at speed with the vehicle's momentum (RoadkillPass): run here while the server
+	-- simulates it, on the driver's client while theirs does.
+	entry.roadkillPass = RoadkillPass.new(model, chassis, function(character, speed, velocity)
+		roadkill(entry, character, speed, velocity)
+	end)
 	table.insert(active, entry)
 	byModel[model] = entry
 
@@ -1067,6 +1325,9 @@ local function step(entry, dt, now)
 		return
 	end
 	entry.idled = false
+	if VehicleService.RoadkillPass ~= false and entry.roadkillPass then
+		entry.roadkillPass:Sweep(dt, now)
+	end
 
 	-- A registered kind with its own step runs here instead of the dynamics, in this same loop. It
 	-- is wrapped, because a hook that raises would otherwise take every vehicle behind it in the
@@ -1132,6 +1393,13 @@ function VehicleService.Start()
 		return
 	end
 	started = true
+	-- A bullet that strikes a vehicle (CombatService's firePellet, VehicleWeapons' traceBullet) asks
+	-- which vehicle it was and hands the hit here. Set as hooks: CombatService can't require this module.
+	CombatService.VehicleFromPart = function(part)
+		local model = part and part:FindFirstAncestorOfClass("Model")
+		return (model and byModel[model]) and model or nil
+	end
+	CombatService.DamageVehicle = VehicleService.DamageVehicle
 	-- A new character is never seated, so whatever an old one left on the player is stale.
 	local function watchPlayer(player)
 		player.CharacterAdded:Connect(function()
@@ -1148,6 +1416,12 @@ function VehicleService.Start()
 	-- (20) is well clear of both, so anything that arrives here is either a bug this harness missed
 	-- or the one thing it structurally cannot see, a network ownership handoff (ServerControl marks
 	-- exactly that). Counted, not just printed, so "how often" is answerable at a glance.
+	Remotes.Event("VehicleRoadkill").OnServerEvent:Connect(function(player, model, character, speed)
+		if not RateLimit.Take(player, "VehicleRoadkill") then
+			return
+		end
+		onRoadkillReport(player, model, character, speed)
+	end)
 	Remotes.Event("VehicleJolt").OnServerEvent:Connect(function(player, jump, speed, serverControl)
 		if not RateLimit.Take(player, "VehicleJolt") then
 			return
