@@ -229,6 +229,30 @@ WeaponData.Weapons = {
 	},
 
 	-- Rare --------------------------------------------------------------------
+	ZanzarinoPikpik = {
+		name = "Zanzarino Pikpik",
+		rarity = "Rare",
+		style = "pistol",
+		description = "A mosquito of a pistol, wings and all. Its darts nose toward whoever's nearly in line, and the bite itches.",
+		-- A new gun (the gun rework): fires darts (Ballistics "mosquitoDart"), fast, with a gentle homing that
+		-- forgives a near miss (6 degrees at most over the flight). A dart that lands itches: 6 more over two
+		-- seconds (StatusEffects' bleed, refreshed rather than stacked). 22 x 4.2 = 92 body DPS, plus the itch
+		-- (3 a second at most): inside a pistol's band, a Rare's price for being hard to miss with.
+		damage = 22,
+		headshotMultiplier = 1.6,
+		fireRate = 4.2,
+		magSize = 12,
+		reserveAmmo = 72,
+		reloadTime = 1.4,
+		range = 270,
+		spread = 1.0,
+		pellets = 1,
+		projectile = "mosquitoDart",
+		bleed = { damage = 6, duration = 2 },
+		groundWeight = 0,
+		chestWeight = 5,
+		killEffect = "confetti",
+	},
 	BananiniBurst = {
 		name = "Bananini Burst",
 		rarity = "Rare",
@@ -343,6 +367,32 @@ WeaponData.Weapons = {
 	},
 
 	-- Epic --------------------------------------------------------------------
+	TamburoTungTung = {
+		name = "Tamburo Tung Tung",
+		rarity = "Epic",
+		style = "launcher",
+		description = "A marching drum on a launcher. Each shot lobs three little drums that bounce and go off: tung, tung, TUNG.",
+		-- A new gun (the gun rework): each shot throws three drumlets (Ballistics "drumlet") in a fan. They bounce
+		-- and burst on their third contact, on anyone they touch, or 1.6 s out. Small blasts: 26 each over 7
+		-- studs, so all three landing on one person is 78 (90 with the direct bonuses), never a kill on a fresh
+		-- player. 78 x 1.0 = 78 DPS on paper, inside the Epic launchers' band (61-81).
+		damage = 26,
+		headshotMultiplier = 1,
+		fireRate = 1.0,
+		magSize = 4,
+		reserveAmmo = 16,
+		reloadTime = 3.2,
+		range = 300,
+		spread = 5,
+		pellets = 3,
+		pattern = "fan",
+		ability = "explosive",
+		splashRadius = 7,
+		projectile = "drumlet",
+		groundWeight = 0,
+		chestWeight = 2,
+		killEffect = "confetti",
+	},
 	CappuccinaLauncher = {
 		name = "Cappuccina Launcher",
 		rarity = "Epic",
@@ -450,6 +500,30 @@ WeaponData.Weapons = {
 	},
 
 	-- Legendary ---------------------------------------------------------------
+	Bananerang = {
+		name = "Bananerang",
+		rarity = "Legendary",
+		style = "crossbow",
+		description = "A crossbow with banana limbs that throws a banana boomerang. It cuts through everyone on the way out, and again on the way back.",
+		-- A new gun (the gun rework): throws a boomerang (Ballistics "bananerang") that reaches 55 studs, hangs,
+		-- and comes back along the same slight curve to where it was thrown. It passes through people, cutting
+		-- each one once out and once back (45 each, never a headshot), so a single throw can't take more than
+		-- 90 from anyone and never kills a fresh player. 45 x 1.2 = 54 DPS on paper, 108 when both passes land:
+		-- between the railgun and the cannons, where the Legendaries sit.
+		damage = 45,
+		headshotMultiplier = 1,
+		fireRate = 1.2,
+		magSize = 4,
+		reserveAmmo = 24,
+		reloadTime = 2.4,
+		range = 55,
+		spread = 0.4,
+		pellets = 1,
+		projectile = "bananerang",
+		groundWeight = 0,
+		chestWeight = 0.65,
+		killEffect = "float",
+	},
 	NonnaDoubleBarrel = {
 		name = "Nonna Double Barrel",
 		rarity = "Legendary",

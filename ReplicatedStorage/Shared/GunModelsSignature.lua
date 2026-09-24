@@ -2753,4 +2753,262 @@ Builders.FinalNotice = function(g, K)
 	return receiver
 end
 
+--------------------------------------------------------------------------------
+-- New guns (the gun rework): Zanzarino Pikpik, Tamburo Tung Tung, Bananerang
+--------------------------------------------------------------------------------
+
+-- The rounds they fire, as they look in flight (ThrowableModels.RoundBuilders). Optional, like this module.
+pcall(function()
+	local roundsModule = game:GetService("ReplicatedStorage"):WaitForChild("Shared"):FindFirstChild("GunModelsRounds")
+	if roundsModule then
+		require(roundsModule)
+	end
+end)
+
+-- Rare: Zanzarino Pikpik -- a mosquito of a pistol. A tiger mosquito's black and white: the slide is its
+-- thorax with a white line down the back and two red compound eyes at the nose, glassy wings swept back off
+-- its shoulders, the needle of its proboscis for a barrel, six thin legs folded under the dust cover, the
+-- grip its striped abdomen, and a drop of blood under the magazine. It fires darts that nose toward whoever
+-- is nearly in line (Ballistics "mosquitoDart"), and the bite itches (WeaponData `bleed`).
+Builders.ZanzarinoPikpik = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local black = skin(g, look(K, 40, 40, 46))
+	local blackSoft = look(K, 58, 58, 64)
+	local white = look(K, 238, 238, 232)
+	local eye = K.finishOf(rgb(150, 24, 34), K.Mat.SmoothPlastic, 0.2)
+	local wing = glass(K, 200, 224, 244, 0.55)
+	local vein = look(K, 80, 90, 104)
+	local needle = metal(K, 96, 98, 106, 0.1)
+	local blood = K.finishOf(rgb(200, 26, 40), K.Mat.Glass, 0.2, 0.15)
+
+	local receiver = pistolChassis(g, K, {
+		frame = black,
+		slide = black,
+		small = blackSoft,
+		guard = black,
+		trigger = look(K, 200, 40, 50),
+		casing = "none",
+		muzzleZ = -175,
+		slideBody = function(g, front, back)
+			local body = g:prism("Slide", V(25.5, 22, back - front - 28), CF(0, 1, (front + back) / 2 + 14), 3, black, "top")
+			-- The head, rounded, with its eyes.
+			g:rounded("SlideNose", V(25.5, 22, 28), CF(0, 1, front + 14), 9, black)
+			for _, sx in ipairs(SIGNS) do
+				g:ball("Eye", 13, CF(sx * 11.5, 5, front + 13), eye)
+			end
+			-- The proboscis, on the bore: the needle and the two palps beside its root.
+			g:cyl("Proboscis", 64, 4.5, CF(0, 0, front - 32), needle)
+			for _, sx in ipairs(SIGNS) do
+				g:cyl("Palp", 24, 3, CF(sx * 3.4, -1, front - 12), blackSoft)
+			end
+			-- The white line down the back, and the thorax's white bands.
+			g:box("SlideLine", V(3, FINE * 2, 100), CF(0, 12 + FINE, -30), white)
+			g:detail(function()
+				for _, z in ipairs({ -56, -26 }) do
+					g:prism("SlideBand", V(25.5 + FINE * 2, 22 + FINE * 2, 4), CF(0, 1, z), 3, white, "top")
+				end
+				for index = 0, 5 do
+					g:box("SlideSerration", V(25.5 + FINE * 2, 12, 2), CF(0, -1, back - 8 - index * 4.5), blackSoft)
+				end
+			end)
+			-- The wings: glassy blades from the shoulders, swept back and out and tipped up (a dihedral, so
+			-- they read from the side too), a dark vein down each; the smaller hind pair behind them.
+			for _, sx in ipairs(SIGNS) do
+				for _, spec in ipairs({ { V(sx * 11, 11, -40), V(sx * 50, 24, 6), 24 }, { V(sx * 10, 11, -14), V(sx * 36, 19, 18), 14 } }) do
+					local root, tip, width = spec[1], spec[2], spec[3]
+					local frame = along((root + tip) / 2, tip - root) * A(0, 0, sx * 28)
+					local length = (tip - root).Magnitude
+					g:box("Wing", V(width, 1.2, length), frame, wing)
+					g:box("WingVein", V(1.6, 0.8, length - 4), frame * CF(-sx * width * 0.15, 1, 0), vein)
+				end
+			end
+			return body
+		end,
+		gripDress = function(g, length)
+			-- The abdomen: white bands across both flanks, FINE-thin on the surface.
+			for _, sx in ipairs(SIGNS) do
+				for index = 0, 3 do
+					g:box("GripStripe", V(FINE * 2, 7, 38), CF(sx * 12.6, -16 - index * 21, -1), white)
+				end
+			end
+		end,
+		mag = function(g, length)
+			g:box("Magazine", V(19, length - 4, 32), CF(0, -length / 2 - 4, 2), blackSoft)
+			g:prism("MagazinePlate", V(25, 7, 42), CF(0, -length - 3.5, 2), 2, black, "bottom")
+			-- Today's catch, hanging under the plate.
+			g:ball("BloodDrop", 14, CF(0, -length - 11, 6), blood)
+		end,
+		under = function(g, front)
+			-- Six legs folded under the dust cover: a thigh out and a shin down on each side, three pairs.
+			for _, z in ipairs({ -96, -80, -64 }) do
+				for _, sx in ipairs(SIGNS) do
+					local root, knee, foot = V(sx * 8, -21, z), V(sx * 22, -27, z - 6), V(sx * 26, -44, z - 14)
+					strut(g, K, "Leg", root, knee, 3, blackSoft)
+					strut(g, K, "Leg", knee, foot, 2.4, blackSoft)
+					g:ball("LegKnee", 3.4, CF(knee), black)
+				end
+			end
+		end,
+	})
+	g.model:SetAttribute("Flair", "buzz")
+	g.model:SetAttribute("ShotCue", "GunshotPikpik")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Epic: Tamburo Tung Tung -- the marching drum
+--------------------------------------------------------------------------------
+
+-- The six-shot revolving launcher turned out for the parade: its drum IS a marching drum -- a red shell
+-- round the six tubes with a white band, brass hoops at both heads and brass tension rods between them,
+-- the heads showing white inside the hoops -- the barrel in band navy with brass rings, a brass bell for a
+-- muzzle, and two drumsticks (little bats) strapped crossed on the stock. It lobs three drumlets a shot
+-- (Ballistics "drumlet") that bounce and go off.
+Builders.TamburoTungTung = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local red = skin(g, look(K, 190, 34, 46))
+	local navy = look(K, 36, 48, 104)
+	local white = look(K, 246, 240, 226)
+	local brass = metal(K, 214, 170, 78, 0.12)
+	local stick = wood(K, 214, 176, 120)
+	local grip = wood(K, 98, 60, 36)
+
+	local receiver = stock(g, K, { sixShot = true })
+	paint(g, {
+		{ "^DrumPlate", white }, { "^DrumTube", navy }, { "^DrumAxle", brass }, { "^RoundNose", red }, { "^Crane", brass },
+		{ "^Receiver", red }, { "^Frame", red }, { "^TopStrap", brass }, { "^Barrel$", navy }, { "^BarrelRib", brass },
+		{ "^Stock", navy }, { "^Grip", grip }, { "^ForeGrip", grip }, { "^TriggerGuard", brass },
+	})
+
+	-- The drum, turning with the stock drum (its group) about the same axle.
+	local axis = CF(0, -52, -145)
+	g:group("drum", function()
+		g:cyl("DrumShell", 244, 155, axis, red)
+		g:detail(function()
+			g:cyl("DrumShellBand", 16, 156.4, axis, white)
+		end)
+		for _, z in ipairs({ -16, -276 }) do
+			g:shell("DrumHoop", 10, 156, 6, CF(0, -52, z), brass)
+		end
+		for index = 0, 5 do
+			local angle = math.rad(30 + index * 60)
+			local sx, cy = math.sin(angle), math.cos(angle)
+			g:cyl("DrumRod", 250, 4, CF(sx * 80, -52 + cy * 80, -146), brass)
+			g:box("DrumLug", V(8, 8, 22), CF(sx * 77.5, -52 + cy * 77.5, -146) * A(0, 0, -math.deg(angle)), brass)
+		end
+	end)
+
+	-- The bell: three brass steps opening out past the barrel, the dark mouth in the last.
+	g:cyl("Bell", 14, 64, CF(0, 0, -607), brass)
+	g:cyl("Bell", 12, 80, CF(0, 0, -620), brass)
+	g:cyl("Bell", 10, 96, CF(0, 0, -631), brass)
+	g:cyl("BellMouth", FINE, 88, CF(0, 0, -636 - FINE / 2), F.bore)
+	g:key("Muzzle", CF(0, 0, -640))
+
+	-- The drumsticks, crossed on the stock's right side under a leather strap.
+	for _, pair in ipairs({ { V(24.5, -22, 168), V(24.5, -62, 296) }, { V(24.5, -62, 168), V(24.5, -22, 296) } }) do
+		rod(g, K, "Drumstick", pair[1], pair[2], 9, stick)
+		g:ball("DrumstickTip", 13, CF(pair[2]), stick)
+	end
+	g:box("DrumstickStrap", V(8, 52, 12), CF(26, -42, 232), F.leather)
+
+	g.model:SetAttribute("Flair", "drumroll")
+	g.model:SetAttribute("ShotCue", "GunshotTamburo")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Legendary: Bananerang -- the banana crossbow
+--------------------------------------------------------------------------------
+
+-- A crossbow gone bananas: each limb is a curved banana with its brown tip at the cam and its stalk at the
+-- riser (the riser is the brown crown of the bunch), the receiver ripe yellow, the rail stalk-green, the
+-- stock the pale flesh with the peel hanging down in strips either side. What sits on the rail is not a
+-- bolt but a banana boomerang (Ballistics "bananerang"): thrown out, it comes back.
+Builders.Bananerang = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local yellow = skin(g, look(K, 250, 214, 60))
+	local ripe = look(K, 236, 190, 40)
+	local flesh = look(K, 250, 240, 200)
+	local stalk = look(K, 120, 146, 60)
+	local brown = look(K, 96, 66, 36)
+	local crown = wood(K, 110, 80, 44)
+
+	local receiver = stock(g, K, {})
+	strip(g, { "^Limb$", "^Rocket" })
+	paint(g, {
+		{ "^Receiver", yellow }, { "^Rail", stalk }, { "^FlightGroove", brown }, { "^Riser", crown },
+		{ "^Stock", flesh }, { "^Buttpad", ripe }, { "^BufferTube", ripe }, { "^Latch", brown }, { "^Grip", brown },
+		{ "^ForeGrip", ripe }, { "^FingerGuard", ripe }, { "^TriggerGuard", brown },
+	})
+
+	-- A banana along a curve: joints as balls, spans as cylinders, fattest in the middle, brown at the tip.
+	local function banana(name, p0, p1, p2, count, thin, fat, lk)
+		local points = {}
+		for index = 0, count do
+			local t = index / count
+			table.insert(points, p0 * ((1 - t) * (1 - t)) + p1 * (2 * (1 - t) * t) + p2 * (t * t))
+		end
+		local function width(t)
+			return thin + (fat - thin) * math.sin(math.pi * t)
+		end
+		for index = 1, count do
+			local t = (index - 0.5) / count
+			rod(g, K, name, points[index], points[index + 1], width(t), index % 2 == 0 and ripe or lk)
+			if index < count then
+				g:ball(name .. "Joint", width(index / count), CF(points[index + 1]), lk)
+			end
+		end
+		return points, width
+	end
+
+	-- The limbs.
+	for _, sx in ipairs(SIGNS) do
+		local points, width = banana("BananaLimb", V(sx * 70, -8, -636), V(sx * 168, -8, -694), V(sx * 256, -8, -600), 8, 16, 36, yellow)
+		g:ball("BananaTip", 16, CF(points[#points]), brown)
+		g:detail(function()
+			-- Freckles on the top of the skin, half sunk in it.
+			for _, index in ipairs({ 3, 5, 7 }) do
+				g:ball("BananaFreckle", 5, CF(points[index] + V(0, width((index - 1) / 8) / 2 - 1, 0)), brown)
+			end
+		end)
+	end
+
+	-- The boomerang on the rail (the round group: shown when loaded, carried in by the hand on a reload).
+	g:group("round", function()
+		local y = 14.5
+		local elbow = V(0, y, -486)
+		g:cylY("Bananerang", 9, 32, CF(elbow), yellow)
+		for _, sx in ipairs(SIGNS) do
+			local points = {}
+			for index = 0, 4 do
+				local t = index / 4
+				table.insert(points, elbow * ((1 - t) * (1 - t)) + V(sx * 42, y, -448) * (2 * (1 - t) * t) + V(sx * 98, y, -378) * (t * t))
+			end
+			for index = 1, 4 do
+				local a, c = points[index], points[index + 1]
+				local width = 30 - index * 4
+				strut(g, K, "Bananerang", a, c, width, index % 2 == 0 and ripe or yellow, 9)
+				g:cylY("BananerangJoint", 9, width, CF(c), yellow)
+			end
+			g:ball("BananerangTip", 14, CF(points[5] + V(sx * 3, 0, 4)), brown)
+		end
+		g:cyl("BananerangStalk", 16, 8, CF(0, y, -506), stalk)
+	end)
+
+	-- The peel, in strips lying down either side of the stock from its top rear, their tips gone brown.
+	for _, sx in ipairs(SIGNS) do
+		for _, z in ipairs({ 318, 280 }) do
+			local top, bottom = V(sx * 21.5, 12, z), V(sx * 21.5, -48, z - 50)
+			local down = (bottom - top).Unit
+			strut(g, K, "Peel", top, bottom, 3, yellow, 22)
+			strut(g, K, "PeelTip", bottom, bottom + down * 10, 3, brown, 20)
+		end
+	end
+
+	g.model:SetAttribute("Flair", "boomerang")
+	g.model:SetAttribute("ShotCue", "GunshotBoomerang")
+	return receiver
+end
+
 return GunModelsSignature

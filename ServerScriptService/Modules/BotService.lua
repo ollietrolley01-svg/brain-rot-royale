@@ -173,7 +173,10 @@ local BOT_NAMES = {
 -- Guns bots don't pick up yet, whatever their rarity. BoomboxBassline shoves its target 45 studs/s,
 -- and a bot aims by turning its whole body with an AlignOrientation, so being shoved mid-burst turns
 -- its aim: worth one playtest look before bots can hold one. Remove the entry after that.
-local BOT_WEAPON_HOLD = { BoomboxBassline = true }
+-- TamburoTungTung throws three bouncing drumlets a shot, and a bot's ProjectileService.FireWeapon throws one
+-- round it can't lead; Bananerang's boomerang comes back to where it was thrown, which no bot plans for.
+-- Held here so a bot is never dealt one at spawn (the pickup filter below already passes them over).
+local BOT_WEAPON_HOLD = { BoomboxBassline = true, TamburoTungTung = true, Bananerang = true }
 
 -- Mostly floor-tier guns, with the occasional good one so some fights bite harder.
 local WEAPON_ODDS = { Common = 44, Uncommon = 38, Rare = 15, Epic = 3, Legendary = 0 }
@@ -1784,8 +1787,12 @@ end
 local BOT_HEADSHOT_CHANCE = 0.12
 
 -- Launcher rounds ProjectileService.LeadAim can lead (straight-line flight with drop). Anything else a
--- bot would mis-aim, so it doesn't pick those guns up.
-local BOT_PROJECTILE_KINDS = { rocket = true, grenade = true }
+-- bot would mis-aim, so it doesn't pick those guns up. The mosquitoDart (Zanzarino Pikpik) flies nearly
+-- straight at 175 studs/s and blows nothing up: LeadAim hands back the target itself, which at a bot's
+-- ranges is a fair aim. Its gentle homing (6 degrees at most) leaves a bot's miss (6-12 studs wide) a
+-- miss at the 55 studs a bot prefers; only past 70 studs, where a bot hits 42% or less, can it pull the
+-- narrowest misses back (tools/gunfun_mechanics_check.py N1 measures it).
+local BOT_PROJECTILE_KINDS = { rocket = true, grenade = true, mosquitoDart = true }
 
 local function accuracyAt(distance)
 	local t = math.clamp(distance / MatchConfig.BotAccuracyFalloff, 0, 1)

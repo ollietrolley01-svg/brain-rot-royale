@@ -2045,6 +2045,95 @@ FLAIR.overdue = {
 	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-6, 0, -8)) }, events = { key(0.92, "sound", "FlairStamp") } },
 }
 
+-- Zanzarino Pikpik: it buzzes in the hand (a fast shiver), then the left hand swats it on the back.
+FLAIR.buzz = {
+	inspect = function()
+		local pose = { V(-0.06, 0.08, 0.03), V(8, 30, -22) }
+		local gun = { key(0, V(), V()), key(0.16, pose[1], pose[2]) }
+		for _, entry in ipairs((rattle(pose, 3, 12, 0.22, 0.028, nil))) do
+			table.insert(gun, entry)
+		end
+		table.insert(gun, key(0.6, pose[1], pose[2]))
+		-- The swat lands and the gun dips under it.
+		table.insert(gun, key(0.7, pose[1], pose[2]))
+		table.insert(gun, key(0.74, pose[1] + V(0, -0.03, 0), pose[2] + V(4, 0, 0)))
+		table.insert(gun, key(0.84, pose[1], pose[2]))
+		table.insert(gun, key(1, V(), V()))
+		return {
+			duration = 2.2,
+			gun = gun,
+			left = {
+				key(0, "SupportHand"), key(0.6, "SupportHand"), key(0.68, "ChargeHand", V(0, 0.14, 0)), key(0.74, "ChargeHand"),
+				key(0.82, "ChargeHand", V(0, 0.06, 0)), key(0.92, "SupportHand"), key(1, "SupportHand"),
+			},
+			events = { key(0.2, "sound", "FlairBuzz"), key(0.74, "sound", "FlairSwat") },
+		}
+	end,
+	draw = {
+		duration = 0.45,
+		gun = {
+			key(0, V(), V()), key(0.2, V(0, 0.02, 0), V(0, 0, 4)), key(0.26, V(0, 0.02, 0), V(0, 0, -4)), key(0.32, V(0, 0.02, 0), V(0, 0, 4)),
+			key(0.38, V(0, 0.02, 0), V(0, 0, -3)), key(1, V(), V()),
+		},
+		events = { key(0.15, "sound", "FlairBuzz") },
+	},
+	reload = { gun = { key(0.9, V(0, 0.02, 0), V(0, 0, 4)), key(0.94, V(0, 0.02, 0), V(0, 0, -4)) }, events = { key(0.9, "sound", "FlairBuzz") } },
+}
+
+-- Tamburo Tung Tung: tip the drum toward you, drum on its rim -- tung, tung, tung, then a roll -- and spin it.
+FLAIR.drumroll = {
+	inspect = function()
+		-- The front hoop's left edge, from the loading point (where the hand puts a round in on a reload).
+		local rim = V(0.16, -0.05, 0.09)
+		local lift = rim + V(-0.07, 0.05, -0.02)
+		local left, events = { key(0, "SupportHand"), key(0.16, "Load", lift) }, {}
+		for index, t in ipairs({ 0.24, 0.34, 0.44, 0.52, 0.56, 0.6, 0.64 }) do
+			table.insert(left, key(t - (index <= 3 and 0.05 or 0.02), "Load", lift))
+			table.insert(left, key(t, "Load", rim))
+			table.insert(events, key(t, "sound", "FlairDrum"))
+		end
+		table.insert(left, key(0.72, "Load", lift))
+		table.insert(left, key(0.86, "SupportHand"))
+		table.insert(left, key(1, "SupportHand"))
+		table.insert(events, key(0.72, "sound", "FlairWhir"))
+		return {
+			duration = 2.6,
+			gun = { key(0, V(), V()), key(0.14, V(-0.04, 0.06, 0.02), V(6, 26, -22)), key(0.7, V(-0.04, 0.06, 0.02), V(6, 28, -22)), key(0.86, V(-0.02, 0.04, 0.01), V(2, 12, -8)), key(1, V(), V()) },
+			left = left,
+			values = { drum = { key(0, 0), key(0.72, 0), key(0.88, 1) } },
+			events = events,
+		}
+	end,
+	draw = {
+		duration = 0.55,
+		gun = { key(0, V(), V()), key(0.5, V(0, 0.03, 0), V(-4, 0, -6)), key(1, V(), V()) },
+		values = { drum = { key(0, 0), key(0.7, 1) } },
+		events = { key(0.1, "sound", "FlairWhir"), key(0.7, "sound", "FlairDrum") },
+	},
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-4, 0, -6)) }, events = { key(0.92, "sound", "FlairDrum") } },
+}
+
+-- Bananerang: show off a banana limb, then a practice throw -- out and back -- without letting go.
+FLAIR.boomerang = {
+	inspect = function()
+		return {
+			duration = 2.4,
+			gun = {
+				key(0, V(), V()), key(0.16, V(-0.04, 0.06, 0.02), V(4, 34, -16)), key(0.4, V(-0.04, 0.06, 0.02), V(6, 38, -18)),
+				key(0.5, V(0.02, 0.04, -0.06), V(-6, -8, 10)), key(0.58, V(0.02, 0.05, -0.1), V(-8, -14, 14)),
+				key(0.7, V(0, 0.03, 0.03), V(4, 10, -6)), key(0.8, V(0, 0.02, 0), V(0, 0, 0)), key(1, V(), V()),
+			},
+			events = { key(0.5, "sound", "FlairWhoosh"), key(0.7, "sound", "FlairWhoosh") },
+		}
+	end,
+	draw = {
+		duration = 0.5,
+		gun = { key(0, V(0.06, -0.02, 0), V(0, -24, 10)), key(0.5, V(-0.01, 0.01, 0), V(0, 4, -3)), key(1, V(), V()) },
+		events = { key(0.1, "sound", "FlairWhoosh") },
+	},
+	reload = { gun = { key(0.92, V(0, 0.02, -0.03), V(-4, -6, 4)) }, events = { key(0.92, "sound", "FlairWhoosh") } },
+}
+
 Viewmodel.Flair = FLAIR
 
 -- The flair's inspect clip for this gun, or nil (the stock inspect plays).

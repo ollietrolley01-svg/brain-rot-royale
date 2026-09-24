@@ -25,6 +25,18 @@ What it holds (each a line in the output):
   M5  ratio: `stacks` quick hits mark the victim (DamageTakenScale = scale) for `duration`; a gap longer
       than `window` resets the count; a marked victim does not re-mark early;
   B1  every reworked gun's TTK is within 12% of its old one, and the one-shot rule holds.
+The new guns' rounds run from the REAL Ballistics.lua (its steer / onContact / onLaunch / onDetonate, and
+Ballistics.FreeStep, the step the server and every client take):
+  N1  mosquitoDart: a near miss (2 studs at 40) is pulled onto the target, a wide one (8 studs) is not turned
+      at all, the turn never passes its cap; a person bursts it, a wall stops it. Also reports from how far a
+      bot's narrowest miss (6 studs) would be pulled back into a hit;
+  N2  drumlet: bursts on a person, bounces off anything else, three contacts or 1.6 s at most, kicked up;
+  N3  bananerang: reaches speed x time / pi, comes back to within a stud and a half of the thrower along its
+      own outward path, lands in the same place at 30 and 240 fps; cuts one person once a pass (two cuts from
+      six contacts, never a headshot), passes through people, bursts on a wall, and is caught (no burst) when
+      its time runs out back at the thrower; the server's sweep filter is back to just the thrower at the turn;
+  N4  the new guns' listed DPS inside their classes (pistols; Epic launchers; slow Legendaries, both boomerang
+      passes counted), and none can take a fresh player's 100 with one shot's worth of hits.
 Planted faults (`--plant`): each breaks the real source one way and the check that guards it must fail.
 
     python3 tools/gunfun_mechanics_check.py [repo]
@@ -470,11 +482,257 @@ def check_balance(repo):
     return out
 
 
-def run(repo, combat_src=None, status_src=None):
+ROUNDS_HARNESS = r"""
+local src = ...
+V3.Lerp = V3.Lerp or function(a, b, t) return a + (b - a) * t end
+local B = assert(load(src, "=Ballistics", "t", _G))()
+
+-- Parts and characters: a part knows its model; a character model has a Humanoid.
+function part(name, model)
+	return {
+		Name = name, model = model,
+		FindFirstAncestorOfClass = function(self) return self.model end,
+		IsDescendantOf = function(self, other) return self.model ~= nil and self.model == other end,
+	}
+end
+function character(token)
+	return { token = token, FindFirstChildOfClass = function(self, class) return class == "Humanoid" and {} or nil end }
+end
+
+-- A dart fired from the origin along `aim` at a target standing at `at`: the closest it comes to the target's
+-- centre, and how far it turned.
+function simDart(at, aim, dt)
+	local spec = B.Rounds.mosquitoDart
+	local entry = { spec = spec, owner = "me", age = 0, position = Vector3.new(0, 0, 0), velocity = aim.Unit * spec.speed }
+	local api = { Targets = function(position, range)
+		if (at - position).Magnitude <= range then return { { root = { Position = at } } } end
+		return {}
+	end }
+	local closest = math.huge
+	while entry.age < spec.maxTime do
+		entry.age = entry.age + dt
+		local p, v = B.FreeStep(entry, dt, 196.2, api)
+		local seg = p - entry.position
+		local l2 = seg:Dot(seg)
+		local t = l2 > 0 and math.max(0, math.min(1, (at - entry.position):Dot(seg) / l2)) or 0
+		closest = math.min(closest, (entry.position + seg * t - at).Magnitude)
+		entry.position, entry.velocity = p, v
+	end
+	return closest, type(entry.turned) == "number" and entry.turned or 0
+end
+
+-- A boomerang thrown from the origin along -Z: its positions by age, stepped at dt, and the entry. `server`
+-- gives it a sweep filter holding the thrower, and adds a person's part to it at age 0.3 (a pass).
+function simBoomerang(dt, server)
+	local spec = B.Rounds.bananerang
+	local entry = { spec = spec, owner = "me", age = 0, position = Vector3.new(0, 0, 0), velocity = Vector3.new(0, 0, -spec.speed) }
+	if server then
+		entry.filter = { "thrower" }
+		entry.params = { FilterDescendantsInstances = entry.filter }
+	end
+	local track, added = {}, false
+	while entry.age < spec.maxTime - 1e-9 do
+		local step = math.min(dt, spec.maxTime - entry.age)
+		entry.age = entry.age + step
+		local p, v = B.FreeStep(entry, step, 196.2, {})
+		entry.position, entry.velocity = p, v
+		table.insert(track, { age = entry.age, position = p })
+		if server and not added and entry.age >= 0.3 then
+			added = true
+			table.insert(entry.filter, "victimPart")
+			entry.params.FilterDescendantsInstances = entry.filter
+		end
+	end
+	local trimmed = server and #entry.filter == 1 and entry.params.FilterDescendantsInstances == entry.filter or false
+	return track, entry, trimmed
+end
+
+function dist(a, b)
+	return (a - b).Magnitude
+end
+
+function at(track, age)
+	local best, bestGap = nil, math.huge
+	for _, sample in ipairs(track) do
+		local gap = math.abs(sample.age - age)
+		if gap < bestGap then best, bestGap = sample.position, gap end
+	end
+	return best
+end
+
+-- The boomerang meeting people: returns the damage calls.
+function cuts(ages)
+	local spec = B.Rounds.bananerang
+	local victim = character("victim")
+	local calls = {}
+	local api = {
+		Targets = function() return { { token = "victim", root = { Position = Vector3.new(0, 0, -20), Parent = victim } } } end,
+		DealDamage = function(attacker, token, amount, weaponId, headshot)
+			table.insert(calls, { attacker = attacker or "nobody", token = token, amount = amount, headshot = headshot })
+		end,
+		-- The thrower leaves between the passes.
+		Creditable = function(token)
+			if LEFT then
+				return nil
+			end
+			return token
+		end,
+	}
+	local entry = { spec = spec, owner = "me", damage = 45, weaponId = "Bananerang", age = 0 }
+	local verdicts = {}
+	LEFT = false
+	for _, age in ipairs(ages) do
+		LEFT = age > 0.75
+		entry.age = age
+		table.insert(verdicts, spec.onContact(entry, { Instance = part("UpperTorso", victim), Position = Vector3.new(0, 0, -20) }, api))
+	end
+	local wall = spec.onContact(entry, { Instance = part("Wall", nil), Position = Vector3.new(0, 0, -20) }, api)
+	return calls, verdicts, wall
+end
+
+return B
+"""
+
+
+NEW_GUNS = {"ZanzarinoPikpik", "TamburoTungTung", "Bananerang"}
+
+
+def check_rounds(repo, ballistics_src, weapon_text=None):
+    out = []
+    lua = lua_runtime()
+    B = lua.execute(ROUNDS_HARNESS, luau_to_lua(ballistics_src))
+    g = lua.globals()
+    V = lua.eval("Vector3.new")
+
+    # N1 the mosquito dart: a near miss is forgiven, a wide one left alone, the turn capped.
+    homing = B.DartHoming
+    total = math.degrees(homing.total)
+    near, near_turn = g.simDart(V(0, 0, -40), V(2, 0, -40), 1 / 60)
+    wide, wide_turn = g.simDart(V(0, 0, -40), V(8, 0, -40), 1 / 60)
+    far_turns = []
+    converted = []
+    for d in range(20, 101, 10):
+        closest, turned = g.simDart(V(0, 0, -d), V(6, 0, -d), 1 / 60)
+        far_turns.append(math.degrees(turned))
+        if closest < 1.2:
+            converted.append(d)
+    spec = B.Rounds.mosquitoDart
+    char = g.character("v")
+    hit_verdict = spec.onContact(lua.table(), lua.table_from({"Instance": g.part("Head", char)}))
+    wall_verdict = spec.onContact(lua.table(), lua.table_from({"Instance": g.part("Wall", None)}))
+    ok = (near < 1.2 and wide > 3 and wide_turn == 0 and max(far_turns + [math.degrees(near_turn)]) <= total + 1e-6
+          and hit_verdict == "detonate" and wall_verdict == "stop")
+    out.append((ok, f"N1 mosquitoDart: 2 studs off at 40 -> passes {near:.2f} from the centre (turned {math.degrees(near_turn):.1f} deg); "
+                    f"8 off -> {wide:.2f} (turned {math.degrees(wide_turn):.1f}); cap {total:.0f} deg, most turned {max(far_turns):.1f}; "
+                    f"a bot's 6-stud miss becomes a hit at {converted or 'no'} studs; person -> {hit_verdict}, wall -> {wall_verdict}"))
+
+    # N2 the drumlet: bursts on a person, bounces off the rest, three contacts or 1.6 s at most, kicked up.
+    spec = B.Rounds.drumlet
+    entry = lua.eval("{ body = { velocity = Vector3.new(0, 0, -115) } }")
+    spec.onLaunch(entry)
+    lift = entry.body.velocity.Y
+    person = spec.onContact(lua.table(), lua.table_from({"instance": g.part("Head", char)}))
+    wall = spec.onContact(lua.table(), lua.table_from({"instance": g.part("Wall", None)}))
+    ok = (person == "detonate" and wall is None and spec.maxBounces == 3 and abs(spec.fuse - 1.6) < 1e-9
+          and abs(lift - B.DrumletLift) < 1e-9 and spec.motion == "body")
+    out.append((ok, f"N2 drumlet: person -> {person}, wall -> {wall or 'default (bounce until the last)'}, maxBounces {spec.maxBounces}, "
+                    f"fuse {spec.fuse}s, launch lift {lift:.0f} studs/s"))
+
+    # N3 the boomerang: out to its reach, back to the thrower along the same curve, whatever the frame rate.
+    track, _, _ = g.simBoomerang(1 / 60, False)
+    positions = [track[i + 1].position for i in range(len(track))]
+    reach = max(-p.Z for p in positions)
+    bend = max(abs(p.X) for p in positions)
+    end = positions[-1]
+    back = end.Magnitude
+    T = B.Boomerang.time
+    retrace = max(g.dist(g.at(track, t), g.at(track, T - t)) for t in (0.2, 0.35, 0.5, 0.65))
+    coarse, _, _ = g.simBoomerang(1 / 30, False)
+    fine, _, _ = g.simBoomerang(1 / 240, False)
+    agree = g.dist(coarse[len(coarse)].position, fine[len(fine)].position)
+    agree_mid = g.dist(g.at(coarse, 0.5), g.at(fine, 0.5))
+    want_reach = B.Rounds.bananerang.speed * T / math.pi
+    _, _, trimmed = g.simBoomerang(1 / 60, True)
+    calls, verdicts, wall = g.cuts(lua.table_from([0.2, 0.3, 0.45, 0.9, 1.0, 1.3]))
+    ncalls = len(calls)
+    amounts = [calls[i + 1].amount for i in range(ncalls)]
+    headshots = [calls[i + 1].headshot for i in range(ncalls)]
+    credited = [calls[i + 1].attacker for i in range(ncalls)]
+    all_pass = all(verdicts[i + 1] == "pass" for i in range(len(verdicts)))
+    catch = B.Rounds.bananerang.onDetonate(lua.eval("{ age = 1.45 }"), lua.eval("{}"))
+    thud = B.Rounds.bananerang.onDetonate(lua.eval("{ age = 0.5 }"), lua.eval("{}"))
+    struck = B.Rounds.bananerang.onDetonate(lua.eval("{ age = 1.45 }"), lua.eval("{ direct = { token = 'v' } }"))
+    ok = (abs(reach - want_reach) < 1.0 and back < 1.5 and retrace < 0.5 and agree < 0.5 and agree_mid < 0.5
+          and 3 < bend < 8 and trimmed and ncalls == 2 and all(a == 45 for a in amounts) and not any(headshots)
+          and credited == ["me", "nobody"]
+          and all_pass and wall == "detonate" and catch is False and thud is None and struck is None)
+    out.append((ok, f"N3 bananerang: reach {reach:.1f} studs (want {want_reach:.1f}), bend {bend:.1f}, back within {back:.2f} of the thrower, "
+                    f"out/back paths {retrace:.2f} apart, 30 vs 240 fps {agree:.2f} apart at the end ({agree_mid:.2f} mid-flight); "
+                    f"filter back to the thrower at the turn: {trimmed}; six contacts on one person over both passes -> {ncalls} cuts "
+                    f"{amounts} (headshots {any(headshots)}) credited to {credited} (the thrower leaves between), all pass: {all_pass}; wall -> {wall}; "
+                    f"time out at the thrower -> {'caught' if catch is False else catch}, mid-air -> {thud or 'bursts'}"))
+
+    # N4 the new guns' numbers against their classes, and no one-shot from a single shot's worth of hits.
+    stats = {}
+    for rel in weapon_stats.FILES:
+        text = (Path(repo) / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
+        if weapon_text is not None and rel.endswith("/WeaponData.lua"):
+            text = weapon_text
+        stats.update(weapon_stats.entries(text))
+    scale = float(re.search(r"CombatDamageScale\s*=\s*([\d.]+)", (Path(repo) / "ReplicatedStorage/Shared/MatchConfig.lua").read_text()).group(1))
+
+    def num(body, key, default=None):
+        m = re.search(rf"\b{key}\s*=\s*([\d.]+)", body)
+        return float(m.group(1)) if m else default
+
+    def listed(body):
+        return num(body, "damage") * num(body, "pellets", 1) * num(body, "fireRate")
+
+    def band(pred):
+        dps = [listed(b) for gid, b in stats.items() if gid not in NEW_GUNS and "staged = true" not in b and pred(b)]
+        return min(dps), max(dps)
+
+    def style(body):
+        m = re.search(r'style\s*=\s*"(\w+)"', body)
+        return m.group(1) if m else None
+
+    def rarity(body):
+        m = re.search(r'rarity\s*=\s*"(\w+)"', body)
+        return m.group(1) if m else None
+
+    lines, ok = [], True
+    pik = stats["ZanzarinoPikpik"]
+    bleed = re.search(r"bleed\s*=\s*\{\s*damage\s*=\s*([\d.]+),\s*duration\s*=\s*([\d.]+)", pik)
+    pik_dps = listed(pik) + (float(bleed.group(1)) / float(bleed.group(2)) if bleed else 0)
+    lo, hi = band(lambda b: style(b) == "pistol")
+    pik_head = num(pik, "damage") * num(pik, "headshotMultiplier") * scale
+    good = lo * (1 - TTK_BAND) <= pik_dps <= hi * (1 + TTK_BAND) and pik_head < 100
+    ok &= good
+    lines.append(f"Pikpik {pik_dps:.1f} DPS with the itch (pistols {lo:.0f}-{hi:.0f}), headshot {pik_head:.0f}")
+    tam = stats["TamburoTungTung"]
+    volley = num(tam, "pellets") * (num(tam, "damage") + B.Rounds.drumlet.impactBonus) * scale
+    lo, hi = band(lambda b: style(b) == "launcher" and rarity(b) == "Epic")
+    good = lo * (1 - TTK_BAND) <= listed(tam) <= hi * (1 + TTK_BAND) and volley < 100
+    ok &= good
+    lines.append(f"Tamburo {listed(tam):.0f} DPS (Epic launchers {lo:.0f}-{hi:.0f}), a whole volley on one person {volley:.0f}")
+    ban = stats["Bananerang"]
+    both = listed(ban) * 2
+    throw = 2 * num(ban, "damage") * scale
+    lo, hi = band(lambda b: rarity(b) == "Legendary" and num(b, "fireRate") <= 1.5)
+    good = lo * (1 - TTK_BAND) <= both <= hi * (1 + TTK_BAND) and throw < 100
+    ok &= good
+    lines.append(f"Bananerang {both:.0f} DPS with both passes (slow Legendaries {lo:.0f}-{hi:.0f}), one throw on one person {throw:.0f}")
+    out.append((ok, "N4 new guns: " + "; ".join(lines) + " (a fresh player has 100)"))
+    return out
+
+
+def run(repo, combat_src=None, status_src=None, ballistics_src=None, weapon_text=None):
     root = Path(repo)
     combat_src = combat_src or (root / "ServerScriptService/Modules/CombatService.lua").read_text(encoding="utf-8")
     status_src = status_src or (root / "ServerScriptService/Modules/StatusEffects.lua").read_text(encoding="utf-8")
-    return check_combat(repo, combat_src) + check_status(repo, status_src) + check_balance(repo)
+    ballistics_src = ballistics_src or (root / "ReplicatedStorage/Shared/Ballistics.lua").read_text(encoding="utf-8")
+    return (check_combat(repo, combat_src) + check_status(repo, status_src) + check_balance(repo)
+            + check_rounds(repo, ballistics_src, weapon_text))
 
 
 PLANTS = [
@@ -488,6 +746,16 @@ PLANTS = [
     ("M6 noclip through every wall", "combat", "if victimToken == nil and walls > 0 then\n\t\t\t\twalls -= 1", "if victimToken == nil and walls > 0 then\n\t\t\t\twalls -= 0"),
     ("M7 a streak that never breaks", "combat", "entry.weaponId ~= def.id or now - entry.at > window then", "entry.weaponId ~= def.id then"),
     ("M5 a ratio with no window", "status", "if now - state.at > window then", "if false then"),
+    # The new guns' rounds (Ballistics) and numbers (WeaponData).
+    ("N1 a dart that homes on a wide miss", "ballistics", "cone = math.rad(10)", "cone = math.rad(40)"),
+    ("N2 drumlets that bounce off people", "ballistics",
+     'onContact = function(_entry, contact)\n\t\tif roundHitsCharacter(roundHitInstance(contact)) then\n\t\t\treturn "detonate"\n\t\tend\n\t\treturn nil',
+     'onContact = function(_entry, contact)\n\t\tif roundHitsCharacter(roundHitInstance(contact)) then\n\t\t\treturn nil\n\t\tend\n\t\treturn nil'),
+    ("N3 a boomerang that cuts on every contact", "ballistics", "if entry.cut[target.token] ~= pass then", "if true then"),
+    ("N3 a boomerang that can't meet anyone twice", "ballistics", "table.remove(entry.filter, index)", "local _ = index"),
+    ("N3 a boomerang that never comes back", "ballistics", "memory.dir * (memory.speed * math.cos(math.pi * u))", "memory.dir * memory.speed"),
+    ("N4 a drumlet volley that kills", "weapons", "\t\tdamage = 26,\n\t\theadshotMultiplier = 1,\n\t\tfireRate = 1.0,",
+     "\t\tdamage = 40,\n\t\theadshotMultiplier = 1,\n\t\tfireRate = 1.0,"),
 ]
 
 
@@ -495,18 +763,23 @@ def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     repo = args[0] if args else "."
     root = Path(repo)
-    combat_src = (root / "ServerScriptService/Modules/CombatService.lua").read_text(encoding="utf-8")
-    status_src = (root / "ServerScriptService/Modules/StatusEffects.lua").read_text(encoding="utf-8")
+    sources = {
+        "combat": (root / "ServerScriptService/Modules/CombatService.lua").read_text(encoding="utf-8"),
+        "status": (root / "ServerScriptService/Modules/StatusEffects.lua").read_text(encoding="utf-8"),
+        "ballistics": (root / "ReplicatedStorage/Shared/Ballistics.lua").read_text(encoding="utf-8"),
+        "weapons": (root / "ReplicatedStorage/Shared/WeaponData.lua").read_text(encoding="utf-8"),
+    }
     if "--plant" in argv:
         caught = 0
         for name, target, old, new in PLANTS:
-            src = combat_src if target == "combat" else status_src
-            if old not in src:
-                print(f"PLANT {name}: the text to break is not there any more")
+            src = sources[target]
+            if src.count(old) != 1:
+                print(f"PLANT {name}: the text to break is not there (once) any more")
                 continue
             broken = src.replace(old, new, 1)
             try:
-                results = run(repo, broken if target == "combat" else None, broken if target == "status" else None)
+                results = run(repo, broken if target == "combat" else None, broken if target == "status" else None,
+                              broken if target == "ballistics" else None, broken if target == "weapons" else None)
                 code = name.split()[0]
                 hit = [line for ok, line in results if not ok and line.startswith(code)]
             except Exception as exc:  # a plant that breaks the run outright is caught too

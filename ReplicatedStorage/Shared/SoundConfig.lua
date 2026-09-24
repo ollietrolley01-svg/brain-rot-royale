@@ -1033,8 +1033,72 @@ SoundConfig.Sounds = {
 		},
 		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
 	},
+	GunshotPikpik = {
+		-- Zanzarino Pikpik: a thin air-gun pfft and a mosquito's whine going away.
+		acoustic = "suppressed",
+		volume = 0.34,
+		pitch = 1,
+		maxDistance = 170,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.55, pitch = 2.3 },
+			{ id = CLICK, volume = 0.25, pitch = 1.8 },
+			{ id = SLIDER, volume = 0.22, pitch = 3.4, delay = 0.02 },
+			{ id = PING, volume = 0.06, pitch = 3.8, delay = 0.04 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -8, MidGain = -2, HighGain = 2 } } },
+	},
+	GunshotTamburo = {
+		-- Tamburo Tung Tung: the big bass drum -- a deep skin thump, the boom under it, the snares' rattle.
+		volume = 0.44,
+		pitch = 1,
+		maxDistance = 420,
+		category = "Weapons",
+		layers = {
+			{ id = HIT, volume = 0.9, pitch = 0.42 },
+			{ id = BASS, volume = 0.8, pitch = 0.7 },
+			{ id = BOOM3, volume = 0.45, pitch = 1.1 },
+			{ id = SLIDER, volume = 0.18, pitch = 2.4, delay = 0.03 },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 0.8, WetLevel = -12, DryLevel = 0 } } },
+	},
+	GunshotBoomerang = {
+		-- Bananerang: a crossbow's twang, and the whup-whup of a boomerang cutting the air.
+		acoustic = "suppressed",
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 170,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 0.6 },
+			{ id = SLIDER, volume = 0.4, pitch = 0.8, delay = 0.02 },
+			{ id = SWIM, volume = 0.3, pitch = 1.6, delay = 0.05 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = 2, MidGain = 0, HighGain = -1 } } },
+	},
 
 	-- Flair: the little noises of a signature gun being shown off (Viewmodel's FLAIR clips).
+	FlairBuzz = {
+		-- A mosquito's whine, close to the ear.
+		volume = 0.22,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = SLIDER, volume = 0.4, pitch = 3.4 }, { id = PING, volume = 0.08, pitch = 3.6, delay = 0.05 } },
+	},
+	FlairSwat = {
+		-- A flat hand slapping down.
+		volume = 0.3,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = SNAP, volume = 0.5, pitch = 1.2 }, { id = HIT, volume = 0.25, pitch = 1.6 } },
+	},
+	FlairDrum = {
+		-- A drum tapped with the fingers.
+		volume = 0.3,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = HIT, volume = 0.5, pitch = 0.7 }, { id = BASS, volume = 0.25, pitch = 1.4 } },
+	},
 	FlairKiss = {
 		-- A blown kiss: a soft smack.
 		volume = 0.22,
@@ -2749,6 +2813,7 @@ SoundConfig.Acoustics = {
 		FlairTap = true, FlairPop = true, FlairRattle = true, FlairChomp = true, FlairSqueak = true, FlairBeep = true,
 		FlairSwipe = true, FlairWhoosh = true, FlairClank = true, FlairChime = true, FlairBat = true, FlairBounce = true,
 		FlairKnock = true, FlairKiss = true, FlairTear = true, FlairWhir = true, FlairStamp = true,
+		FlairBuzz = true, FlairSwat = true, FlairDrum = true,
 	},
 }
 
