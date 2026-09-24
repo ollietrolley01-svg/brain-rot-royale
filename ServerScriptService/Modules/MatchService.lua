@@ -131,6 +131,53 @@ CombatService.OnDamage(function(attacker, _, dealt)
 		afk.record(attacker).busy = true
 	end
 end)
+
+-- Players' out-of-combat regen, the bots' own rule (BotService: MatchConfig.BotRegenDelay seconds with no
+-- damage taken or dealt, then BotRegenPerSecond, up to MaxHealth). Roblox's default character "Health"
+-- script used to regenerate players 1% a second all match, storm and all; StarterCharacterScripts/Health
+-- replaces it with nothing, and this is the whole of player regen now. Only for someone playing a running
+-- match (MatchService.IsPlaying: not the lobby, not Loading, not downed), from the 1 s loop in Start.
+local regen = {
+	lastCombat = {}, -- [player] = tick() of the last damage taken or dealt
+	lastHealth = {}, -- [player] = Health after the last step: any loss (storm, a fall) is combat too
+	at = nil, -- tick() of the last step, so a late loop heals for the time that really passed
+}
+
+function regen.step(player, now, seconds)
+	local humanoid = Combatants.GetHumanoid(player)
+	if not humanoid or humanoid.Health <= 0 then
+		regen.lastHealth[player] = nil
+		return
+	end
+	local health = humanoid.Health
+	local before = regen.lastHealth[player]
+	if before and health < before then
+		regen.lastCombat[player] = now
+	end
+	-- Never above MaxHealth, and never DOWN to it: a heal cap only ever raises health.
+	if health < humanoid.MaxHealth and now - (regen.lastCombat[player] or 0) > MatchConfig.BotRegenDelay then
+		health = math.min(humanoid.MaxHealth, health + MatchConfig.BotRegenPerSecond * seconds)
+		humanoid.Health = health
+	end
+	regen.lastHealth[player] = health
+end
+
+function regen.forget(player)
+	regen.lastCombat[player], regen.lastHealth[player] = nil, nil
+end
+
+-- Dealing damage, or a hit the shield soaked (health never moved), is combat as well.
+CombatService.OnDamage(function(attacker, victim, dealt)
+	if (dealt or 0) <= 0 or attacker == victim then
+		return
+	end
+	local now = tick()
+	for _, token in ipairs({ attacker, victim }) do
+		if token ~= nil and Combatants.IsPlayer(token) then
+			regen.lastCombat[token] = now
+		end
+	end
+end)
 local aliveCount = 0
 local placements = {}
 local deathConnections = {}
@@ -1744,6 +1791,8 @@ local function startMatch()
 	table.clear(leftSpectate)
 	table.clear(afk.players)
 	afk.tick = 0
+	table.clear(regen.lastCombat)
+	table.clear(regen.lastHealth)
 	table.clear(streaks)
 	CompanionService.ResetStats()
 
@@ -2059,6 +2108,7 @@ function MatchService.OnPlayerRemoving(player)
 	end
 	leftSpectate[player] = nil
 	afk.players[player] = nil
+	regen.forget(player)
 	-- Keyed by UserId, so a weak table can't drop it mid-visit; nothing else let it go on leave.
 	lastReadyToggle[player.UserId] = nil
 	participants[player] = nil
@@ -2075,6 +2125,22 @@ function MatchService.Start()
 	task.spawn(function()
 		while true do
 			task.wait(1)
+
+			if state == "InProgress" then
+				local now = tick()
+				local seconds = regen.at and math.clamp(now - regen.at, 0, 3) or 1
+				regen.at = now
+				for token in pairs(participants) do
+					if Combatants.IsPlayer(token) and MatchService.IsPlaying(token) then
+						local ok, err = pcall(regen.step, token, now, seconds)
+						if not ok then
+							warn("[MatchService] regen failed: " .. tostring(err))
+						end
+					end
+				end
+			else
+				regen.at = nil
+			end
 
 			if state == "InProgress" and not currentMode.respawn then
 				-- The battle royale's participation checks (a respawn mode runs its own, in GameMode).
