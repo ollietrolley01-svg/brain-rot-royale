@@ -739,7 +739,12 @@ local function renderBrainrots()
 				-- row is 60 px tall with two lines of text at x 64; a third line at y 46 is where it
 				-- goes, and the row grows to about 80. verify.py already checks the file is complete
 				-- and inside its own length limit, so the text is ready whenever the panel is.
-				for _, def in ipairs(set) do
+				-- Oliver 09-24 (#130): A to Z within each rarity, on a copy (see above).
+				local sorted = table.clone(set)
+				table.sort(sorted, function(a, b)
+					return a.name < b.name
+				end)
+				for _, def in ipairs(sorted) do
 					order += 1
 					codexRow(order, def, counts[def.name] or 0)
 				end

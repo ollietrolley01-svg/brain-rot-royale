@@ -65,14 +65,6 @@ Settings.Toggles = {
 	{ id = "MenuStackCollapsed", label = "Tuck the menu, bundle and quest buttons behind a tab", default = false, group = "Gameplay" },
 }
 
--- ControlsHint (#90). The legend is off unless the player turns it on under Gameplay. Whether it is
--- minimised is remembered on the profile, separately for a touch screen and a keyboard, because the
--- two start differently: open on a desktop, minimised on a phone, where the screen has no room to
--- spare. The "HudState" group is not drawn on the settings page; ControlsHint's own button sets them.
-table.insert(Settings.Toggles, { id = "ControlsHint", label = "Controls legend on the HUD (the keys that aren't obvious)", default = false, group = "Gameplay" })
-table.insert(Settings.Toggles, { id = "ControlsHintCollapsed", label = "Controls legend minimised", default = false, group = "HudState" })
-table.insert(Settings.Toggles, { id = "ControlsHintPhoneOpen", label = "Controls legend open on a touch screen", default = false, group = "HudState" })
-
 -- Keys that would break the game or Roblox itself if an action took them.
 Settings.ReservedKeys = {
 	Escape = true, Slash = true, Tab = true, Backquote = true, Unknown = true,
