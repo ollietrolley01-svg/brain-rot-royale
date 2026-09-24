@@ -1630,7 +1630,10 @@ local function renderWeapon()
 			goldRush = "GOLD RUSH: kills pay coins",
 		}
 		-- The tier in words as well as colour (#86 M34), as the floor label already says it.
+		-- And what KIND of gun it is (#86 C39), unless the name already says so ("Rot SMG").
+		local typeWord = Panel and Panel.GunTypeWord(slot.name, slot.style) or nil
 		weaponName.Text = (type(slot.rarity) == "string" and (string.upper(slot.rarity) .. "  ") or "") .. slot.name
+			.. (typeWord and (" · " .. typeWord) or "")
 			.. (slot.ability and ("  •  " .. (abilityWords[slot.ability] or slot.ability)) or "")
 		weaponName.TextColor3 = Rarity.Color(slot.rarity)
 		showCrosshair(true)

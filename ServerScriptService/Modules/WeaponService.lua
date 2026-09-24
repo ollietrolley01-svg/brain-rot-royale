@@ -177,6 +177,8 @@ function WeaponService.Push(player)
 				name = def.name,
 				rarity = def.rarity,
 				ability = def.ability,
+				-- Its silhouette, which the HUD and the bag turn into a type word (#86 C39).
+				style = def.style,
 				mag = slot.mag,
 				magSize = def.magSize,
 				reserve = slot.reserve,

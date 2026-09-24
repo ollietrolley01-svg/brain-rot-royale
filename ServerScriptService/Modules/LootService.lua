@@ -116,6 +116,30 @@ end
 -- than ten times the length of the Pocket Popper it was naming, so from a standing eye the banner was
 -- the pickup and the gun was a smudge under it (measured in scratchpad/guns_f0_out/ground2). TextScaled
 -- keeps it legible at the smaller size, and it still fades out at MaxDistance the way it always did.
+-- A gun's type in a word, from its `style`. A copy of the table in StarterPlayerScripts/InventoryPanel.lua
+-- (the HUD and the bag say the same word; a server module cannot require that one), and
+-- tools/player_eye_check.py ("gunword") fails the moment the two differ or a style has no word.
+local GUN_TYPE_WORDS = {
+	pistol = "PISTOL", revolver = "REVOLVER", smg = "SMG", rifle = "RIFLE", dmr = "MARKSMAN",
+	shotgun = "SHOTGUN", doublebarrel = "SHOTGUN", crossbow = "CROSSBOW", sniper = "SNIPER",
+	blaster = "BLASTER", launcher = "LAUNCHER", lmg = "MACHINE GUN", minigun = "MINIGUN",
+	cannon = "CANNON", railgun = "RAILGUN",
+}
+
+-- The word, or nil when the name already says it (without case or spaces, so "Double Barrel" matches).
+local function gunTypeWord(name, style)
+	local word = style and GUN_TYPE_WORDS[style]
+	if not word then
+		return nil
+	end
+	local flat = string.gsub(string.lower(name or ""), "%s", "")
+	local wordFlat = string.gsub(string.lower(word), "%s", "")
+	if string.find(flat, wordFlat, 1, true) or string.find(flat, style, 1, true) then
+		return nil
+	end
+	return word
+end
+
 local function label(parent, text, color, height)
 	local billboard = Instance.new("BillboardGui")
 	billboard.Size = UDim2.fromScale(3.2, 0.64)
@@ -281,8 +305,12 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 	-- The tier in words, not only in the colour. A player deciding whether a gun on the floor beats the
 	-- one in their hands reads this from a distance, and colour alone asks them to have learnt seven
 	-- shades -- and excludes anyone who cannot tell two of them apart.
-	label(base, string.format("%s %s", def.rarity, def.name), color)
-	local prompt = makePrompt(base, "Pick Up", string.format("%s %s", def.rarity, def.name))
+	-- And the KIND of gun (#86 C39): "Scrolla Scrolla Brrrap" could be anything. Left off where the
+	-- name already says it ("Rot SMG").
+	local word = gunTypeWord(def.name, def.style)
+	local title = string.format("%s %s", def.rarity, def.name) .. (word and (" · " .. word) or "")
+	label(base, title, color)
+	local prompt = makePrompt(base, "Pick Up", title)
 
 	-- Parented once everything is attached, so the pickup replicates as one piece; the z-fight
 	-- pass runs after, in the world, so a pad whose top meets the ground on a slope is lifted.
