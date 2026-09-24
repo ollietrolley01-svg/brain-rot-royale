@@ -17,6 +17,7 @@ local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local ItemData = require(Shared:WaitForChild("ItemData"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
+local LagCompensation = require(script.Parent:WaitForChild("LagCompensation"))
 local QuestService = require(script.Parent:WaitForChild("QuestService"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
@@ -182,10 +183,34 @@ function CombatService.SteadyRecoil(token)
 	return 1 - (1 - STEADY.RecoilScale) * CombatService.SteadyFactor(token)
 end
 
+-- A player's own Roblox accessories (hats, hair) stop no bullets. Their Handles are queryable by
+-- Roblox default, and a Handle's parent is an Accessory, not a Model, so a shot that struck one walked
+-- up to the CHARACTER and was paid as a body hit with the headshot lost, for everyone wearing a hat
+-- or hair (HITREG_DESIGN.md, "Second cause"). This is the project's own pattern for everything hung on
+-- a character (CosmeticBuild, the held gun): not queryable. Accessories arrive after CharacterAdded,
+-- so the character is watched for them rather than swept once.
+local function unqueryable(instance)
+	if instance:IsA("BasePart") and instance:FindFirstAncestorWhichIsA("Accessory") then
+		instance.CanQuery = false
+	end
+end
+
+function CombatService.WatchAccessories(character)
+	for _, instance in ipairs(character:GetDescendants()) do
+		unqueryable(instance)
+	end
+	character.DescendantAdded:Connect(unqueryable)
+end
+
+local function characterAdded(character)
+	CombatService.WatchCrouch(character)
+	CombatService.WatchAccessories(character)
+end
+
 local function watchPlayer(player)
-	player.CharacterAdded:Connect(CombatService.WatchCrouch)
+	player.CharacterAdded:Connect(characterAdded)
 	if player.Character then
-		CombatService.WatchCrouch(player.Character)
+		characterAdded(player.Character)
 	end
 end
 
@@ -568,7 +593,8 @@ local function fireAbility(shooterToken, def, victimToken, hitPosition, baseDama
 	end
 end
 
-local function firePellet(shooterToken, character, origin, direction, def)
+-- `rewindTo`: the server time the victims are put back to (LagCompensation), or nil for the present.
+local function firePellet(shooterToken, character, origin, direction, def, rewindTo)
 	local params = buildRaycastParams(character, shooterToken)
 	local remaining = def.ability == "pierce" and PIERCE_TARGETS or 1
 	local currentOrigin = origin
@@ -576,7 +602,7 @@ local function firePellet(shooterToken, character, origin, direction, def)
 	local endPoint = origin + direction * def.range
 
 	while remaining > 0 and travelled < def.range do
-		local result = workspace:Raycast(currentOrigin, direction * (def.range - travelled), params)
+		local result = LagCompensation.Raycast(currentOrigin, direction * (def.range - travelled), params, rewindTo)
 		if not result then
 			break
 		end
@@ -651,6 +677,14 @@ local function firePellet(shooterToken, character, origin, direction, def)
 	end
 
 	return endPoint
+end
+
+-- workspace:Raycast for a shot from `shooterToken`, with its victims rewound to where the shooter saw
+-- them (LagCompensation: a player's own ping, capped; a bot, the present). For the hitscan path outside
+-- this module (VehicleWeapons), so every bullet in the game is ruled on the same instant.
+function CombatService.Raycast(shooterToken, origin, vector, params)
+	local rewindTo = LagCompensation.RewindTime(shooterToken, LagCompensation.Now())
+	return LagCompensation.Raycast(origin, vector, params, rewindTo)
 end
 
 -- True while `player` sits in a vehicle's driving seat. Drivers are VehicleSeats; passengers sit
@@ -741,6 +775,10 @@ function CombatService.Fire(player, aimPoint)
 		return
 	end
 	CombatService.SpendShot(loadout, credit, now)
+	-- The instant this shot is ruled on (#97): the victims as the shooter saw them, one ping ago on the
+	-- server's clock. Worked out after the budget is settled and from nothing the client sent, so it
+	-- can neither buy a shot nor be forged. A shot slower than the cap is ruled on the present.
+	local rewindTo = LagCompensation.RewindTime(player, LagCompensation.Now())
 
 	local head = character:FindFirstChild("Head")
 	local origin = head and head.Position or character:GetPivot().Position
@@ -768,7 +806,7 @@ function CombatService.Fire(player, aimPoint)
 	local endPoints = {}
 	for _ = 1, def.pellets or 1 do
 		local pelletDirection = applySpread(unit, spread)
-		table.insert(endPoints, firePellet(player, character, origin, pelletDirection, def))
+		table.insert(endPoints, firePellet(player, character, origin, pelletDirection, def, rewindTo))
 	end
 	statsFor(player).shots += def.pellets or 1
 
