@@ -536,6 +536,21 @@ end
 -- above VehicleDynamics' own PARKED_STILL of 4) never enters the cooldown path at all, so a car
 -- sitting on top of someone can never tick regardless of how many times Touched re-fires while it
 -- rests there.
+--
+-- #110: who is credited is whoever sits in the DRIVING seat at the moment of contact, as a combatant
+-- token. This used to pass entry.driverPlayer, which is only ever a Player (onSeatChanged fills it
+-- from Players:GetPlayerFromCharacter), so a BOT at the wheel -- BotService drives armed vehicles --
+-- dealt its roadkill as nobody's: no kill-feed name, no credit, no CombatDamageScale, and, because
+-- ModeTeams.DamageVeto waves every attacker-less hit through, a bot could run over its own team in a
+-- team mode. Combatants.FromCharacter answers for players and bots alike; driverPlayer is the
+-- fallback for a character that has already gone from the seat. A car nobody is driving (a bail at
+-- speed, a wreck still rolling) still hurts, credited to no one, as before.
+local function roadkillDriverToken(entry)
+	local driver = entry.seat.Occupant
+	local character = driver and driver.Parent
+	return (character and Combatants.FromCharacter(character)) or entry.driverPlayer
+end
+
 local function onChassisTouched(entry, hit)
 	local character = hit.Parent
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -569,7 +584,12 @@ local function onChassisTouched(entry, hit)
 	if not victimToken then
 		return
 	end
-	CombatService.DealDamage(entry.driverPlayer, victimToken, (flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER, "Roadkill", false)
+	local driverToken = roadkillDriverToken(entry)
+	-- Belt and braces beside the occupants loop above: a driver is never their own car's victim.
+	if driverToken == victimToken then
+		return
+	end
+	CombatService.DealDamage(driverToken, victimToken, (flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER, "Roadkill", false)
 end
 
 --------------------------------------------------------------------------------
