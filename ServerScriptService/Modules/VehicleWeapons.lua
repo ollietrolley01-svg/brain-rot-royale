@@ -222,7 +222,7 @@ local function traceBullet(token, vehicle, origin, direction, spec)
 	local travelled = 0
 	local endPoint = origin + direction * spec.range
 	for _ = 1, 6 do
-		local result = workspace:Raycast(from, direction * (spec.range - travelled), params)
+		local result = CombatService.Raycast(token, from, direction * (spec.range - travelled), params) -- lag-compensated like hand guns, #97
 		if not result then
 			break
 		end

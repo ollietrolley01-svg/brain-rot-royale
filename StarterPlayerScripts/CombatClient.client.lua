@@ -1971,7 +1971,7 @@ shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity)
 	else
 		-- Everyone else's shots (bots included) come from where they were fired, so gunfire tells
 		-- you where a fight is, and each gun sounds like what it is.
-		Sfx.PlayAt(cue, origin, 0.08)
+		Sfx.PlayAt(cue, origin, 0.08, endPoints[1])
 
 		-- Still drawn if either end is close: a far-off shooter hitting the wall next to you
 		-- has to be visible.

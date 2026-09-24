@@ -176,7 +176,9 @@ def run(decor_faults=(), vehicle_faults=(), quiet=False):
     world.lua.execute("local mock = ...\nmock_advance = function(dt) mock.advance(dt) end", world.mock)
     service = world.load(dmc.SERVICE, name="DestructibleService")
     decor = world.load(dmc.DECOR, decor_faults, name="MapDecor")
-    per_town = int(re.search(r"^local DETAILED_CARS_PER_TOWN = (\d+)", dmc.read(dmc.DECOR, decor_faults), re.M).group(1))
+    # math.huge means every kerbside car, which is count("cars", 4): 4 a town at the default count.
+    knob = re.search(r"^local DETAILED_CARS_PER_TOWN = ([\w.]+)", dmc.read(dmc.DECOR, decor_faults), re.M).group(1)
+    per_town = 4 if knob == "math.huge" else int(knob)
     make = world.lua.eval(
         """function(decor, detailed, x, ground, yaw, seed)
             local map = workspace:FindFirstChild("Map")

@@ -851,8 +851,10 @@ local function renderRank(content, progression, ctx, owned)
 			if candidate < firstRank + 4 or isMilestone then
 				table.insert(upcoming, candidate)
 			end
-			-- Seven tiles need 700 px. Narrow, three fill the width instead of seven spilling off it.
-			if #upcoming >= (narrow and 3 or 7) then
+			-- Seven tiles need 700 px. Narrow, three fill the width instead of seven spilling off it; in
+			-- between (a landscape phone's 632 px) as many as fit, which tools/menu_screens_check.py
+			-- found running two tiles off the side.
+			if #upcoming >= (narrow and 3 or math.clamp(math.floor((page.width - CARD_INSET + 6) / 103), 3, 7)) then
 				break
 			end
 		end
@@ -994,13 +996,20 @@ local function renderRank(content, progression, ctx, owned)
 
 	-- Every prestige's cosmetic, owned or still to earn.
 	sectionHeader(content, 5, "PRESTIGE REWARDS")
+	-- A grid that wraps, not a row: ten 66 px tiles are 714 px, and in a row they ran off the side of
+	-- every phone (tools/menu_screens_check.py, 313 px of content on a 390 px portrait phone).
 	local strip = create("Frame", {
-		Size = UDim2.new(1, -8, 0, 92),
+		Size = UDim2.new(1, -8, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundTransparency = 1,
 		LayoutOrder = 6,
 		Parent = content,
 	}, {
-		create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+		create("UIGridLayout", {
+			CellSize = UDim2.fromOffset(66, 92),
+			CellPadding = UDim2.fromOffset(6, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
 	})
 	for level = 1, ProgressionData.MaxPrestige do
 		local entry = ProgressionData.PrestigeCosmetic(level)
@@ -1049,7 +1058,9 @@ local function renderMastery(content, progression, ctx, owned)
 	local statWidth = narrow and math.floor((span(14, 14, 120) - 12) / 3) or 124
 	local statStep = statWidth + 6
 	local pillColumns = narrow and 3 or 6
-	local pillWidth = narrow and math.floor((span(14, 14, 120) - 6 * (pillColumns - 1)) / pillColumns) or 110
+	-- Six 110 px pills are 690 px; a tablet's content is 683, so wide they shrink to what fits rather
+	-- than the last one running off the card.
+	local pillWidth = math.min(110, math.floor((span(14, 14, 120) - 6 * (pillColumns - 1)) / pillColumns))
 	local pillStep = pillWidth + 6
 	local summary = card(content, 1, narrow and 148 or (short and 52 or 92), C.Accent)
 	-- "GOLD OR BETTER" is 96 px of text in an 81 px column, so narrow it ran into the heading beside
@@ -1180,16 +1191,18 @@ local function renderMastery(content, progression, ctx, owned)
 	end
 
 	-- Rarity filter.
-	-- Eight chips need 690 px in a row; at 296 the last four ran off the side. Narrow they wrap.
-	local filterChip = narrow and math.max(64, math.floor((span(0, 0, 200) - 18) / 4)) or nil
+	-- Eight chips need 690 px in a row; at 296 the last four ran off the side. Narrow they wrap, and so
+	-- does any width without the 690 -- a landscape phone has 632 and lost SECRET off the end.
+	local wrapChips = narrow or not roomFor(0, 0, 690)
+	local filterChip = wrapChips and math.max(64, math.floor((span(0, 0, 200) - 18) / 4)) or nil
 	local filters = create("Frame", {
-		Size = UDim2.new(1, -8, 0, narrow and 0 or 30),
-		AutomaticSize = narrow and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
+		Size = UDim2.new(1, -8, 0, wrapChips and 0 or 30),
+		AutomaticSize = wrapChips and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
 		BackgroundTransparency = 1,
 		LayoutOrder = 3,
 		Parent = content,
 	}, {
-		narrow and create("UIGridLayout", {
+		wrapChips and create("UIGridLayout", {
 			CellSize = UDim2.fromOffset(filterChip, 28),
 			CellPadding = UDim2.fromOffset(6, 6),
 			SortOrder = Enum.SortOrder.LayoutOrder,
@@ -1421,15 +1434,17 @@ local function renderIndex(content, progression, ctx)
 	-- Rarity pages.
 	-- Seven rarity chips need 721 px in a row. At 296 only three fitted and the other four ran off the
 	-- side with nothing to say they were there, so narrow they wrap onto as many rows as it takes.
-	local pageChip = narrow and math.max(64, math.floor((span(0, 0, 200) - 15) / 4)) or 98
+	-- Wide without the 721 px (a landscape phone) they wrap too.
+	local wrapPages = narrow or not roomFor(0, 0, 721)
+	local pageChip = wrapPages and math.max(64, math.floor((span(0, 0, 200) - 15) / 4)) or 98
 	local pages = create("Frame", {
-		Size = UDim2.new(1, -8, 0, narrow and 0 or 40),
-		AutomaticSize = narrow and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
+		Size = UDim2.new(1, -8, 0, wrapPages and 0 or 40),
+		AutomaticSize = wrapPages and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
 		BackgroundTransparency = 1,
 		LayoutOrder = 2,
 		Parent = content,
 	}, {
-		narrow and create("UIGridLayout", {
+		wrapPages and create("UIGridLayout", {
 			CellSize = UDim2.fromOffset(pageChip, 40),
 			CellPadding = UDim2.fromOffset(5, 5),
 			SortOrder = Enum.SortOrder.LayoutOrder,
@@ -1763,15 +1778,18 @@ local function renderShop(content, progression, profile, ctx)
 	sectionHeader(content, 4, "ALWAYS IN STOCK", BRAIN)
 	-- Two cards side by side while they fit; one above the other when they don't. AutomaticSize keeps
 	-- the container honest either way, so a third listing later doesn't need this height edited.
+	-- Two 356 px cards and their gap are 720 px; a landscape phone has 632, where the second card ran
+	-- 88 px off the side. Without the room they stack, drawn the narrow way.
+	local stackListings = page.narrow or not roomFor(0, 0, 720)
 	local listings = create("Frame", {
-		Size = page.narrow and UDim2.new(1, -8, 0, 0) or UDim2.new(1, -8, 0, 84),
-		AutomaticSize = page.narrow and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
+		Size = stackListings and UDim2.new(1, -8, 0, 0) or UDim2.new(1, -8, 0, 84),
+		AutomaticSize = stackListings and Enum.AutomaticSize.Y or Enum.AutomaticSize.None,
 		BackgroundTransparency = 1,
 		LayoutOrder = 5,
 		Parent = content,
 	}, {
 		create("UIListLayout", {
-			FillDirection = page.narrow and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal,
+			FillDirection = stackListings and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal,
 			Padding = UDim.new(0, 8),
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
@@ -1785,7 +1803,7 @@ local function renderShop(content, progression, profile, ctx)
 			local isOwned = ownedCosmetics[entry.id] == true
 			local listing = create("Frame", {
 				-- Narrow, these stop being a two-up grid of 356 px cards and become full-width rows.
-				Size = page.narrow and UDim2.new(1, -8, 0, 160) or UDim2.fromOffset(356, 84),
+				Size = stackListings and UDim2.new(1, -8, 0, 160) or UDim2.fromOffset(356, 84),
 				BackgroundColor3 = C.Panel,
 				BorderSizePixel = 0,
 				LayoutOrder = listingOrder,
@@ -1793,7 +1811,7 @@ local function renderShop(content, progression, profile, ctx)
 			}, { rounded(12) })
 			create("UIStroke", { Color = item.color, Thickness = 2, Transparency = isOwned and 0.6 or 0.2, Parent = listing })
 			cosmeticSwatch(listing, item, isOwned, item.kind == "GunSkin" and "SKIN" or "AURA", 66, 72, true).Position = UDim2.fromOffset(6, 6)
-			local listingNarrow = page.narrow
+			local listingNarrow = stackListings
 			-- These sit inside a card, not on the page: wide it is a fixed 356 in a two-up row, narrow
 			-- it is a full-width row. Sizing against the page would run the text 144 px past the card.
 			-- Narrow the card is a full-width row inside the listings frame, which is itself inset from

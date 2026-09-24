@@ -58,6 +58,10 @@ end
 -- exactly as they were. tools/parachute_shop_probe.lua checks that against the old draw.
 ShopRotation.ParachuteSlots = 2
 
+-- Kill animations on sale per rotation (#24, 2026-09-24). Drawn last, from a Random of their own,
+-- for the same reason as the parachutes: every earlier draw in every rotation stays as it was.
+ShopRotation.KillAnimationSlots = 2
+
 local cached = nil
 
 -- `count` weighted draws, without repeats, from the buyable cosmetics of `kind`, marked in `into`.
@@ -106,6 +110,7 @@ local function stockFor(window)
 	crates.Super = true
 
 	drawCosmetics(Random.new(window * 6311 + 29), "Parachute", ShopRotation.ParachuteSlots, cosmetics)
+	drawCosmetics(Random.new(window * 4513 + 41), "KillAnimation", ShopRotation.KillAnimationSlots, cosmetics)
 
 	cached = { window = window, cosmetics = cosmetics, crates = crates }
 	return cached

@@ -783,8 +783,12 @@ VehicleModels.Models.Rotster = {
 		for _, s in ipairs({ -1, 1 }) do
 			b:bevel(s < 0 and "RoofEdgeL" or "RoofEdgeR", V(s * 2.76, roofY + 0.125, (hatchTop + 0.1 - 0.1) / 2), hatchTop + 0.2, 0.22, 0.25, V(s, 0, 0), UP, "accent")
 		end
-		b:box("Spoiler", V(5.12, 0.16, 0.9), CF(0, roofY + 0.3, hatchTop + 0.12) * A(-7, 0, 0), "accent")
-		b:wedge("SharkFin", V(0.24, 0.34, 0.8), V(0, roofY + 0.42, 3.0), "trim")
+		-- The roof gun (Mounts below) swings right round over the roof, so what is on it keeps out of
+		-- the gun's way: the spoiler is 0.7 deep, not 0.9, and 0.06 lower, so the flash hider clears
+		-- it with the gun turned to the rear and tipped right down; and there is no shark fin any
+		-- more -- at z 3.0 the yoke and cheeks went through it at every turn, and anywhere else on
+		-- this roof the ammo box or the receiver does. The gun is the roof's feature now.
+		b:box("Spoiler", V(5.12, 0.16, 0.7), CF(0, roofY + 0.24, hatchTop + 0.02) * A(-7, 0, 0), "accent")
 		for _, s in ipairs({ -1, 1 }) do
 			b:beam(s < 0 and "WiperL" or "WiperR", V(s * 0.35, belt + 0.28, -1.72), V(s * 2.15, belt + 0.2, -1.78), 0.08, 0.06, "trim")
 		end
@@ -993,8 +997,12 @@ VehicleModels.Models.PatapimScrambler = {
 			b:beam("Spar" .. n, V(s * 0.2, 3.72, -1.86), V(s * 0.47, 3.28, -0.58), 0.18, 0.38, "frame")
 			b:beam("SparDrop" .. n, V(s * 0.47, 3.28, -0.58), V(s * 0.47, 2.26, 0.46), 0.18, 0.4, "frame")
 			b:pipe("Cradle" .. n, { V(s * 0.05, 1.62, -1.08), V(s * 0.24, 1.36, -0.2), V(s * 0.34, 1.5, 0.35), V(s * 0.44, 2.2, 0.5) }, 0.18, "frame")
-			b:tube("Subframe" .. n, V(s * 0.42, 3.2, 0.3), V(s * 0.3, 3.76, 3.1), 0.12, "frame")
-			b:tube("SubframeStay" .. n, V(s * 0.46, 2.45, 0.6), V(s * 0.3, 3.68, 2.35), 0.1, "frame")
+			-- Its back end runs up into the underside of the rear fender (at 3.76 it stopped 0.09 short,
+			-- leaving 0.4 studs of bare tube hanging under the tail).
+			-- Its front end starts in the top of the spar (it used to start 0.26 clear of everything,
+			-- in the air above the throttle body).
+			b:tube("Subframe" .. n, V(s * 0.45, 3.24, -0.45), V(s * 0.3, 3.9, 3.1), 0.12, "frame")
+			b:tube("SubframeStay" .. n, V(s * 0.46, 2.45, 0.6), V(s * 0.33, 3.74, 2.35), 0.1, "frame")
 		end
 		b:cyl("PivotBolt", 1.1, 0.2, CF(0, 2.3, 0.55), "chrome")
 
@@ -1064,8 +1072,10 @@ VehicleModels.Models.PatapimScrambler = {
 				b:beam("SwingarmTail" .. n, V(s * 0.4, 1.8, 2.0), V(s * 0.38, 1.42, 3.2), 0.18, 0.3, "alloy")
 				b:box("AxleBlock" .. n, V(0.3, 0.3, 0.42), V(s * 0.38, rr, rz), "trim")
 			end
-			b:beam("ChainTop", V(-0.5, 2.22, 0.3), V(-0.5, 1.95, rz), 0.08, 0.1, "dash")
-			b:beam("ChainBottom", V(-0.5, 1.68, 0.3), V(-0.5, rr - 0.53, rz), 0.08, 0.1, "dash")
+			-- From the front sprocket's plane (x -0.62) to the rear one's (x -0.33, see spokedWheel): run
+			-- straight down x -0.5 they missed the rear sprocket by 0.17 and ended in the air beside it.
+			b:beam("ChainTop", V(-0.62, 2.22, 0.3), V(-0.33, 1.95, rz), 0.08, 0.1, "dash")
+			b:beam("ChainBottom", V(-0.62, 1.68, 0.3), V(-0.33, rr - 0.53, rz), 0.08, 0.1, "dash")
 			b:box("ChainGuide", V(0.24, 0.36, 0.6), V(-0.46, 1.2, 2.2), "stripe")
 			b:box("RearCaliper", V(0.14, 0.36, 0.4), V(0.36, rr - 0.55, rz + 0.2), "gold")
 		end)
@@ -1303,6 +1313,8 @@ VehicleModels.Models.CrocodiloRanger = {
 		b:tube("GearStick", V(0.05, 3.3, 0.1), V(0.05, 3.9, 0.25), 0.1, "chrome")
 		b:ball("GearKnob", 0.26, V(0.05, 3.95, 0.26), "dash")
 		b:tube("TransferStick", V(-0.25, 3.3, 0.45), V(-0.25, 3.75, 0.55), 0.08, "chrome")
+		-- Its own knob, as the gear stick has: without one it was a bare chrome rod ending in the air.
+		b:ball("TransferKnob", 0.18, V(-0.25, 3.78, 0.56), "dash")
 		b:tube("Column", V(-1.5, 3.9, -1.3), V(-1.5, 4.3, -0.62), 0.2, "dash")
 		b:steeringWheel("SteeringWheel", V(-1.5, 4.36, -0.5), V(0, 0.5, 0.87).Unit, 0.55)
 		b:bucketSeat("SeatDriver", V(-1.5, 2.6, 0.55), 2.0, 1.8, 2.3, 10)
@@ -1651,15 +1663,39 @@ VehicleModels.Models.SahurVan = {
 		local function batAt(z, lift)
 			return (bat * CF(0, lift or 0, z)).Position
 		end
+		-- #116 a third time (Oliver 09-24, "the bat on top is broken"), measured by
+		-- tools/vehicle_models_axis_check.py with the real z-fight pass and the mortar swung through
+		-- its arc: (1) the straps were placed in the bat's own frame at -1.0 and 1.5, which were the
+		-- bars' positions before the bat moved to batZ, so both hung 0.4 studs off their bars in thin
+		-- air under the bat; (2) the handle went 0.30 -> 0.56 -> 0.78 -> 0.98 across in three hard
+		-- steps, which reads as separate pieces stuck end to end; (3) the roof mortar's tube swung
+		-- straight through the barrel (see Mounts). Now: six pieces stepping 0.12-0.16 at a time,
+		-- the straps on the bars themselves, and the mortar high enough to pass over.
 		b:ball("BatKnob", 0.46, batAt(-3.8), "wood")
 		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), handleR * 2, "wood")
-		b:tube("BatTaper", batAt(-1.6), batAt(0.7), 0.56, "wood")
-		b:tube("BatThroat", batAt(0.7), batAt(1.6), 0.78, "wood")
+		local profile = { -- name, from, to, diameter (the barrel's end is 4.0)
+			{ "BatFlare", -1.6, -0.8, 0.42 },
+			{ "BatTaper", -0.8, 0.1, 0.54 },
+			{ "BatThroat", 0.1, 0.9, 0.68 },
+			{ "BatShoulder", 0.9, 1.6, 0.84 },
+		}
+		for _, piece in ipairs(profile) do
+			b:tube(piece[1], batAt(piece[2]), batAt(piece[3]), piece[4], "wood")
+		end
 		b:tube("BatBarrel", batAt(1.6), batAt(4.0), barrelR * 2, "wood")
 		b:cyl("BatEnd", 0.16, 0.9, CF(batAt(4.06)) * (bat - bat.Position) * A(0, 90, 0), "wood")
-		for index, z in ipairs({ -1.0, 1.5 }) do
-			-- The straps follow the bat, or they would hold thin air where it used to lie.
-			b:box("BatStrap" .. index, V(0.9, 0.12, 0.2), CF(batAt(z, -0.3)) * (bat - bat.Position), "accent")
+		for index, barZ in ipairs({ -1.0, barrelBar }) do
+			-- Each strap lies across the bar it is named for, just under the bat: its top 0.04 into the
+			-- wood and its bottom 0.04 into the bar (the bat's underside meets the bar top within a hair
+			-- at both, see the rake above).
+			local z = (barZ - batZ) / math.cos(math.rad(rake))
+			local radius = barrelR
+			for _, piece in ipairs(profile) do
+				if z >= piece[2] and z < piece[3] then
+					radius = piece[4] / 2
+				end
+			end
+			b:box("BatStrap" .. index, V(0.9, 0.12, 0.2), CF(batAt(z, -radius - 0.02)) * (bat - bat.Position), "accent")
 		end
 		local drum = V(1.4, roofY + 1.3, 2.8)
 		b:cyl("DrumShell", 1.2, 2.0, CF(drum) * A(0, 0, 90), "stripe")
@@ -2040,6 +2076,8 @@ VehicleModels.Models.BrrStreetfighter = {
 			b:beam("Swingarm", V(-0.45, 2.3, 0.45), V(-0.95, r, rz), 0.24, 0.55, "alloy")
 			b:beam("SwingarmBrace", V(-0.45, 2.0, 0.6), V(-0.95, r - 0.2, rz - 0.4), 0.14, 0.2, "alloy")
 			b:cyl("AxleNut", 0.2, 0.5, CF(-1.12, r, rz), "alloy")
+			-- The chain's front end goes round a sprocket; without one it stopped in the air by the engine.
+			b:cyl("FrontSprocket", 0.06, 0.5, CF(-0.72, 1.95, 0.35), "alloy")
 			b:beam("ChainTop", V(-0.72, 2.2, 0.35), V(-0.72, r + 0.48, rz), 0.07, 0.09, "dash")
 			b:beam("ChainBottom", V(-0.72, 1.7, 0.35), V(-0.72, r - 0.48, rz), 0.07, 0.09, "dash")
 			b:box("RearCaliper", V(0.14, 0.34, 0.4), V(0.78, r - 0.45, rz + 0.3), "tail")
@@ -2075,7 +2113,11 @@ VehicleModels.Mounts = {
 	-- A rocket pod on a tall pedestal in the bed, high enough to fire forward over the cab.
 	CrocodiloRanger = { style = "pod", base = V(0, 3.1, 4.9), column = 3.9 },
 	-- A mortar on a plinth at the back of the roof rack, between the last rack bar and the rail ends.
-	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.4 },
+	-- The plinth is 0.9 tall so the tube clears the bat and the drum wherever it points: on a 0.4
+	-- plinth, swung 30-40 degrees left at its lowest pitch (10) it went straight through the bat's
+	-- barrel and end cap, and 20-60 degrees right through the drum (0.8 still clips a drumstick).
+	-- Measured over the whole arc by tools/vehicle_models_axis_check.py.
+	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.9 },
 }
 
 local function buildMount(b, mount)
@@ -2111,10 +2153,13 @@ local function buildMount(b, mount)
 	b:with(pitch, function()
 		local at = pitchAt
 		if mount.style == "gun" then
-			b:box("GunReceiver", V(0.5, 0.55, 1.6), at + V(0, 0, 0.2), "trim")
+			-- 1.1 long, from the barrel's root back: at 1.6 its back end dug into the Rotster's roof
+			-- with the gun turned round and tipped up.
+			b:box("GunReceiver", V(0.5, 0.55, 1.1), at + V(0, 0, -0.05), "trim")
 			b:tube("GunBarrel", at + V(0, 0.05, -0.6), at + V(0, 0.05, -2.8), 0.2, "mesh")
 			b:tube("GunJacket", at + V(0, 0.05, -0.6), at + V(0, 0.05, -1.7), 0.34, "trim")
-			b:tube("GunFlashHider", at + V(0, 0.05, -2.6), at + V(0, 0.05, -3.0), 0.3, "mesh")
+			-- 0.26 across (it was 0.3), which is what lets it pass over the Rotster's spoiler with 0.06 to spare.
+			b:tube("GunFlashHider", at + V(0, 0.05, -2.6), at + V(0, 0.05, -3.0), 0.26, "mesh")
 			b:box("GunAmmoBox", V(0.45, 0.5, 0.7), at + V(0.85, -0.05, 0.25), "stripe")
 			b:box("GunShield", V(1.5, 0.9, 0.12), at + V(0, 0.2, -0.75), "accent")
 			muzzleZ = -3.05
@@ -2355,12 +2400,18 @@ end
 --     most of them wall, barrel, spokes and nuts that only show on a wheel you can turn)
 --   * the wheel-arch lips (a ring of ten or twelve trim segments per arch; the arch panels, which
 --     are the body round the wheel, all stay, so no hole opens in the side)
---   * the steering wheel's rim segments and the gauges, which are inside behind glass
+--   * the steering wheel and the gauges, which are inside behind glass
+--   * a car's steering column with them: left on its own it is a bare rod standing up out of the
+--     dash at the driver's chest, 0.2-0.5 studs of it clear of anything (measured by
+--     tools/vehicle_models_axis_check.py), which through the windscreen is a pole in the cabin.
+--     (Only a car's: a scooter's Column is its front fork.)
 -- The Chassis and Hull_* colliders stay: they are what you take cover behind and what a shot hits.
 local STATIC_DROP = { "^SteeringWheel", "^Lip[FR][LR]", "^Gauge" }
-local STATIC_WHEEL_KEEP = { Tyre = true, Lip = true, Disc = true }
+local STATIC_CAR_DROP = { "^Column$" }
+-- (A bike's sprocket too: without it the chain ends in the air at the back wheel.)
+local STATIC_WHEEL_KEEP = { Tyre = true, Lip = true, Disc = true, Sprocket = true }
 
-local function staticKeeps(part, hubs)
+local function staticKeeps(part, hubs, car)
 	if part.Name == "Chassis" or string.sub(part.Name, 1, 5) == "Hull_" then
 		return true
 	end
@@ -2374,6 +2425,13 @@ local function staticKeeps(part, hubs)
 	for _, pattern in ipairs(STATIC_DROP) do
 		if string.find(part.Name, pattern) then
 			return false
+		end
+	end
+	if car then
+		for _, pattern in ipairs(STATIC_CAR_DROP) do
+			if string.find(part.Name, pattern) then
+				return false
+			end
 		end
 	end
 	return true
@@ -2391,7 +2449,7 @@ function VehicleModels.BuildStatic(modelId, rng, cframe, opts)
 		hubs[hub.Name] = true
 	end
 	for _, child in ipairs(model:GetChildren()) do
-		if child:IsA("BasePart") and not staticKeeps(child, hubs) then
+		if child:IsA("BasePart") and not staticKeeps(child, hubs, info.kind == "car") then
 			child:Destroy()
 		end
 	end
