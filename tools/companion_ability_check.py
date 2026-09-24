@@ -315,6 +315,9 @@ def run_data_checks(root, data_src, base_src, fails, facts):
 
     # The buff kept: styles stripped, every number equals the base tree's.
     lua.globals()._strip(data)
+    # The base tree may itself carry styles (once this lands, HEAD does): compare plain against plain.
+    if base.AbilityStyleOf is not None:
+        lua.globals()._strip(base)
     for name, d, s in styled_rows:
         plain = data.Stats(d, 1, 0)
         bd = None

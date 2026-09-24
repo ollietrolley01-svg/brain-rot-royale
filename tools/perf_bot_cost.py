@@ -354,6 +354,10 @@ CombatService = { IsEnabled = function() return true end }
 Combatants = { IsBot = function() return true end }
 despawn = function() end
 attack = function() end
+-- Locals of the real module that the sliced-out Heartbeat body calls: the cooldown clock and the
+-- 0-HP gate (every mock companion is healthy, so the gate never hides a scan).
+clockNow = function() return CLOCK end
+canAct = function(entry) return entry ~= nil and type(entry.health) == "number" and entry.health > 0 end
 local frame, perFrame, lastScan, periods = 0, {}, {}, {}
 pickTarget = function(owner)
     perFrame[frame] = (perFrame[frame] or 0) + 1
@@ -368,7 +372,7 @@ for i = 1, C do
     local owner = { id = i }
     owners[i] = owner
     companions[owner] = { model = { Parent = true }, anchor = { Parent = true, WorldPosition = Vector3.zero },
-        root = { Position = Vector3.zero }, gui = {}, stats = { cooldown = 1 }, lastAttackAt = -math.huge }
+        root = { Position = Vector3.zero }, gui = {}, stats = { cooldown = 1 }, lastAttackAt = -math.huge, health = 100 }
 end
 assert(load(src, "Companion", "t", _ENV))()
 local dt = 1 / 60
