@@ -1739,9 +1739,22 @@ local function shed(parent, position, groundAt, lootSpots)
 	local width, depth, height = 14, 12, 9
 	local halfW, halfD = width / 2, depth / 2
 	local wood, roofColor = pick(SHED_WALLS), pick(SHED_ROOFS)
-	-- Sunk like the trees are, so a slope never leaves a shed standing on one corner.
-	local base = CFrame.new(position - Vector3.new(0, SINK, 0)) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
-	local wallHeight = height + SINK
+	-- Sunk like the trees are, and further by however far the ground falls away under its walls from
+	-- the point it was placed on: a rigid box on one sampled height stood a corner up to 17 studs over
+	-- a hillside (tools/foundation_check.py).
+	local turn = CFrame.Angles(0, math.random() * math.pi * 2, 0)
+	local drop = 0
+	if groundAt then
+		for _, corner in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+			local at = (CFrame.new(position) * turn * CFrame.new(corner[1] * (halfW + 0.4), 0, corner[2] * (halfD + 0.4))).Position
+			local y = groundAt(at.X, at.Z)
+			if y then
+				drop = math.max(drop, position.Y - y)
+			end
+		end
+	end
+	local base = CFrame.new(position - Vector3.new(0, SINK + drop, 0)) * turn
+	local wallHeight = height + SINK + drop
 
 	currentName = "Wall"
 	makePart(parent, Vector3.new(width, wallHeight, 0.8), base * CFrame.new(0, wallHeight / 2, halfD), wood, Enum.Material.WoodPlanks)
@@ -1750,7 +1763,7 @@ local function shed(parent, position, groundAt, lootSpots)
 	end
 
 	-- The front, split round a doorway you can actually walk through.
-	local doorway, doorTop = 5, SINK + 7
+	local doorway, doorTop = 5, SINK + drop + 7
 	local pier = (width - doorway) / 2
 	for _, side in ipairs({ -1, 1 }) do
 		makePart(parent, Vector3.new(pier, wallHeight, 0.8), base * CFrame.new(side * (width - pier) / 2, wallHeight / 2, -halfD),
