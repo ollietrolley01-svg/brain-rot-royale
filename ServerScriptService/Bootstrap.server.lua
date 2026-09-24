@@ -49,6 +49,7 @@ local RateLimit = require(Modules:WaitForChild("RateLimit"))
 local RewardService = require(Modules:WaitForChild("RewardService"))
 local ShowcaseService = require(Modules:WaitForChild("ShowcaseService"))
 local StateSync = require(Modules:WaitForChild("StateSync"))
+local StormService = require(Modules:WaitForChild("StormService"))
 local TradeService = require(Modules:WaitForChild("TradeService"))
 local VehicleService = require(Modules:WaitForChild("VehicleService"))
 local VoteService = require(Modules:WaitForChild("VoteService"))
@@ -72,6 +73,8 @@ Players.CharacterAutoLoads = false
 
 -- Bodies ragdoll, float, burn or shatter by the gun that got them.
 CombatService.OnDeathFx = DeathFxService.OnDeath
+-- The storm's damage reaches the death recap (#86): StormService cannot require CombatService.
+StormService.OnDamage = CombatService.RecordEnvironmentDamage
 
 -- A crouched, still shooter gets a steadier gun. MatchService requires CombatService, so the
 -- crouch state is handed over rather than required back.
@@ -109,7 +112,10 @@ end)
 Monetization.RegisterGrantHandler("Consumable", function(player, data, grant)
 	data.Consumables[grant.consumable] = (data.Consumables[grant.consumable] or 0) + grant.amount
 	return function()
-		StateSync.Notify(player, string.format("+%d one-match %s boost", grant.amount, grant.consumable))
+		-- Named the way the shop card names it (GamepassConfig.DescribeContents), not by its raw id:
+		-- "+5 one-match HealthPro boost" was a code word on the one toast a buyer reads (#86).
+		local names = { Health = "Health Boost", Speed = "Speed Boost", HealthPro = "Pro Health Boost", SpeedPro = "Pro Speed Boost" }
+		StateSync.Notify(player, string.format("+%d one-match %s", grant.amount, names[grant.consumable] or (grant.consumable .. " Boost")))
 		StateSync.Push(player)
 	end
 end)
@@ -638,6 +644,7 @@ end)
 
 -- The companion hotkey. The client sends where it's aiming; the server picks the target and
 -- owns the cooldown.
+local noCompanionToldAt = {}
 Remotes.Event("CompanionAbility").OnServerEvent:Connect(function(player, aimPoint)
 	if not RateLimit.Take(player, "CompanionAbility") then
 		return
@@ -645,7 +652,20 @@ Remotes.Event("CompanionAbility").OnServerEvent:Connect(function(player, aimPoin
 	if aimPoint ~= nil and not SafeValue.Vector3(aimPoint) then
 		return
 	end
-	CompanionService.UseAbility(player, aimPoint)
+	if CompanionService.UseAbility(player, aimPoint) then
+		return
+	end
+	-- A fresh profile has no companion, and the practice sign says "press [G]": doing exactly what it
+	-- says did nothing, with no word why (#86). Said once per few seconds, not per press. Only for "no
+	-- companion equipped" -- a cooldown or a fallen companion has its own widget on the HUD.
+	local data = PlayerData.Get(player)
+	if data and data.Companion == nil and os.time() - (noCompanionToldAt[player] or 0) >= 5 then
+		noCompanionToldAt[player] = os.time()
+		StateSync.Notify(player, "No companion yet — open a crate, then equip a brainrot in the menu.", true)
+	end
+end)
+Players.PlayerRemoving:Connect(function(player)
+	noCompanionToldAt[player] = nil
 end)
 
 -- Ready up / stay in the lobby. Only readied players are pulled into the next match.
@@ -962,8 +982,13 @@ Remotes.Function("ClaimPassAll").OnServerInvoke = guard(function(player)
 	return BattlePassService.ClaimAll(player)
 end)
 
+-- The Pass tab's DAILY SPIN is the same spin as the wheel at the booth, so it goes through the same
+-- function: a brainrot won from the menu is recorded in the Rot Index just as one won at the wheel
+-- is (#86). Two values back, not three: the segment is for the wheel's animation, and guard toasts
+-- the message.
 Remotes.Function("ClaimDaily").OnServerInvoke = guard(function(player)
-	return BattlePassService.ClaimDaily(player)
+	local success, message, _segment = LobbyService.OnDailySpin(player)
+	return success, message
 end)
 
 -- The title worn on the nameplate: an unlocked achievement's id, or nil for none.

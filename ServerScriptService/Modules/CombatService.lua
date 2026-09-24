@@ -852,6 +852,25 @@ end
 -- Set by Bootstrap to DeathFxService.OnDeath: what the body does, by the gun that did it.
 CombatService.OnDeathFx = nil
 
+-- Damage with no attacker (the storm; StormService.OnDamage), kept for the death recap. It goes in the
+-- same list as the hits, so the recap's sources name it, and it marks itself `environment` so that
+-- when it was the LAST thing to hurt a player, the recap does not headline whoever shot them seconds
+-- earlier. Kill credit is not touched: GetLastAttacker still names the shooter (#86).
+function CombatService.RecordEnvironmentDamage(victimToken, amount, source)
+	if not Combatants.IsPlayer(victimToken) or type(amount) ~= "number" or amount <= 0 then
+		return
+	end
+	local list = recent[victimToken]
+	if not list then
+		list = {}
+		recent[victimToken] = list
+	end
+	table.insert(list, { at = os.clock(), name = source, amount = amount, environment = true })
+	if #list > RECAP_HITS then
+		table.remove(list, 1)
+	end
+end
+
 -- The death recap a player sees while their body hits the floor: who did it, with what, from how
 -- far, what they had left, and where the last twelve seconds of damage came from.
 local function sendRecap(victimToken, killerToken, weaponId)
@@ -881,8 +900,11 @@ local function sendRecap(victimToken, killerToken, weaponId)
 		table.remove(sources)
 	end
 
+	-- Finished by the storm: no "ELIMINATED BY <shooter>  •  <gun>  •  <n> studs" headline. The
+	-- shooter is still in `sources` with what they did.
+	local environmentFinish = last ~= nil and last.environment == true
 	local killerName, killerHealth, killerShield = nil, nil, nil
-	if killerToken and killerToken ~= victimToken then
+	if killerToken and killerToken ~= victimToken and not environmentFinish then
 		killerName = Combatants.GetName(killerToken)
 		local humanoid = Combatants.GetHumanoid(killerToken)
 		if humanoid and humanoid.Health > 0 then
@@ -894,8 +916,10 @@ local function sendRecap(victimToken, killerToken, weaponId)
 
 	deathRecap:FireClient(victimToken, {
 		killer = killerName,
-		weapon = describeWeapon(weaponId),
+		weapon = not environmentFinish and describeWeapon(weaponId) or nil,
 		distance = last and last.distance or nil,
+		-- "Storm" when that was the final blow, for the HUD to title the recap by.
+		finishedBy = environmentFinish and last.name or nil,
 		headshot = last and last.headshot or false,
 		killerHealth = killerHealth,
 		killerShield = killerShield,

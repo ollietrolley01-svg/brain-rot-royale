@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local ItemData = require(Shared:WaitForChild("ItemData"))
 local Rarity = require(Shared:WaitForChild("Rarity"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
@@ -204,6 +205,9 @@ local function attachPrompt(crate, def, beam, landing)
 	prompt.HoldDuration = 1.2
 	prompt.MaxActivationDistance = 12
 	prompt.RequiresLineOfSight = false
+	-- B, not the default X: X is Reload, so a pad player reloading beside the crate would open it
+	-- (#86; the same key LootService's prompts use).
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 	prompt.Parent = crate
 
 	-- Bots give way to a player who's already mid-hold, same as with chests.
@@ -250,13 +254,18 @@ local function attachPrompt(crate, def, beam, landing)
 		local toward = opener and (opener.Position - crate.Position) * Vector3.new(1, 0, 1) or Vector3.zero
 		local spill = crate.Position + (toward.Magnitude > 0.1 and toward.Unit * 7 or Vector3.new(0, 0, 7))
 		LootService.DropWeapon(def.id, spill, nil, crate.Position)
-		LootService.DropItem("MedKit", spill, 1, crate.Position)
-		LootService.DropItem("ShieldPotion", spill, 1, crate.Position)
-		-- Somewhere to hold what you just fought for.
-		LootService.DropItem("PopupBunker", spill, 1, crate.Position)
+		-- Somewhere to hold what you just fought for: the Pop-up Bunker.
+		local spilled = { def.name }
+		for _, id in ipairs({ "MedKit", "ShieldPotion", "PopupBunker" }) do
+			LootService.DropItem(id, spill, 1, crate.Position)
+			table.insert(spilled, ItemData.Get(id).name)
+		end
 		WeaponService.GiveAmmo(player, 1)
 		QuestService.Progress(player, "supply", 1)
-		StateSync.Notify(player, "Supply drop: " .. def.name .. " and supplies on the ground")
+		-- Every piece named, the way a chest's toast names its spill: "and supplies" left a first-time
+		-- player walking away from a bunker they never knew was there (#86). Kept to the list: the
+		-- toast is one unwrapped line on the HUD.
+		StateSync.Notify(player, "Supply drop: " .. table.concat(spilled, ", ") .. " on the ground")
 
 		finishCrate(crate)
 	end)

@@ -1729,7 +1729,10 @@ local function startMatch()
 				end
 				character:PivotTo(spawnAt + Vector3.new(0, MatchConfig.DropHeight, 0))
 				MovementService.DropIn(player, character)
-				StateSync.Notify(player, "Dropping in — steer with WASD, look for a landmark")
+				-- The drop glides in "steer" mode: straight down with nothing held, so doing what the old
+				-- toast said (hold W) carried the player off the spot they had just picked (#86).
+				StateSync.Notify(player, picked and "Dropping in over your spot — hold nothing to land there, or steer with WASD"
+					or "Dropping in — steer with WASD, look for a landmark")
 			end
 			watchDeath(player, humanoid)
 		end)
@@ -1904,9 +1907,15 @@ function MatchService.Start()
 			task.wait(1)
 
 			if state == "Waiting" then
-				if #readyPlayers() >= MatchConfig.MinPlayers then
+				local readyNow = #readyPlayers()
+				if readyNow >= MatchConfig.MinPlayers then
 					state = "Countdown"
-					countdown = MatchConfig.LobbyCountdown
+					-- Everyone already ready (a solo player, always): start at the short count. Starting at
+					-- the full one and cutting it on the next tick showed "STARTING IN 15" then "7", a
+					-- clock that skipped eight seconds with no word why (#86).
+					countdown = readyNow >= #Players:GetPlayers()
+						and math.min(MatchConfig.LobbyCountdown, MatchConfig.AllReadyCountdown)
+						or MatchConfig.LobbyCountdown
 					VoteService.Open()
 				end
 				broadcast()

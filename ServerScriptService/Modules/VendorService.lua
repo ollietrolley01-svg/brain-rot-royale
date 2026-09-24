@@ -103,7 +103,8 @@ function VendorService.Buy(player, product)
 		end
 	elseif product.kind == "ammo" then
 		if not WeaponService.GiveAmmo(player, product.fraction) then
-			return false, "Nothing to reload."
+			-- GiveAmmo adds nothing when every reserve is at its cap or there is no gun; nothing is charged.
+			return false, "Your ammo is already full (or you have no gun to refill)."
 		end
 	else
 		return false, "Out of order."
@@ -154,7 +155,11 @@ function VendorService.Build(parent, cframe)
 		text(button, Enum.NormalId.Front, { { y = 0, h = 1, text = tostring(index), color = DARK } }, 60)
 		local prompt = Instance.new("ProximityPrompt")
 		prompt.ActionText = "Buy"
-		prompt.ObjectText = string.format("%s · %d C", product.label, product.price)
+		-- The ammo row says what a refill is, so it can be judged before buying (#86).
+		prompt.ObjectText = product.kind == "ammo"
+			and string.format("%s (+%d%% every gun) · %d C", product.label, math.floor(product.fraction * 100 + 0.5), product.price)
+			or string.format("%s · %d C", product.label, product.price)
+		prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 		prompt.HoldDuration = 0.35
 		prompt.MaxActivationDistance = 9
 		prompt.RequiresLineOfSight = false

@@ -93,6 +93,11 @@ local function makePrompt(parent, actionText, objectText)
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = 10
 	prompt.RequiresLineOfSight = false
+	-- B, not Roblox's default X: X is Reload (CombatClient), so a pad player reloading within ten
+	-- studs of a floor gun also picked it up -- and with the bag full, swapped away the gun they were
+	-- reloading (#86). Every other face button and d-pad direction is already a match control; B is
+	-- only the menu's close, and the menu is shut while a prompt is being used.
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 	prompt.Parent = parent
 
 	-- Bots read this so they give way to a player who's already mid-hold, instead of taking
@@ -301,8 +306,11 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 
 		local ok, message, replaced = WeaponService.GiveWeapon(player, def.id, carried)
 		if ok then
-			if not carried then
-				WeaponService.GiveAmmo(player, 0.25)
+			-- The toast says what the pickup did for the rest of the bag: a map gun tops up every gun's
+			-- reserve, and nothing on screen said so, so players never learned floor guns ARE the ammo
+			-- supply (#86).
+			if not carried and WeaponService.GiveAmmo(player, 0.25) then
+				message = message .. "  •  +ammo for your guns"
 			end
 			-- Swapping puts whatever was held down where the new gun was, instead of deleting it.
 			if replaced then
@@ -496,7 +504,7 @@ local function spawnChest(cframe)
 			table.insert(dropped, def.name)
 		end
 
-		WeaponService.GiveAmmo(player, 0.4 + math.random() * 0.5)
+		local refilled = WeaponService.GiveAmmo(player, 0.4 + math.random() * 0.5)
 
 		local function giveItem(item)
 			LootService.DropItem(item.id, spill, item.pickup, chest.Position)
@@ -519,7 +527,8 @@ local function spawnChest(cframe)
 			giveItem(ItemData.RollThrowable())
 		end
 
-		StateSync.Notify(player, "Chest: " .. table.concat(dropped, ", ") .. " on the ground")
+		StateSync.Notify(player, "Chest: " .. table.concat(dropped, ", ") .. " on the ground"
+			.. (refilled and "  •  +ammo for your guns" or ""))
 		QuestService.Progress(player, "chests", 1)
 		if nearLandmark(chest.Position) then
 			QuestService.Progress(player, "landmarkChests", 1)

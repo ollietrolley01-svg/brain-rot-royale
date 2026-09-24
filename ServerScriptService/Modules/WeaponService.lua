@@ -1868,7 +1868,11 @@ local function refusal(player, loadout, item)
 		return ""
 	end
 	if item.kind == "heal" and humanoid.Health >= healCap(humanoid, item) then
-		return item.cap < 100 and string.format("%s only heals up to %d.", item.name, item.cap) or "You're already at full health."
+		-- The cap in the player's own health points, scaled the way healCap scales it: with a Health
+		-- Boost (MaxHealth 150) a Bandage heals to 112, and "only heals up to 75" contradicted the 113
+		-- on their HUD (#86).
+		return item.cap < 100 and string.format("%s only heals up to %d.", item.name, math.floor(healCap(humanoid, item)))
+			or "You're already at full health."
 	elseif item.kind == "shield" and loadout.shield >= item.cap then
 		return item.cap < MAX_SHIELD and string.format("%s only fills shield up to %d.", item.name, item.cap) or "Your shield is already full."
 	end
@@ -1891,7 +1895,9 @@ local function applyItem(player, loadout, item, aimPoint)
 	elseif item.kind == "throwable" then
 		return WeaponService.ThrowEffect(player, item.id, aimPoint) == true
 	else
-		return WeaponService.MovementEffect(player, item.id) == true
+		-- The reason comes back too (a Blink Bean too close to a wall), so the click is not silent.
+		local ok, why = WeaponService.MovementEffect(player, item.id)
+		return ok == true, why
 	end
 	return true
 end
@@ -1951,8 +1957,9 @@ function WeaponService.StartUse(player, aimPoint, slotIndex)
 		if lastInstantAt[player] and now - lastInstantAt[player] < INSTANT_COOLDOWN then
 			return false
 		end
-		if not applyItem(player, loadout, item, aimPoint) then
-			return false
+		local applied, why = applyItem(player, loadout, item, aimPoint)
+		if not applied then
+			return false, why
 		end
 		lastInstantAt[player] = now
 		spendAndFinish(player, loadout, index, item)

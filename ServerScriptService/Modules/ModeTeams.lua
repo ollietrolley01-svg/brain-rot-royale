@@ -420,6 +420,12 @@ function ModeTeams.DamageVeto(attackerToken, victimToken, _weaponId)
 		return true
 	end
 
+	-- A swing at an enemy ends the swinger's own protection. The comment on BreakProtection always
+	-- promised this and nothing called it from an attack, so a fresh spawn could fire at you for the
+	-- whole window while being unhittable back (#86). Here, because every hit on a combatant --
+	-- gun, blast, melee -- comes through this veto; a clean miss does not, which is the one gap.
+	ModeTeams.BreakProtection(attackerToken)
+
 	if ModeTeams.IsProtected(victimToken) then
 		return true
 	end
@@ -447,8 +453,8 @@ function ModeTeams.IsProtected(token)
 	return until_ ~= nil and protectionNowMs() < until_
 end
 
--- Protection ends the moment you take a swing, not when you move. Called from the fire and throw
--- paths; safe to call when nothing is protected.
+-- Protection ends the moment you land a swing on an enemy, not when you move: DamageVeto calls
+-- BreakProtection for the attacker. Safe to call when nothing is protected.
 -- The raw deadline, for tools/respawn_probe.lua. Read-only and read by nothing in the game.
 --
 -- It exists because the UNITS are checkable offline and the BEHAVIOUR is not: this deadline was

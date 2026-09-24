@@ -273,7 +273,8 @@ local function blink(character, root)
 		end
 	end
 	if distance < 4 then
-		return false
+		-- Said, not silent: a dead click read as a broken item (#86). Nothing is spent.
+		return false, "Too close to a wall to blink. Turn and try again."
 	end
 
 	local velocity = root.AssemblyLinearVelocity
