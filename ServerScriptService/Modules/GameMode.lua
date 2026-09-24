@@ -386,6 +386,7 @@ local function onDeath(token, killerToken, method)
 		killFeed:FireAllClients({
 			victim = Combatants.GetName(token),
 			killer = killerToken and Combatants.GetName(killerToken) or nil,
+			killerUserId = killerToken and Combatants.GetUserId(killerToken) or nil,
 			method = killerToken and method or nil,
 		})
 	end)

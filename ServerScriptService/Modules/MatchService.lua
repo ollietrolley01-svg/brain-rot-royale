@@ -1369,6 +1369,7 @@ local function eliminate(token, killerToken, method, weaponId)
 	killFeed:FireAllClients({
 		victim = Combatants.GetName(token),
 		killer = killerToken and Combatants.GetName(killerToken) or nil,
+		killerUserId = killerToken and Combatants.GetUserId(killerToken) or nil,
 		method = killerToken and method or nil,
 		placement = placements[token],
 	})
@@ -1380,7 +1381,8 @@ local function eliminate(token, killerToken, method, weaponId)
 		if Combatants.IsPlayer(killerToken) and killerToken ~= token and participants[killerToken] then
 			RewardService.AwardBonusCoins(killerToken, reward, "bounty on " .. Combatants.GetName(token))
 			QuestService.Progress(killerToken, "bounties", 1)
-			bounty:FireAllClients({ claimed = true, name = Combatants.GetName(token), by = Combatants.GetName(killerToken), reward = reward })
+			bounty:FireAllClients({ claimed = true, name = Combatants.GetName(token), userId = Combatants.GetUserId(token),
+				by = Combatants.GetName(killerToken), reward = reward })
 		else
 			bounty:FireAllClients(nil)
 		end
@@ -1420,7 +1422,8 @@ local function eliminate(token, killerToken, method, weaponId)
 		if streak.total >= bountyMinKills and (killerToken == bountyToken or streak.total > leaderKills) and alive[killerToken] then
 			bountyToken = killerToken
 			bountyReward = math.floor((BOUNTY_BASE + BOUNTY_PER_KILL * streak.total) * bountyMultiplier)
-			bounty:FireAllClients({ name = Combatants.GetName(killerToken), kills = streak.total, reward = bountyReward })
+			bounty:FireAllClients({ name = Combatants.GetName(killerToken), userId = Combatants.GetUserId(killerToken),
+				kills = streak.total, reward = bountyReward })
 		end
 	end
 

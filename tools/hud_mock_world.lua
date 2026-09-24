@@ -1169,6 +1169,20 @@ function W.setViewport(x, y)
 	W.camera.ViewportSize = W.viewport
 end
 
+-- The text of the HUD's toast (the TextLabel HudClient makes with TextWrapped at the bottom centre),
+-- found as the most recently written wrapped label whose text is not empty.
+function W.lastToast()
+	for i = #W.created, 1, -1 do
+		local inst = W.created[i]
+		local props = rawget(inst, "__props")
+		if rawget(inst, "__class") == "TextLabel" and props.TextWrapped and props.AutomaticSize ~= nil
+			and type(props.Text) == "string" and props.Text ~= "" then
+			return props.Text
+		end
+	end
+	return ""
+end
+
 function W.frame(n)
 	for _ = 1, n or 1 do
 		W.now = W.now + 1 / 60

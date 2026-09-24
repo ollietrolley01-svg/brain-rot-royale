@@ -2842,8 +2842,9 @@ killFeed.OnClientEvent:Connect(function(entry)
 		Text = "  " .. (entry.placement and ("#" .. entry.placement .. "  ") or "") .. text .. "  ",
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Right,
-		-- DisplayName: the server names players by it (Combatants.GetName, #86 C7).
-		TextColor3 = entry.killer == player.DisplayName and C.Accent or C.Text,
+		-- By UserId, not the shown name: a DisplayName is not unique (#86 C7). The server sends the
+		-- killer's UserId beside the name (Combatants.GetUserId; nil for a bot).
+		TextColor3 = entry.killerUserId ~= nil and entry.killerUserId == player.UserId and C.Accent or C.Text,
 		TextSize = 13,
 		LayoutOrder = feedOrder,
 		Parent = feed,
@@ -2949,11 +2950,10 @@ Remotes.Event("Bounty").OnClientEvent:Connect(function(info)
 	end
 	bountyLabel.Text = string.format("BOUNTY  •  %s  (%d kills)  •  %d C", info.name or "?", info.kills or 0, info.reward or 0)
 	hudLayout.show(bountyLabel, matchState.state == "InProgress")
-	-- DisplayName, because that is what the server sends (Combatants.GetName, changed with this in #86
-	-- C7). Comparing two different kinds of name is how the "bounty on YOU" toast once went to everyone
-	-- except its subject. A DisplayName is not unique: someone sharing yours would get the "YOU" toast
-	-- too, which is the price of showing people the names they chose.
-	if info.name ~= player.DisplayName then
+	-- "Is it me?" by UserId, which the server sends beside the name (Combatants.GetUserId, #86 C7): the
+	-- name is a DisplayName and not unique, so comparing names gave a player who shares yours your "YOU"
+	-- toast. (Comparing two different kinds of name is how it once went to everyone except its subject.)
+	if info.userId == nil or info.userId ~= player.UserId then
 		showToast(string.format("BOUNTY: %d SahurCoins on %s (%d kills)", info.reward or 0, info.name or "?", info.kills or 0))
 	else
 		showToast(string.format("There's a %d coin bounty on YOU — everyone knows.", info.reward or 0), true)

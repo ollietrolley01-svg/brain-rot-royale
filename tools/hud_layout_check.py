@@ -339,6 +339,27 @@ def check(root, sources, dump=False, quiet=False):
         elif not quiet:
             print(f"OPEN (known, not fixed) [{tag}] {' / '.join(sorted(key))}: {why}")
 
+    # 5. "Is it me?" is asked by UserId (#86 C7): a namesake's bounty is third-person, mine says YOU,
+    # and so does the kill-feed highlight.
+    world = World(root, SIZES[0], sources)
+    world.play()
+    me = world.run("""
+        local function toastFor(info)
+            W.fire('Bounty', info)
+            return W.lastToast()
+        end
+        local out = {}
+        out.namesake = toastFor({ name = W.player.DisplayName, userId = 999, kills = 3, reward = 100 })
+        out.mine = toastFor({ name = W.player.DisplayName, userId = W.player.UserId, kills = 3, reward = 100 })
+        out.bot = toastFor({ name = W.player.DisplayName, kills = 3, reward = 100 })
+        return out.namesake .. '|' .. out.mine .. '|' .. out.bot
+    """)
+    namesake, mine, bot = me.split("|")
+    if "YOU" in namesake or "YOU" in bot:
+        problems.append(f"a bounty on someone sharing my DisplayName (or a bot) says YOU: {namesake!r} / {bot!r}")
+    if "YOU" not in mine:
+        problems.append(f"a bounty on me (my UserId) does not say YOU: {mine!r}")
+
     # 4. static: writers of droppable pieces go through the gate
     hud = sources["HudClient.client.lua"]
     start = hud.index("-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)")
@@ -361,6 +382,9 @@ def check(root, sources, dump=False, quiet=False):
 
 # Planted faults, each aimed at an invariant the code must keep forever, not at the bug as it was.
 PLANTS = [
+    ("the bounty toast asking 'is it me?' by name, not UserId",
+     "HudClient.client.lua", "if info.userId == nil or info.userId ~= player.UserId then",
+     "if info.name ~= player.DisplayName then"),
     ("a per-frame writer that bypasses the layout gate (compass)",
      "HudClient.client.lua", "hudLayout.show(compass, true)", "compass.Visible = true"),
     ("the stamina bar ignoring PhoneLayout's mode",

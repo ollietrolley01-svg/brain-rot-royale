@@ -44,6 +44,16 @@ end
 -- and the results named people by USERNAME, which most accounts show nobody). HudClient compares these
 -- with player.DisplayName in step (its kill-feed highlight and the "bounty on YOU" toast), so the two
 -- change together. Nothing looks a player up by this string: it is only ever shown.
+-- Who a combatant IS, for a client asking "is this me?": a player's UserId, nil for a bot. Sent beside
+-- GetName wherever a client compares, because a DisplayName is not unique (#86 C7 follow-up: a player
+-- sharing your DisplayName got your "bounty on YOU" toast).
+function Combatants.GetUserId(token)
+	if Combatants.IsPlayer(token) then
+		return token.UserId
+	end
+	return nil
+end
+
 function Combatants.GetName(token)
 	if Combatants.IsPlayer(token) then
 		return token.DisplayName
