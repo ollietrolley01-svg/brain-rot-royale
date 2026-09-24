@@ -854,8 +854,239 @@ SoundConfig.Sounds = {
 			{ "ChorusSoundEffect", { Depth = 0.25, Mix = 0.35, Rate = 3 } },
 		},
 	},
+	GunshotGlitch = {
+		-- Glitch SMG: an SMG's chatter that stutters -- a digital blip, then the shot again, smaller.
+		volume = 0.33,
+		pitch = 1,
+		maxDistance = 330,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 1.9 },
+			{ id = PING, volume = 0.2, pitch = 1.3 },
+			{ id = BOOM2, volume = 0.26, pitch = 3.4 },
+			{ id = SNAP, volume = 0.3, pitch = 2.3, delay = 0.03 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.35 } } },
+	},
+	GunshotVampire = {
+		-- Camelo Vampire LMG: a belt-fed's heavy report with a leathery wing-beat in its tail.
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 480,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
+			{ id = BOOM2, volume = 0.7, pitch = 2.0 },
+			{ id = BASS, volume = 0.45, pitch = 1.6 },
+			{ id = SLIDER, volume = 0.16, pitch = 0.5, delay = 0.04 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.24 } } },
+	},
+	GunshotBank = {
+		-- Six-Seven Marksman: a marksman's report with a hollow court-floor bounce under it.
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 620,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
+			{ id = BOOM2, volume = 0.8, pitch = 1.7 },
+			{ id = JUMP, volume = 0.3, pitch = 0.7, delay = 0.03 },
+			{ id = BOOM3, volume = 0.18, pitch = 0.8, delay = 0.3, where = "outdoor" },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 1.3, WetLevel = -10, DryLevel = 0 } } },
+	},
+	GunshotRatio = {
+		-- Piccolino Ratatatà: the suppressed cough and a phone's send-swoosh.
+		acoustic = "suppressed",
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.35, pitch = 2.9 },
+			{ id = CLICK, volume = 0.5, pitch = 1.4 },
+			{ id = SLIDER, volume = 0.22, pitch = 2.0 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -12, MidGain = -3, HighGain = -2 } } },
+	},
+	GunshotBreach = {
+		-- Porta Porta Bonk: a shotgun's boom and a door slamming into the frame.
+		volume = 0.42,
+		pitch = 1,
+		maxDistance = 440,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 1, pitch = 1.4 },
+			{ id = HIT, volume = 0.5, pitch = 0.5 },
+			{ id = COLLIDE, volume = 0.4, pitch = 0.7, delay = 0.02 },
+			{ id = BASS, volume = 0.6, pitch = 1.0 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.26 } } },
+	},
+	Ricochet = {
+		-- A round glancing off a wall: a bright whine that falls away.
+		volume = 0.34,
+		pitch = 1,
+		maxDistance = 260,
+		category = "Weapons",
+		layers = {
+			{ id = PING, volume = 0.5, pitch = 1.9 },
+			{ id = SLIDER, volume = 0.3, pitch = 2.6 },
+			{ id = METAL, volume = 0.2, pitch = 2.2 },
+		},
+	},
+	GunshotRizz = {
+		-- Rizz Rifle: a rifle's crack with a bright, sweet ring behind it.
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 460,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.45, crack = true },
+			{ id = BOOM2, volume = 0.6, pitch = 2.2 },
+			{ id = PING, volume = 0.18, pitch = 1.8, delay = 0.03 },
+			{ id = BOOM3, volume = 0.12, pitch = 0.95, delay = 0.25, where = "outdoor" },
+		},
+		effects = { { "ChorusSoundEffect", { Depth = 0.2, Mix = 0.3, Rate = 3 } } },
+	},
+	GunshotReceipt = {
+		-- Scontrino Infinito: a belt-fed's report with the printer's chatter in every round.
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 480,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
+			{ id = BOOM2, volume = 0.7, pitch = 2.0 },
+			{ id = CLICK, volume = 0.3, pitch = 2.6 },
+			{ id = BASS, volume = 0.4, pitch = 1.6 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
+	},
+	GunshotForest = {
+		-- Patapim Chaingun: the rotary's roar with a rustle of leaves through it.
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 500,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 1.6 },
+			{ id = BOOM2, volume = 0.5, pitch = 2.6 },
+			{ id = STEPS, volume = 0.25, pitch = 1.6 },
+			{ id = BASS, volume = 0.3, pitch = 2.0 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -3, MidGain = 0, HighGain = 1 } } },
+	},
+	GunshotNonna = {
+		-- Nonna Double Barrel: a big old boom and a disapproving click of the tongue.
+		volume = 0.44,
+		pitch = 1,
+		maxDistance = 460,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 1, pitch = 1.3 },
+			{ id = SNAP, volume = 0.75, pitch = 0.8 },
+			{ id = BASS, volume = 0.7, pitch = 1.0 },
+			{ id = CLICK, volume = 0.3, pitch = 1.2, delay = 0.12 },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 0.9, WetLevel = -14, DryLevel = 0 } } },
+	},
+	GunshotAudit = {
+		-- Occhietto Pium Pium: a clean rifle crack and a stamp coming down.
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 460,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.45, crack = true },
+			{ id = BOOM2, volume = 0.6, pitch = 2.2 },
+			{ id = HIT, volume = 0.3, pitch = 0.8, delay = 0.02 },
+			{ id = BOOM3, volume = 0.12, pitch = 0.95, delay = 0.25, where = "outdoor" },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.18 } } },
+	},
+	GunshotAdmin = {
+		-- Capo Supremo Bonkolone: a pistol's crack, bit-crushed, with a console blip.
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 360,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.7 },
+			{ id = PING, volume = 0.22, pitch = 2.0 },
+			{ id = BOOM2, volume = 0.34, pitch = 3.0 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.4 } } },
+	},
+	GunshotCollect = {
+		-- Ultimo Bum: an AK's crack with a cash register's clunk.
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 470,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
+			{ id = BOOM2, volume = 0.7, pitch = 2.0 },
+			{ id = METAL, volume = 0.3, pitch = 1.4, delay = 0.02 },
+			{ id = BOOM3, volume = 0.12, pitch = 0.9, delay = 0.25, where = "outdoor" },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
+	},
 
 	-- Flair: the little noises of a signature gun being shown off (Viewmodel's FLAIR clips).
+	FlairKiss = {
+		-- A blown kiss: a soft smack.
+		volume = 0.22,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = SNAP, volume = 0.3, pitch = 2.4 }, { id = BUTTON, volume = 0.2, pitch = 2.2 } },
+	},
+	FlairTear = {
+		-- Paper torn off a roll.
+		volume = 0.26,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = SLIDER, volume = 0.4, pitch = 2.8 }, { id = CLICK, volume = 0.2, pitch = 2.6 } },
+	},
+	FlairWhir = {
+		-- Barrels spinning up and winding down.
+		volume = 0.3,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = SLIDER, volume = 0.5, pitch = 0.9 }, { id = METAL, volume = 0.15, pitch = 1.2, delay = 0.1 } },
+	},
+	FlairStamp = {
+		-- A rubber stamp slammed down.
+		volume = 0.32,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = HIT, volume = 0.6, pitch = 0.6 }, { id = COLLIDE, volume = 0.2, pitch = 0.9 } },
+	},
+	FlairBat = {
+		-- A bat's wings, a flurry of them.
+		volume = 0.24,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.3, pitch = 1.4 },
+			{ id = SLIDER, volume = 0.2, pitch = 1.6, delay = 0.05 },
+		},
+	},
+	FlairBounce = {
+		-- A ball on a court floor.
+		volume = 0.3,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = JUMP, volume = 0.5, pitch = 0.9 }, { id = HIT, volume = 0.25, pitch = 0.9 } },
+	},
+	FlairKnock = {
+		-- Knuckles on a wooden door.
+		volume = 0.32,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = HIT, volume = 0.6, pitch = 0.55 }, { id = COLLIDE, volume = 0.3, pitch = 0.6 } },
+	},
 	FlairChomp = {
 		-- Jaws snapping shut.
 		volume = 0.32,
@@ -2516,7 +2747,8 @@ SoundConfig.Acoustics = {
 		DoubleJump = true, StaminaEmpty = true,
 		-- A signature gun being shown off (Viewmodel's FLAIR clips) is handling noise too.
 		FlairTap = true, FlairPop = true, FlairRattle = true, FlairChomp = true, FlairSqueak = true, FlairBeep = true,
-		FlairSwipe = true, FlairWhoosh = true, FlairClank = true, FlairChime = true,
+		FlairSwipe = true, FlairWhoosh = true, FlairClank = true, FlairChime = true, FlairBat = true, FlairBounce = true,
+		FlairKnock = true, FlairKiss = true, FlairTear = true, FlairWhir = true, FlairStamp = true,
 	},
 }
 

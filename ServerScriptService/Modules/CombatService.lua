@@ -373,6 +373,13 @@ function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity)
 	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity)
 end
 
+-- The rest of a shot that did not come out of the muzzle: a ricochet leaving a wall. Clients draw its tracer
+-- from `from` and play the ricochet's whine there, with no report and no flash (the fifth argument).
+function CombatService.BroadcastSegment(shooterToken, from, to, rarity)
+	local shooterPlayer = Combatants.IsPlayer(shooterToken) and shooterToken or nil
+	shotFired:FireAllClients(shooterPlayer, from, { to }, rarity, true)
+end
+
 -- Breaks the window panes on the line from `from` to `to`, stopping at the first thing on the map
 -- that isn't glass. Bots don't trace their shots (they roll against accuracy), so this is what
 -- makes a bot firing through a window take the pane with it, as a player's traced shot does.
@@ -432,6 +439,10 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 	-- Storm, fall and self-damage are left alone.
 	if attackerToken ~= nil and attackerToken ~= victimToken then
 		amount *= MatchConfig.CombatDamageScale or 1
+		-- A status that makes its victim take more from everyone (StatusEffects: "ratio'd").
+		if CombatService.DamageTakenScale then
+			amount *= CombatService.DamageTakenScale(victimToken) or 1
+		end
 	end
 
 	-- A shield soaks damage before health does. Players keep theirs in the loadout; bots keep
@@ -584,10 +595,140 @@ local function buildRaycastParams(character, shooterToken)
 	return params
 end
 
+--------------------------------------------------------------------------------
+-- Signature mechanics (the gun rework, 2026-09-24). Each is a WeaponData field a gun opts into; nothing
+-- here names a gun. The pure parts are module functions so tools/gunfun_mechanics_check.py can run them.
+--   bloodthirst = { perHit, max, window }   lifesteal that grows with an unbroken run of hits
+--   ricochet = { bounces, scale }           a hitscan bullet that stops on the map glances off it
+--   pattern = "door" | "heart"             pellets go out in a shape instead of a random cone
+--   (echo and ratio live in StatusEffects, as damage listeners)
+--------------------------------------------------------------------------------
+
+-- Server game time, not os.clock (CPU time in Roblox, which drifts from the wall under load). A probe or
+-- the harness can swap it.
+CombatService.Clock = function()
+	return time()
+end
+
+-- [token] = { streak, at, weaponId }. Strong and cleared in ForgetToken: tokens are Players and bot tables.
+local thirst = {}
+
+-- The lifesteal ratio of this hit. With `bloodthirst`, every hit landed within `window` seconds of the
+-- one before adds `perHit`, up to `max`; a longer pause, or a different gun, starts the run over.
+function CombatService.LifestealRatio(token, def, now)
+	local ratio = def.lifestealRatio or 0.2
+	local spec = def.bloodthirst
+	if not spec then
+		return ratio
+	end
+	now = now or CombatService.Clock()
+	local entry = thirst[token]
+	if not entry or now - entry.at > spec.window or entry.weaponId ~= def.id then
+		entry = { streak = 0, at = now, weaponId = def.id }
+		thirst[token] = entry
+	end
+	entry.streak += 1
+	entry.at = now
+	return math.min(spec.max, ratio + spec.perHit * (entry.streak - 1))
+end
+
+-- A direction reflected off a surface with `normal`.
+function CombatService.Reflect(direction, normal)
+	return direction - normal * (2 * direction:Dot(normal))
+end
+
+-- Pellet patterns: points in the aim's own plane, x right and y up, inside the unit circle, scaled to
+-- the shot's current spread (so aiming and a steady crouch tighten the shape as they tighten a cone).
+CombatService.Patterns = {
+	-- A doorway: the frame's corners and sides, the lintel, the knob, the threshold.
+	door = {
+		{ -0.4, 0.88 }, { 0.4, 0.88 }, { 0, 0.88 }, { -0.4, 0.1 }, { 0.4, 0.1 },
+		{ -0.4, -0.8 }, { 0.4, -0.8 }, { 0.22, 0.05 }, { 0, -0.8 },
+	},
+	-- A heart: two lobes and the point.
+	heart = {
+		{ -0.5, 0.75 }, { 0.5, 0.75 }, { -0.85, 0.35 }, { 0.85, 0.35 }, { 0, 0.45 },
+		{ -0.55, -0.15 }, { 0.55, -0.15 }, { -0.25, -0.55 }, { 0.25, -0.55 }, { 0, -0.95 },
+	},
+}
+CombatService.PatternJitter = 0.14
+
+-- Where pellet `index` of a shot along `unit` goes: its point of the gun's pattern (a little jittered, so
+-- the shape reads without being a stamp), or anywhere in the cone for a gun without one.
+function CombatService.PelletDirection(unit, spread, def, index)
+	local pattern = def.pattern and CombatService.Patterns[def.pattern]
+	if not pattern or spread <= 0 then
+		return applySpread(unit, spread)
+	end
+	local point = pattern[(index - 1) % #pattern + 1]
+	local jitter = CombatService.PatternJitter
+	local x = point[1] + (math.random() - 0.5) * jitter
+	local y = point[2] + (math.random() - 0.5) * jitter
+	local radians = math.rad(spread)
+	local base = CFrame.lookAt(Vector3.zero, unit)
+	return (base * CFrame.Angles(y * radians, -x * radians, 0)).LookVector
+end
+
 -- `explosive` is not here: a hitscan gun's blast goes off where its bullet stops (bulletBlast), through
 -- the same blast as the launchers, instead of the cruder splash this used to have (which had no
 -- caller: the only explosive guns fire real rounds).
+-- [shooterToken] = { victim, count, at, weaponId }: the run of hits one shooter has landed on one target with
+-- one gun, each within `window` of the last. Strong, cleared in ForgetToken.
+local streaks = {}
+
+-- The length of the run this hit makes (1 for a fresh one).
+function CombatService.HitStreak(shooterToken, victimToken, def, window, now)
+	now = now or CombatService.Clock()
+	local entry = streaks[shooterToken]
+	if not entry or entry.victim ~= victimToken or entry.weaponId ~= def.id or now - entry.at > window then
+		entry = { victim = victimToken, count = 0, at = now, weaponId = def.id }
+		streaks[shooterToken] = entry
+	end
+	entry.count += 1
+	entry.at = now
+	return entry.count
+end
+
+-- Every `every`th hit of a run pays out (the gun rework):
+--   receipt = { every, bonus, window }          the hit prints its total: `bonus` more damage to the target
+--   collect = { every, damage, radius, window }  the debt is collected: a small blast on the target
+--   audit = { every, ratio, targets, window }    the aura is audited: arcs to up to `targets` others near
+--                                                the target for `ratio` of the hit
+function CombatService.StreakPayout(shooterToken, def, victimToken, baseDamage)
+	local spec = def.receipt or def.collect or def.audit
+	if not spec or not victimToken then
+		return
+	end
+	local count = CombatService.HitStreak(shooterToken, victimToken, def, spec.window or 1)
+	if count % spec.every ~= 0 then
+		return
+	end
+	local victimRoot = Combatants.GetRoot(victimToken)
+	if def.receipt then
+		CombatService.DealDamage(shooterToken, victimToken, spec.bonus, def.id)
+	elseif def.collect and victimRoot and CombatService.Explode then
+		CombatService.Explode({
+			owner = shooterToken, weaponId = def.id, kind = "impact", position = victimRoot.Position, normal = Vector3.yAxis,
+			damage = spec.damage, radius = spec.radius, innerRadius = 0, wallDamage = 0,
+		})
+	elseif def.audit and victimRoot then
+		local arcs = 0
+		for _, entry in ipairs(combatantsInRadius(victimRoot.Position, def.chainRadius or 20, shooterToken)) do
+			if entry.token ~= victimToken and arcs < spec.targets then
+				arcs += 1
+				CombatService.DealDamage(shooterToken, entry.token, baseDamage * spec.ratio, def.id)
+			end
+		end
+	end
+	if CombatService.OnStreakPayout then
+		CombatService.OnStreakPayout(shooterToken, victimToken, def, victimRoot and victimRoot.Position)
+	end
+end
+
 local function fireAbility(shooterToken, def, victimToken, hitPosition, baseDamage)
+	if CombatService.StreakPayout then
+		CombatService.StreakPayout(shooterToken, def, victimToken, baseDamage)
+	end
 	if def.ability == "chain" and victimToken then
 		local victimRoot = Combatants.GetRoot(victimToken)
 		if victimRoot then
@@ -602,7 +743,7 @@ local function fireAbility(shooterToken, def, victimToken, hitPosition, baseDama
 		-- Only off a combatant: walls, barrels and companions come through here with no victim.
 		local humanoid = Combatants.GetHumanoid(shooterToken)
 		if humanoid and humanoid.Health > 0 then
-			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + baseDamage * (def.lifestealRatio or 0.2))
+			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + baseDamage * CombatService.LifestealRatio(shooterToken, def))
 		end
 	end
 end
@@ -643,7 +784,14 @@ local function bulletBlast(shooterToken, def, position, normal)
 end
 
 -- `rewindTo`: the server time the victims are put back to (LagCompensation), or nil for the present.
-local function firePellet(shooterToken, character, origin, direction, def, rewindTo)
+-- The shot being fired right now collects its ricochets here, { from, to } each, for Fire to broadcast once
+-- its pellets are done (Fire does not yield between setting and clearing it).
+local shotSegments = nil
+
+-- `segments` (default: the shot's own list above): where this bullet's ricochets go; `bounced`: how many
+-- times it has already glanced off something.
+local function firePellet(shooterToken, character, origin, direction, def, rewindTo, segments, bounced)
+	segments = segments or shotSegments
 	local params = buildRaycastParams(character, shooterToken)
 	local remaining = def.ability == "pierce" and PIERCE_TARGETS or 1
 	local currentOrigin = origin
@@ -652,6 +800,13 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 	-- The last solid thing the bullet struck: where explosive ammo goes off. A pane it broke and flew
 	-- on through doesn't count, and a bullet that ran out of range in the open blows up nothing.
 	local stopped = nil
+	-- Whether it ended on the map itself (a wall, the ground, the furniture): what a ricochet glances off.
+	-- Not a person, a barricade, a companion or a barrel.
+	local onMap = false
+	-- A noclip round (def.noclip = { walls, scale }) passes through that many walls of the map, keeping
+	-- `scale` of its damage through each; `through` is what it has left.
+	local walls = def.noclip and def.noclip.walls or 0
+	local through = 1
 
 	while remaining > 0 and travelled < def.range do
 		local result = LagCompensation.Raycast(currentOrigin, direction * (def.range - travelled), params, rewindTo)
@@ -703,7 +858,18 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 				stopped = nil
 				continue
 			end
+			if walls > 0 then
+				walls -= 1
+				through *= def.noclip.scale or 0.7
+				local filter = params.FilterDescendantsInstances
+				table.insert(filter, result.Instance)
+				params.FilterDescendantsInstances = filter
+				currentOrigin = result.Position + direction * 0.05
+				stopped = nil
+				continue
+			end
 			fireAbility(shooterToken, def, nil, result.Position, def.damage)
+			onMap = true
 			break
 		end
 
@@ -718,17 +884,29 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		local victimCharacter = result.Instance:FindFirstAncestorOfClass("Model")
 		local victimToken = victimCharacter and Combatants.FromCharacter(victimCharacter) or nil
 		if not victimToken or not Combatants.IsAlive(victimToken) then
+			-- Solid map with no destructible behind it (terrain, the level's own props): a noclip round passes.
+			if victimToken == nil and walls > 0 then
+				walls -= 1
+				through *= def.noclip.scale or 0.7
+				local filter = params.FilterDescendantsInstances
+				table.insert(filter, result.Instance)
+				params.FilterDescendantsInstances = filter
+				currentOrigin = result.Position + direction * 0.05
+				stopped = nil
+				continue
+			end
+			onMap = victimToken == nil
 			break
 		end
 
-		local damage = def.damage
+		local damage = def.damage * through
 		local headshot = result.Instance.Name == "Head"
 		if headshot then
 			damage *= (def.headshotMultiplier or 1) * CombatService.HeadshotScale
 		end
 
 		CombatService.DealDamage(shooterToken, victimToken, damage, def.id, headshot)
-		fireAbility(shooterToken, def, victimToken, result.Position, def.damage)
+		fireAbility(shooterToken, def, victimToken, result.Position, def.damage * through)
 
 		remaining -= 1
 		if remaining > 0 then
@@ -742,6 +920,19 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 
 	if stopped then
 		bulletBlast(shooterToken, def, stopped.Position, stopped.Normal)
+	end
+	-- A ricochet round (def.ricochet) that stopped on the map glances off it with what range it has left, at
+	-- `scale` of its damage, and can pierce and ricochet again up to `bounces` times in all.
+	local spec = def.ricochet
+	if spec and onMap and stopped and segments and (bounced or 0) < (spec.bounces or 1) then
+		local left = def.range - travelled
+		if left > 2 then
+			local normal = stopped.Normal
+			local from = stopped.Position + normal * 0.05
+			local bounce = setmetatable({ damage = def.damage * (spec.scale or 0.8), range = left }, { __index = def })
+			local to = firePellet(shooterToken, character, from, CombatService.Reflect(direction, normal).Unit, bounce, rewindTo, segments, (bounced or 0) + 1)
+			table.insert(segments, { from, to })
+		end
 	end
 	return endPoint
 end
@@ -864,20 +1055,28 @@ function CombatService.Fire(player, aimPoint)
 	-- Launchers fire real rounds that fly, drop and burst (ProjectileService); the shot still broadcasts
 	-- with no end points so everyone gets the flash and report.
 	if def.projectile and CombatService.LaunchProjectile then
-		CombatService.LaunchProjectile(player, def, origin, applySpread(unit, spread))
+		-- A gun with several rounds a shot (def.pellets) throws them all, patterned or in the cone.
+		for index = 1, def.pellets or 1 do
+			CombatService.LaunchProjectile(player, def, origin, CombatService.PelletDirection(unit, spread, def, index))
+		end
 		statsFor(player).shots += 1
 		CombatService.BroadcastShot(player, origin, {}, def.rarity)
 		return
 	end
 
-	local endPoints = {}
-	for _ = 1, def.pellets or 1 do
-		local pelletDirection = applySpread(unit, spread)
+	local endPoints, segments = {}, {}
+	shotSegments = segments
+	for index = 1, def.pellets or 1 do
+		local pelletDirection = CombatService.PelletDirection(unit, spread, def, index)
 		table.insert(endPoints, firePellet(player, character, origin, pelletDirection, def, rewindTo))
 	end
+	shotSegments = nil
 	statsFor(player).shots += def.pellets or 1
 
 	CombatService.BroadcastShot(player, origin, endPoints, def.rarity)
+	for _, segment in ipairs(segments) do
+		CombatService.BroadcastSegment(player, segment[1], segment[2], def.rarity)
+	end
 end
 
 -- Set by Bootstrap to DeathFxService.OnDeath: what the body does, by the gun that did it.
@@ -992,6 +1191,8 @@ end
 
 function CombatService.ForgetToken(token)
 	lastAttacker[token] = nil
+	thirst[token] = nil
+	streaks[token] = nil
 	aiming[token] = nil
 	stats[token] = nil
 	recent[token] = nil

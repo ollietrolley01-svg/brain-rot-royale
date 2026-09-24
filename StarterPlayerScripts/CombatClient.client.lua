@@ -2049,12 +2049,37 @@ local function gunMuzzle(gun)
 	return attachment and attachment.WorldCFrame or nil
 end
 
-shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity)
+-- `segment`: the rest of a shot that did not leave the muzzle -- a ricochet glancing off a wall
+-- (CombatService.BroadcastSegment). Its tracer starts where it is sent from, with the ricochet's whine there
+-- and no report, flash or first-person muzzle.
+local function drawSegment(shooter, origin, endPoints)
+	local character = typeof(shooter) == "Instance" and shooter:IsA("Player") and shooter.Character or nil
+	local gun = character and character:FindFirstChild("HeldGun", true) or nil
+	local kind = (gun and gun:GetAttribute("Tracer")) or "bullet"
+	local eye = camera.CFrame.Position
+	if (origin - eye).Magnitude < EFFECT_CULL_DISTANCE then
+		Sfx.PlayAt("Ricochet", origin, 0.1, endPoints[1])
+	end
+	for _, endPoint in ipairs(endPoints) do
+		GunFx.Tracer(origin, endPoint, kind, function()
+			local hit = markImpact(origin, endPoint)
+			if hit then
+				GunFx.Impact(hit.Position, hit.Normal)
+			end
+		end)
+	end
+end
+
+shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, segment)
+	if segment then
+		drawSegment(shooter, origin, endPoints)
+		return
+	end
 	local mine = shooter == player
 	local gun = shooterGun(shooter, origin)
 	local flash = gun and gun:GetAttribute("Flash") or "rifle"
-	-- A signature gun (GunModelsSignature) names its own report on the model (ShotCue), so a new one needs no
-	-- entry here; everything else goes by weapon id, then by flash kind.
+	-- A signature gun (GunModelsSignature) names its own report and tracer on the model (ShotCue, Tracer), so a
+	-- new one needs no entry here; everything else goes by weapon id, then by flash kind.
 	local cue = (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
 
 	if mine then
@@ -2100,9 +2125,11 @@ shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity)
 
 	-- Bubbles pop without a trace, and water, snow, noodles, gumballs and squeaks don't chip a wall;
 	-- rockets and grenades have their own explosion, so no chip either.
-	local kind = TRACER_KIND_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or TRACER_KIND[flash] or "bullet"
+	-- A signature gun (GunModelsSignature) names its tracer on the model too.
+	local kind = (gun and gun:GetAttribute("Tracer")) or TRACER_KIND_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or TRACER_KIND[flash] or "bullet"
 	local chips = not ({ bubble = true, rocket = true, grenade = true, droplets = true, snow = true, noodle = true,
 		gumball = true, squeak = true, leaf = true, waterjet = true, streamer = true, dustbunny = true })[kind]
+		and not GunFx.SoftTracer(kind)
 	for _, endPoint in ipairs(endPoints) do
 		GunFx.Tracer(origin, endPoint, kind, chips and function()
 			local hit = markImpact(origin, endPoint)

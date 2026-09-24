@@ -1848,6 +1848,203 @@ FLAIR.halo = {
 	reload = { gun = { key(0.92, V(0, 0.04, 0), V(-6, 0, 0)) }, events = { key(0.92, "sound", "FlairChime") } },
 }
 
+-- Glitch SMG: it glitches -- the gun tears between two poses a frame apart, over and over.
+FLAIR.glitch = {
+	inspect = function()
+		local a, b = { V(-0.08, 0.08, 0.03), V(6, 30, -18) }, { V(-0.02, 0.1, 0.03), V(2, 18, 10) }
+		local gun, events = { key(0, V(), V()), key(0.14, a[1], a[2]) }, {}
+		local t = 0.24
+		for index = 1, 6 do
+			local from, to = index % 2 == 1 and a or b, index % 2 == 1 and b or a
+			table.insert(gun, key(t, from[1], from[2]))
+			table.insert(gun, key(t + 0.004, to[1], to[2]))
+			if index % 2 == 1 then
+				table.insert(events, key(t, "sound", "FlairBeep"))
+			end
+			t += index < 4 and 0.1 or 0.05
+		end
+		table.insert(gun, key(0.82, a[1], a[2]))
+		table.insert(gun, key(1, V(), V()))
+		return { duration = 2.2, gun = gun, events = events }
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V(0, 0, 12)), key(0.3, V(), V(0, 0, 12)), key(0.304, V(), V(0, 0, -8)), key(0.6, V(), V(0, 0, -8)), key(0.604, V(), V()), key(1, V(), V()) },
+		events = { key(0.3, "sound", "FlairBeep") } },
+	reload = { gun = { key(0.9, V(0, 0.02, 0), V(0, 0, 10)), key(0.904, V(), V()) }, events = { key(0.9, "sound", "FlairBeep") } },
+}
+
+-- Camelo Vampire LMG: a sweep of the cape -- the gun swung wide across the body and back.
+FLAIR.cape = {
+	inspect = function()
+		return {
+			duration = 2.4,
+			gun = { key(0, V(), V()), key(0.2, V(-0.12, 0.06, 0.04), V(4, 40, -22)), key(0.45, V(-0.14, 0.08, 0.04), V(6, 46, -26)),
+				key(0.6, V(-0.04, 0.04, 0.02), V(2, -16, 18)), key(0.82, V(-0.04, 0.04, 0.02), V(2, -18, 20)), key(1, V(), V()) },
+			events = { key(0.2, "sound", "FlairWhoosh"), key(0.6, "sound", "FlairBat") },
+		}
+	end,
+	draw = { duration = 0.6, gun = { key(0, V(), V()), key(0.4, V(-0.04, 0.02, 0), V(0, 16, -10)), key(1, V(), V()) }, events = { key(0.35, "sound", "FlairBat") } },
+	reload = { gun = { key(0.93, V(0, 0.02, 0), V(0, 10, -8)) }, events = { key(0.92, "sound", "FlairBat") } },
+}
+
+-- Six-Seven Marksman: bounce it like a dribble -- three quick drops and catches.
+FLAIR.dribble = {
+	inspect = function()
+		local gun, events = { key(0, V(), V()) }, {}
+		for index = 0, 2 do
+			local s = 0.14 + index * 0.18
+			table.insert(gun, key(s, V(-0.02, 0.04, 0.02), V(-4, 12, -6)))
+			table.insert(gun, key(s + 0.08, V(-0.02, -0.1, 0.02), V(10, 12, -6)))
+			table.insert(events, key(s + 0.08, "sound", "FlairBounce"))
+		end
+		table.insert(gun, key(0.72, V(-0.06, 0.06, 0.02), V(4, 34, -18)))
+		table.insert(gun, key(0.88, V(-0.06, 0.06, 0.02), V(4, 36, -18)))
+		table.insert(gun, key(1, V(), V()))
+		return { duration = 2.3, gun = gun, events = events }
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.35, V(0, -0.06, 0), V(8, 0, 0)), key(0.7, V(0, 0.02, 0), V(-4, 0, 0)), key(1, V(), V()) }, events = { key(0.35, "sound", "FlairBounce") } },
+	reload = { gun = { key(0.9, V(0, -0.05, 0), V(8, 0, 0)), key(0.96, V(0, 0.02, 0), V(-3, 0, 0)) }, events = { key(0.9, "sound", "FlairBounce") } },
+}
+
+-- Piccolino Ratatatà: hold it up to the camera like a phone and tap "post", twice.
+FLAIR.ratio = {
+	inspect = function()
+		local left, events = taps("MagHand", 2, 0.34, 0.56, V(0.04, 0.04, 0), "FlairSwipe")
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.2, V(-0.08, 0.12, 0.06), V(-10, 30, -30)), key(0.66, V(-0.08, 0.12, 0.06), V(-10, 34, -32)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.45, V(0, 0.03, 0), V(-6, 0, -10)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairSwipe") } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-4, 0, -10)) } },
+}
+
+-- Porta Porta Bonk: knock on the door -- three raps on the stock.
+FLAIR.knock = {
+	inspect = function()
+		local left, events = taps("MagHand", 3, 0.3, 0.62, V(0.06, 0, 0.04), "FlairKnock")
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.18, V(-0.08, 0.06, 0.04), V(8, 38, -20)), key(0.7, V(-0.08, 0.06, 0.04), V(8, 40, -22)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.45, V(0, 0.02, 0.03), V(-4, 0, 8)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairKnock") } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0.03), V(-4, 0, 8)) }, events = { key(0.92, "sound", "FlairKnock") } },
+}
+
+-- Rizz Rifle: a turn of the wrist to show the rose, a wink of a tilt back.
+FLAIR.wink = {
+	inspect = function()
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.2, V(-0.08, 0.1, 0.04), V(6, 40, -26)), key(0.55, V(-0.08, 0.1, 0.04), V(6, 44, -28)),
+				key(0.66, V(-0.02, 0.06, 0.02), V(-8, 8, 14)), key(0.76, V(-0.02, 0.06, 0.02), V(-8, 8, 16)), key(1, V(), V()) },
+			events = { key(0.66, "sound", "FlairKiss") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.45, V(0, 0.03, 0), V(-4, 0, 14)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairKiss") } },
+	reload = { gun = { key(0.92, V(0, 0.03, 0), V(-4, 0, 12)) }, events = { key(0.92, "sound", "FlairKiss") } },
+}
+
+-- Scontrino Infinito: tear the receipt off, then tap the display.
+FLAIR.print = {
+	inspect = function()
+		local left, events = taps("CoverHand", 2, 0.46, 0.66, V(0.04, 0.02, 0), "FlairTap")
+		table.insert(events, key(0.3, "sound", "FlairTear"))
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.18, V(-0.06, 0.06, 0.03), V(4, 30, -18)), key(0.72, V(-0.06, 0.06, 0.03), V(4, 32, -20)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.45, V(0, 0.02, 0), V(-4, 0, -6)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairTear") } },
+	reload = { gun = { key(0.93, V(0, 0.02, 0), V(-4, 0, -6)) }, events = { key(0.93, "sound", "FlairTear") } },
+}
+
+-- Patapim Chaingun: spin the barrels up and let them wind down.
+FLAIR.spinup = {
+	inspect = function()
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.2, V(-0.04, 0.04, 0.02), V(2, 20, -10)), key(0.8, V(-0.04, 0.04, 0.02), V(2, 22, -12)), key(1, V(), V()) },
+			events = { key(0.25, "spin", 30), key(0.25, "sound", "FlairWhir"), key(0.5, "spin", 30) },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.5, V(0, 0.02, 0), V(-3, 0, 0)), key(1, V(), V()) }, events = { key(0.3, "spin", 20), key(0.3, "sound", "FlairWhir") } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-3, 0, 0)) }, events = { key(0.92, "spin", 20) } },
+}
+
+-- Nonna Double Barrel: break it, look down the barrels, snap it shut.
+FLAIR.nonna = {
+	inspect = function()
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.18, V(0, 0.02, 0.04), V(-20, 10, 10)), key(0.6, V(0, 0.02, 0.04), V(-22, 14, 10)),
+				key(0.74, V(-0.06, 0.06, 0.02), V(4, 30, -16)), key(0.9, V(-0.06, 0.06, 0.02), V(4, 32, -16)), key(1, V(), V()) },
+			values = { hinge = { key(0, 0), key(0.14, 0), key(0.24, 1), key(0.6, 1), key(0.68, 0) } },
+			events = { key(0.2, "sound", "BreakOpen"), key(0.68, "sound", "BreakClose") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.45, V(0, 0.02, 0), V(-6, 0, 6)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-6, 0, 6)) }, events = { key(0.9, "sound", "FlairKiss") } },
+}
+
+-- Occhietto Pium Pium: stamp it APPROVED on the air in front of you.
+FLAIR.stamp = {
+	inspect = function()
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.18, V(-0.04, 0.06, 0.04), V(6, 30, -16)), key(0.4, V(-0.04, 0.12, 0.04), V(-10, 30, -16)),
+				key(0.46, V(-0.04, -0.02, -0.02), V(10, 30, -16)), key(0.7, V(-0.04, 0.04, 0.02), V(4, 34, -18)), key(1, V(), V()) },
+			events = { key(0.46, "sound", "FlairStamp") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.3, V(0, 0.06, 0), V(-8, 0, 0)), key(0.4, V(0, -0.02, 0), V(6, 0, 0)), key(1, V(), V()) }, events = { key(0.4, "sound", "FlairStamp") } },
+	reload = { gun = { key(0.9, V(0, 0.05, 0), V(-8, 0, 0)), key(0.95, V(0, -0.02, 0), V(6, 0, 0)) }, events = { key(0.95, "sound", "FlairStamp") } },
+}
+
+-- Capo Supremo Bonkolone: it noclips -- flickers sideways out of place and back.
+FLAIR.noclip = {
+	inspect = function()
+		local gun, events = { key(0, V(), V()), key(0.14, V(-0.06, 0.08, 0.04), V(8, 26, -24)) }, {}
+		local t = 0.26
+		for index = 1, 4 do
+			local off = V((index % 2 == 0) and 0.06 or -0.06, 0.08, 0.04)
+			table.insert(gun, key(t, V(-0.06, 0.08, 0.04), V(8, 26, -24)))
+			table.insert(gun, key(t + 0.004, off, V(8, 26, -24)))
+			table.insert(gun, key(t + 0.06, off, V(8, 26, -24)))
+			table.insert(gun, key(t + 0.064, V(-0.06, 0.08, 0.04), V(8, 26, -24)))
+			table.insert(events, key(t, "sound", "FlairBeep"))
+			t += 0.12
+		end
+		table.insert(gun, key(0.84, V(-0.06, 0.08, 0.04), V(8, 28, -24)))
+		table.insert(gun, key(1, V(), V()))
+		return { duration = 2.2, gun = gun, events = events }
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(0.06, 0, 0), V()), key(0.3, V(0.06, 0, 0), V()), key(0.304, V(), V()), key(1, V(), V()) }, events = { key(0.3, "sound", "FlairBeep") } },
+	reload = { gun = { key(0.9, V(0.05, 0, 0), V()), key(0.904, V(), V()) }, events = { key(0.9, "sound", "FlairBeep") } },
+}
+
+-- Ultimo Bum: slap the magazine, then the stock: payment is overdue.
+FLAIR.overdue = {
+	inspect = function()
+		local left, events = taps("MagHand", 2, 0.26, 0.46, V(0, -0.06, 0.02), "FlairStamp")
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.16, V(-0.06, 0.06, 0.03), V(10, 26, -26)), key(0.6, V(-0.06, 0.06, 0.03), V(10, 28, -28)),
+				key(0.72, V(-0.08, 0.08, 0.03), V(2, 40, -14)), key(0.9, V(-0.08, 0.08, 0.03), V(2, 42, -14)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.45, V(0, 0.02, 0), V(-6, 0, -8)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairStamp") } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-6, 0, -8)) }, events = { key(0.92, "sound", "FlairStamp") } },
+}
+
 Viewmodel.Flair = FLAIR
 
 -- The flair's inspect clip for this gun, or nil (the stock inspect plays).
@@ -2556,6 +2753,9 @@ function Viewmodel:handleEvent(event)
 		emit(self, "sound", event[3])
 	elseif kind == "eject" then
 		self:eject()
+	elseif kind == "spin" then
+		-- A flair spinning a rotary's barrels up.
+		self.spinSpeed = math.max(self.spinSpeed, event[3] or 26)
 	elseif kind == "drop" then
 		-- A copy of the magazine where it is right now, handed off to fall away.
 		local group = event[3]

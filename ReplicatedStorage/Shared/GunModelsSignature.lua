@@ -1886,4 +1886,871 @@ Builders.AuraScattergun = function(g, K)
 	return receiver
 end
 
+--------------------------------------------------------------------------------
+-- Epic: Glitch SMG -- the one that did not load properly
+--------------------------------------------------------------------------------
+
+-- Built out of voxels and not quite in sync with itself: a black body with its colour channels split off
+-- either side (a magenta ghost up and left, a cyan one down and right), a staircase of pixels down its back,
+-- a stock still wearing the missing-texture checker, a drum that is a pixel circle, and a square muzzle with
+-- a lit core. Every hit it lands arrives twice (WeaponData `echo`).
+Builders.GlitchSMG = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local body = skin(g, look(K, 26, 24, 34))
+	local magenta = neon(K, 255, 70, 220)
+	local cyan = neon(K, 70, 240, 255)
+	local violet = look(K, 90, 60, 160)
+	local checkA, checkB = look(K, 255, 0, 220), look(K, 12, 12, 14)
+
+	local receiver = smgChassis(g, K, {
+		metal = body,
+		furniture = violet,
+		tube = body,
+		endCap = body,
+		receiverDress = function(g)
+			-- The split: a sliver of each colour channel standing off the sides, out of register.
+			-- Scanlines of each channel, broken where the signal drops.
+			for index, line in ipairs({ { 12, 180, 30 }, { 4, 120, -60 }, { -6, 210, 20 }, { -14, 90, 90 } }) do
+				g:box("ChannelSplit", V(FINE * 2, 3, line[2]), CF(-15.2 - FINE, line[1] + 2, line[3]), magenta)
+				g:box("ChannelSplit", V(FINE * 2, 3, line[2] * 0.8), CF(15.2 + FINE, line[1] - 3, line[3] + 14), cyan)
+			end
+			-- A staircase of pixels down the back of the receiver.
+			g:detail(function()
+				for index = 0, 5 do
+					for _, sx in ipairs(SIGNS) do
+						g:box("Pixel", V(8, 8, 8), CF(sx * 11, 20 + index * 0 + 4, 70 + index * 14) * CF(0, -index * 2.5, 0), index % 2 == 0 and magenta or cyan)
+					end
+				end
+			end)
+		end,
+		sights = function(g)
+			g:box("ClawRail", V(28, 12, 140), CF(0, 27, 40), body)
+			g:rail("OpticRail", 132, CF(0, 33, 40))
+			local h = g:holo(CF(0, 42.5, 30))
+			g:key("Sight", CF(0, 42.5 + h, 110))
+			g.model:SetAttribute("Optic", "holo")
+			g.model:SetAttribute("EyeRelief", 0.6)
+		end,
+		front = function(g)
+			g:cyl("Barrel", 150, 15, CF(0, 0, -215), F.nitride)
+			-- A blocky handguard, its sides split into channels too.
+			g:rounded("Handguard", V(42, 40, 124), CF(0, -8, -205), 12, body)
+			-- Only its upper half split, where the hand does not close.
+			for _, sx in ipairs(SIGNS) do
+				g:box("HandguardSplit", V(FINE * 2, 12, 110), CF(sx * (21 + FINE), sx > 0 and 2 or 6, -205), sx > 0 and cyan or magenta)
+			end
+			-- The square muzzle and its lit core, a few loose pixels stuck to its face.
+			g:box("MuzzleBrake", V(26, 26, 20), CF(0, 0, -300), body)
+			g:box("MuzzleCore", V(12, 12, 2), CF(0, 0, -311), cyan)
+			g:box("Bore", V(8, 8, FINE), CF(0, 0, -312 - FINE / 2), F.bore)
+			for index, at in ipairs({ { 9, 14, -304 }, { -14, -8, -298 }, { 15, -12, -292 } }) do
+				g:box("Pixel", V(6, 6, 6), CF(at[1], at[2], at[3]), index % 2 == 0 and magenta or cyan)
+			end
+			return -313
+		end,
+		mag = function(g)
+			-- The drum as a pixel circle: rows of blocks stepping out and back in, a feed tower above.
+			g:at(CF(0, -44, -76), function()
+				g:box("Magazine", V(20, 42, 34), CF(0, -21, 0), body)
+				local centre = V(0, -42 - 50 + 8, -2)
+				local rows = { 38, 64, 80, 90, 94, 94, 90, 80, 64, 38 }
+				for index, width in ipairs(rows) do
+					local y = centre.Y + 45 - (index - 0.5) * 9.5
+					g:box("Magazine", V(56, 9.6, width), CF(0, y, centre.Z), index % 3 == 0 and violet or body)
+				end
+				for _, sx in ipairs(SIGNS) do
+					g:box("MagazinePixel", V(FINE * 2, 18, 18), CF(sx * 28.2, centre.Y, centre.Z), sx > 0 and cyan or magenta)
+				end
+			end)
+		end,
+		stock = function(g)
+			-- A stepped pixel stock, its sides checked in the missing-texture magenta and black.
+			g:at(CF(0, 0, 168), function()
+				for index = 0, 3 do
+					g:box("Stock", V(36, 34 + index * 12, 50), CF(0, -2 - index * 6, 25 + index * 50), violet)
+				end
+				g:box("Buttpad", V(40, 80, 12), CF(0, -22, 206), F.rubber)
+				g:detail(function()
+					for _, sx in ipairs(SIGNS) do
+						for row = 0, 2 do
+							for col = 0, 5 do
+								g:box("StockChecker", V(FINE * 2, 10, 10), CF(sx * 18.2, 8 - row * 10, 40 + col * 20 + (row % 2) * 10), (row + col) % 2 == 0 and checkA or checkB)
+							end
+						end
+					end
+				end)
+			end)
+		end,
+	})
+	g.model:SetAttribute("Flash", "glitch")
+	g.model:SetAttribute("Tracer", "glitch")
+	g.model:SetAttribute("Flair", "glitch")
+	g.model:SetAttribute("ShotCue", "GunshotGlitch")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Epic: Camelo Vampire LMG -- the vampire camel
+--------------------------------------------------------------------------------
+
+-- The belt-fed gun of a camel that only comes out at night: black steel and crimson velvet, bat wings off
+-- the barrel shroud, two humps on the stock, a coffin for an ammo box with a gold bat on its lid, and fangs
+-- under the muzzle. Its lifesteal grows the longer the belt keeps landing (WeaponData `bloodthirst`).
+Builders.CameloLMG = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local black = skin(g, metal(K, 30, 28, 32))
+	local velvet = skin(g, look(K, 122, 18, 36, K.Mat.Fabric))
+	local coffin = wood(K, 58, 34, 26)
+	local gold = F.gold
+	local fur = look(K, 196, 152, 100, K.Mat.Fabric)
+	local wing = look(K, 40, 30, 44)
+	local fang = look(K, 250, 248, 240)
+
+	local receiver = stock(g, K, {})
+	paint(g, {
+		{ "^HandguardRail", black }, { "^Handguard", velvet }, { "^StockTube", black }, { "^Stock", velvet },
+		{ "^Grip", velvet }, { "^Buttpad", black }, { "^MagazineBullet", F.copper }, { "^MagazineBelt", F.brass },
+		{ "^MagazineLink", black }, { "^Magazine", coffin }, { "^Receiver", black }, { "^FeedCover", black },
+		{ "^Shroud$", black }, { "^CarryHandleGrip", velvet },
+	})
+
+	-- The coffin: a raised lid rim, handles either end, the gold bat on its right side.
+	g:group("mag", function()
+		g:box("MagazineLidRim", V(84, 4, 124), CF(-14, -50.5, -110), gold)
+		for _, sz in ipairs(SIGNS) do
+			g:box("MagazineHandle", V(24, 6, 6), CF(-14, -96, -110 + sz * 63), gold)
+		end
+		g:at(CF(26.2, -95, -110), function()
+			g:box("MagazineBat", V(FINE * 2, 10, 14), CF(0, 0, 0), gold)
+			for _, sz in ipairs(SIGNS) do
+				g:box("MagazineBatWing", V(FINE * 2, 8, 22), CF(0, 5, sz * 16) * A(sz * 25, 0, 0), gold)
+			end
+		end)
+	end)
+	-- The humps, fur-covered, on the stock behind the eye.
+	for _, hump in ipairs({ { 190, 30 }, { 290, 24 } }) do
+		g:rounded("Hump", V(34, hump[2], 70), CF(0, 12 + hump[2] / 2 - 2, hump[1]), hump[2] * 0.45, fur)
+	end
+	-- Bat wings fanned off both sides of the shroud.
+	for _, sx in ipairs(SIGNS) do
+		for index = 0, 2 do
+			g:wedge("BatWing", V(3, 44 - index * 8, 86 - index * 14), CF(sx * (26 + index * 6), 12 - index * 6, -330 - index * 18) * A(0, 0, sx * (-70 + index * 12)), wing)
+		end
+		g:box("BatWingRoot", V(10, 14, 60), CF(sx * 22, 8, -330), black)
+	end
+	-- Fangs under the muzzle brake.
+	for _, sx in ipairs(SIGNS) do
+		g:wedge("Fang", V(5, 16, 8), CF(sx * 6, -19, -700) * A(0, 0, 180), fang)
+	end
+
+	g.model:SetAttribute("Flash", "blood")
+	g.model:SetAttribute("Tracer", "blood")
+	g.model:SetAttribute("Flair", "cape")
+	g.model:SetAttribute("ShotCue", "GunshotVampire")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Epic: Six-Seven Marksman -- the bank-shot rifle
+--------------------------------------------------------------------------------
+
+-- A long marksman rifle in basketball leather, black seams running round it, the stock carrying a lit
+-- scoreboard that reads 6 7, and a hoop round the muzzle brake. Its shots bank off walls (WeaponData
+-- `ricochet`).
+local SEGMENTS = {
+	-- Which of a seven-segment digit's bars are lit: top, upper right, lower right, bottom, lower left,
+	-- upper left, middle.
+	[6] = { true, false, true, true, true, true, true },
+	[7] = { true, true, true, false, false, false, false },
+}
+
+local function digit(g, K, name, value, at, height, lk)
+	local V, CF = K.V, K.CF
+	local lit = SEGMENTS[value]
+	local w, h, t = height * 0.55, height / 2, height * 0.12
+	local bars = {
+		{ V(0, h, 0), true }, { V(0, h / 2, -w / 2), false }, { V(0, -h / 2, -w / 2), false },
+		{ V(0, -h, 0), true }, { V(0, -h / 2, w / 2), false }, { V(0, h / 2, w / 2), false }, { V(0, 0, 0), true },
+	}
+	g:at(at, function()
+		for index, bar in ipairs(bars) do
+			if lit[index] then
+				local across = bar[2]
+				g:box(name, across and V(K.FINE * 2, t, w) or V(K.FINE * 2, h, t), CF(bar[1]), lk)
+			end
+		end
+	end)
+end
+
+Builders.SixSevenMarksman = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local ball = skin(g, look(K, 222, 110, 40, K.Mat.Rubber))
+	local seam = look(K, 26, 22, 20)
+	local board = look(K, 20, 20, 24)
+	local lamp = neon(K, 255, 176, 60)
+	local rim = metal(K, 230, 90, 30, 0.1)
+	local net = fabric(K, 244, 244, 240)
+	local steel = metal(K, 60, 62, 68)
+
+	local receiver = arChassis(g, K, { scale = 1.12, hgLength = 330, barrelEnd = -600, barrelDia = 21, action = "semi", flash = "bank" }, {
+		receiver = steel,
+		lower = steel,
+		furniture = ball,
+		small = seam,
+		stock = function(g)
+			-- The precision stock, in leather, with the scoreboard set into each side.
+			g:cyl("BufferTube", 60, 30, CF(0, -3, 133), steel)
+			g:rounded("Stock", V(42, 44, 240), CF(0, -2, 222), 12, ball)
+			g:prism("StockCheek", V(36, 16, 150), CF(0, 36, 230), 5, ball, "top")
+			for _, z in ipairs({ 180, 280 }) do
+				g:cylY("StockCheekPost", 12, 9, CF(0, 23, z), steel)
+			end
+			g:box("StockHook", V(32, 22, 176), CF(0, -82, 256), ball)
+			g:box("StockHook", V(34, 60, 30), CF(0, -41, 326), ball)
+			g:prism("Buttpad", V(46, 150, 18), CF(0, -38, 350), 4, F.rubber)
+			for _, sx in ipairs(SIGNS) do
+				g:box("Scoreboard", V(FINE * 2, 32, 70), CF(sx * 21.2, -2, 222), board)
+				digit(g, K, "ScoreDigit", 6, CF(sx * (21.2 + FINE), -2, 222 + sx * 16), 22, lamp)
+				digit(g, K, "ScoreDigit", 7, CF(sx * (21.2 + FINE), -2, 222 - sx * 16), 22, lamp)
+			end
+			-- The seams: a ring round the stock and one running its length.
+			g:rounded("StockSeam", V(43.4, 45.4, 3), CF(0, -2, 160), 12.5, seam)
+			g:box("StockSeam", V(3, 45.6, 200), CF(0, -2, 240), seam)
+		end,
+		handguard = function(g, info)
+			g:at(CF(0, -4, info.z), function()
+				g:cyl("Handguard", info.length, 46, CF(0, 0, 0), ball)
+				for index = 0, 2 do
+					g:cyl("HandguardSeam", 3, 47.4, CF(0, 0, -info.length / 2 + 50 + index * 110), seam)
+				end
+				g:box("HandguardSeam", V(3, 47.6, info.length - 20), CF(0, 0, 0), seam)
+			end)
+			g:rail("HandguardRail", 120, CF(0, 19, info.z + 60), steel)
+		end,
+		muzzle = function(g, barrelEnd, barrelDia)
+			local z = barrelEnd + g:brake(CF(0, 0, barrelEnd), barrelDia + 9, 64)
+			-- The hoop: an orange rim hung level under the brake on a bracket, a short white net below it.
+			local hoop = barrelEnd - 36
+			g:shell("Hoop", 5, 66, 4, CF(0, -26, hoop) * A(90, 0, 0), rim, 16)
+			g:box("HoopBracket", V(8, 12, 40), CF(0, -21, barrelEnd - 16), rim)
+			for index = 0, 5 do
+				local angle = (index + 0.5) / 6 * math.pi * 2
+				local top = V(math.cos(angle) * 29, -27, hoop + math.sin(angle) * 29)
+				local bottom = V(math.cos(angle) * 18, -52, hoop + math.sin(angle) * 18)
+				strut(g, K, "HoopNet", top, bottom, 2.4, net)
+			end
+			g:shell("HoopNetRing", 3, 40, 3, CF(0, -52, hoop) * A(90, 0, 0), net, 12)
+			return z
+		end,
+		mag = function(g)
+			g:magazine("Magazine", { width = 24, depth = 70, segments = { { 64, 0 }, { 30, 3 }, { 30, 3 } }, ribs = "stanag", caliber = 10.5, plate = seam },
+				CF(0, -52, -57), ball)
+		end,
+		sights = function(g, railTop)
+			local h = g:scope(CF(0, railTop, -15), "long")
+			g:key("Sight", CF(0, railTop + h, 150))
+			g.model:SetAttribute("Optic", "scope")
+			g.model:SetAttribute("EyeRelief", 0.6)
+		end,
+		dress = function(g, info)
+			g:bipod(CF(0, -4 - 23, info.front + 40))
+		end,
+	})
+	g.model:SetAttribute("Tracer", "bank")
+	g.model:SetAttribute("Flair", "dribble")
+	g.model:SetAttribute("ShotCue", "GunshotBank")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Epic: Piccolino Ratatatà -- L + RATIO
+--------------------------------------------------------------------------------
+
+-- Berry and pink: the stock is a big letter L, the suppressor ends in a plus sign, and the drum is a speech
+-- bubble with its three dots typing. Five quick hits ratio the target (WeaponData `ratio`).
+Builders.RatioPDW = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local berry = skin(g, look(K, 114, 54, 82))
+	local pink = look(K, 235, 150, 182)
+	local white = look(K, 246, 244, 248)
+	local dot = look(K, 150, 150, 160)
+	local dark = look(K, 49, 44, 56)
+
+	local receiver = smgChassis(g, K, {
+		metal = berry,
+		furniture = dark,
+		tube = berry,
+		suppressed = true,
+		drum = true,
+		flash = "ratio",
+		sights = function(g)
+			g:box("ClawRail", V(28, 12, 140), CF(0, 27, 40), berry)
+			g:rail("OpticRail", 132, CF(0, 33, 40))
+			local h = g:holo(CF(0, 42.5, 30))
+			g:key("Sight", CF(0, 42.5 + h, 110))
+			g.model:SetAttribute("Optic", "holo")
+			g.model:SetAttribute("EyeRelief", 0.6)
+		end,
+		front = function(g)
+			g:cyl("Suppressor", 330, 52, CF(0, -2, -305), berry)
+			g:rounded("Handguard", V(56, 56, 120), CF(0, -2, -200), 26, dark)
+			g:detail(function()
+				for index = 0, 4 do
+					g:cyl("SuppressorBand", 4, 55, CF(0, -2, -330 - index * 26), pink)
+				end
+			end)
+			-- The plus: two white bars crossed on the can's end, clear of the bore.
+			g:box("PlusBar", V(46, 12, 6), CF(0, -2, -473), white)
+			g:box("PlusBar", V(12, 46, 6.4), CF(0, -2, -473), white)
+			g:cyl("Bore", 2, 10, CF(0, -2, -477), F.bore)
+			return -478
+		end,
+		mag = function(g)
+			-- The speech bubble: a rounded white slab, its tail pointing back, three dots on each face.
+			g:at(CF(0, -44, -76), function()
+				g:box("Magazine", V(20, 42, 34), CF(0, -21, 0), dark)
+				g:rounded("Magazine", V(56, 84, 110), CF(0, -86, -2), 22, white)
+				g:wedge("MagazineTail", V(40, 26, 30), CF(0, -134, 44) * A(0, 180, 0) * A(-20, 0, 0), white)
+				for _, sx in ipairs(SIGNS) do
+					for index = -1, 1 do
+						g:ball("MagazineDot", 13, CF(sx * 27, -86, -2 + index * 26), dot)
+					end
+				end
+			end)
+		end,
+		stock = function(g)
+			-- The L: a long upright bar and its foot, in pink, bolted to the end cap.
+			g:box("StockYoke", V(30, 14, 20), CF(0, -2, 174), dark)
+			g:rounded("Stock", V(30, 34, 180), CF(0, -4, 270), 10, pink)
+			g:rounded("Stock", V(30, 110, 34), CF(0, -52, 345), 10, pink)
+			g:rounded("Buttpad", V(34, 116, 10), CF(0, -52, 367), 4, F.rubber)
+		end,
+	})
+	g.model:SetAttribute("Tracer", "ratio")
+	g.model:SetAttribute("Flair", "ratio")
+	g.model:SetAttribute("ShotCue", "GunshotRatio")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Epic: Porta Porta Bonk -- the backrooms breacher
+--------------------------------------------------------------------------------
+
+-- Mono-yellow wallpaper and damp brown carpet, a fluorescent tube humming down its side, an EXIT sign on
+-- the drum, a door frame round the muzzle -- and the stock is a door, knob and all. Its pellets land in the
+-- shape of a doorway and shove what they hit (WeaponData `pattern`, `knockback`).
+Builders.BackroomsBreacher = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local wallpaper = skin(g, look(K, 206, 186, 96))
+	local stripe = look(K, 180, 160, 80)
+	local carpet = look(K, 118, 98, 60, K.Mat.Fabric)
+	local doorWood = wood(K, 150, 110, 70)
+	local tube = neon(K, 240, 246, 220)
+	local housing = look(K, 170, 172, 168)
+	local exitGreen = neon(K, 60, 220, 110)
+	local white = look(K, 246, 246, 246)
+
+	local receiver = arChassis(g, K, { scale = 1.18, hgLength = 230, barrelEnd = -420, barrelDia = 22, action = "semi", flash = "breach", casing = "shell" }, {
+		receiver = wallpaper,
+		lower = carpet,
+		furniture = carpet,
+		small = F.brass,
+		stock = function(g)
+			g:cyl("BufferTube", 177, 30, CF(0, -3, 191.5), housing)
+			-- The door: a flat panel standing on end with its frame, a brass knob on each side.
+			g:at(CF(0, 0, 205), function()
+				g:box("Stock", V(30, 130, 150), CF(0, -34, 20), doorWood)
+				for _, sx in ipairs(SIGNS) do
+					g:box("StockPanel", V(FINE * 2, 50, 56), CF(sx * 15.2, -8, 50), wood(K, 126, 90, 56))
+					g:box("StockPanel", V(FINE * 2, 50, 56), CF(sx * 15.2, -64, 50), wood(K, 126, 90, 56))
+					g:cylX("DoorKnob", 10, 6, CF(sx * 20, -36, -34), F.brass)
+					g:ball("DoorKnob", 12, CF(sx * 26, -36, -34), F.brass)
+				end
+				g:rounded("Buttpad", V(34, 128, 12), CF(0, -34, 100), 4, F.rubber)
+			end)
+		end,
+		handguard = function(g, info)
+			g:at(CF(0, -4, info.z), function()
+				g:rounded("Handguard", V(44, 48, info.length), CF(0, 0, 0), 8, wallpaper)
+				g:detail(function()
+					for _, sx in ipairs(SIGNS) do
+						for index = 0, 7 do
+							g:box("HandguardStripe", V(FINE * 2, 40, 3), CF(sx * 22.2, 0, -info.length / 2 + 20 + index * 27), stripe)
+						end
+					end
+				end)
+				-- The fluorescent tube in its housing along the left side.
+				g:box("LightHousing", V(10, 22, info.length - 30), CF(-27, 4, 0), housing)
+				g:box("LightTube", V(4, 10, info.length - 44), CF(-33.5, 4, 0), tube)
+			end)
+			g:rail("HandguardRail", 90, CF(0, 20, info.z + 50))
+		end,
+		supportHand = function(g, info)
+			local z = info.z - info.length * 0.14
+			g:foregrip(CF(0, -4 - 24, z))
+			g:hand("SupportHand", V(-27, -80, z + 6), V(0.45, -0.1, -1), V(-1, 0.1, 0.4))
+		end,
+		muzzle = function(g, barrelEnd, barrelDia)
+			g:cyl("MuzzleBrake", 36, barrelDia + 5, CF(0, 0, barrelEnd - 18), housing)
+			g:cyl("Bore", FINE, barrelDia - 3, CF(0, 0, barrelEnd - 36 - FINE / 2), F.bore)
+			-- A door frame round the choke: jambs, lintel and threshold on a collar.
+			g:box("DoorFrameCollar", V(barrelDia + 12, barrelDia + 12, 8), CF(0, 0, barrelEnd - 14), doorWood)
+			for _, sx in ipairs(SIGNS) do
+				g:box("DoorFrame", V(5, 56, 8), CF(sx * 18, 4, barrelEnd - 14), doorWood)
+			end
+			g:box("DoorFrame", V(41, 5, 8), CF(0, 34.5, barrelEnd - 14), doorWood)
+			g:box("DoorFrame", V(41, 5, 8), CF(0, -26.5, barrelEnd - 14), doorWood)
+			return barrelEnd - 38
+		end,
+		mag = function(g)
+			g:at(CF(0, -52, -57), function()
+				g:box("Magazine", V(20, 42, 34), CF(0, -21, 0), carpet)
+				local centre = CF(0, -42 - 85 + 8, -2)
+				g:cylX("Magazine", 64, 170, centre, wallpaper)
+				for _, sx in ipairs(SIGNS) do
+					g:cylX("MagazineCover", 3.5, 136, centre * CF(sx * 33.5, 0, 0), stripe)
+					-- The EXIT sign on each face, its arrow pointing forward.
+					g:box("ExitSign", V(4, 30, 64), centre * CF(sx * 36.5, 20, 0), exitGreen)
+					g:box("ExitArrow", V(4.6, 6, 26), centre * CF(sx * 36.8, 20, 4), white)
+					g:wedge("ExitArrowHead", V(4.6, 14, 12), centre * CF(sx * 36.8, 20, -14) * A(90, 0, 0), white)
+				end
+			end)
+		end,
+		sights = function(g, railTop)
+			local h = g:holo(CF(0, railTop, -30))
+			g:key("Sight", CF(0, railTop + h, 50))
+			g.model:SetAttribute("Optic", "holo")
+			g.model:SetAttribute("EyeRelief", 0.62)
+		end,
+	})
+	g.model:SetAttribute("Tracer", "breach")
+	g.model:SetAttribute("Flair", "knock")
+	g.model:SetAttribute("ShotCue", "GunshotBreach")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Shared by the top tiers: a heart, a chain
+--------------------------------------------------------------------------------
+
+-- A heart lying on a side face (`at`'s X is out of the face): two lobes and a turned square for the point.
+local function heart(g, K, name, at, size, lk)
+	local V, CF, A = K.V, K.CF, K.A
+	g:at(at, function()
+		for _, sz in ipairs(SIGNS) do
+			g:ball(name, size * 0.56, CF(0, size * 0.14, sz * size * 0.22), lk)
+		end
+		g:box(name, V(size * 0.3, size * 0.56, size * 0.56), CF(0, -size * 0.12, 0) * A(45, 0, 0), lk)
+	end)
+end
+
+-- A chain hanging between two points, sagging `sag` below the straight line, in `links` links.
+local function chain(g, K, name, from, to, sag, links, lk)
+	local previous = from
+	for index = 1, links do
+		local t = index / links
+		local point = from:Lerp(to, t) - K.V(0, sag * 4 * t * (1 - t), 0)
+		strut(g, K, name, previous, point, 3.2, lk, 2)
+		previous = point
+	end
+end
+
+--------------------------------------------------------------------------------
+-- Legendary: Rizz Rifle -- the charmer
+--------------------------------------------------------------------------------
+
+-- Pearl and rose gold: a pink handguard with gold scrollwork and a rose tucked along its side, hearts set
+-- in the receiver, a gold chain looped under the stock with a heart hanging from it, a gold muzzle. Its hits
+-- charm: each one slows the target a little, three at a time (WeaponData `chill`, no freeze).
+Builders.RizzRotary = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local pearl = skin(g, metal(K, 244, 236, 240, 0.2))
+	local rose = skin(g, look(K, 236, 120, 160))
+	local roseGold = metal(K, 232, 170, 150, 0.2)
+	local petal = look(K, 214, 30, 60)
+	local leaf = look(K, 70, 140, 70)
+
+	local receiver = arChassis(g, K, {}, {
+		receiver = pearl,
+		lower = pearl,
+		furniture = rose,
+		small = roseGold,
+		stock = function(g)
+			g:cyl("BufferTube", 177, 30, CF(0, -3, 191.5), roseGold)
+			g:at(CF(0, 0, 205), function()
+				g:rounded("Stock", V(40, 42, 150), CF(0, -3, 0), 16, rose)
+				g:wedge("StockWeb", V(34, 76, 130), CF(0, -60, 10) * A(0, 0, 180), rose)
+				g:rounded("Buttpad", V(44, 20, 128), CF(0, -38, 83) * A(90, 0, 0), 8, pearl)
+				-- The chain looped from the heel to the toe of the stock, a heart hanging at its lowest link.
+				chain(g, K, "StockChain", V(21, -20, -40), V(21, -60, 60), 22, 9, F.gold)
+				heart(g, K, "StockCharm", CF(23, -64, 12), 16, F.gold)
+				heart(g, K, "StockHeart", CF(-20.4, -8, 0), 18, roseGold)
+			end)
+		end,
+		handguard = function(g, info)
+			g:at(CF(0, -4, info.z), function()
+				g:rounded("Handguard", V(44, 48, info.length), CF(0, 0, 0), 14, rose)
+				for _, sx in ipairs(SIGNS) do
+					g:engraving(CF(sx * 22, 10, 30), info.length - 90, 14)
+				end
+				-- A rose along the left side: its stem, two leaves, the flower at the front.
+				g:cyl("RoseStem", info.length * 0.5, 4, CF(-23.5, -6, info.length * 0.05), leaf)
+				for _, z in ipairs({ -20, 30 }) do
+					g:box("RoseLeaf", V(3, 8, 16), CF(-24.5, -2, z) * A(30, 0, 0), leaf)
+				end
+				g:at(CF(-27, -6, -info.length * 0.22), function()
+					g:ball("RoseBloom", 16, CF(0, 0, 0), petal)
+					for index = 0, 4 do
+						local angle = index / 5 * math.pi * 2
+						g:ball("RosePetal", 10, CF(-2, math.cos(angle) * 7, math.sin(angle) * 7), petal)
+					end
+				end)
+			end)
+			g:rail("HandguardRail", 100, CF(0, 20, info.z + 60), roseGold)
+		end,
+		supportHand = function(g, info)
+			local z = info.z - info.length * 0.14
+			g:foregrip(CF(0, -4 - 24, z))
+			g:hand("SupportHand", V(-27, -80, z + 6), V(0.45, -0.1, -1), V(-1, 0.1, 0.4))
+		end,
+		muzzle = function(g, barrelEnd)
+			local z = barrelEnd + g:birdcage(CF(0, 0, barrelEnd), 22)
+			paint(g, { { "^MuzzleBrake", roseGold }, { "^MuzzleProng", roseGold } })
+			return z
+		end,
+		sights = function(g, railTop)
+			local h = g:holo(CF(0, railTop, -30))
+			g:key("Sight", CF(0, railTop + h, 50))
+			g.model:SetAttribute("Optic", "holo")
+			g.model:SetAttribute("EyeRelief", 0.62)
+		end,
+		dress = function(g)
+			for _, sx in ipairs(SIGNS) do
+				heart(g, K, "ReceiverHeart", CF(sx * 13.2, -33, 30), 14, roseGold)
+			end
+		end,
+	})
+	g.model:SetAttribute("Tracer", "heart")
+	g.model:SetAttribute("Flair", "wink")
+	g.model:SetAttribute("ShotCue", "GunshotRizz")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Legendary: Scontrino Infinito Brrrrr -- the receipt printer
+--------------------------------------------------------------------------------
+
+-- A till that fires: a cream printer body with its receipt curling out of the right side of the feed cover,
+-- a green price display on the left, charcoal furniture, and a cash drawer for an ammo box with coins
+-- stacked on it. Every tenth hit in a run prints the total (WeaponData `receipt`).
+Builders.ReceiptPrinterLMG = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local cream = skin(g, look(K, 214, 206, 178))
+	local charcoal = skin(g, look(K, 57, 61, 64))
+	local paper = look(K, 250, 250, 244)
+	local ink = look(K, 60, 60, 70)
+	local lcd = neon(K, 120, 255, 150)
+	local drawer = look(K, 88, 96, 92)
+
+	local receiver = stock(g, K, {})
+	paint(g, {
+		{ "^HandguardRail", charcoal }, { "^Handguard", charcoal }, { "^StockTube", charcoal }, { "^Stock", charcoal },
+		{ "^Grip", charcoal }, { "^MagazineBullet", F.copper }, { "^MagazineBelt", F.brass }, { "^MagazineLink", ink },
+		{ "^Magazine", drawer }, { "^Receiver", cream }, { "^FeedCover", cream },
+	})
+
+	-- The receipt: a paper strip leaving a slot in the cover's right edge and curling out and down.
+	-- It leaves the slot low on the cover's side, so it stays out of the sight picture.
+	g:box("PaperSlot", V(6, 4, 58), CF(26, 14, -70), ink)
+	local previous = V(28, 14, -70)
+	for index = 1, 9 do
+		local angle = math.rad(index * 22)
+		local point = V(28 + math.sin(angle) * 22, 14 + (1 - math.cos(angle)) * -22 + index * -3, -70)
+		strut(g, K, "Receipt", previous, point, 50, paper, 1.4)
+		if index % 2 == 0 then
+			g:box("ReceiptLine", V(1.6, 1.6, 34), CF((previous + point) / 2) * CF(0.9, 0, 0), ink)
+		end
+		previous = point
+	end
+	-- The price display on the left.
+	g:box("DisplayFrame", V(2, 22, 66), CF(-25.8, 4, -30), ink)
+	g:box("Display", V(1.2, 14, 56), CF(-27, 4, -30), lcd)
+	-- Coins on the cash drawer's lid, and the drawer's handle.
+	g:group("mag", function()
+		for index = 0, 3 do
+			g:cylY("Coin", 3, 16, CF(-40, -47 + index * 3.1, -140), F.gold)
+		end
+		g:cylY("Coin", 3, 16, CF(-22, -47, -128), F.gold)
+		g:box("DrawerHandle", V(36, 6, 8), CF(-14, -118, -174), ink)
+	end)
+
+	g.model:SetAttribute("Tracer", "cash")
+	g.model:SetAttribute("Flair", "print")
+	g.model:SetAttribute("ShotCue", "GunshotReceipt")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Legendary: Patapim Chaingun -- the forest gatling
+--------------------------------------------------------------------------------
+
+-- A gatling that grew in a wood: the motor housing is bark with its ribs gone to moss, leaves sprout off the
+-- carry handle and the housing, mushrooms on the drum of the box, a crown of leaves round the barrel clamp.
+-- Its arcs are green (it keeps its chain).
+Builders.PatapimChaingun = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local bark = skin(g, wood(K, 96, 66, 40))
+	local moss = K.finishOf(rgb(86, 140, 60), K.Mat.Grass)
+	local leafA, leafB = look(K, 96, 170, 70), look(K, 140, 196, 80)
+	local crate = wood(K, 150, 110, 64)
+	local cap, stem = look(K, 210, 60, 40), look(K, 238, 230, 210)
+
+	local receiver = stock(g, K, {})
+	paint(g, {
+		{ "^Receiver", bark }, { "^HousingRib", moss }, { "^Magazine", crate }, { "^Gearbox", bark }, { "^Motor", bark },
+		{ "^RearCap", bark }, { "^CarryHandleBar", bark },
+	})
+	-- Leaves: fans of blades off the housing's shoulders and the barrel clamp.
+	local function leaves(at, count, size)
+		g:at(at, function()
+			for index = 0, count - 1 do
+				local turn = (index - (count - 1) / 2) * 28
+				g:box("Leaf", V(2, size, size * 0.45), CF(0, 0, 0) * A(0, 0, turn) * CF(0, size / 2, 0), index % 2 == 0 and leafA or leafB)
+			end
+		end)
+	end
+	for _, sx in ipairs(SIGNS) do
+		leaves(CF(sx * 44, 36, -60) * A(0, 0, -sx * 40), 3, 34)
+		leaves(CF(sx * 22, 18, -560) * A(0, 0, -sx * 55), 3, 22)
+	end
+	mushroom(g, K, CF(-110, -84, 40) * A(0, 0, 70), 14, 20, cap, stem, stem)
+	mushroom(g, K, CF(-110, -110, -30) * A(0, 0, 80), 10, 14, cap, stem, nil)
+
+	g.model:SetAttribute("Flash", "leaves")
+	g.model:SetAttribute("Tracer", "vine")
+	g.model:SetAttribute("Flair", "spinup")
+	g.model:SetAttribute("ShotCue", "GunshotForest")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Legendary: Nonna Double Barrel -- grandma's
+--------------------------------------------------------------------------------
+
+-- Grandma's: the engraved heirloom with a knitted cosy on the stock in her colours, a cameo on the side
+-- plate, a lace doily tied round the wrist of the stock. Its shot lands in a heart (WeaponData `pattern`).
+Builders.NonnaDoubleBarrel = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local wools = { look(K, 240, 170, 190, K.Mat.Fabric), look(K, 250, 236, 200, K.Mat.Fabric), look(K, 160, 200, 230, K.Mat.Fabric) }
+	local lace = look(K, 250, 248, 240, K.Mat.Fabric)
+	local ivory = look(K, 246, 236, 220)
+
+	local receiver = stock(g, K, { engraved = true })
+	-- The cosy: striped knit bands round the middle of the stock, a pompom on its end.
+	for index = 0, 5 do
+		g:rounded("StockCosy", V(44, 25, 18), CF(0, -41, 240 + index * 18) * A(-6, 0, 0), 9, wools[index % 3 + 1])
+	end
+	g:ball("StockPompom", 16, CF(0, -24, 346), wools[1])
+	-- The doily at the wrist, its scalloped edge.
+	g:rounded("Doily", V(40, 20, 8), CF(0, -16, 170), 8, lace)
+	for index = 0, 7 do
+		local angle = index / 8 * math.pi * 2
+		g:ball("DoilyScallop", 6, CF(math.cos(angle) * 21, -16 + math.sin(angle) * 11, 170), lace)
+	end
+	-- The cameo on each side plate.
+	for _, sx in ipairs(SIGNS) do
+		g:cylX("Cameo", 3, 22, CF(sx * 24, -16, 10), F.gold)
+		g:cylX("CameoFace", 1.6, 16, CF(sx * 25.8, -16, 10), ivory)
+		heart(g, K, "CameoHeart", CF(sx * 26.8, -16, 10), 8, look(K, 214, 120, 140))
+	end
+
+	g.model:SetAttribute("Tracer", "heart")
+	g.model:SetAttribute("Flair", "nonna")
+	g.model:SetAttribute("ShotCue", "GunshotNonna")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Mythic: Occhietto Pium Pium -- the auditor
+--------------------------------------------------------------------------------
+
+-- White titanium and violet: a clipboard clamped to the handguard with its checklist ticked green, a pen in
+-- its clip, an APPROVED stamp for a buttpad, and a violet aura ring round the muzzle. Every eighth hit in a
+-- run is audited: it arcs to two more people (WeaponData `audit`).
+Builders.AuraAuditRifle = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local titanium = skin(g, metal(K, 214, 216, 220, 0.18))
+	local violet = look(K, 150, 110, 230)
+	local board = wood(K, 176, 136, 90)
+	local paperLook = look(K, 250, 250, 246)
+	local tick = neon(K, 90, 230, 120)
+	local ink = look(K, 50, 50, 60)
+	local stampRed = look(K, 200, 40, 50)
+	local aura = neon(K, 190, 150, 255)
+
+	local receiver = arChassis(g, K, {}, {
+		receiver = titanium,
+		lower = titanium,
+		furniture = violet,
+		small = F.gold,
+		stock = function(g)
+			g:cyl("BufferTube", 177, 30, CF(0, -3, 191.5), titanium)
+			g:at(CF(0, 0, 205), function()
+				g:rounded("Stock", V(40, 42, 150), CF(0, -3, 0), 13, violet)
+				g:wedge("StockWeb", V(34, 76, 130), CF(0, -60, 10) * A(0, 0, 180), violet)
+				-- The stamp: a wooden handle block and its red rubber face for a buttpad.
+				g:rounded("Buttpad", V(44, 20, 128), CF(0, -38, 83) * A(90, 0, 0), 8, stampRed)
+				g:box("StampBlock", V(40, 110, 10), CF(0, -38, 71), board)
+			end)
+		end,
+		handguard = function(g, info)
+			g:at(CF(0, -4, info.z), function()
+				g:rounded("Handguard", V(44, 48, info.length), CF(0, 0, 0), 12, titanium)
+				-- The clipboard on the right: the board, its clip, the sheet and a ticked checklist.
+				g:box("Clipboard", V(3, 44, 120), CF(23.5, 0, 20), board)
+				g:box("ClipboardClip", V(5, 10, 26), CF(25.5, 18, 20), F.steel)
+				g:box("ClipboardSheet", V(1.2, 36, 104), CF(25.6, -3, 20), paperLook)
+				for row = 0, 2 do
+					g:box("ChecklistBox", V(1.4, 7, 7), CF(26.5, 8 - row * 11, 60), ink)
+					g:box("ChecklistTick", V(1.8, 3, 8), CF(26.8, 8 - row * 11, 60) * A(40, 0, 0), tick)
+					g:box("ChecklistLine", V(1.4, 2, 60), CF(26.5, 8 - row * 11, 20), ink)
+				end
+				g:cyl("Pen", 70, 6, CF(26, 22, -10), ink)
+			end)
+			g:rail("HandguardRail", 100, CF(0, 20, info.z + 60))
+		end,
+		supportHand = function(g, info)
+			local z = info.z - info.length * 0.14
+			g:foregrip(CF(0, -4 - 24, z))
+			g:hand("SupportHand", V(-27, -80, z + 6), V(0.45, -0.1, -1), V(-1, 0.1, 0.4))
+		end,
+		muzzle = function(g, barrelEnd)
+			local z = barrelEnd + g:birdcage(CF(0, 0, barrelEnd), 22)
+			g:shell("AuraRing", 4, 42, 3, CF(0, 0, barrelEnd - 20), aura, 14)
+			for _, sx in ipairs(SIGNS) do
+				g:box("AuraRingSpoke", V(10, 3, 3), CF(sx * 15.5, 0, barrelEnd - 20), titanium)
+			end
+			return z
+		end,
+		sights = function(g, railTop)
+			local h = g:holo(CF(0, railTop, -30))
+			g:key("Sight", CF(0, railTop + h, 50))
+			g.model:SetAttribute("Optic", "holo")
+			g.model:SetAttribute("EyeRelief", 0.62)
+		end,
+	})
+	g.model:SetAttribute("Tracer", "audit")
+	g.model:SetAttribute("Flair", "stamp")
+	g.model:SetAttribute("ShotCue", "GunshotAudit")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Secret: Capo Supremo Bonkolone -- the admin's sidearm
+--------------------------------------------------------------------------------
+
+-- Black glass and mint light: a terminal prompt glowing down both sides of the slide, a grip of keycaps, and
+-- a console under the nose where a light would be, cursor blinking. Its rounds noclip through one wall
+-- (WeaponData `noclip`).
+Builders.AdminOverride = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local glassBlack = skin(g, look(K, 20, 24, 26, K.Mat.SmoothPlastic, 0.2))
+	local teal = skin(g, look(K, 30, 54, 50))
+	local mint = neon(K, 126, 250, 200)
+	local key = look(K, 46, 52, 54)
+	local keyTop = look(K, 70, 78, 80)
+
+	local receiver = pistolChassis(g, K, {
+		frame = teal,
+		slide = glassBlack,
+		small = mint,
+		guard = teal,
+		slideBody = function(g, front, back)
+			local body = g:prism("Slide", V(25.5, 22, back - front), CF(0, 1, (front + back) / 2), 3, glassBlack, "top")
+			-- The prompt down each side: a chevron, an underscore cursor, and lines of output.
+			g:detail(function()
+				for _, sx in ipairs(SIGNS) do
+					local x = sx * (12.75 + FINE)
+					g:box("Prompt", V(FINE * 2, 2, 8), CF(x, 6, back - 20) * A(35, 0, 0), mint)
+					g:box("Prompt", V(FINE * 2, 2, 8), CF(x, 2, back - 20) * A(-35, 0, 0), mint)
+					g:box("Prompt", V(FINE * 2, 2, 10), CF(x, 0, back - 34), mint)
+					for index = 0, 2 do
+						g:box("PromptLine", V(FINE * 2, 1.6, 60 - index * 14), CF(x, -4 + index * 4, back - 80 + index * 7), mint)
+					end
+				end
+			end)
+			return body
+		end,
+		gripDress = function(g, length)
+			-- Keycaps set in both flanks.
+			for _, sx in ipairs(SIGNS) do
+				for row = 0, 3 do
+					for col = 0, 1 do
+						g:box("Keycap", V(3, 12, 12), CF(sx * 13, -16 - row * 16, -8 + col * 14), key)
+						g:box("KeycapTop", V(1.2, 9, 9), CF(sx * 15, -16 - row * 16, -8 + col * 14), keyTop)
+					end
+				end
+			end
+		end,
+		under = function(g, front)
+			-- The console: a slab on the rail, its screen and the blinking cursor.
+			g:box("ConsoleMount", V(20, 6, 26), CF(0, -27, -58), teal)
+			g:prism("Console", V(28, 22, 68), CF(0, -40, -80), 4, glassBlack)
+			for _, sx in ipairs(SIGNS) do
+				g:box("ConsoleScreen", V(FINE * 2, 14, 56), CF(sx * (14 + FINE), -40, -80), look(K, 16, 40, 34))
+				g:box("ConsoleCursor", V(FINE * 2 + 0.4, 2, 6), CF(sx * (14 + FINE), -44, -64), mint)
+			end
+			g:cyl("ConsoleLens", FINE * 2, 10, CF(0, -40, -114 - FINE), mint)
+		end,
+		flash = "pistol",
+	})
+	g.model:SetAttribute("Tracer", "noclip")
+	g.model:SetAttribute("Flair", "noclip")
+	g.model:SetAttribute("ShotCue", "GunshotAdmin")
+	return receiver
+end
+
+--------------------------------------------------------------------------------
+-- Secret: Ultimo Bum -- the debt collector
+--------------------------------------------------------------------------------
+
+-- The collector's AK: burgundy wood, invoices stapled down the stock with PAST DUE across them in red, a
+-- padlock through the magazine, a red stamp plate on the receiver. Every fifth hit in a run collects: a small
+-- blast on the target (WeaponData `collect`).
+Builders.FinalNotice = function(g, K)
+	local V, CF, A, F, FINE = K.V, K.CF, K.A, K.F, K.FINE
+	local burgundy = skin(g, wood(K, 107, 40, 44))
+	local stampRed = look(K, 210, 36, 40)
+	local paperLook = look(K, 248, 246, 238)
+	local ink = look(K, 50, 50, 56)
+
+	local receiver = stock(g, K, { pattern = "ak", woodFurniture = true })
+	paint(g, { { "^HandguardFerrule", F.nitride }, { "^HandguardRetainer", F.nitride }, { "^Handguard", burgundy }, { "^StockTang", F.nitride },
+		{ "^Stock", burgundy }, { "^Grip", burgundy } })
+
+	-- Invoices down both sides of the stock, each with its PAST DUE band and staple.
+	for _, sx in ipairs(SIGNS) do
+		for index = 0, 1 do
+			g:at(CF(sx * (16 + FINE + index * 0.6), -8, 180 + index * 70) * A(sx * 0, 0, 0) * A(index == 0 and 6 or -5, 0, 0), function()
+				g:box("Invoice", V(1.2, 30, 50), CF(0, 0, 0), paperLook)
+				g:box("InvoiceStamp", V(1.6, 7, 40), CF(sx * 0.3, 2, 0) * A(-14, 0, 0), stampRed)
+				g:box("InvoiceLine", V(1.6, 1.4, 34), CF(sx * 0.3, -8, 0), ink)
+				g:box("Staple", V(2, 2, 10), CF(sx * 0.4, 12, -18), F.steel)
+			end)
+		end
+	end
+	-- The stamp plate on the receiver's left, and the padlock through the magazine.
+	g:box("StampPlate", V(FINE * 2, 14, 48), CF(-15.3, -18, -20), stampRed)
+	g:group("mag", function()
+		g:box("Padlock", V(28, 22, 18), CF(0, -86, -94) * A(16, 0, 0), F.gold)
+		arc(g, K, "PadlockShackle", CF(0, -76, -97) * A(16, 0, 0), 9, -90, 90, 7, 3.5, 3.5, F.steel)
+		g:box("PadlockKeyhole", V(29.4, 5, 3), CF(0, -88, -94) * A(16, 0, 0), ink)
+	end)
+
+	g.model:SetAttribute("Tracer", "overdue")
+	g.model:SetAttribute("Flair", "overdue")
+	g.model:SetAttribute("ShotCue", "GunshotCollect")
+	return receiver
+end
+
 return GunModelsSignature

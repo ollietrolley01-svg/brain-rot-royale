@@ -114,6 +114,18 @@ local FLASH = {
 			ColorSequenceKeypoint.new(0.7, Color3.fromRGB(90, 226, 180)), ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 130, 255)),
 		}) },
 	keycap = { core = 0.45, flame = 0.2, sides = 0, color = Color3.fromRGB(226, 236, 255), smoke = 0.2, light = 4, sparks = 3 },
+
+	-- The signature guns (GunModelsSignature, the gun rework): the Epics and up flash as what they are.
+	glitch = { core = 0.7, flame = 0.4, sides = 0, color = Color3.fromRGB(255, 90, 230), smoke = 0.1, light = 7, sparks = 5,
+		bubbles = 6, bubbleColor = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 220)), ColorSequenceKeypoint.new(1, Color3.fromRGB(70, 240, 255)),
+		}) },
+	blood = { core = 0.9, flame = 0.9, sides = 0.3, color = Color3.fromRGB(255, 80, 70), smoke = 0.7, light = 8,
+		bubbles = 5, bubbleColor = Color3.fromRGB(150, 16, 30) },
+	bank = { core = 0.8, flame = 0.6, sides = 1.1, color = Color3.fromRGB(255, 170, 70), smoke = 0.9, light = 10, sparks = 4 },
+	ratio = { core = 0.3, flame = 0.2, sides = 0, color = Color3.fromRGB(255, 150, 210), smoke = 0.2, light = 3,
+		bubbles = 5, bubbleColor = Color3.fromRGB(255, 120, 190) },
+	breach = { core = 1.4, flame = 1.2, sides = 0.5, color = Color3.fromRGB(255, 226, 120), smoke = 1.0, light = 12, sparks = 6 },
 }
 
 -- One emitter host per flash kind is enough: particles live in the world once emitted, so the host can
@@ -368,8 +380,28 @@ local TRACER = {
 	disco = { speed = 900, streak = 6, core = 0.05, glow = 0.28, color = Color3.fromRGB(255, 120, 240), hot = Color3.fromRGB(255, 255, 255) },
 	snow = { speed = 240, projectile = "ball", size = 0.24, color = Color3.fromRGB(246, 250, 255), material = Enum.Material.Snow },
 	lava = { speed = 300, projectile = "ball", size = 0.3, color = Color3.fromRGB(255, 120, 40), material = Enum.Material.Neon },
+
+	-- The signature guns (the gun rework). `soft` marks a tracer that chips no wall where it lands.
+	glitch = { speed = 1100, streak = 6, core = 0.05, glow = 0.24, color = Color3.fromRGB(70, 240, 255), hot = Color3.fromRGB(255, 90, 230) },
+	blood = { speed = 820, streak = 9, core = 0.06, glow = 0.26, color = Color3.fromRGB(170, 18, 36), hot = Color3.fromRGB(255, 130, 130) },
+	bank = { speed = 900, streak = 8, core = 0.05, glow = 0.24, color = Color3.fromRGB(255, 140, 40), hot = Color3.fromRGB(255, 232, 196) },
+	ratio = { speed = 760, streak = 5, core = 0.045, glow = 0.22, color = Color3.fromRGB(255, 110, 190), hot = Color3.fromRGB(255, 232, 246) },
+	breach = { speed = 760, streak = 3, core = 0.035, glow = 0.14, color = Color3.fromRGB(255, 210, 90), hot = Color3.fromRGB(255, 250, 222) },
+	heart = { speed = 520, projectile = "heart", soft = true },
+	cash = { speed = 880, streak = 8, core = 0.05, glow = 0.26, color = Color3.fromRGB(120, 230, 120), hot = Color3.fromRGB(255, 236, 150) },
+	vine = { speed = 820, streak = 10, core = 0.06, glow = 0.3, color = Color3.fromRGB(110, 220, 90), hot = Color3.fromRGB(230, 255, 190) },
+	audit = { speed = 1000, streak = 7, core = 0.045, glow = 0.3, color = Color3.fromRGB(190, 150, 255), hot = Color3.fromRGB(250, 244, 255) },
+	noclip = { speed = 1200, streak = 9, core = 0.04, glow = 0.28, color = Color3.fromRGB(126, 250, 200), hot = Color3.fromRGB(230, 255, 245) },
+	overdue = { speed = 950, streak = 7, core = 0.05, glow = 0.24, color = Color3.fromRGB(230, 40, 50), hot = Color3.fromRGB(255, 220, 200) },
 }
 GunFx.TracerKinds = TRACER
+
+-- Whether a tracer kind lands soft: no chip in the wall where it arrives (CombatClient asks, for kinds it
+-- does not list itself).
+function GunFx.SoftTracer(kind)
+	local spec = TRACER[kind]
+	return spec ~= nil and spec.soft == true
+end
 
 local flying = {}
 local MAX_FLYING = 90
@@ -421,6 +453,12 @@ local function projectileModel(kind, spec)
 	elseif kind == "leaf" then
 		piece(Enum.PartType.Block, V(0.34, 0.03, 0.2), CFrame.identity, Color3.fromRGB(126, 186, 74), Enum.Material.Grass)
 		piece(Enum.PartType.Block, V(0.36, 0.05, 0.05), CFrame.identity, Color3.fromRGB(92, 132, 56), Enum.Material.Grass)
+	elseif kind == "heart" then
+		-- A little pink heart: two lobes and the point.
+		for _, side in ipairs({ -1, 1 }) do
+			piece(Enum.PartType.Ball, V(0.13, 0.13, 0.13), CFrame.new(side * 0.05, 0.03, 0), Color3.fromRGB(255, 90, 150), Enum.Material.Neon)
+		end
+		piece(Enum.PartType.Block, V(0.1, 0.1, 0.06), CFrame.new(0, -0.03, 0) * CFrame.Angles(0, 0, math.rad(45)), Color3.fromRGB(255, 90, 150), Enum.Material.Neon)
 	elseif kind == "keycap" then
 		piece(Enum.PartType.Block, V(0.16, 0.1, 0.16), CFrame.identity, Color3.fromRGB(38, 40, 48), Enum.Material.SmoothPlastic)
 		piece(Enum.PartType.Block, V(0.13, 0.03, 0.13), CFrame.new(0, 0.052, 0), Color3.fromRGB(228, 234, 246), Enum.Material.SmoothPlastic)

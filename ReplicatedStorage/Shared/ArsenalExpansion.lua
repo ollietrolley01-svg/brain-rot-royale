@@ -15,7 +15,7 @@ Pack.Weapons = {
 		damage = 21, headshotMultiplier = 1.8, fireRate = 4.8, magSize = 13,
 		reserveAmmo = 91, reloadTime = 1.45, range = 230, spread = 1.35, pellets = 1,
 		groundWeight = 24, chestWeight = 8,
-		description = "Scuffed two-tone compact. Fast follow-up shots, modest reach.",
+		description = "A pistachio-green pawnshop pistol with cracked-shell grips and the price tag still on.",
 	},
 	RustbeltMarshal = {
 		name = "Sceriffo Sgrunf", rarity = "Common", style = "revolver",
@@ -29,28 +29,28 @@ Pack.Weapons = {
 		damage = 13, headshotMultiplier = 1.3, fireRate = 0.95, magSize = 5,
 		reserveAmmo = 40, reloadTime = 2.75, range = 110, spread = 7, pellets = 8,
 		groundWeight = 18, chestWeight = 8,
-		description = "Worn security shotgun. Work the pump between close-range shots.",
+		description = "The night-shift bakery's shotgun: a ciabatta for a pump, a baguette for a stock, breadsticks in the saddle.",
 	},
 	DoomscrollSMG = {
 		name = "Scrolla Scrolla Brrrap", rarity = "Uncommon", style = "smg",
 		damage = 15, headshotMultiplier = 1.6, fireRate = 11.5, magSize = 30,
 		reserveAmmo = 180, reloadTime = 1.95, range = 205, spread = 2.4, pellets = 1,
 		groundWeight = 13, chestWeight = 8, killEffect = "shock",
-		description = "Folded-stock SMG in midnight blue. One more mag, then bed.",
+		description = "A phone clamped to its side mid-scroll, a power bank for a magazine, a selfie stick for a stock. One more mag, then bed.",
 	},
 	TrailheadCarbine = {
 		name = "Scarponcino Trotto Trotto", rarity = "Uncommon", style = "rifle",
 		damage = 25, headshotMultiplier = 1.9, fireRate = 6.8, magSize = 25,
 		reserveAmmo = 150, reloadTime = 1.9, range = 410, spread = 1.35, pellets = 1,
 		groundWeight = 12, chestWeight = 8,
-		description = "Short ranger carbine with iron sights and olive furniture.",
+		description = "Packed for a hike: a trekking-pole handguard, a headlamp, paracord and a compass in the stock.",
 	},
 	TouchGrassScout = {
 		name = "Prato Prato Pium", rarity = "Rare", style = "dmr",
 		damage = 43, headshotMultiplier = 2.2, fireRate = 3.3, magSize = 14,
 		reserveAmmo = 70, reloadTime = 2.2, range = 690, spread = 0.32, pellets = 1,
 		ability = "pierce", groundWeight = 0, chestWeight = 4,
-		description = "Light scoped scout with a field-green finish and a tiny grass insignia.",
+		description = "A picnic scout: wicker stock, gingham handguard, a flower on the muzzle and a butterfly on the scope.",
 	},
 	DeadAirPrecision = {
 		name = "Silenzio Sussurrone", rarity = "Rare", style = "sniper",
@@ -61,27 +61,36 @@ Pack.Weapons = {
 	},
 	RatioPDW = {
 		name = "Piccolino Ratatatà", rarity = "Epic", style = "smg",
-		damage = 20, headshotMultiplier = 1.6, fireRate = 12.5, magSize = 36,
+		-- Ratio (the gun rework): five hits with no gap over a second and a half mark the target for three
+		-- seconds, and a marked target takes 1.12x from everyone. Damage comes down from 20 to 19 and the
+		-- lifesteal goes: 19 x 12.5 = 237.5 body DPS, 266 once the mark is up, against the old 250.
+		damage = 19, headshotMultiplier = 1.6, fireRate = 12.5, magSize = 36,
 		reserveAmmo = 216, reloadTime = 1.85, range = 230, spread = 2.05, pellets = 1,
-		ability = "lifesteal", lifestealRatio = 0.1, groundWeight = 0, chestWeight = 2,
+		ratio = { stacks = 5, window = 1.5, duration = 3, scale = 1.12 }, groundWeight = 0, chestWeight = 2,
 		killEffect = "confetti",
-		description = "Suppressed drum-fed PDW, berry panels and a small L + RATIO marking.",
+		description = "L + RATIO: five quick hits and the target takes extra damage from everyone for three seconds.",
 	},
 	BackroomsBreacher = {
 		name = "Porta Porta Bonk", rarity = "Epic", style = "shotgun",
+		-- A door (the gun rework): the nine pellets land in the shape of a doorway -- the frame, the lintel, the
+		-- knob -- scaled to the spread, so the pattern is the same every shot, and each hit shoves. Damage and
+		-- pellets are untouched; the lifesteal goes for the shove.
 		damage = 13, headshotMultiplier = 1.3, fireRate = 1.85, magSize = 8,
 		reserveAmmo = 48, reloadTime = 2.85, range = 125, spread = 6, pellets = 9,
-		ability = "lifesteal", lifestealRatio = 0.12, groundWeight = 0, chestWeight = 2,
+		pattern = "door", knockback = 14, groundWeight = 0, chestWeight = 2,
 		killEffect = "ash",
-		description = "Drum-fed breacher in tired yellow: EXIT lettering, black rails, real sights.",
+		description = "Fluorescent-yellow breacher from the backrooms. Its pellets land in the shape of a door, and they shove.",
 	},
 	ReceiptPrinterLMG = {
 		name = "Scontrino Infinito Brrrrr", rarity = "Legendary", style = "lmg",
-		damage = 26, headshotMultiplier = 1.6, fireRate = 10.5, magSize = 70,
+		-- The total (the gun rework): every tenth hit in a run on one target (no gap over 0.8 s) prints a 30
+		-- bonus. Damage comes down from 26 to 25 to pay for it; the kill still takes nine hits, 0.76 s.
+		damage = 25, headshotMultiplier = 1.6, fireRate = 10.5, magSize = 70,
 		reserveAmmo = 280, reloadTime = 4.1, range = 425, spread = 2.5, pellets = 1,
 		ability = "goldRush", goldRushBonus = 100, groundWeight = 0, chestWeight = 0.65,
+		receipt = { every = 10, bonus = 30, window = 0.8 },
 		killEffect = "gold",
-		description = "Cream-and-charcoal belt-fed. The ammo box prints an ITEM / TOTAL receipt.",
+		description = "A till that fires. Every tenth hit in a row prints the total: 30 extra damage.",
 	},
 	SundaySpecial = {
 		name = "Pranzo Della Nonna Bum", rarity = "Legendary", style = "cannon",
@@ -100,8 +109,11 @@ Pack.Weapons = {
 		damage = 29, headshotMultiplier = 1.9, fireRate = 8.0, magSize = 28,
 		reserveAmmo = 168, reloadTime = 2.35, range = 470, spread = 1.05, pellets = 1,
 		ability = "chain", chainRadius = 12, chainRatio = 0.22,
+		-- The audit (the gun rework): every eighth hit in a run arcs to two more people near the target for 0.6
+		-- of the hit. The target's own damage is untouched.
+		audit = { every = 8, ratio = 0.6, targets = 2, window = 1 },
 		groundWeight = 0, chestWeight = 1.5, killEffect = "shock",
-		description = "White-and-titanium evaluation carbine. Small arcs punish tightly stacked teams.",
+		description = "The auditor: clipboard, checklist and stamp. Every eighth hit in a row arcs to two more people.",
 	},
 	QuietHours = {
 		name = "Nanna Nanna Puff", rarity = "Mythic", style = "sniper",
@@ -115,16 +127,21 @@ Pack.Weapons = {
 		name = "Capo Supremo Bonkolone", rarity = "Secret", style = "pistol",
 		damage = 34, headshotMultiplier = 2.0, fireRate = 3.5, magSize = 10,
 		reserveAmmo = 60, reloadTime = 1.7, range = 335, spread = 0.65, pellets = 1,
-		ability = "pierce", groundWeight = 0, chestWeight = 0.8, killEffect = "vaporize",
-		description = "Black prototype sidearm with mint AUTH / LOCAL markings. No actual admin powers.",
+		-- Noclip (the gun rework): each round passes through one wall of the map for 0.7 of its damage.
+		ability = "pierce", noclip = { walls = 1, scale = 0.7 }, groundWeight = 0, chestWeight = 0.8, killEffect = "vaporize",
+		description = "The admin's sidearm, a terminal glowing down its slide. Its rounds noclip through one wall.",
 	},
 	FinalNotice = {
 		name = "Ultimo Bum", rarity = "Secret", style = "rifle",
-		damage = 33, headshotMultiplier = 1.9, fireRate = 6.5, magSize = 24,
+		-- Collection (the gun rework): every fifth hit in a run (no gap over 1.5 s) sets off a small blast on the
+		-- target, 20 at its centre over 6 studs. Damage comes down from 33 to 31; the kill still takes seven
+		-- hits, 0.92 s.
+		damage = 31, headshotMultiplier = 1.9, fireRate = 6.5, magSize = 24,
 		reserveAmmo = 144, reloadTime = 2.5, range = 490, spread = 1.15, pellets = 1,
 		ability = "goldRush", goldRushBonus = 135,
+		collect = { every = 5, damage = 20, radius = 6, window = 1.5 },
 		groundWeight = 0, chestWeight = 0.8, killEffect = "gold",
-		description = "Stamped receiver, burgundy wood and a FINAL NOTICE label: the collector's AK.",
+		description = "The debt collector's AK. Every fifth hit in a row collects: a small blast on the target.",
 	},
 }
 
