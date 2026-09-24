@@ -1,39 +1,65 @@
--- Shooting the map apart: walls, floors, roofs and the props inside buildings take damage and
--- break, so cover is something you wear down rather than something permanent.
+-- Shooting the map apart: walls, floors, roofs, the props inside buildings, and the things standing
+-- about the map (trees, rocks, wrecks, shelters, parked cars, benches, street furniture) take damage
+-- and break, so cover is something you wear down rather than something permanent.
 --
 --   DestructibleService.FromPart(part)              the part if it can be broken, or nil
---   DestructibleService.Damage(part, amount, by)    hurt one; it breaks at zero
---   DestructibleService.DamageInRadius(...)         splash from a blast
+--   DestructibleService.Damage(part, amount, by)    hurt it (or the pool it belongs to); breaks at zero
+--   DestructibleService.DamageInRadius(...)         splash from a blast: each pool once per blast
 --   DestructibleService.Count()                     how many are damaged but still standing
 --
 -- Registered with CombatService at load the way defenses and hazards are, so bullets find it.
 --
--- Two things shape the design. Health is per PART, not per model: a building is one Model, so
--- the defense registry's model lookup would give a whole house a single pool instead of 250 a
--- wall. And entries are made lazily, on the first hit — a map carries thousands of wall parts,
--- and registering them all at build time would cost real time at match start and need clearing
--- between matches. Nothing is tracked until someone shoots it, and an entry dies with its part.
-
+-- WHAT CAN BREAK. Two ways in, both decided when the map is built and neither a registry:
+--
+--   by name   a building's own Wall, Floor, Roof... (HEALTH below): health per PART, so a house is
+--             250 a wall rather than one pool for the whole building
+--   by tag    the attribute `Destructible`, set by the map modules on what they build:
+--               "Kind"        on a Model: the whole Model is one pool (a TownThemes street prop)
+--               "Kind"        on a part: that part alone
+--               "Kind:id"     on parts: every sibling with the same string is one pool, so a tree's
+--                             trunk and its leaves go together (MapDecor, MapWilds, Landmarks group
+--                             each thing they build this way, since their parts share one parent)
+--               false         never, whatever its name says (the ground floor of a building)
+--             `DestructibleHealth` (a number) beside it overrides the health rule below; on its
+--             own, a positive number marks the Model (one pool) or part it is on as breakable with
+--             exactly that health (#51: MapDecor's ParkedCar Models carry 240).
+--
+-- A tagged pool's health comes from its size and what it is made of (poolHealth), times its kind's
+-- toughness (KINDS), found on its first hit. Nothing is tracked until someone shoots it, and an
+-- entry dies with the part it hangs on: a map carries thousands of breakable things, and looking
+-- them all up at match start would cost real time and need clearing between matches.
+--
+-- WHAT NEVER BREAKS, whatever it is tagged: anything outside the Map; anything unanchored (vehicles
+-- and deployables have health of their own); anything named, or inside something named, in NEVER
+-- (roads, bridges, footings, spawns, the storm, objectives); and a tagged pool bigger than
+-- MAX_POOL_SPAN across, which would be a slab something else stands on. The map modules never tag
+-- those in the first place; this is the backstop, and tools/destruct_map_check.py plants a tag on
+-- a bridge to show it holds.
+--
+-- FLOORS. A building's upper floors, stairs and roofs keep breaking per part as before (loot and
+-- deployables on them resettle through OnPartBroken). Its ground-floor slab never breaks
+-- (MapBuildings tags it false): it is what everyone inside is standing on, and under it is only
+-- footing. Small single-storey things built as one pool (a wilds cabin, a lean-to, a deer stand)
+-- come down whole, never leaving a roof in the air.
 --
 -- Window glass is the one thing that breaks at a touch: any bullet or blast shatters a pane, and
 -- the shot carries on through it (CombatService asks PassesThrough). Clients draw the shards
 -- (GlassFxClient) from one GlassShatter event per frame; the server only removes the pane, so
 -- anyone joining later simply sees the window open.
 --
+-- Everything else that breaks is drawn the same way (#71): the server removes it and sends one
+-- BreakFx event per frame, { cframe, size, color, material, class, from } for each piece, and
+-- BreakFxClient throws debris shaped for the material (splinters, chunks and dust, plates and
+-- sparks, leaves). No rubble is made on the server, so nothing breaking replicates a part.
+--
 -- When a wall, floor or roof part breaks, everything hanging off it goes too: the panes set into
 -- it shatter, and its trim (sills, shutters, frames, cornices, signs, lights) is removed rather
 -- than left floating where the wall used to be. Trim is found by overlap with the broken part,
 -- walking the building's own children, so nothing is registered ahead of time.
 --
--- Not everything can be found by its name: decor built from generic parts (the parked cars were
--- all called "Part", #51, so a shot looked them up, found nothing and did no damage). Two opt-ins
--- work whatever the pieces are called. A part with a numeric DestructibleHealth attribute is one
--- more wall-like piece with that health. A Model carrying the attribute is ONE pool shared by
--- every solid part in it — shoot a car's cabin or its wheel and it is the car that wears down —
--- and when it breaks the whole model comes apart at once, so no roof is left floating over the
--- place its body was. The nearest such Model wins over a part's own name.
+-- A blast that goes off on open ground also takes a small bite out of the terrain (craterAt),
+-- capped per map and never on a road, paving or water, or under anything built.
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
@@ -43,6 +69,9 @@ local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local DestructibleService = {}
 
 DestructibleService.GlassName = "WindowGlass"
+DestructibleService.Tag = "Destructible"
+DestructibleService.HealthTag = "DestructibleHealth"
+DestructibleService.HealthAttribute = DestructibleService.HealthTag
 
 -- What can be broken and how much it takes. Walls are the headline number; structure is tougher
 -- than the dressing hanging off it, and loose props give way quickly. (Trim never collides or
@@ -61,6 +90,57 @@ local HEALTH = {
 	WindowGlass = 1,
 }
 
+-- How tough each tagged kind is for its size and material. 1 is a plain prop; a parked car is cover
+-- you are meant to lean on, so it lasts; an umbrella is cloth on a stick.
+local KINDS = {
+	Tree = 1.4, Palm = 1.1, Cactus = 0.8, Bush = 0.5, HayBales = 0.6,
+	Rock = 1.3, Log = 1, Stump = 1, Cairn = 1, Picnic = 0.8,
+	Shelter = 1.6, Wreck = 1.5, Container = 2.2,
+	Car = 1.8, Bench = 0.8, Bin = 0.7, Hydrant = 1.2, Planter = 0.8, Umbrella = 0.4, Lamp = 1,
+	RoofProp = 1, Prop = 1,
+}
+DestructibleService.Kinds = KINDS
+
+-- Material families: how tough each is, and what BreakFxClient throws when it goes.
+local CLASS_OF = {
+	[Enum.Material.Wood] = "wood", [Enum.Material.WoodPlanks] = "wood",
+	[Enum.Material.Brick] = "stone", [Enum.Material.Concrete] = "stone", [Enum.Material.Slate] = "stone",
+	[Enum.Material.Rock] = "stone", [Enum.Material.Cobblestone] = "stone", [Enum.Material.Granite] = "stone",
+	[Enum.Material.Marble] = "stone", [Enum.Material.Pebble] = "stone", [Enum.Material.Basalt] = "stone",
+	[Enum.Material.Limestone] = "stone", [Enum.Material.Sandstone] = "stone", [Enum.Material.Pavement] = "stone",
+	[Enum.Material.Asphalt] = "stone", [Enum.Material.CrackedLava] = "stone",
+	[Enum.Material.Metal] = "metal", [Enum.Material.DiamondPlate] = "metal", [Enum.Material.CorrodedMetal] = "metal",
+	[Enum.Material.Foil] = "metal",
+	[Enum.Material.Grass] = "foliage", [Enum.Material.LeafyGrass] = "foliage", [Enum.Material.Ground] = "foliage",
+	[Enum.Material.Fabric] = "cloth",
+	[Enum.Material.Glass] = "glass", [Enum.Material.Ice] = "glass", [Enum.Material.Neon] = "glass",
+}
+local CLASS_TOUGHNESS = { stone = 2, metal = 1.6, wood = 1, plastic = 1, foliage = 0.55, cloth = 0.4, glass = 0.3 }
+
+local function classOf(material)
+	return CLASS_OF[material] or "plastic"
+end
+DestructibleService.ClassOf = classOf
+
+-- health = toughness(material) * (BASE + PER_STUD * size) * kind, where size is the cube root of the
+-- pool's solid volume (capped): a bench about 55, an oak about 120, a boulder about 200, a parked car
+-- about 280. A rocket's wallDamage is 110-150, a rifle round 20-40.
+local HEALTH_BASE, HEALTH_PER_STUD, SIZE_CAP = 20, 14, 12
+local MIN_HEALTH, MAX_HEALTH = 15, 1500
+
+-- Never breakable, by the part's own name or any ancestor's inside the Map.
+local NEVER = {
+	Asphalt = true, Kerb = true, Paving = true, Road = true, Street = true, Junction = true, Crossing = true,
+	Bridge = true, Deck = true, Footbridge = true, SteppingStone = true,
+	Ground = true, Footing = true, Foundation = true, Plinth = true, Pad = true,
+	SpawnLocation = true, Spawn = true, Lobby = true, Storm = true, Objective = true, Zipline = true,
+}
+DestructibleService.Never = NEVER
+-- A tagged pool wider than this is somebody's floor, not a prop.
+local MAX_POOL_SPAN = 90
+-- The most parts one pool's break draws debris for (the biggest ones); the rest just go.
+local FX_PER_POOL = 10
+
 -- Structure whose breaking takes the panes and trim attached to it along.
 local CARRIES_DRESSING = { Wall = true, Floor = true, Roof = true, Gable = true, Parapet = true }
 -- How far apart two parts may be and still count as attached: trim sits a hair off its wall.
@@ -69,70 +149,212 @@ local ATTACH_MARGIN = 0.35
 local PANE_MARGIN = 0.02
 
 local glassShatter = Remotes.Event("GlassShatter")
+local breakFx = Remotes.Event("BreakFx")
 
 -- Anything inside these is fair game; anything else on the map is scenery and stays put.
 local ROOTS = { Map = true }
 
-DestructibleService.HealthAttribute = "DestructibleHealth"
-
--- key -> { health, max, broken }, where the key is the part, or the Model for a pooled model.
--- Strong keys, dropped when the key is destroyed: a weak-keyed table loses live Instances, since
--- Roblox collects an instance's Lua handle whenever nothing but a weak table holds it.
+-- pool key -> { health, max, broken, members, target }. The key is the part (a single part), the
+-- Model (a tagged Model) or the tag string (a group). Strong keys, dropped when the pool's first
+-- member is destroyed: a weak-keyed table loses live Instances, since Roblox collects an instance's
+-- Lua handle whenever nothing but a weak table holds it.
 local damaged = {}
+
+-- The Map this part stands in, or nil if it's outside one or anything on the way is off limits.
+local function mapRootOf(part)
+	if NEVER[part.Name] then
+		return nil
+	end
+	local node = part.Parent
+	while node and node.Parent ~= workspace do
+		if NEVER[node.Name] then
+			return nil
+		end
+		node = node.Parent
+	end
+	if not node or node.Parent ~= workspace or not ROOTS[node.Name] then
+		return nil
+	end
+	return node
+end
 
 local function positiveNumber(value)
 	return type(value) == "number" and value > 0 and value or nil
 end
 
--- What a hit on `part` damages and how much that takes: the key (the part, or the pooled Model
--- it belongs to) and its full health, or nil when it is scenery.
-local function resolve(part)
-	if not part or not part:IsA("BasePart") or not part.CanCollide then
-		return nil
-	end
-	local key, health = nil, nil
+-- The nearest Model above `part` (inside the Map) tagged as one pool, if any.
+local function taggedModel(part)
 	local node = part.Parent
-	-- Walk up to the map root, noting the nearest pooled Model on the way.
-	local root = part
-	while node and node ~= workspace do
-		if not key and node:IsA("Model") then
-			local pooled = positiveNumber(node:GetAttribute(DestructibleService.HealthAttribute))
-			if pooled then
-				key, health = node, pooled
+	while node and node.Parent ~= workspace do
+		if node:IsA("Model") then
+			local tag = node:GetAttribute("Destructible")
+			if tag == false then
+				return nil, true
+			elseif type(tag) == "string" or positiveNumber(node:GetAttribute("DestructibleHealth")) then
+				return node
 			end
 		end
-		root = node
 		node = node.Parent
 	end
-	-- Only things standing on the map itself, so lobby furniture and deployables are untouched.
-	if node ~= workspace or not ROOTS[root.Name] then
-		return nil
-	end
-	if key then
-		return key, health
-	end
-	health = positiveNumber(part:GetAttribute(DestructibleService.HealthAttribute)) or HEALTH[part.Name]
-	if not health then
-		return nil
-	end
-	return part, health
+	return nil
 end
 
-local function maxHealthFor(part)
-	local _, health = resolve(part)
-	return health
+-- Which pool a part belongs to, cheaply (no search): (key, kind, owner, explicit health) or nil.
+-- The key is the part itself, the tagged Model, or the group's tag string; `owner` is where the
+-- members are found (the Model, or the part's parent for a group), nil for a pool of one.
+local function keyOf(part)
+	if not part or not part:IsA("BasePart") or not part.Anchored then
+		return nil
+	end
+	-- A window pane is always its own pool of one, even in a tagged cabin: glass breaks at a touch.
+	if part.Name == DestructibleService.GlassName then
+		return (part.CanCollide and mapRootOf(part)) and part or nil, nil, nil, HEALTH[part.Name]
+	end
+	local tag = part:GetAttribute("Destructible")
+	if tag == false then
+		return nil
+	end
+	if type(tag) == "string" then
+		if not (part.CanCollide or part.CanQuery) then
+			return nil
+		end
+		local kind, id = string.match(tag, "^([^:]+):(.+)$")
+		if not id then
+			return part, tag, nil, part:GetAttribute("DestructibleHealth")
+		end
+		return tag, kind, part.Parent, part:GetAttribute("DestructibleHealth")
+	end
+	local model, refused = taggedModel(part)
+	if refused then
+		return nil
+	end
+	if model then
+		if not (part.CanCollide or part.CanQuery) then
+			return nil
+		end
+		local kind = model:GetAttribute("Destructible")
+		return model, type(kind) == "string" and kind or "Prop", model, positiveNumber(model:GetAttribute("DestructibleHealth"))
+	end
+	if part.CanCollide then
+		-- A lone part with its own health number, or a building's own named piece.
+		local own = positiveNumber(part:GetAttribute("DestructibleHealth"))
+		if own or HEALTH[part.Name] then
+			return part, nil, nil, own or HEALTH[part.Name]
+		end
+	end
+	return nil
+end
+DestructibleService.KeyOf = keyOf
+
+-- Every part in a pool, found once, on its first hit.
+local function membersOf(key, part, owner)
+	if not owner then
+		return { part }
+	end
+	local members = {}
+	if type(key) == "string" then
+		for _, other in ipairs(owner:GetChildren()) do
+			if other:IsA("BasePart") and other:GetAttribute("Destructible") == key then
+				table.insert(members, other)
+			end
+		end
+	else
+		for _, other in ipairs(owner:GetDescendants()) do
+			if other:IsA("BasePart") then
+				table.insert(members, other)
+			end
+		end
+	end
+	return members
 end
 
-function DestructibleService.FromPart(part)
-	local key, _ = resolve(part)
+-- A tagged pool's health from what it is: the cube root of its solid volume (a tree's trunk, not
+-- its leaves) in the material of its biggest solid piece, times its kind.
+local function poolHealth(kind, members)
+	local solid, all = 0, 0
+	local biggest, biggestVolume = members[1], -1
+	for _, member in ipairs(members) do
+		local size = member.Size
+		local volume = size.X * size.Y * size.Z
+		all += volume
+		if member.CanCollide then
+			solid += volume
+			if volume > biggestVolume then
+				biggest, biggestVolume = member, volume
+			end
+		end
+	end
+	local scale = math.min((solid > 0 and solid or all) ^ (1 / 3), SIZE_CAP)
+	local health = CLASS_TOUGHNESS[classOf(biggest.Material)] * (HEALTH_BASE + HEALTH_PER_STUD * scale) * (KINDS[kind] or 1)
+	return math.clamp(math.floor(health + 0.5), MIN_HEALTH, MAX_HEALTH)
+end
+DestructibleService.PoolHealth = poolHealth
+
+-- The box round a pool's members, axis-aligned: (centre CFrame, size).
+local function boundsOf(members)
+	local low, high = nil, nil
+	for _, member in ipairs(members) do
+		local half = member.Size / 2
+		local centre = member.Position
+		local a, b = centre - half, centre + half
+		low = low and Vector3.new(math.min(low.X, a.X), math.min(low.Y, a.Y), math.min(low.Z, a.Z)) or a
+		high = high and Vector3.new(math.max(high.X, b.X), math.max(high.Y, b.Y), math.max(high.Z, b.Z)) or b
+	end
+	return CFrame.new((low + high) / 2), high - low
+end
+
+-- The pool entry for a part, made on its first hit; nil if the part can't be broken.
+local function entryFor(part)
+	local key, kind, owner, explicit = keyOf(part)
 	if not key then
 		return nil
 	end
 	local entry = damaged[key]
-	if entry and entry.broken then
+	if entry then
+		return entry, key
+	end
+	-- Only things standing on the map itself, so lobby furniture and deployables are untouched.
+	if not mapRootOf(part) then
 		return nil
 	end
-	return part
+	local tagged = kind ~= nil
+	local members = membersOf(key, part, owner)
+	local max = explicit
+	if tagged then
+		local _, span = boundsOf(members)
+		if math.max(span.X, span.Z) > MAX_POOL_SPAN then
+			return nil
+		end
+		max = max or poolHealth(kind, members)
+	end
+	if type(max) ~= "number" or max <= 0 then
+		return nil
+	end
+	entry = { health = max, max = max, members = members, tagged = tagged,
+		target = typeof(key) == "Instance" and key:IsA("Model") and key or nil }
+	damaged[key] = entry
+	-- Dropped when the pool's anchor goes: the part itself, the Model, or the group's first member.
+	local anchor = typeof(key) == "Instance" and key or members[1]
+	anchor.Destroying:Connect(function()
+		if damaged[key] == entry then
+			damaged[key] = nil
+		end
+	end)
+	return entry, key
+end
+
+-- Answers without looking anything up beyond the part and its parents: whether it is worth
+-- sending the hit here. (An oversized pool is only refused on the hit itself, which then deals 0.)
+function DestructibleService.FromPart(part)
+	local key = keyOf(part)
+	if not key then
+		return nil
+	end
+	local entry = damaged[key]
+	if entry then
+		return not entry.broken and part or nil
+	end
+	return mapRootOf(part) and part or nil
 end
 
 -- Glass doesn't stop a shot: the pane breaks and the bullet goes on to whatever is behind it.
@@ -144,8 +366,11 @@ end
 -- where `from` (optional) is where the shot or blast came from, so the shards fly away from it.
 local pendingPanes = nil
 
--- Sends the shards of one pane-shaped piece of glass with this frame's batch.
-local function queueShards(glass, from)
+local function breakPane(pane, from)
+	local entry = damaged[pane]
+	if entry then
+		entry.broken = true
+	end
 	if not pendingPanes then
 		pendingPanes = {}
 		task.defer(function()
@@ -154,15 +379,7 @@ local function queueShards(glass, from)
 			glassShatter:FireAllClients(batch)
 		end)
 	end
-	table.insert(pendingPanes, { glass.CFrame, glass.Size, glass.Color, typeof(from) == "Vector3" and from or nil })
-end
-
-local function breakPane(pane, from)
-	local entry = damaged[pane]
-	if entry then
-		entry.broken = true
-	end
-	queueShards(pane, from)
+	table.insert(pendingPanes, { pane.CFrame, pane.Size, pane.Color, typeof(from) == "Vector3" and from or nil })
 	pane:Destroy()
 end
 
@@ -311,124 +528,28 @@ function DestructibleService.SettleDown(node, maxDrop)
 	return true
 end
 
--- How each material comes apart (#71): wood splinters into long thin sticks, stone and brick
--- crumble into chunky lumps under a puff of dust, metal tears into thin plates with a spray of
--- sparks. `piece` shapes one chunk from the part's size and the piece count; `extra` adds pieces,
--- `throw` and `lift` set how hard they fly. Anything unlisted keeps the plain slabs.
-local M = Enum.Material
-local SPLINTER = {
-	extra = 2, throw = 22, lift = 12, spin = 14,
-	piece = function(size, pieces)
-		return Vector3.new(0.25, 0.25, math.clamp(math.max(size.X, size.Y, size.Z) / (pieces + 1), 1, 2.6))
-	end,
-}
-local CRUMBLE = {
-	extra = 1, throw = 10, lift = 5, spin = 5, dust = true,
-	piece = function(size, pieces)
-		local side = math.clamp(math.max(size.X, size.Y, size.Z) / (pieces + 1), 0.5, 1.6)
-		return Vector3.new(side, side * 0.8, side)
-	end,
-}
-local TEAR = {
-	extra = 0, throw = 16, lift = 8, spin = 10, sparks = true,
-	piece = function(size, pieces)
-		local side = math.clamp(math.max(size.X, size.Z) / (pieces + 1), 0.6, 1.8)
-		return Vector3.new(side, 0.15, side * 0.7)
-	end,
-}
-local BREAKS_AS = {
-	[M.Wood] = SPLINTER, [M.WoodPlanks] = SPLINTER,
-	[M.Concrete] = CRUMBLE, [M.Brick] = CRUMBLE, [M.Cobblestone] = CRUMBLE, [M.Slate] = CRUMBLE,
-	[M.Granite] = CRUMBLE, [M.Marble] = CRUMBLE, [M.Pebble] = CRUMBLE, [M.Rock] = CRUMBLE,
-	[M.Sandstone] = CRUMBLE, [M.Limestone] = CRUMBLE, [M.Basalt] = CRUMBLE, [M.Asphalt] = CRUMBLE,
-	[M.Pavement] = CRUMBLE, [M.Plaster] = CRUMBLE,
-	[M.Metal] = TEAR, [M.DiamondPlate] = TEAR, [M.CorrodedMetal] = TEAR, [M.Foil] = TEAR,
-}
+-- Pieces broken this frame, sent to every client as one BreakFx event:
+-- { cframe, size, color, material, class, from } each. Capped per frame, biggest pools first come
+-- first served, so a rocket through a street of props costs one bounded message.
+local FX_PER_FRAME = 60
+local pendingFx = nil
 
--- A short burst from the broken part's whole volume: dust for stone, sparks for metal. The
--- emitter runs for a fraction of a second and is then switched off rather than using Emit, since
--- a property change replicates to every client and a server-side Emit call does not.
-local function burst(part, parent, how)
-	local holder = Instance.new("Part")
-	holder.Name = "Rubble"
-	holder.Anchored = true
-	holder.CanCollide = false
-	holder.CanQuery = false
-	holder.CanTouch = false
-	holder.Transparency = 1
-	holder.Size = part.Size
-	holder.CFrame = part.CFrame
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Shape = Enum.ParticleEmitterShape.Box
-	if how.dust then
-		emitter.Color = ColorSequence.new(part.Color:Lerp(Color3.fromRGB(200, 196, 188), 0.6))
-		emitter.Size = NumberSequence.new(1.5, 5)
-		emitter.Transparency = NumberSequence.new(0.35, 1)
-		emitter.Lifetime = NumberRange.new(0.9, 1.6)
-		emitter.Speed = NumberRange.new(2, 6)
-		emitter.Drag = 3
-		emitter.Rate = 70
-	else
-		emitter.Color = ColorSequence.new(Color3.fromRGB(255, 190, 90))
-		emitter.LightEmission = 1
-		emitter.Size = NumberSequence.new(0.25, 0)
-		emitter.Lifetime = NumberRange.new(0.2, 0.45)
-		emitter.Speed = NumberRange.new(14, 26)
-		emitter.Acceleration = Vector3.new(0, -60, 0)
-		emitter.Rate = 120
+local function queueFx(part, from)
+	if not pendingFx then
+		pendingFx = {}
+		task.defer(function()
+			local batch = pendingFx
+			pendingFx = nil
+			breakFx:FireAllClients(batch)
+		end)
 	end
-	emitter.Parent = holder
-	holder.Parent = parent
-	task.delay(0.18, function()
-		emitter.Enabled = false
-	end)
-	Debris:AddItem(holder, 2)
-end
-
--- A few chunks of a breaking part thrown out, cleared away a moment later, shaped by what it was
--- made of. `cap` (optional) caps how many, so a model breaking all at once throws a bounded
--- number; `parent` (optional) is where they go, the part's own parent by default.
-local function throwRubble(part, cap, parent)
-	local size = part.Size
-	local how = BREAKS_AS[part.Material]
-	local pieces = math.clamp(math.floor(math.max(size.X, size.Y, size.Z) / 3), 2, 5) + (how and how.extra or 0)
-	pieces = math.min(pieces, cap or pieces)
-	parent = parent or part.Parent
-	for index = 1, pieces do
-		local chunk = Instance.new("Part")
-		chunk.Name = "Rubble"
-		chunk.Size = how and how.piece(size, pieces) or Vector3.new(
-			math.max(0.4, size.X / (pieces + 1)),
-			math.max(0.4, size.Y / (pieces + 1)),
-			math.max(0.4, math.min(size.Z, 1.4))
-		)
-		chunk.CFrame = part.CFrame * CFrame.new(
-			(math.random() - 0.5) * size.X * 0.6,
-			(math.random() - 0.5) * size.Y * 0.6,
-			0
-		) * CFrame.Angles(math.random() * 6, math.random() * 6, math.random() * 6)
-		chunk.Color = part.Color
-		chunk.Material = part.Material
-		chunk.CanCollide = false
-		chunk.CanQuery = false
-		chunk.CanTouch = false
-		chunk.CastShadow = false
-		chunk.Parent = parent
-		local throw, lift, spin = how and how.throw or 18, how and how.lift or 6, how and how.spin or 8
-		chunk.AssemblyLinearVelocity = Vector3.new(
-			(math.random() - 0.5) * throw,
-			lift + math.random() * 10,
-			(math.random() - 0.5) * throw
-		)
-		chunk.AssemblyAngularVelocity = Vector3.new(math.random() * spin, math.random() * spin, math.random() * spin)
-		Debris:AddItem(chunk, 2.5 + math.random())
-	end
-	if how and (how.dust or how.sparks) then
-		burst(part, parent, how)
+	if #pendingFx < FX_PER_FRAME then
+		table.insert(pendingFx, { part.CFrame, part.Size, part.Color, part.Material, classOf(part.Material),
+			typeof(from) == "Vector3" and from or nil })
 	end
 end
 
-local function tellPartBroken(cframe, size)
+local function tellBroken(cframe, size)
 	if DestructibleService.PartBrokenEnabled then
 		for _, listener in ipairs(partBrokenListeners) do
 			task.spawn(listener, cframe, size)
@@ -436,50 +557,51 @@ local function tellPartBroken(cframe, size)
 	end
 end
 
--- A part coming apart: a few chunks of itself thrown out, then it's gone.
+-- A part coming apart: it's gone at once for everyone, and each client throws its debris.
 local function shatter(part, from)
 	if part.Name == DestructibleService.GlassName then
 		breakPane(part, from)
 		return
 	end
-	tellPartBroken(part.CFrame, part.Size)
+	tellBroken(part.CFrame, part.Size)
 	dropDressing(part, from)
-	throwRubble(part)
+	queueFx(part, from)
 	part:Destroy()
 end
 
--- A pooled model coming apart: every piece of it at once. Rubble comes from its solid pieces,
--- biggest first and a dozen chunks in all, so a car costs no more than two walls; its glass
--- goes to shards the way a window does, and its trim and lights simply go with it.
-local MODEL_RUBBLE = 12
-
-local function shatterModel(model, from)
-	local box, boxSize = model:GetBoundingBox()
-	tellPartBroken(box, boxSize)
-	local solid = {}
-	for _, piece in ipairs(model:GetDescendants()) do
-		if piece:IsA("BasePart") and piece.CanCollide and piece.Transparency < 1 then
-			-- Glass in a model (a car's windows) bursts into shards like a window pane.
-			if piece.Material == Enum.Material.Glass then
-				queueShards(piece, from)
-			else
-				table.insert(solid, piece)
-			end
+-- A tagged pool coming apart: every member goes; the biggest few throw debris; whatever stood on
+-- it is told, by the box round the whole thing.
+local function shatterPool(entry, from)
+	local members = {}
+	for _, member in ipairs(entry.members) do
+		if member.Parent then
+			table.insert(members, member)
 		end
 	end
-	table.sort(solid, function(a, b)
+	if #members == 0 then
+		return
+	end
+	tellBroken(boundsOf(members))
+	table.sort(members, function(a, b)
 		return a.Size.X * a.Size.Y * a.Size.Z > b.Size.X * b.Size.Y * b.Size.Z
 	end)
-	local left = MODEL_RUBBLE
-	for _, piece in ipairs(solid) do
-		if left <= 0 then
-			break
+	for index, member in ipairs(members) do
+		if index <= FX_PER_POOL and member.Transparency < 0.95 and member.Name ~= DestructibleService.GlassName then
+			queueFx(member, from)
 		end
-		-- Rubble goes beside the model, not inside the thing being destroyed.
-		throwRubble(piece, math.min(left, 4), model.Parent)
-		left -= math.min(left, 4)
 	end
-	model:Destroy()
+	for _, member in ipairs(members) do
+		if member.Parent and member.Name == DestructibleService.GlassName then
+			breakPane(member, from)
+		elseif member.Parent then
+			member:Destroy()
+		end
+	end
+	-- A tagged Model with nothing left in it goes too.
+	local model = entry.target
+	if model and model.Parent and model:IsA("Model") then
+		model:Destroy()
+	end
 end
 
 -- Returns the damage actually taken. `from` (optional) is where the shot or blast came from.
@@ -487,19 +609,8 @@ function DestructibleService.Damage(part, amount, attackerToken, from)
 	if amount <= 0 then
 		return 0
 	end
-	local key, max = resolve(part)
-	if not key then
-		return 0
-	end
-	local entry = damaged[key]
-	if not entry then
-		entry = { health = max, max = max }
-		damaged[key] = entry
-		key.Destroying:Connect(function()
-			damaged[key] = nil
-		end)
-	end
-	if entry.broken then
+	local entry = entryFor(part)
+	if not entry or entry.broken then
 		return 0
 	end
 
@@ -507,54 +618,92 @@ function DestructibleService.Damage(part, amount, attackerToken, from)
 	entry.health -= dealt
 
 	-- Half gone: it starts to look it, so you can read what is nearly through. (Glass has no
-	-- halfway; it just breaks.) A pooled model darkens all over. Darker, never see-through: a wall
-	-- fading toward clear read as a ghost of cover rather than cover taking a beating (#71).
+	-- halfway; it just breaks.)
 	if entry.health <= entry.max * 0.5 and not entry.battered and entry.max > 1 then
 		entry.battered = true
-		local pieces = key:IsA("Model") and key:GetDescendants() or { key }
-		for _, piece in ipairs(pieces) do
-			if piece:IsA("BasePart") then
-				piece.Color = piece.Color:Lerp(Color3.new(0, 0, 0), 0.25)
+		for _, member in ipairs(entry.members) do
+			if member.Parent then
+				member.Color = member.Color:Lerp(Color3.new(0, 0, 0), 0.25)
+				if not entry.tagged then
+					member.Transparency = math.max(member.Transparency, 0.12)
+				end
 			end
 		end
 	end
 
 	if entry.health <= 0 then
 		entry.broken = true
-		if key:IsA("Model") then
-			shatterModel(key, from)
+		if entry.tagged then
+			shatterPool(entry, from)
 		else
-			shatter(key, from)
+			shatter(part, from)
 		end
 	end
 	return dealt
 end
 
--- One blast hurts each thing once: a car with six parts in the radius takes the blast once, not
--- six times.
+-- Craters: a blast on open ground scoops a little terrain out. Capped per Map (a new map is a new
+-- Map instance, which resets it), sized off the blast, and never where the ground is a road, paving,
+-- water or ice, or where the blast first meets something built rather than terrain.
+local CRATER_CAP = 40
+local CRATER_SHARE, CRATER_MIN, CRATER_MAX = 0.3, 1.5, 4.5
+local NO_CRATER = {
+	[Enum.Material.Asphalt] = true, [Enum.Material.Pavement] = true, [Enum.Material.Concrete] = true,
+	[Enum.Material.Cobblestone] = true, [Enum.Material.Brick] = true, [Enum.Material.Water] = true,
+	[Enum.Material.Glacier] = true, [Enum.Material.Ice] = true, [Enum.Material.Salt] = true,
+}
+DestructibleService.CraterCap = CRATER_CAP
+local craterMap, craterCount = nil, 0
+
+local function craterAt(position, radius, map)
+	if craterMap ~= map then
+		craterMap, craterCount = map, 0
+	end
+	if craterCount >= CRATER_CAP then
+		return false
+	end
+	local size = math.clamp(radius * CRATER_SHARE, CRATER_MIN, CRATER_MAX)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { map, workspace.Terrain }
+	params.IgnoreWater = false
+	local hit = workspace:Raycast(position + Vector3.new(0, 1, 0), Vector3.new(0, -(size + 2), 0), params)
+	if not hit or hit.Instance ~= workspace.Terrain or NO_CRATER[hit.Material] then
+		return false
+	end
+	craterCount += 1
+	-- Whatever lay on the ground there (loot, a supply crate) settles into the hole.
+	tellBroken(CFrame.new(hit.Position - Vector3.new(0, 0.5, 0)), Vector3.new(size * 2, 1, size * 2))
+	workspace.Terrain:FillBall(hit.Position, size, Enum.Material.Air)
+	return true
+end
+
+-- Each pool once per blast, however many of its parts the blast reaches: a tree is one tree, not
+-- one hit per leaf.
 function DestructibleService.DamageInRadius(position, radius, amount, attackerToken)
-	local region = OverlapParams.new()
-	region.FilterType = Enum.RaycastFilterType.Include
 	local map = workspace:FindFirstChild("Map")
 	if not map then
 		return
 	end
+	local region = OverlapParams.new()
+	region.FilterType = Enum.RaycastFilterType.Include
 	region.FilterDescendantsInstances = { map }
-	local hit = {}
+	local seen = {}
 	for _, part in ipairs(workspace:GetPartBoundsInRadius(position, radius, region)) do
-		local key, _ = resolve(part)
-		if key and not hit[key] then
-			hit[key] = true
+		local key = keyOf(part)
+		if key and not seen[key] then
+			seen[key] = true
 			DestructibleService.Damage(part, amount, attackerToken, position)
 		end
 	end
+	craterAt(position, radius, map)
 end
 
 -- How many are damaged but still standing (for the build check).
 function DestructibleService.Count()
 	local count = 0
-	for part, entry in pairs(damaged) do
-		if not entry.broken and part.Parent then
+	for _, entry in pairs(damaged) do
+		if not entry.broken and entry.members[1] and entry.members[1].Parent then
 			count += 1
 		end
 	end

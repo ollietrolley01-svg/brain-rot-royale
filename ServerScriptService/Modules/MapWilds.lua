@@ -106,6 +106,29 @@ MapWilds.CornerApex = { x = 1, z = -1 }
 local rng = Random.new(1)
 local partCount = 0
 local sampler -- fn(x, z) -> y, material or nil
+
+-- The thing being built right now, when it can be shot apart (#56): every part it makes is tagged
+-- `Destructible = "Kind:W<n>"`, one pool for DestructibleService (so a tree's leaves go with its
+-- trunk, and a cabin comes down whole rather than leaving its roof in the air). Trees, shelters and
+-- the solid clutter are grouped; undergrowth and grass are not, since nothing can hit them anyway.
+local currentGroup = nil
+local groupSerial = 0
+
+local function grouped(kind, build)
+	return function(...)
+		if currentGroup then
+			return build(...)
+		end
+		groupSerial += 1
+		currentGroup = kind .. ":W" .. groupSerial
+		local results = table.pack(pcall(build, ...))
+		currentGroup = nil
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
+	end
+end
 -- How far the ground falls away under the piece being built, below the point it stands on. Trunks,
 -- stumps and rocks go that much deeper, so a tree on a slope never shows air under its low side.
 local footDrop = 0
@@ -169,6 +192,9 @@ local function part(parent, name, size, cframe, color, material, shape)
 	p.Anchored = true
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	if currentGroup then
+		p:SetAttribute("Destructible", currentGroup)
+	end
 	p.Parent = parent
 	partCount += 1
 	return p
@@ -185,6 +211,9 @@ local function classPart(className, parent, name, size, cframe, color, material)
 	p.Anchored = true
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	if currentGroup then
+		p:SetAttribute("Destructible", currentGroup)
+	end
 	p.Parent = parent
 	partCount += 1
 	return p
@@ -256,6 +285,9 @@ local function truss(parent, name, cframe, height, color)
 	t.Anchored = true
 	t.Color = color
 	t.Material = Enum.Material.Wood
+	if currentGroup then
+		t:SetAttribute("Destructible", currentGroup)
+	end
 	t.Parent = parent
 	partCount += 1
 	return t
@@ -580,6 +612,10 @@ local TREES = {
 	fanPalm = { reach = 7.5, build = fanPalm },
 	apple = { reach = 8.5, build = appleTree },
 }
+for _, spec in pairs(TREES) do
+	spec.build = grouped("Tree", spec.build)
+end
+appleTree = TREES.apple.build
 
 --------------------------------------------------------------------------------
 -- Ground cover: soft clumps that hide nothing solid, and a few solid pieces (logs, stumps, boulders)
@@ -716,6 +752,7 @@ local function fallenLog(parent, p, s, direction, color)
 		Enum.Material.Wood), true)
 	return from, to, diameter / 2
 end
+fallenLog = grouped("Log", fallenLog)
 
 local function stump(parent, p, s)
 	local diameter = rand(2.2, 3) * s
@@ -724,6 +761,7 @@ local function stump(parent, p, s)
 	-- The cut face, a shade lighter and just proud of the bark.
 	soft(column(parent, "Stump", p + Vector3.new(0, height, 0), 0.12, diameter - 0.35, rgb(176, 142, 100), Enum.Material.Wood))
 end
+stump = grouped("Stump", stump)
 
 local function boulder(parent, p, s, color, material, mossy)
 	local size = rand(4.5, 7.5) * s
@@ -748,6 +786,7 @@ local function boulder(parent, p, s, color, material, mossy)
 	end
 	return size * 0.75
 end
+boulder = grouped("Rock", boulder)
 
 --------------------------------------------------------------------------------
 -- Shelters. Each builds into its own Model, standing on `cf`: a CFrame at the site's centre, at the
@@ -1476,6 +1515,7 @@ local function cairn(parent, p, s, color, material)
 		y += thick * 0.92
 	end
 end
+cairn = grouped("Cairn", cairn)
 
 -- A picnic table: top, two benches, and end frames that reach down to the lowest ground under it.
 local function picnicTable(parent, p, yaw)
@@ -1496,6 +1536,7 @@ local function picnicTable(parent, p, yaw)
 		end
 	end
 end
+picnicTable = grouped("Picnic", picnicTable)
 
 -- Each shelter: its footprint's half extents (before any turn), how uneven its ground may be, and
 -- its builder. `reach` pads the claim for pieces set outside the walls (fire pits, fallen blocks).
@@ -1521,6 +1562,9 @@ local SHELTERS = {
 	wreck = { halfX = 7.5, halfZ = 7.5, flat = 1.4, rigid = true, build = wreck },
 	upturnedBoat = { halfX = 5, halfZ = 7, flat = 1.2, rigid = true, build = upturnedBoat },
 }
+for kind, spec in pairs(SHELTERS) do
+	spec.build = grouped(kind == "wreck" and "Wreck" or "Shelter", spec.build)
+end
 MapWilds.ShelterKinds = SHELTERS
 
 --------------------------------------------------------------------------------

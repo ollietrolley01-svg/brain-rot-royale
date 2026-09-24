@@ -21,6 +21,30 @@ local MapDecor = {}
 -- check's reports name the piece rather than saying "Part". Builders set it.
 local currentName = "Part"
 
+-- The thing being built right now, when it can be shot apart (#56): every part it makes is tagged
+-- `Destructible = "Kind:D<n>"`, which makes them one pool for DestructibleService, sized off the
+-- parts themselves. `grouped` wraps a builder so everything it makes is one such thing; a builder
+-- called from inside another keeps the outer one's group. Roads, bridges, signs, signals and the
+-- square are never wrapped: they are the ground people stand on or steer by.
+local currentGroup = nil
+local groupSerial = 0
+
+local function grouped(kind, build)
+	return function(...)
+		if currentGroup then
+			return build(...)
+		end
+		groupSerial += 1
+		currentGroup = kind .. ":D" .. groupSerial
+		local results = table.pack(pcall(build, ...))
+		currentGroup = nil
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
+	end
+end
+
 local function makePart(parent, size, cframe, color, material, shape)
 	local part = Instance.new("Part")
 	part.Name = currentName
@@ -34,6 +58,9 @@ local function makePart(parent, size, cframe, color, material, shape)
 	part.Anchored = true
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
+	if currentGroup then
+		part:SetAttribute("Destructible", currentGroup)
+	end
 	part.Parent = parent
 	return part
 end
@@ -170,6 +197,7 @@ local function streetLamp(parent, position, facing)
 	clutter(makePart(parent, Vector3.new(1.8, 0.5, 1.4), look * CFrame.new(0, -0.35, -3.3), LAMP_GLOW, Enum.Material.Neon))
 	currentName = "Part"
 end
+streetLamp = grouped("Lamp", streetLamp)
 MapDecor.StreetLamp = streetLamp
 
 local function bench(parent, position, yaw)
@@ -181,11 +209,13 @@ local function bench(parent, position, yaw)
 		makePart(parent, Vector3.new(0.4, 2, 1.8), cf * CFrame.new(x, 1, 0), METAL_DARK, Enum.Material.Metal)
 	end
 end
+bench = grouped("Bench", bench)
 
 local function bin(parent, position)
 	column(parent, 3.4, 2.4, position, Color3.fromRGB(54, 92, 64), Enum.Material.Metal)
 	column(parent, 0.3, 2.7, position + Vector3.new(0, 3.4, 0), Color3.fromRGB(40, 70, 48), Enum.Material.Metal)
 end
+bin = grouped("Bin", bin)
 
 local function hydrant(parent, position)
 	local red = Color3.fromRGB(206, 44, 40)
@@ -195,6 +225,7 @@ local function hydrant(parent, position)
 	clutter(makePart(parent, Vector3.new(2, 0.5, 0.5), CFrame.new(position + Vector3.new(0, 1.6, 0)),
 		Color3.fromRGB(230, 220, 90), Enum.Material.Metal, Enum.PartType.Cylinder))
 end
+hydrant = grouped("Hydrant", hydrant)
 
 local FLOWER_COLORS = {
 	Color3.fromRGB(255, 96, 140), Color3.fromRGB(255, 214, 70), Color3.fromRGB(170, 120, 255),
@@ -212,6 +243,7 @@ local function planter(parent, position, yaw)
 			pick(FLOWER_COLORS), Enum.Material.SmoothPlastic, Enum.PartType.Ball))
 	end
 end
+planter = grouped("Planter", planter)
 
 local UMBRELLA_COLORS = {
 	Color3.fromRGB(240, 80, 80), Color3.fromRGB(70, 170, 240), Color3.fromRGB(255, 210, 70),
@@ -226,6 +258,7 @@ local function beachUmbrella(parent, position)
 	clutter(makePart(parent, Vector3.new(3, 0.2, 6), CFrame.new(position + Vector3.new(2.5, 0.1, 0)),
 		pick(UMBRELLA_COLORS), Enum.Material.Fabric))
 end
+beachUmbrella = grouped("Umbrella", beachUmbrella)
 
 local CAR_COLORS = {
 	Color3.fromRGB(196, 50, 50), Color3.fromRGB(50, 96, 196), Color3.fromRGB(230, 230, 226),
@@ -1262,6 +1295,7 @@ local function roundTree(parent, position)
 			Enum.Material.Grass, Enum.PartType.Ball)
 	end
 end
+roundTree = grouped("Tree", roundTree)
 
 local function pineTree(parent, position, scale)
 	column(parent, 6 * scale + SINK, 1.8 * scale, position - Vector3.new(0, SINK, 0), TRUNK, Enum.Material.Wood)
@@ -1273,6 +1307,7 @@ local function pineTree(parent, position, scale)
 		y += tier[2] * scale * 0.8
 	end
 end
+pineTree = grouped("Tree", pineTree)
 
 local function palmTree(parent, position)
 	local trunk = Color3.fromRGB(150, 116, 78)
@@ -1300,6 +1335,7 @@ local function palmTree(parent, position)
 			Color3.fromRGB(96, 66, 40), Enum.Material.Wood, Enum.PartType.Ball))
 	end
 end
+palmTree = grouped("Palm", palmTree)
 
 local function cactus(parent, position)
 	local green = Color3.fromRGB(78, 138, 72)
@@ -1319,6 +1355,7 @@ local function cactus(parent, position)
 		end
 	end
 end
+cactus = grouped("Cactus", cactus)
 
 -- Pieces set off to the side of a prop's spot find their own ground (a slope can be studs
 -- higher three studs over), when the caller gave us a way to ask.
@@ -1337,6 +1374,7 @@ local function bush(parent, position, groundAt)
 			green, Enum.Material.Grass, Enum.PartType.Ball)
 	end
 end
+bush = grouped("Bush", bush)
 
 local function hayBales(parent, position)
 	local hay = Color3.fromRGB(214, 180, 96)
@@ -1349,6 +1387,7 @@ local function hayBales(parent, position)
 		makePart(parent, Vector3.new(4, 5, 5), cf * CFrame.new(0, 6.37, 0), hay, Enum.Material.Grass, Enum.PartType.Cylinder)
 	end
 end
+hayBales = grouped("HayBales", hayBales)
 
 local function rock(parent, position, size, groundAt)
 	makePart(parent, Vector3.new(size, size * 0.8, size * 1.1),
@@ -1361,6 +1400,7 @@ local function rock(parent, position, size, groundAt)
 			Color3.fromRGB(132, 126, 118), Enum.Material.Rock, Enum.PartType.Ball)
 	end
 end
+rock = grouped("Rock", rock)
 
 -- One piece of open-ground scenery, chosen to suit the map's terrain, if `space` has room for
 -- it. Claims its footprint and returns true when placed. `groundAt(x, z)`, if given, lets

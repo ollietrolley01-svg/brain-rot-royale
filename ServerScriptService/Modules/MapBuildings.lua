@@ -106,6 +106,23 @@ end
 -- These were MapDecor.Building and its helpers. They keep MapDecor's own part factory (an optional
 -- shape, SmoothPlastic by default) and its separate name, so every part comes out as it did there.
 local decorName = "Part"
+-- The rooftop unit being built, when it can be shot apart (#56): its parts are tagged
+-- `Destructible = "RoofProp:B<n>"`, one pool for DestructibleService.
+local decorGroup = nil
+local decorSerial = 0
+
+local function roofProp(build)
+	return function(...)
+		decorSerial += 1
+		decorGroup = "RoofProp:B" .. decorSerial
+		local results = table.pack(pcall(build, ...))
+		decorGroup = nil
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
+	end
+end
 
 local function decorPart(parent, size, cframe, color, material, shape)
 	local part = Instance.new("Part")
@@ -120,6 +137,9 @@ local function decorPart(parent, size, cframe, color, material, shape)
 	part.Anchored = true
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
+	if decorGroup then
+		part:SetAttribute("Destructible", decorGroup)
+	end
 	part.Parent = parent
 	return part
 end
@@ -148,6 +168,7 @@ local function acUnit(parent, base)
 	clutter(decorPart(parent, Vector3.new(0.4, 3.6, 3.6), CFrame.new(base + Vector3.new(0, 3.8, 0)) * CFrame.Angles(0, 0, math.pi / 2),
 		Color3.fromRGB(60, 62, 68), Enum.Material.DiamondPlate, Enum.PartType.Cylinder))
 end
+acUnit = roofProp(acUnit)
 
 local function waterTank(parent, base)
 	for _, x in ipairs({ -2.2, 2.2 }) do
@@ -158,6 +179,7 @@ local function waterTank(parent, base)
 	column(parent, 6, 6.4, base + Vector3.new(0, 5, 0), Color3.fromRGB(130, 96, 66), Enum.Material.WoodPlanks)
 	column(parent, 1, 4.4, base + Vector3.new(0, 11, 0), Color3.fromRGB(80, 80, 86), Enum.Material.Metal)
 end
+waterTank = roofProp(waterTank)
 
 local function antenna(parent, base)
 	column(parent, 10, 0.3, base, Color3.fromRGB(150, 150, 156), Enum.Material.Metal)
@@ -166,6 +188,7 @@ local function antenna(parent, base)
 			Color3.fromRGB(150, 150, 156), Enum.Material.Metal))
 	end
 end
+antenna = roofProp(antenna)
 
 -- Doorway trim and an awning over the ground-floor door (always centred on the -Z wall), a
 -- chimney on pitched roofs, and rooftop clutter on flat ones. The roof clutter stays out of the
@@ -959,6 +982,15 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 
 		buildFloorWithWell(model, origin, width, depth, baseY, preset.floorMaterial, wallColor,
 			canClimb and floor > 0, facade.trim, floor == floors - 1)
+		if floor == 0 then
+			-- The ground-floor slab never breaks (DestructibleService): it is what everyone inside
+			-- stands on, and there is only footing under it. Upper floors still break per part.
+			for _, child in ipairs(model:GetChildren()) do
+				if child.Name == "Floor" and math.abs(child.Position.Y - baseY) < 0.01 then
+					child:SetAttribute("Destructible", false)
+				end
+			end
+		end
 
 		-- The front and back walls run the full width; the side walls fit between them, so no two
 		-- walls share a corner (their tops would lie in one plane and flicker).
