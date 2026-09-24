@@ -242,7 +242,7 @@ local function traceBullet(token, vehicle, origin, direction, spec)
 		end
 		local destructible = CombatService.DestructibleFromPart and CombatService.DestructibleFromPart(part)
 		if destructible then
-			CombatService.DamageDestructible(token, destructible, spec.damage, origin)
+			CombatService.DamageDestructible(token, destructible, spec.damage, origin, result.Position, result.Normal)
 			-- A pane breaks and the bullet carries on.
 			if not (CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(part)) then
 				break

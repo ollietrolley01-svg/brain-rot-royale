@@ -685,7 +685,7 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		-- the things that stand in front of it, and before the shot reaches anyone behind it.
 		local destructible = CombatService.DestructibleFromPart and CombatService.DestructibleFromPart(result.Instance)
 		if destructible then
-			CombatService.DamageDestructible(shooterToken, destructible, def.damage, origin)
+			CombatService.DamageDestructible(shooterToken, destructible, def.damage, origin, result.Position, result.Normal)
 			-- A window pane breaks and the shot keeps going: rockets still burst on what's behind it.
 			if CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(result.Instance) then
 				local filter = params.FilterDescendantsInstances
