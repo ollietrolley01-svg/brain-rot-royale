@@ -1,48 +1,56 @@
 -- Mounted vehicle weapons, server side (Oliver: "vehicles with different guns and explosive
--- weapons on them"). The specs are in Shared/VehicleWeaponData, the metal in VehicleModels (Mounts),
--- the HUD and the turret's swing in VehicleWeaponClient.
+-- weapons on them"). The specs are in Shared/VehicleWeaponData, the metal in VehicleModels (Mounts,
+-- DriverMounts), the HUD, the aim and the gunner's first-person view in VehicleWeaponClient.
 --
 --   VehicleWeapons.Start()                         remotes and the round guard (once, from Bootstrap)
 --   VehicleWeapons.Fire(token, aimPoint)  -> ok, reason   a player's remote or a bot calls this
---   VehicleWeapons.Aim(token, aimPoint)   -> ok           swing the turret without firing
---   VehicleWeapons.DrivenBy(token)        -> vehicle, spec, character, humanoid   or nil
---                                           (the vehicle whose gun `token` works; see WHO WORKS THE GUN)
---   VehicleWeapons.GunnerSeatOf(vehicle)  -> seat or nil   the gun's own seat
+--   VehicleWeapons.Aim(token, aimPoint)   -> ok           swing the mount without firing
+--   VehicleWeapons.DrivenBy(token)        -> vehicle, spec, character, humanoid, mount   or nil
+--                                           (the vehicle and mount `token` works; see WHO WORKS WHAT)
+--   VehicleWeapons.GunnerSeatOf(vehicle)  -> seat or nil   the turret's own seat
 --   VehicleWeapons.ClampAim(spec, direction) -> yaw, pitch (radians, mount space, within limits)
 --   VehicleWeapons.FreeArmedNear(position, radius) -> vehicle, seat   an empty armed vehicle (bots)
 --   VehicleWeapons.BotBoard(humanoid, seat)   -> ok        sit a bot in a driving seat
---   VehicleWeapons.AmmoOf(vehicle)        -> rounds, spec  what the mount holds right now
---   VehicleWeapons.InArc(vehicle, point)  -> bool          `point` is inside the mount's arc
---   VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit) -> aimPoint   (bots)
+--   VehicleWeapons.AmmoOf(vehicle, mount)     -> rounds, spec  what a mount holds right now
+--   VehicleWeapons.InArc(vehicle, point, mount) -> bool    `point` is inside the mount's arc
+--   VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit, mount) -> aimPoint (bots)
+-- `mount` is "turret" (the default) or "driver".
 --
 -- `token` is a combatant (a Player or a bot record, see Combatants): players and bots go through
 -- exactly the same checks.
 --
--- WHO WORKS THE GUN. An armed vehicle has a seat of its own at the mount (VehicleModels' `gunner`
--- frame: a Seat named GunnerSeat with a true Gunner attribute, as VehicleWeaponClient reads it).
--- Whoever sits there works the gun. While nobody does, the driver can still fire it, as before the
--- gun had a seat, so someone alone in the car is not left unarmed (Oliver, 2026-09-24). A passenger,
--- someone on the roof, or a stale SeatPart gets nothing.
+-- WHO WORKS WHAT (Oliver 09-24: "make the car guns controllable by a gunner seat" and "make the drivers
+-- have their own gun that they can control"). An armed vehicle has two weapons:
+--   the TURRET, worked only from its own seat (VehicleModels' `gunner` frame: a Seat named GunnerSeat
+--     with a true Gunner attribute, as VehicleWeaponClient reads it). A driver alone in the vehicle can
+--     no longer work it: the gun waits for a gunner. (It used to fall to the driver while the gun's seat
+--     was empty; now the driver has a gun of their own and the turret belongs to the gunner.)
+--   the DRIVER'S GUN, worked only from the driving seat: a short-arc gun at the front.
+-- A passenger, someone on the roof, or a stale SeatPart gets nothing.
 --
--- WHAT THE SERVER HOLDS A SHOT TO. The firer must be alive and working the gun (above) of an
--- armed, unwrecked vehicle, in a match (CombatService enabled, so never in the lobby). The mount's
--- fire rate is CombatService's own shot budget (ShotCredit/SpendShot), its magazine runs down one a
--- shot and comes back at `recharge` a second once it has been left alone for `rechargeDelay`. The
--- client only ever sends where it is aiming; the direction is worked out here and clamped to the
--- mount's arc, and the shot leaves from the mount's muzzle, not from the client.
+-- WHAT THE SERVER HOLDS A SHOT TO. The firer must be alive and in the seat of an armed, unwrecked
+-- vehicle's mount, in a match (CombatService enabled, so never in the lobby). The mount's fire rate is
+-- CombatService's own shot budget (ShotCredit/SpendShot), its magazine runs down one a shot and comes
+-- back at `recharge` a second once it has been left alone for `rechargeDelay`, and a gun with
+-- `overheat` that has run dry stays hot until it has cooled back up to that share (VehicleWeaponData
+-- .Ready). The client only ever sends where it is aiming; the direction is worked out here
+-- (VehicleWeaponData.Solve) and clamped to the mount's arc, and the shot leaves from the mount's
+-- muzzle, not from the client -- and only if the muzzle is in the open: a barrel pushed through a wall
+-- (the car parked nose-in against a building) fires into that wall, not through it.
 --
 -- DAMAGE IS NOT DECIDED HERE. A bullet is traced and each thing it meets is handed to the same
 -- CombatService functions a hand gun's bullet is (companions, defenses, walls and glass, barrels,
--- then DealDamage for a body, which applies the match's damage scale, shields, the team veto and
--- the credit). A round goes through CombatService.LaunchProjectile, which is ProjectileService's
--- launcher path: the same flight, blast falloff, wall damage, exposure and effects as the hand
--- launchers. Nothing about damage is duplicated in this file.
+-- another vehicle, then DealDamage for a body, which applies the match's damage scale, shields, the
+-- team veto and the credit). A round goes through CombatService.LaunchProjectile, which is
+-- ProjectileService's launcher path: the same flight, blast falloff, wall damage, exposure and effects
+-- as the hand launchers. Nothing about damage is duplicated in this file.
 --
 -- NOT HITTING YOURSELF. A bullet's trace excludes the vehicle and everyone sitting in it. A round
 -- excludes them from its flight too: ProjectileService's round filter only knows the owner's
 -- character, so each round this module launches carries the riders on its def, and each round
--- kind's onLaunch (the Ballistics registry's own hook) adds them to the new round's filter. A blast you set off against a
--- wall at your bumper still reaches you at the launchers' half strength; that is the launchers' rule.
+-- kind's onLaunch (the Ballistics registry's own hook) adds them to the new round's filter. A blast you
+-- set off against a wall at your bumper still reaches you at the launchers' half strength; that is the
+-- launchers' rule.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -74,25 +82,26 @@ VehicleWeapons.Tag = "ArmedVehicle"
 -- the prompt's reach plus a little).
 local BOARD_DISTANCE = 12
 
--- Mount state per vehicle model: STRONG keys, dropped when the model leaves the game (a weak key
--- would drop a live vehicle's magazine; see COORDINATION's weak-table lesson).
+-- Mount state per vehicle model and mount: STRONG keys, dropped when the model leaves the game (a
+-- weak key would drop a live vehicle's magazine; see COORDINATION's weak-table lesson).
 local states = {}
 
 --------------------------------------------------------------------------------
--- Who is driving what
+-- Who works what
 --------------------------------------------------------------------------------
 
-local function mountOf(vehicle)
-	local yaw = vehicle:FindFirstChild("TurretYaw")
-	local pitch = vehicle:FindFirstChild("TurretPitch")
-	local muzzle = vehicle:FindFirstChild("TurretMuzzle")
+local function mountOf(vehicle, mount)
+	local names = VehicleWeaponData.Parts[mount or "turret"]
+	local yaw = names and vehicle:FindFirstChild(names.yaw)
+	local pitch = names and vehicle:FindFirstChild(names.pitch)
+	local muzzle = names and vehicle:FindFirstChild(names.muzzle)
 	if yaw and pitch and muzzle then
 		return yaw, pitch, muzzle
 	end
 	return nil
 end
 
--- The gun's own seat on `vehicle`, or nil: a Seat named GunnerSeat, or any Seat with a true Gunner
+-- The turret's own seat on `vehicle`, or nil: a Seat named GunnerSeat, or any Seat with a true Gunner
 -- attribute (VehicleWeaponClient's gunnerSeatOf reads the same two things).
 function VehicleWeapons.GunnerSeatOf(vehicle)
 	for _, child in ipairs(vehicle:GetChildren()) do
@@ -103,9 +112,9 @@ function VehicleWeapons.GunnerSeatOf(vehicle)
 	return nil
 end
 
--- The armed vehicle whose gun `token` works, or nil (see WHO WORKS THE GUN). The seat's Occupant
--- must be this very humanoid, so a stale SeatPart gets nothing. The name is kept from when only the
--- driver could fire.
+-- The armed vehicle and mount `token` works, or nil (see WHO WORKS WHAT). The seat's Occupant must be
+-- this very humanoid, so a stale SeatPart gets nothing. The name is kept from when only the driver
+-- could fire.
 function VehicleWeapons.DrivenBy(token)
 	local character = token ~= nil and Combatants.GetCharacter(token) or nil
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -114,19 +123,21 @@ function VehicleWeapons.DrivenBy(token)
 		return nil
 	end
 	local vehicle = seat.Parent
-	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
-	if not spec or not mountOf(vehicle) then
+	local modelId = vehicle and vehicle:GetAttribute("VehicleModel")
+	local mount
+	if seat == VehicleWeapons.GunnerSeatOf(vehicle) then
+		mount = "turret"
+	elseif seat:IsA("VehicleSeat") then
+		-- The driving seat works the driver's gun, and only that.
+		mount = "driver"
+	else
 		return nil
 	end
-	local gunner = VehicleWeapons.GunnerSeatOf(vehicle)
-	if seat ~= gunner then
-		-- Not the gun's seat: only the driver, and only while nobody is on the gun.
-		local manned = gunner ~= nil and gunner.Occupant ~= nil
-		if not seat:IsA("VehicleSeat") or manned then
-			return nil
-		end
+	local spec = VehicleWeaponData.ForModel(modelId, mount)
+	if not spec or not mountOf(vehicle, mount) then
+		return nil
 	end
-	return vehicle, spec, character, humanoid
+	return vehicle, spec, character, humanoid, mount
 end
 
 -- Everything a shot from `vehicle` must pass through: the vehicle and whoever rides in it.
@@ -143,28 +154,37 @@ local function riders(vehicle)
 	return list
 end
 
-local function stateFor(vehicle, spec)
-	local state = states[vehicle]
-	if not state then
-		state = { ammo = spec.magazine, firedAt = nil }
-		states[vehicle] = state
+local function stateFor(vehicle, spec, mount)
+	local perVehicle = states[vehicle]
+	if not perVehicle then
+		perVehicle = {}
+		states[vehicle] = perVehicle
 		vehicle.AncestryChanged:Connect(function()
 			if not vehicle:IsDescendantOf(game) then
 				states[vehicle] = nil
 			end
 		end)
 	end
+	local key = mount or "turret"
+	local state = perVehicle[key]
+	if not state then
+		state = { ammo = spec.magazine, firedAt = nil, hot = false }
+		perVehicle[key] = state
+	end
 	return state
 end
 
--- What the HUD and the other clients read. WeaponAmmo is the count as of WeaponFiredAt; the
--- client climbs it back with VehicleWeaponData.AmmoAt on the same clock.
-local function publish(vehicle, state, yaw, pitch)
-	vehicle:SetAttribute("WeaponAmmo", state.ammo)
-	vehicle:SetAttribute("WeaponFiredAt", state.firedAt or 0)
+-- What the HUD and the other clients read (VehicleWeaponData.Attributes names them per mount). The
+-- ammo is the count as of the last shot; the client climbs it back with VehicleWeaponData.AmmoAt on
+-- the same clock. Hot is the overheat flag.
+local function publish(vehicle, mount, state, yaw, pitch)
+	local attributes = VehicleWeaponData.Attributes[mount or "turret"]
+	vehicle:SetAttribute(attributes.ammo, state.ammo)
+	vehicle:SetAttribute(attributes.firedAt, state.firedAt or 0)
+	vehicle:SetAttribute(attributes.hot, state.hot or nil)
 	if yaw then
-		vehicle:SetAttribute("AimYaw", math.floor(math.deg(yaw) * 2 + 0.5) / 2)
-		vehicle:SetAttribute("AimPitch", math.floor(math.deg(pitch) * 2 + 0.5) / 2)
+		vehicle:SetAttribute(attributes.yaw, math.floor(math.deg(yaw) * 2 + 0.5) / 2)
+		vehicle:SetAttribute(attributes.pitch, math.floor(math.deg(pitch) * 2 + 0.5) / 2)
 	end
 end
 
@@ -172,43 +192,25 @@ end
 -- Aiming
 --------------------------------------------------------------------------------
 
--- Shared with the client, which swings the driver's own turret by the same limits.
+-- Shared with the client, which swings the mounts by the same limits.
 VehicleWeapons.ClampAim = VehicleWeaponData.ClampAim
 
--- A mount-space vector turned by the pitch pivot, then the yaw pivot.
-local function turn(v, yaw, pitch)
-	local cp, sp, cy, sy = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
-	local y1 = v.Y * cp - v.Z * sp
-	local z1 = v.Y * sp + v.Z * cp
-	return Vector3.new(v.X * cy + z1 * sy, y1, -v.X * sy + z1 * cy)
-end
-
-local function directionOf(yaw, pitch)
-	return turn(Vector3.new(0, 0, -1), yaw, pitch)
-end
-
--- Where the shot leaves and which way, in world space, clamped to the mount's arc. The server
--- never swings the pivots itself (clients do, from AimYaw/AimPitch), so the parts stand at rest
--- and the muzzle's offset from the pitch pivot is the rest offset, turned here by the aim.
-local function solve(vehicle, spec, aimPoint)
-	local yawPart, pitchPart, muzzle = mountOf(vehicle)
+-- Where the shot leaves and which way, in world space, clamped to the mount's arc
+-- (VehicleWeaponData.Solve). The server never swings the pivots itself (clients do, from the aim
+-- attributes), so the parts stand at rest: the yaw pivot's frame, the pitch pivot and the muzzle as
+-- built are all it needs.
+local function solve(vehicle, mount, spec, aimPoint)
+	local yawPart, pitchPart, muzzle = mountOf(vehicle, mount)
 	local frame = yawPart.CFrame
-	local toAim = frame:VectorToObjectSpace(aimPoint - pitchPart.Position)
-	if toAim.Magnitude < 1 then
+	local pivot = frame:PointToObjectSpace(pitchPart.Position)
+	local mouth = frame:VectorToObjectSpace(muzzle.Position - pitchPart.Position)
+	local yaw, pitch, origin, direction = VehicleWeaponData.Solve(spec, frame, pivot, mouth, aimPoint)
+	if not yaw then
 		return nil
 	end
-	local yaw, pitch = VehicleWeapons.ClampAim(spec, toAim)
-	local rest = frame:VectorToObjectSpace(muzzle.Position - pitchPart.Position)
-	local originLocal = turn(rest, yaw, pitch)
-	-- Second pass from the muzzle itself, so a close target is hit where the crosshair is rather
-	-- than a muzzle's length beside it. Still clamped: a crosshair can't pull the barrel out of its arc.
-	local fromMuzzle = toAim - originLocal
-	if fromMuzzle.Magnitude > 1 then
-		yaw, pitch = VehicleWeapons.ClampAim(spec, fromMuzzle)
-	end
-	local origin = pitchPart.Position + frame:VectorToWorldSpace(originLocal)
-	local direction = frame:VectorToWorldSpace(directionOf(yaw, pitch))
-	return origin, direction, yaw, pitch
+	-- The pivot as turned, for the line-of-sight test (the barrel's own length, pivot to muzzle).
+	local pivotWorld = frame:PointToWorldSpace(VehicleWeaponData.Turn(pivot, yaw, 0))
+	return origin, direction, yaw, pitch, pivotWorld
 end
 
 -- A random direction within `degrees` of `direction`.
@@ -228,9 +230,7 @@ end
 -- Shots
 --------------------------------------------------------------------------------
 
--- One bullet: traced here, and everything it meets handed to CombatService's own functions in the
--- order a hand gun's bullet meets them (CombatService's firePellet). Returns where it ended.
-local function traceBullet(token, vehicle, origin, direction, spec)
+local function shotParams(token, vehicle)
 	local filter = riders(vehicle)
 	local companion = CombatService.CompanionOf and CombatService.CompanionOf(token)
 	if companion then
@@ -247,7 +247,24 @@ local function traceBullet(token, vehicle, origin, direction, spec)
 	-- Water doesn't stop a bullet here either (CombatService.buildRaycastParams).
 	params.IgnoreWater = true
 	params.FilterDescendantsInstances = filter
+	return params, filter
+end
 
+-- Whether the barrel is in the open: nothing solid between its pivot and its mouth. Returns the point
+-- a shot really leaves from -- the muzzle, or where the barrel meets whatever it has been pushed into.
+local function clearMuzzle(token, vehicle, pivotWorld, origin)
+	local params = shotParams(token, vehicle)
+	local blocked = workspace:Raycast(pivotWorld, origin - pivotWorld, params)
+	if blocked and blocked.Instance.CanCollide then
+		return blocked.Position - (origin - pivotWorld).Unit * 0.05, false
+	end
+	return origin, true
+end
+
+-- One bullet: traced here, and everything it meets handed to CombatService's own functions in the
+-- order a hand gun's bullet meets them (CombatService's firePellet). Returns where it ended.
+local function traceBullet(token, vehicle, origin, direction, spec)
+	local params, filter = shotParams(token, vehicle)
 	local from = origin
 	local travelled = 0
 	local endPoint = origin + direction * spec.range
@@ -284,6 +301,12 @@ local function traceBullet(token, vehicle, origin, direction, spec)
 			local hazard = CombatService.HazardFromPart and CombatService.HazardFromPart(part)
 			if hazard then
 				CombatService.DamageHazard(token, hazard, spec.damage)
+				break
+			end
+			-- Another vehicle's body or armour takes it (VehicleService, VehicleArmor).
+			local struck = CombatService.VehicleFromPart and CombatService.VehicleFromPart(part)
+			if struck then
+				CombatService.DamageVehicle(token, struck, spec.damage, spec.damageClass or "bullet", spec.id, result.Position)
 				break
 			end
 			local victimCharacter = part:FindFirstAncestorOfClass("Model")
@@ -351,7 +374,7 @@ function VehicleWeapons.Fire(token, aimPoint)
 	if token == nil or not Combatants.IsAlive(token) then
 		return false, "dead"
 	end
-	local vehicle, spec = VehicleWeapons.DrivenBy(token)
+	local vehicle, spec, _, _, mount = VehicleWeapons.DrivenBy(token)
 	if not vehicle then
 		return false, "not driving"
 	end
@@ -360,16 +383,23 @@ function VehicleWeapons.Fire(token, aimPoint)
 	end
 
 	local now = VehicleWeapons.Now()
-	local state = stateFor(vehicle, spec)
+	local state = stateFor(vehicle, spec, mount)
 	local credit = CombatService.ShotCredit(state, spec, now)
 	if credit < 1 then
 		return false, "rate"
 	end
 	local ammo = VehicleWeaponData.AmmoAt(spec, state.ammo, state.firedAt, now)
-	if ammo < 1 then
+	-- Run dry, or still hot after running dry: nothing until the belt has cooled (the bots read both as
+	-- "ammo" and let it cool).
+	local ready, hot = VehicleWeaponData.Ready(spec, ammo, state.hot)
+	if hot ~= state.hot then
+		state.hot = hot
+		publish(vehicle, mount, state)
+	end
+	if not ready then
 		return false, "ammo"
 	end
-	local origin, direction, yaw, pitch = solve(vehicle, spec, aimPoint)
+	local origin, direction, yaw, pitch, pivotWorld = solve(vehicle, mount, spec, aimPoint)
 	if not origin then
 		return false, "aim"
 	end
@@ -377,11 +407,13 @@ function VehicleWeapons.Fire(token, aimPoint)
 	CombatService.SpendShot(state, credit, now)
 	state.ammo = ammo - 1
 	state.firedAt = now
-	publish(vehicle, state, yaw, pitch)
+	state.hot = spec.overheat ~= nil and state.ammo < 1 or false
+	publish(vehicle, mount, state, yaw, pitch)
+	origin = clearMuzzle(token, vehicle, pivotWorld, origin)
 
 	-- The shot is broadcast with no shooter: CombatClient would otherwise take the flash and the
 	-- tracer from the driver's own hand gun (or their view, for their own shots). With none, every
-	-- client, the driver's included, draws it from the mount's muzzle and hears it from there.
+	-- client, the firer's included, draws it from the mount's muzzle and hears it from there.
 	if spec.kind == "round" then
 		launchRound(token, vehicle, origin, spread(direction, spec.spread), spec)
 		CombatService.BroadcastShot(nil, origin, {}, spec.rarity)
@@ -395,21 +427,22 @@ function VehicleWeapons.Fire(token, aimPoint)
 	return true
 end
 
--- Swings the turret toward `aimPoint` without firing, so everyone sees where it's pointing.
+-- Swings the mount toward `aimPoint` without firing, so everyone sees where it's pointing.
 function VehicleWeapons.Aim(token, aimPoint)
 	if not SafeValue.Vector3(aimPoint) then
 		return false
 	end
-	local vehicle, spec = VehicleWeapons.DrivenBy(token)
+	local vehicle, spec, _, _, mount = VehicleWeapons.DrivenBy(token)
 	if not vehicle then
 		return false
 	end
-	local _, _, yaw, pitch = solve(vehicle, spec, aimPoint)
+	local _, _, yaw, pitch = solve(vehicle, mount, spec, aimPoint)
 	if not yaw then
 		return false
 	end
-	vehicle:SetAttribute("AimYaw", math.floor(math.deg(yaw) * 2 + 0.5) / 2)
-	vehicle:SetAttribute("AimPitch", math.floor(math.deg(pitch) * 2 + 0.5) / 2)
+	local attributes = VehicleWeaponData.Attributes[mount]
+	vehicle:SetAttribute(attributes.yaw, math.floor(math.deg(yaw) * 2 + 0.5) / 2)
+	vehicle:SetAttribute(attributes.pitch, math.floor(math.deg(pitch) * 2 + 0.5) / 2)
 	return true
 end
 
@@ -451,13 +484,13 @@ function VehicleWeapons.BotBoard(humanoid, seat)
 	return true
 end
 
--- The rounds `vehicle`'s mount holds right now (recharge counted), and its spec; nil for an unarmed one.
-function VehicleWeapons.AmmoOf(vehicle)
-	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
+-- The rounds a mount holds right now (recharge counted), and its spec; nil for an unarmed one.
+function VehicleWeapons.AmmoOf(vehicle, mount)
+	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"), mount)
 	if not spec then
 		return nil
 	end
-	local state = stateFor(vehicle, spec)
+	local state = stateFor(vehicle, spec, mount)
 	return VehicleWeaponData.AmmoAt(spec, state.ammo, state.firedAt, VehicleWeapons.Now()), spec
 end
 
@@ -487,9 +520,9 @@ end
 -- Whether a shot at `point` can be made inside the mount's arc (its yaw limit, and its pitch limits
 -- for the line or, for a lobbed round, the arc): a bot holds fire rather than send rounds off at the
 -- clamped edge.
-function VehicleWeapons.InArc(vehicle, point)
-	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
-	local yawPart, pitchPart = mountOf(vehicle)
+function VehicleWeapons.InArc(vehicle, point, mount)
+	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"), mount)
+	local yawPart, pitchPart = mountOf(vehicle, mount)
 	if not spec or not yawPart then
 		return false
 	end
@@ -497,16 +530,18 @@ function VehicleWeapons.InArc(vehicle, point)
 	if toAim.Magnitude < 1 then
 		return false
 	end
-	local yaw = math.atan2(-toAim.X, -toAim.Z)
+	-- The bearing about the yaw axis itself (a pintle's pitch pivot stands out in front of it).
+	local fromAxis = yawPart.CFrame:PointToObjectSpace(point)
+	local yaw = math.atan2(-fromAxis.X, -fromAxis.Z)
 	if math.abs(yaw) > math.rad(spec.yawLimit) + 1e-3 then
 		return false
 	end
-	if spec.kind == "round" and spec.projectile == "grenade" then
+	if spec.kind == "round" and spec.projectile == "grenade" and spec.pitchMin >= 0 then
 		local round = Ballistics.Rounds[spec.projectile]
 		return round ~= nil and round.speed ~= nil and lobAngle(spec, round, pitchPart.Position, point) ~= nil
 	end
 	local pitch = math.atan2(toAim.Y, math.sqrt(toAim.X * toAim.X + toAim.Z * toAim.Z))
-	return pitch >= math.rad(spec.pitchMin) - 0.02 and pitch <= math.rad(spec.pitchMax) + 0.02
+	return pitch >= VehicleWeaponData.PitchFloor(spec, yaw) - 0.02 and pitch <= math.rad(spec.pitchMax) + 0.02
 end
 
 -- How much of a moving target's run a bot leads a round by: most of the way, not all of it. A bot
@@ -521,9 +556,9 @@ local LOB_DROP = 2.5
 -- width and more away so its splash does not turn every miss into a hit. A round is led by BOT_LEAD
 -- of the target's run over its flight, and a lobbed one (the mortar) aimed so its arc comes down
 -- where it should, not where the barrel points. The mount's own spread and clamp still apply in Fire.
-function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit)
-	local spec = VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
-	local _, pitchPart = mountOf(vehicle)
+function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit, mount)
+	local spec = VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"), mount)
+	local _, pitchPart = mountOf(vehicle, mount)
 	if not spec or not pitchPart then
 		return targetPosition
 	end
@@ -534,9 +569,10 @@ function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit
 		local flight = Ballistics.RoundTimeFor(round, (targetPosition - origin).Magnitude)
 		point += (targetVelocity or Vector3.zero) * flight * BOT_LEAD
 	end
+	local lobbed = round ~= nil and spec.projectile == "grenade" and spec.pitchMin >= 0
 	if not hit then
 		local off = round and (spec.splashRadius or 12) + 6 + math.random() * 6 or 5 + math.random() * 7
-		if round and spec.projectile == "grenade" then
+		if lobbed then
 			-- A lob comes down somewhere else: anywhere round the target.
 			local angle = math.random() * math.pi * 2
 			point += Vector3.new(math.cos(angle) * off, 0, math.sin(angle) * off)
@@ -548,7 +584,7 @@ function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit
 			point += side * (math.random() < 0.5 and -off or off) + Vector3.new(0, math.random(-1, 3), 0)
 		end
 	end
-	if round and spec.projectile == "grenade" then
+	if lobbed then
 		-- A lob: along the launch angle that brings the round down at `point`'s feet (a round coming down
 		-- at a shallow angle onto a body's middle would carry on past it to the ground behind).
 		point -= Vector3.new(0, LOB_DROP, 0)
@@ -558,7 +594,8 @@ function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit
 			return origin + (across * math.cos(angle) + Vector3.new(0, math.sin(angle), 0)) * 100
 		end
 	elseif round and Ballistics.LeadAim then
-		-- A rocket's drop, taken out the way the hand launcher's aim takes it out (its lead is above).
+		-- A round's drop (a rocket's, a flat-fired grenade's), taken out the way the hand launcher's aim
+		-- takes it out (its lead is above).
 		return Ballistics.LeadAim(round, origin, point, Vector3.zero, workspace.Gravity)
 	end
 	return point
@@ -593,7 +630,7 @@ local function guardRound(kind)
 end
 
 -- The aim remote's own token bucket (RateLimit.Budgets belongs to another file): a client sends
--- its aim about ten times a second while it drives an armed vehicle.
+-- its aim about ten times a second while it works a vehicle's gun.
 local aimBudget = { burst = 6, rate = 15 }
 local aimBuckets = {}
 
@@ -605,7 +642,8 @@ function VehicleWeapons.Start()
 	end
 
 	Remotes.Event("VehicleWeaponFire").OnServerEvent:Connect(function(player, aimPoint)
-		-- The hand gun's budget: a driver can't use their hand gun, so it's theirs to spend here.
+		-- The hand gun's budget: whoever works a mount isn't using their hand gun, so it's theirs to
+		-- spend here.
 		if not RateLimit.Take(player, "Fire") then
 			return
 		end

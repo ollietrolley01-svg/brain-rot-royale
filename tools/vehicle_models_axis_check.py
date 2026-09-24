@@ -33,9 +33,10 @@ Invariants, each aimed at something the models must refuse forever:
        - it rests on the rack: handle and barrel each sit on a rack bar (underside 0..0.05 above
          the bar's top), and the straps touch both bat and bar,
        - nothing else overlaps it except the straps and the bars it rests on.
-  6. An armed build's turret clears the rest of the vehicle through its WHOLE aim arc (yaw and
-     pitch limits from VehicleWeaponData, 5 degree steps): no turret part comes within 0.05 of a
-     visible non-turret part other than the mount it stands on.
+  6. An armed build's weapons clear the rest of the vehicle through their WHOLE aim arcs (yaw and
+     pitch limits from VehicleWeaponData, 5 degree steps): no part of the turret comes within 0.05 of
+     a visible part that is not the turret's own, and the same for the driver's gun (DriverGun*,
+     VehicleModels.DriverMounts, VehicleWeaponData.DriverByModel).
 
 Planted faults travel the same pipeline as the real input: the module SOURCE is edited and rebuilt.
     python3 tools/vehicle_models_axis_check.py [repo]        -> exit 0 when clean
@@ -223,7 +224,10 @@ BARE, BARE_RATIO = 0.4, 2.0
 MOUNT_POST = 2.5
 BAT_CHAIN = ("BatHandle", "BatFlare", "BatTaper", "BatThroat", "BatShoulder", "BatBarrel")
 BAT_PIECES = ("BatKnob",) + BAT_CHAIN + ("BatEnd", "BatStrap1", "BatStrap2")
-TURRET = re.compile(r"^(Turret|Gun|Pod|Mortar)")
+TURRET = re.compile(r"^(Turret|Gun|Pod|Mortar|DriverGun)")
+# The weapon itself (not its mount), which is allowed to be long: barrels, tubes.
+WEAPON = re.compile(r"^(Gun|Pod|Mortar|DriverGun(Jacket|Barrel|Flash))")
+DRIVER_GUN = re.compile(r"^DriverGun")
 
 
 def luau_to_lua(src):
@@ -236,15 +240,20 @@ def load_sources(repo):
             for name in ("VehicleModels", "ZFight", "VehicleWeaponData")}
 
 
-def weapon_arcs(data_src):
-    """{modelId: (yawLimit, pitchMin, pitchMax)} read from VehicleWeaponData's source."""
+def weapon_arcs(data_src, table="ByModel"):
+    """{modelId: (yawLimit, pitchMin, pitchMax, guard)} read from VehicleWeaponData's source: the
+    turrets (ByModel) or, with table="DriverByModel", the drivers' guns. `guard` is the spec's
+    frontGuard as (arc, pitchMin), or None: inside that arc the barrel never goes below its floor."""
     arcs, specs = {}, {}
     for m in re.finditer(r"\n\t(\w+) = \{(.*?)\n\t\}", data_src, re.S):
         body = m.group(2)
-        vals = [re.search(rf"\b{k} = (-?[\d.]+)", body) for k in ("yawLimit", "pitchMin", "pitchMax")]
+        vals = [re.search(rf"\n\t\t{k} = (-?[\d.]+)", body) for k in ("yawLimit", "pitchMin", "pitchMax")]
+        guard = re.search(r"frontGuard = \{ arc = (-?[\d.]+), pitchMin = (-?[\d.]+) \}", body)
         if all(vals):
-            specs[m.group(1)] = tuple(float(v.group(1)) for v in vals)
-    for model_id, spec in re.findall(r"\n\t(\w+) = \"(\w+)\",", data_src):
+            specs[m.group(1)] = tuple(float(v.group(1)) for v in vals) + (
+                (float(guard.group(1)), float(guard.group(2))) if guard else None,)
+    block = re.search(r"\nVehicleWeaponData\." + table + r" = \{(.*?)\n\}", data_src, re.S)
+    for model_id, spec in re.findall(r"\n\t(\w+) = \"(\w+)\",", block.group(1) if block else ""):
         if spec in specs:
             arcs[model_id] = specs[spec]
     return arcs
@@ -343,7 +352,30 @@ def point_distance(p, q):
         along = max(0.0, abs(local[0]) - h[0])
         return math.hypot(radial, along)
     out = [max(0.0, abs(local[k]) - h[k]) for k in range(3)]
+    if p.get("cls") == "WedgePart":
+        # A wedge is its box cut by the slope from its low front edge (y -h, z -h) to its high back
+        # edge (y +h, z +h): a point above the slope is outside by its distance from that plane.
+        n = [0.0, h[2], -h[1]]
+        m = math.hypot(n[1], n[2]) or 1.0
+        above = (local[1] * n[1] + local[2] * n[2]) / m
+        return max(length(out), above)
     return length(out)
+
+
+def samples(p):
+    """Points through a part's solid, and the radius each stands for (round parts are their axis)."""
+    h = half_sizes(p)
+    if p["shape"] == "Ball":
+        return [(p["pos"], h[0])]
+    if p["shape"] == "Cylinder":
+        axis = p["cols"][0]
+        return [(add(p["pos"], mul(axis, h[0] * t / 4)), h[1]) for t in range(-4, 5)]
+    pts = []
+    for i in (-1, 0, 1):
+        for j in (-1, 0, 1):
+            for k in (-1, 0, 1):
+                pts.append((add(p["pos"], add(add(mul(p["cols"][0], h[0] * i), mul(p["cols"][1], h[1] * j)), mul(p["cols"][2], h[2] * k))), 0.0))
+    return pts
 
 
 def seg_seg(p1, q1, p2, q2):
@@ -405,6 +437,13 @@ def overlaps(p, q, margin):
     qlo, qhi = world_extent(q)
     if any(plo[k] > qhi[k] + margin or qlo[k] > phi[k] + margin for k in range(3)):
         return False
+    # A ball against anything, and anything against a wedge's slope, measured exactly (a ball's box
+    # reaches 0.4 of its size out at a corner; a wedge's box counts the air over its slope as solid).
+    for a, b in ((p, q), (q, p)):
+        if a["shape"] == "Ball" and b["shape"] != "Ball":
+            return point_distance(b, a["pos"]) < half_sizes(a)[0] + margin
+        if b.get("cls") == "WedgePart" and a.get("cls") != "WedgePart":
+            return any(point_distance(b, x) < r + margin for x, r in samples(a))
     if p["shape"] in ("Cylinder", "Ball") and q["shape"] in ("Cylinder", "Ball"):
         def slim(x): return 0 if x["shape"] == "Ball" else x["size"][0] / half_sizes(x)[1]
         if slim(p) < slim(q):
@@ -452,7 +491,7 @@ def audit_rods(parts, label, verbose):
         if worst > max(BARE, BARE_RATIO * thick) and not TURRET.match(p["name"]):
             verdict = "FLAG free end"
             faults.append(f"{label}/{p['name']}: rod end sticks out {worst:.2f} studs with nothing round it (a pole sticking out)")
-        if TURRET.match(p["name"]) and ln > MOUNT_POST and not re.match(r"^(Gun|Pod|Mortar)", p["name"]):
+        if TURRET.match(p["name"]) and ln > MOUNT_POST and not WEAPON.match(p["name"]):
             verdict = "FLAG post"
             faults.append(f"{label}/{p['name']}: a {ln:.1f}-stud rod in the weapon mount (a pole standing out of the vehicle)")
         if off > 6:
@@ -606,20 +645,28 @@ def posed(p, pivot, axis, a):
     return dict(p, pos=add(pivot, rotate(sub(p["pos"], pivot), axis, a)), cols=tuple(rotate(c, axis, a) for c in p["cols"]))
 
 
-def audit_turret(parts, label, arc, verbose):
-    """Invariant 6: the turret clears the vehicle through its whole arc."""
+def audit_turret(parts, label, arc, verbose, mount="turret"):
+    """Invariant 6: a weapon clears the vehicle through its whole arc."""
     faults = []
     byname = {p["name"]: p for p in parts}
-    yaw_p, pitch_p = byname.get("TurretYaw"), byname.get("TurretPitch")
+    yaw_name, pitch_name = ("TurretYaw", "TurretPitch") if mount == "turret" else ("DriverGunYaw", "DriverGunPitch")
+    yaw_p, pitch_p = byname.get(yaw_name), byname.get(pitch_name)
     if not (yaw_p and pitch_p and arc):
-        return [f"{label}: armed build without a turret or an arc"]
-    yaw_parts = [p for p in visible(parts) if p["anchor"] == "TurretYaw"]
-    pitch_parts = [p for p in visible(parts) if p["anchor"] == "TurretPitch"]
-    fixed = [p for p in visible(parts) if not TURRET.match(p["name"])]
-    yaw_limit, pmin, pmax = arc
+        return [f"{label}: armed build without a {mount} mount or an arc"]
+    yaw_parts = [p for p in visible(parts) if p["anchor"] == yaw_name]
+    pitch_parts = [p for p in visible(parts) if p["anchor"] == pitch_name]
+    # Obstacles: everything visible that is not this mount's own (its fixed base included, which it
+    # stands on). The turret's sweep meets the driver's gun like any other part, and the other way round.
+    own = (lambda n: TURRET.match(n) and not DRIVER_GUN.match(n)) if mount == "turret" else DRIVER_GUN.match
+    fixed = [p for p in visible(parts) if not own(p["name"])]
+    yaw_limit, pmin, pmax, guard = arc
     worst, hits = 1e9, {}
     yaws = [math.radians(y) for y in range(-int(yaw_limit), int(yaw_limit) + 1, 5)]
-    pitches = [math.radians(pmin + (pmax - pmin) * i / 10) for i in range(11)]
+
+    def pitches_at(yaw):
+        low = max(pmin, guard[1]) if guard and abs(math.degrees(yaw)) < guard[0] else pmin
+        return [math.radians(low + (pmax - low) * i / 10) for i in range(11)]
+    pitches = pitches_at(math.pi)
     up, right = yaw_p["cols"][1], pitch_p["cols"][0]
     # Only parts that could possibly be reached: within the turret's swing radius of the yaw pivot.
     reach = max(length(sub(p["pos"], yaw_p["pos"])) + length(p["size"]) / 2 for p in yaw_parts + pitch_parts)
@@ -628,7 +675,7 @@ def audit_turret(parts, label, arc, verbose):
         pitch_pivot = add(yaw_p["pos"], rotate(sub(pitch_p["pos"], yaw_p["pos"]), up, yaw))
         right_now = rotate(right, up, yaw)
         moving = [posed(p, yaw_p["pos"], up, yaw) for p in yaw_parts]
-        for pitch in pitches:
+        for pitch in pitches_at(yaw):
             # Positive pitch is up: CFrame.Angles(pitch, 0, 0) about the pivot's X, front -Z.
             moving2 = moving + [posed(posed(p, yaw_p["pos"], up, yaw), pitch_pivot, right_now, pitch) for p in pitch_parts]
             for m in moving2:
@@ -636,14 +683,14 @@ def audit_turret(parts, label, arc, verbose):
                     if overlaps(m, q, CLEAR):
                         hits.setdefault((m["name"], q["name"]), (round(math.degrees(yaw)), round(math.degrees(pitch))))
     for (m, q), (y, pt) in sorted(hits.items()):
-        faults.append(f"{label}/{m}: turret runs into {q} (first at yaw {y}, pitch {pt})")
+        faults.append(f"{label}/{m}: {'turret' if mount == 'turret' else 'driver gun'} runs into {q} (first at yaw {y}, pitch {pt})")
     if verbose:
-        print(f"  turret: {len(yaws)} yaws x {len(pitches)} pitches over yaw +-{yaw_limit:g}, pitch {pmin:g}..{pmax:g}; "
+        print(f"  {mount}: {len(yaws)} yaws x {len(pitches)} pitches over yaw +-{yaw_limit:g}, pitch {pmin:g}..{pmax:g}; "
               f"{len(near)} nearby parts checked, {len(hits)} contacts")
     return faults
 
 
-def audit_model(rt, rt_raw, arcs, model_id, verbose=True):
+def audit_model(rt, rt_raw, arcs, model_id, verbose=True, driver_arcs=None):
     faults = []
     for scheme in range(1, rt.schemes[model_id] + 1):
         hows = ["drive", "static"] + (["unarmed"] if model_id in rt.mounts else [])
@@ -657,17 +704,19 @@ def audit_model(rt, rt_raw, arcs, model_id, verbose=True):
                 faults += audit_bat(parts, label, talk)
             if how == "drive" and model_id in rt.mounts and scheme == 1:
                 faults += audit_turret(parts, label, arcs.get(model_id), talk)
+                faults += audit_turret(parts, label, (driver_arcs or {}).get(model_id), talk, "driver")
     return faults
 
 
 def run(sources, only=None, verbose=True):
     rt, raw = Runtime(sources), Runtime(sources, zfight=False)
     arcs = weapon_arcs(sources["VehicleWeaponData"])
+    driver_arcs = weapon_arcs(sources["VehicleWeaponData"], "DriverByModel")
     faults = []
     for model_id in rt.ids:
         if only and model_id != only:
             continue
-        found = audit_model(rt, raw, arcs, model_id, verbose)
+        found = audit_model(rt, raw, arcs, model_id, verbose, driver_arcs)
         if verbose:
             for f in found:
                 print("  FAULT " + f)
@@ -704,11 +753,14 @@ def main(repo="."):
          "local z = (barZ - batZ) / math.cos(math.rad(rake))", "local z = barZ", "strap does not reach a rack bar"),
         ("mortar back on its old 0.4 plinth (swings through the bat)", "SahurVan", VM,
          "base = V(0, 7.8, 5.2), column = 0.9", "base = V(0, 7.8, 5.2), column = 0.4", "turret runs into BatBarrel"),
-        ("the Ranger's pod back on its 3.9-stud post", "CrocodiloRanger", VM,
-         'CrocodiloRanger = { style = "pod", base = V(0, 7.0, 2.75), column = 0.2 },',
-         'CrocodiloRanger = { style = "pod", base = V(0, 3.1, 4.9), column = 3.9 },', "rod in the weapon mount",
-         ('b:box("TurretCradle", V(2.0, column, 0.9), base + V(0, column / 2, 0), "trim")',
-          'b:tube("TurretColumn", base, base + V(0, column, 0), 0.5, "trim")')),
+        ("the Ranger's pedestal thinned to a bare pole", "CrocodiloRanger", VM,
+         'b:cyl("TurretColumn", yokeY - (yawAt.Y + 0.3), 0.72,',
+         'b:cyl("TurretColumn", yokeY - (yawAt.Y + 0.3), 0.5,', "rod in the weapon mount"),
+        ("the Ranger's pedestal moved forward against its roll bar", "CrocodiloRanger", VM,
+         'CrocodiloRanger = { style = "pedestal", base = V(0, 3.1, 4.55) },', 'CrocodiloRanger = { style = "pedestal", base = V(0, 3.1, 3.6) },', "turret runs into RollBar"),
+        ("the Rotster's nose gun sunk into its bonnet", "Rotster", VM,
+         'Rotster = { style = "cowl", base = V(0, 3.52, -4.6), depth = 1.1, length = 1.8 },',
+         'Rotster = { style = "cowl", base = V(0, 3.02, -4.6), depth = 1.1, length = 1.8 },', "driver gun runs into"),
         ("parked car keeps its bare steering column", "TralalaGT", VM,
          'local STATIC_CAR_DROP = { "^Column$" }', "local STATIC_CAR_DROP = {}", "Column: rod end sticks out"),
         ("z-fight pass shoves a bat piece", "SahurVan", ZF,

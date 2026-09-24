@@ -43,11 +43,12 @@ def region(root):
 
 def vehicle_models(root):
     text = read(root, "ReplicatedStorage", "Shared", "VehicleModels.lua")
-    models = re.findall(r"^VehicleModels\.Models\.(\w+) = \{\n\tkind = \"(\w+)\",(?:.|\n)*?\n\tweight = (\d+),", text, re.M)
+    models = re.findall(r"^VehicleModels\.Models\.(\w+) = \{\n\tkind = \"(\w+)\",(?:.|\n)*?\n\tweight = (\d+),((?:\n\tdrivableOnly = true,)?)", text, re.M)
+    models = [(m[0], m[1], m[2], bool(m[3])) for m in models]
     mounts_block = text[text.index("VehicleModels.Mounts = {"):]
     mounts_block = mounts_block[:mounts_block.index("\n}\n")]
     mounts = re.findall(r"^\t(\w+) = \{", mounts_block, re.M)
-    start = text.index("function VehicleModels.Pick(kind, rng)")
+    start = text.index("function VehicleModels.Pick(kind, rng")
     pick = text[start:text.index("\nend\n", start) + 5]
     return models, mounts, pick
 
@@ -212,7 +213,7 @@ end
 GameModes = { TeamCount = 2 }
 MapTerrain = { InRiver = function() return false end }
 VehicleModels = { Models = {}, Mounts = {} }
-for _, m in ipairs(R.models) do VehicleModels.Models[m[1]] = { kind = m[2], weight = m[3] } end
+for _, m in ipairs(R.models) do VehicleModels.Models[m[1]] = { kind = m[2], weight = m[3], drivableOnly = m[4] } end
 for _, id in ipairs(R.mounts) do VehicleModels.Mounts[id] = true end
 local TOL = 0.5
 local function footing(centre, yaw, size)
@@ -267,7 +268,7 @@ def run(root, plant=None, config_plant=None, seeds=40):
     for seed in range(1, seeds + 1):
         lua = LuaRuntime(unpack_returned_tuples=True)
         R = lua.eval("{}")
-        R.models = lua.table_from([lua.table_from(list(m[:2]) + [int(m[2])]) for m in models])
+        R.models = lua.table_from([lua.table_from(list(m[:2]) + [int(m[2]), m[3]]) for m in models])
         R.mounts = lua.table_from(mounts)
         lua.execute("math.randomseed(%d)" % seed)
         lua.globals()._R = R
@@ -326,13 +327,14 @@ local ids = {}
 for team = 1, 2 do
     local live = liveOf(team)
     if #live ~= #cfg.Slots then fail(("team %d: %d vehicles, want %d (%s)"):format(team, #live, #cfg.Slots, tostring(R.lastWarning))) end
-    local armed, bikes, list = 0, 0, {}
+    local armed, bikes, armored, list = 0, 0, 0, {}
     for i, v in ipairs(live) do
         R.examined = R.examined + 1
         local def = VehicleModels.Models[v.modelId]
         table.insert(list, v.modelId)
         if def.kind ~= v.kind then fail(v.modelId .. " created as " .. v.kind) end
         if def.kind == "car" and armedSet[v.modelId] then armed = armed + 1 end
+        if def.drivableOnly then armored = armored + 1 end
         if def.kind == "bike" then bikes = bikes + 1 end
         local p = v.model:GetPivot().Position
         if R.flat(p, centre) > radius - 40 then fail("outside the arena") end
@@ -357,6 +359,10 @@ for team = 1, 2 do
         if look.X * want.X + look.Z * want.Z < 0.999 then fail("not facing the arena centre") end
     end
     if armed < 1 then fail(("team %d: no armed vehicle"):format(team)) end
+    -- Armoured cars: exactly the slots that ask for one (each base one, never two, never in a car slot).
+    local wantArmored = 0
+    for _, slot in ipairs(cfg.Slots) do if slot == "armored" then wantArmored = wantArmored + 1 end end
+    if armored ~= wantArmored then fail(("team %d: %d armoured cars, want %d"):format(team, armored, wantArmored)) end
     if bikes > 1 then fail(("team %d: %d bikes"):format(team, bikes)) end
     table.sort(list)
     ids[team] = table.concat(list, ",")

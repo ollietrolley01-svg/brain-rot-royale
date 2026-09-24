@@ -683,12 +683,13 @@ local BASE_VEHICLE_RETRY_MS = 5000
 -- A bay with a base vehicle standing this close to its centre is taken.
 local BAY_TAKEN = 6
 -- The box over a bay that must be empty of anything solid before a vehicle is put in it: the biggest
--- vehicle's footprint (Sahur Van 9.0 wide, Crocodilo Ranger 17.4 long, measured from VehicleModels by
--- tools/team_base_ruins_check.py) with half a stud all round, 8 high, from 0.6 over the floor. A car
+-- vehicle's footprint (Sahur Van 9.0 wide; Crocodilo Ranger 19.04 long, its bull-bar gun's muzzle
+-- included -- 17.4 before it had one; measured from VehicleModels by tools/team_base_ruins_check.py)
+-- with half a stud all round, 8 high, from 0.6 over the floor. A car
 -- put into a wreck, a driven-back car, a player or a deployable is two assemblies in one place, and
 -- the physics shoves them apart into a pile (Oliver's playtest, 2026-09-24: "the vehicles in the team
 -- bases are all messed up, like piled together").
-local BAY_CLEAR = Vector3.new(10, 8, 18.5)
+local BAY_CLEAR = Vector3.new(10, 8, 20.1)
 -- A vehicle put in a bay is held anchored this long, so nothing shoves it before it has settled.
 local BAY_SETTLE_SECONDS = 1.5
 
@@ -772,21 +773,25 @@ local function footprintClear(at, yaw)
 	return true
 end
 
--- The models for one base, rolled once and handed to both. "armed" is drawn from the cars that carry
--- a mount (VehicleModels.Mounts), in a fixed order so the roll is repeatable.
+-- The models for one base, rolled once and handed to both. "armed" is drawn from the ordinary cars that
+-- carry a mount (VehicleModels.Mounts), "armored" from the armoured cars (drivableOnly, with a mount),
+-- each in a fixed order so the roll is repeatable; "car" and "bike" are VehicleModels.Pick's, which
+-- never gives an armoured car.
 function ModeTeams.RollBaseVehicleModels(rng)
-	local armed = {}
+	local armed, armored = {}, {}
 	for id, def in pairs(VehicleModels.Models) do
 		if def.kind == "car" and VehicleModels.Mounts[id] then
-			table.insert(armed, id)
+			table.insert(def.drivableOnly and armored or armed, id)
 		end
 	end
 	table.sort(armed)
+	table.sort(armored)
 	local ids = {}
 	for _, slot in ipairs(MatchConfig.TeamBaseVehicles.Slots) do
 		local id
-		if slot == "armed" then
-			id = #armed > 0 and armed[rng:NextInteger(1, #armed)] or nil
+		if slot == "armed" or slot == "armored" then
+			local pool = (slot == "armored" and #armored > 0) and armored or armed
+			id = #pool > 0 and pool[rng:NextInteger(1, #pool)] or nil
 		else
 			id = VehicleModels.Pick(slot == "bike" and "bike" or "car", rng)
 		end

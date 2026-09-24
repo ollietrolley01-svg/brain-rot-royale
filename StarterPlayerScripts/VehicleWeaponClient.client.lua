@@ -1,17 +1,27 @@
--- Mounted vehicle weapons on the client: the driver's trigger and aim, the ammo readout, and every
--- armed vehicle's turret swinging to where its driver is looking.
+-- Mounted vehicle weapons on the client: the trigger and aim of whichever mount this player works,
+-- the ammo and heat readout, the gunner's first-person view, and every armed vehicle's mounts
+-- swinging to where their users are aiming.
 --
--- The server decides everything that matters (VehicleWeapons): this only says where the driver is
--- aiming and when they pull the trigger. The shot itself comes back through ShotFired (tracer,
+-- The server decides everything that matters (VehicleWeapons): this only says where the mount is
+-- aiming and when the trigger is pulled. The shot itself comes back through ShotFired (tracer,
 -- report) and ProjectileService's round events like any gun's.
 --
--- Controls while driving an armed vehicle: the fire button (left mouse, R1 on a gamepad, since the
--- triggers are the throttle and brake, or the FIRE touch button this binds) fires the mount along the
--- camera. CombatClient refuses the hand gun from the driving seat, so the two never both fire.
+-- WHO WORKS WHAT (VehicleWeapons, the same rule): the gunner's seat works the TURRET, the driving seat
+-- works the DRIVER'S GUN (a short-arc gun at the front). A driver alone cannot work the turret.
 --
--- The turret swings on its two Motor6Ds' Transform (VehicleModels, Mounted weapons): from the
--- server's AimYaw/AimPitch for everyone else's, from the driver's own camera for their own, so it
--- answers the mouse the moment it moves.
+-- The DRIVER aims with the mouse while driving (the gun follows the cursor, inside its 20-degree arc,
+-- Oliver: "the aim to follow your mouse") or the camera's middle on a pad or a touch screen, and fires
+-- with the left mouse, R1 (the triggers are the throttle and brake) or the FIRE button.
+-- The GUNNER sees down the gun (GunnerView: the camera at their eye riding the turret, their own arms
+-- on its handles, a sight that shows where the shot lands): the mouse, the right stick or a drag turns
+-- the turret; the left mouse, R2 or R1, or FIRE fires; the right mouse, L2 or the AIM button aims down
+-- the sight. On a model with no first-person markers the gunner gets the driver's kind of aim instead.
+-- CombatClient refuses the hand gun from the driving seat, and this sinks a gunner's fire and aim
+-- buttons before CombatClient sees them, so a hand gun never fires or aims alongside a mount.
+--
+-- The mounts swing on their two Motor6Ds' Transform (VehicleModels, Mounted weapons): from the
+-- server's aim attributes for everyone else's, from this player's own aim for theirs, so it answers
+-- the mouse the moment it moves.
 
 local CollectionService = game:GetService("CollectionService")
 local ContextActionService = game:GetService("ContextActionService")
@@ -31,17 +41,27 @@ local aimRemote = Remotes.Event("VehicleWeaponAim")
 
 local AIM_SEND_EVERY = 0.1
 local AIM_RANGE = 1000
--- Degrees a second the turret swings at most when following someone else's aim, so a 10 Hz
+-- Degrees a second a mount swings at most when following someone else's aim, so a 10 Hz
 -- attribute reads as a turret turning rather than one jumping.
 local SWING_RATE = 240
 local TAG = "ArmedVehicle"
+
+-- The first-person view (a ModuleScript beside this one). Under pcall: without it, a gunner keeps the
+-- plain aim below.
+local GunnerView = nil
+do
+	local ok, module = pcall(function()
+		return require(script.Parent:WaitForChild("GunnerView", 5))
+	end)
+	GunnerView = ok and type(module) == "table" and module or nil
+end
 
 --------------------------------------------------------------------------------
 -- Aiming at the mouse (Oliver: "the aim to follow your mouse")
 --------------------------------------------------------------------------------
 
 -- With a mouse, the gun aims along the ray through the cursor, not the middle of the screen: the
--- turret follows the mouse, the aim mark is drawn at the cursor (the OS arrow is hidden while it is)
+-- mount follows the mouse, the aim mark is drawn at the cursor (the OS arrow is hidden while it is)
 -- and the shot goes through that point. Outside the mount's arc the mark stops at the arc's edge and
 -- greys, and the shot goes along that edge (the server clamps to the same arc). A pad and a touch
 -- screen keep the middle, and so does a mouse locked to the middle (first person, shift-lock), where
@@ -150,7 +170,8 @@ barFill.Parent = barBack
 Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
 
 -- The gun's one aim mark (HudClient's crosshair stands down while VehicleGunActive): at the cursor with
--- a mouse, in the middle otherwise, grey and held at the arc's edge when the aim is outside it.
+-- a mouse, in the middle otherwise, grey and held at the arc's edge when the aim is outside it. (In the
+-- gunner's first-person view GunnerView draws its own sight and this one is hidden.)
 local reticle = Instance.new("Frame")
 reticle.AnchorPoint = Vector2.new(0.5, 0.5)
 reticle.Position = UDim2.fromScale(0.5, 0.5)
@@ -166,11 +187,11 @@ reticleRing.Thickness = 1.5
 reticleRing.Parent = reticle
 
 --------------------------------------------------------------------------------
--- Driving and aiming
+-- Which mount is mine
 --------------------------------------------------------------------------------
 
 -- The gunner's seat of an armed vehicle, if it has one: a Seat named "GunnerSeat", or any seat with a
--- true "Gunner" attribute (being added to armed vehicles alongside this).
+-- true "Gunner" attribute.
 local function gunnerSeatOf(vehicle)
 	for _, child in ipairs(vehicle:GetChildren()) do
 		if child:IsA("Seat") and (child.Name == "GunnerSeat" or child:GetAttribute("Gunner") == true) then
@@ -180,10 +201,9 @@ local function gunnerSeatOf(vehicle)
 	return nil
 end
 
--- The armed vehicle whose gun this player works, with its spec, or nil: whoever sits in the gunner's
--- seat, and the driver while that seat is empty (or there is none), so a player alone in an armed
--- vehicle can still fire it. The same rule as the server's VehicleWeapons.DrivenBy. The name is kept
--- from when only the driver could fire.
+-- The armed vehicle whose mount this player works, its spec and which mount, or nil: the gunner's seat
+-- works the turret and the driving seat the driver's gun -- the server's VehicleWeapons.DrivenBy, the
+-- same rule. The name is kept from when only the driver could fire.
 local function drivenVehicle()
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -192,20 +212,22 @@ local function drivenVehicle()
 		return nil
 	end
 	local vehicle = seat.Parent
-	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
-	if not spec or not vehicle:FindFirstChild("TurretYaw") then
+	local mount
+	if seat == gunnerSeatOf(vehicle) then
+		mount = "turret"
+	elseif seat:IsA("VehicleSeat") then
+		mount = "driver"
+	else
 		return nil
 	end
-	local gunner = gunnerSeatOf(vehicle)
-	if seat ~= gunner then
-		if not seat:IsA("VehicleSeat") or (gunner ~= nil and gunner.Occupant ~= nil) then
-			return nil
-		end
+	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"), mount)
+	if not spec or not vehicle:FindFirstChild(VehicleWeaponData.Parts[mount].yaw) then
+		return nil
 	end
-	return vehicle, spec
+	return vehicle, spec, mount
 end
 
--- What's under the middle of the view, past the vehicle and everyone in it.
+-- What's under the aim point on the screen, past the vehicle and everyone in it.
 local function aimPoint(vehicle, screenX, screenY)
 	local ray = camera:ViewportPointToRay(screenX, screenY)
 	local filter = { vehicle }
@@ -230,6 +252,7 @@ end
 local firing = false
 local lastShotAt = 0
 local lastAimAt = 0
+local view = nil -- the gunner's GunnerView while it runs
 
 local function onFire(_, inputState, inputObject)
 	if not drivenVehicle() then
@@ -238,12 +261,12 @@ local function onFire(_, inputState, inputObject)
 	end
 	if inputState == Enum.UserInputState.Begin then
 		firing = true
-	elseif inputState == Enum.UserInputState.End then
+	elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
 		firing = false
 	end
 	-- The mouse button also belongs to the camera and CombatClient (which passes it on while you
 	-- drive); R1 would otherwise cycle the hotbar under you. A gunner is a passenger to CombatClient,
-	-- which would fire the gun in their hands as well, so a gunner's click stops here.
+	-- which would fire the gun in their hands as well, so a gunner's click (and R2) stops here.
 	if inputObject and inputObject.KeyCode == Enum.KeyCode.ButtonR1 then
 		return Enum.ContextActionResult.Sink
 	end
@@ -254,31 +277,57 @@ local function onFire(_, inputState, inputObject)
 	return Enum.ContextActionResult.Pass
 end
 
-local bound = false
+-- A gunner's aim-down-the-sight button: held (the right mouse, L2) or toggled (the touch AIM button).
+local function onAimSight(_, inputState, inputObject)
+	if not view then
+		return Enum.ContextActionResult.Pass
+	end
+	local touch = inputObject and inputObject.UserInputType == Enum.UserInputType.Touch
+	if touch then
+		if inputState == Enum.UserInputState.Begin then
+			view:SetAiming(not view.aiming)
+		end
+	elseif inputState == Enum.UserInputState.Begin then
+		view:SetAiming(true)
+	elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+		view:SetAiming(false)
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local bound = nil -- the mount the fire action is bound for
 local function setBound(want)
 	if want == bound then
 		return
 	end
 	bound = want
 	-- Said on the player, locally, for the rest of the HUD: HudClient stands its own crosshair down
-	-- (one crosshair while the vehicle gun is yours, this one) and hides the stamina bar, and BoonHud
+	-- (one crosshair while a vehicle gun is yours, this one) and hides the stamina bar, and BoonHud
 	-- steps out of the phone's driving block, for a gunner as for a driver.
-	player:SetAttribute("VehicleGunActive", want or nil)
-	if want then
+	player:SetAttribute("VehicleGunActive", want ~= nil or nil)
+	ContextActionService:UnbindAction("BRR_VehicleFire")
+	ContextActionService:UnbindAction("BRR_GunnerAim")
+	firing = false
+	if want == "driver" then
 		ContextActionService:BindAction("BRR_VehicleFire", onFire, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR1)
+	elseif want == "turret" then
+		-- The gunner isn't driving, so the triggers are free: R2 fires as a hand gun does, and L2 aims.
+		ContextActionService:BindAction("BRR_VehicleFire", onFire, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonR1)
+		ContextActionService:BindAction("BRR_GunnerAim", onAimSight, true, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL2)
+		ContextActionService:SetTitle("BRR_GunnerAim", "AIM")
+		ContextActionService:SetPosition("BRR_GunnerAim", UDim2.new(1, -250, 1, -180))
+	end
+	if want then
 		ContextActionService:SetTitle("BRR_VehicleFire", "FIRE")
 		ContextActionService:SetPosition("BRR_VehicleFire", UDim2.new(1, -140, 1, -180))
-	else
-		ContextActionService:UnbindAction("BRR_VehicleFire")
-		firing = false
 	end
 end
 
 --------------------------------------------------------------------------------
--- Turrets
+-- Mounts
 --------------------------------------------------------------------------------
 
--- Current swing per vehicle, in degrees. STRONG keys, dropped when the vehicle leaves.
+-- Current swing per vehicle and mount, in degrees. STRONG keys, dropped when the vehicle leaves.
 local swings = {}
 
 local function jointOf(vehicle, name)
@@ -294,15 +343,21 @@ local function approach(from, to, step)
 	return from + math.sign(to - from) * step
 end
 
-local function swingTurret(vehicle, spec, yawTarget, pitchTarget, dt)
-	local yawJoint, pitchJoint = jointOf(vehicle, "TurretYaw"), jointOf(vehicle, "TurretPitch")
+local function swingMount(vehicle, mount, spec, yawTarget, pitchTarget, dt)
+	local names = VehicleWeaponData.Parts[mount]
+	local yawJoint, pitchJoint = jointOf(vehicle, names.yaw), jointOf(vehicle, names.pitch)
 	if not yawJoint or not pitchJoint then
 		return
 	end
-	local swing = swings[vehicle]
+	local perVehicle = swings[vehicle]
+	if not perVehicle then
+		perVehicle = {}
+		swings[vehicle] = perVehicle
+	end
+	local swing = perVehicle[mount]
 	if not swing then
 		swing = { yaw = 0, pitch = spec.restPitch or 0 }
-		swings[vehicle] = swing
+		perVehicle[mount] = swing
 	end
 	local step = SWING_RATE * dt
 	swing.yaw = approach(swing.yaw, yawTarget, step)
@@ -382,10 +437,50 @@ local function setCursorHidden(hide)
 	player:SetAttribute("AimCursor", hide or nil)
 end
 
+-- The gunner's view: started on the turret this player sits at, stopped on anything else.
+local viewVehicle = nil
+local function setView(vehicle, spec)
+	if view and viewVehicle == vehicle then
+		return
+	end
+	if view then
+		view:Stop()
+		view = nil
+		viewVehicle = nil
+	end
+	if vehicle and GunnerView then
+		local ok, started = pcall(GunnerView.Start, vehicle, spec)
+		if ok and started then
+			view, viewVehicle = started, vehicle
+		elseif not ok then
+			warn("[VehicleWeaponClient] the gunner's view didn't start: " .. tostring(started))
+		end
+	end
+end
+
+-- The mount's readout: rounds left and the bar, or for a gun that overheats, its heat.
+local function showAmmo(spec, ammo, hot)
+	local whole = math.floor(ammo)
+	nameLabel.Text = spec.hud
+	if spec.overheat then
+		local heat = math.clamp(1 - ammo / spec.magazine, 0, 1)
+		ammoLabel.Text = hot and "OVERHEAT" or string.format("%d / %d", whole, spec.magazine)
+		ammoLabel.TextColor3 = hot and Color3.fromRGB(255, 110, 70) or Color3.fromRGB(245, 245, 250)
+		barFill.Size = UDim2.fromScale(heat, 1)
+		barFill.BackgroundColor3 = Color3.fromRGB(255, math.floor(196 - 130 * heat), math.floor(64 - 40 * heat))
+	else
+		ammoLabel.Text = string.format("%d / %d", whole, spec.magazine)
+		ammoLabel.TextColor3 = whole < 1 and Color3.fromRGB(255, 96, 96) or Color3.fromRGB(245, 245, 250)
+		barFill.Size = UDim2.fromScale(math.clamp(ammo / spec.magazine, 0, 1), 1)
+		barFill.BackgroundColor3 = Color3.fromRGB(255, 196, 64)
+	end
+end
+
 RunService.RenderStepped:Connect(function(dt)
-	local mine, spec = drivenVehicle()
-	setBound(mine ~= nil)
+	local mine, spec, mount = drivenVehicle()
+	setBound(mine and mount or nil)
 	gui.Enabled = mine ~= nil
+	setView(mine and mount == "turret" and mine or nil, spec)
 	if mine then
 		followVehiclePanel()
 	else
@@ -394,65 +489,93 @@ RunService.RenderStepped:Connect(function(dt)
 
 	local now = workspace:GetServerTimeNow()
 	if mine then
-		local screenX, screenY, mode = aimScreen()
-		setCursorHidden(mode == "mouse" and player:GetAttribute("MenuOpen") ~= true)
-		local target = aimPoint(mine, screenX, screenY)
-		placeReticle(screenX, screenY, false)
-		-- The turret follows the aim straight away, by the server's own limits.
-		local yawPart, pitchPart = mine:FindFirstChild("TurretYaw"), mine:FindFirstChild("TurretPitch")
-		if yawPart and pitchPart then
-			local joint = yawPart:FindFirstChild("Joint")
-			-- The unswung mount frame: the yaw pivot's rest frame from its joint's parent.
-			local rest = joint and joint.Part0 and joint.Part0.CFrame * joint.C0 or yawPart.CFrame
-			local toTarget = target - pitchPart.Position
-			local direction = rest:VectorToObjectSpace(toTarget)
-			local yaw, pitch = VehicleWeaponData.ClampAim(spec, direction)
-			swingTurret(mine, spec, math.deg(yaw), math.deg(pitch), dt * 3)
-			local wantYaw = math.atan2(-direction.X, -direction.Z)
-			local wantPitch = math.atan2(direction.Y, math.sqrt(direction.X * direction.X + direction.Z * direction.Z))
-			if pinnedToArc(wantYaw, wantPitch, yaw, pitch) then
-				-- The mark goes where the gun can point: along the arc's edge, as far out as the aim.
-				local dx, dy, dz = directionFromAngles(yaw, pitch)
-				local edge = pitchPart.Position + rest:VectorToWorldSpace(Vector3.new(dx, dy, dz)) * toTarget.Magnitude
-				local screen, onScreen = camera:WorldToViewportPoint(edge)
-				if onScreen then
-					placeReticle(screen.X, screen.Y, true)
-				else
-					placeReticle(screenX, screenY, true)
+		local attributes = VehicleWeaponData.Attributes[mount]
+		local ammo = VehicleWeaponData.AmmoAt(spec, mine:GetAttribute(attributes.ammo) or spec.magazine,
+			mine:GetAttribute(attributes.firedAt), now)
+		local hot = mine:GetAttribute(attributes.hot) == true and spec.overheat ~= nil and ammo < spec.magazine * spec.overheat
+		local ready = ammo >= 1 and not hot
+		local target
+		if view then
+			-- The gunner's first person: the view turns the turret itself and shows the sight.
+			reticle.Visible = false
+			setCursorHidden(false)
+			view:Update(dt, { ready = ready })
+			target = view:AimPoint()
+		else
+			reticle.Visible = true
+			local screenX, screenY, mode = aimScreen()
+			setCursorHidden(mode == "mouse" and player:GetAttribute("MenuOpen") ~= true)
+			target = aimPoint(mine, screenX, screenY)
+			placeReticle(screenX, screenY, false)
+			-- The mount follows the aim straight away, by the server's own limits (VehicleWeaponData.Solve).
+			local names = VehicleWeaponData.Parts[mount]
+			local yawPart, pitchPart, muzzle = mine:FindFirstChild(names.yaw), mine:FindFirstChild(names.pitch), mine:FindFirstChild(names.muzzle)
+			if yawPart and pitchPart then
+				local joint = yawPart:FindFirstChild("Joint")
+				-- The unswung mount frame: the yaw pivot's rest frame from its joint's parent.
+				local rest = joint and joint.Part0 and joint.Part0.CFrame * joint.C0 or yawPart.CFrame
+				-- The pitch pivot's rest place in the yaw frame (its joint's C0: it may stand out in front on a
+				-- pintle) and the muzzle's in the pitch pivot's own frame -- read off the joints, not the parts,
+				-- which are already swung.
+				local pitchJoint = pitchPart:FindFirstChild("Joint")
+				local pivot = pitchJoint and pitchJoint.C0.Position or rest:PointToObjectSpace(pitchPart.Position)
+				local mouth = muzzle and pitchPart.CFrame:VectorToObjectSpace(muzzle.Position - pitchPart.Position) or Vector3.new(0, 0, -1)
+				local toTarget = rest:PointToObjectSpace(target)
+				local yaw, pitch, _origin, _direction = VehicleWeaponData.Solve(spec, rest, pivot, mouth, target)
+				if yaw then
+					swingMount(mine, mount, spec, math.deg(yaw), math.deg(pitch), dt * 3)
+					-- Pinned when the wanted bearing and elevation (from the yaw axis and the pitch pivot) fall
+					-- outside the arc: the arc's own clamp of them differs from them.
+					local wantYaw = math.atan2(-toTarget.X, -toTarget.Z)
+					local fromPivot = toTarget - pivot
+					local wantPitch = math.atan2(fromPivot.Y, math.sqrt(fromPivot.X * fromPivot.X + fromPivot.Z * fromPivot.Z))
+					local heldYaw = math.clamp(wantYaw, -math.rad(spec.yawLimit), math.rad(spec.yawLimit))
+					local heldPitch = math.clamp(wantPitch, VehicleWeaponData.PitchFloor(spec, heldYaw), math.rad(spec.pitchMax))
+					if pinnedToArc(wantYaw, wantPitch, heldYaw, heldPitch) then
+						-- The mark goes where the gun can point: along the arc's edge, as far out as the aim.
+						local dx, dy, dz = directionFromAngles(yaw, pitch)
+						local edge = rest:PointToWorldSpace(pivot) + rest:VectorToWorldSpace(Vector3.new(dx, dy, dz)) * fromPivot.Magnitude
+						local screen, onScreen = camera:WorldToViewportPoint(edge)
+						if onScreen then
+							placeReticle(screen.X, screen.Y, true)
+						else
+							placeReticle(screenX, screenY, true)
+						end
+					end
 				end
 			end
 		end
 
-		if firing and now - lastShotAt >= 1 / spec.fireRate then
+		if firing and now - lastShotAt >= 1 / spec.fireRate and ready then
 			lastShotAt = now
 			lastAimAt = now -- the server takes the aim from the shot too
 			fireRemote:FireServer(target)
+			if view then
+				view:Fired()
+			end
 		elseif now - lastAimAt >= AIM_SEND_EVERY then
 			lastAimAt = now
 			aimRemote:FireServer(target)
 		end
-
-		local ammo = VehicleWeaponData.AmmoAt(spec, mine:GetAttribute("WeaponAmmo") or spec.magazine,
-			mine:GetAttribute("WeaponFiredAt"), now)
-		local whole = math.floor(ammo)
-		nameLabel.Text = spec.hud
-		ammoLabel.Text = string.format("%d / %d", whole, spec.magazine)
-		ammoLabel.TextColor3 = whole < 1 and Color3.fromRGB(255, 96, 96) or Color3.fromRGB(245, 245, 250)
-		barFill.Size = UDim2.fromScale(math.clamp(ammo / spec.magazine, 0, 1), 1)
+		showAmmo(spec, ammo, hot)
 	end
 
-	-- Everyone else's turrets, from what their drivers last sent; an empty one settles to rest.
+	-- Everyone else's mounts (and this player's other one), from what their users last sent; an
+	-- unmanned one settles to rest.
 	local eye = camera.CFrame.Position
 	for _, vehicle in ipairs(CollectionService:GetTagged(TAG)) do
-		if vehicle ~= mine and vehicle.PrimaryPart and (vehicle.PrimaryPart.Position - eye).Magnitude < 400 then
-			local other = VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
-			if other then
-				local seat = vehicle:FindFirstChild("DriverSeat")
-				local gunner = gunnerSeatOf(vehicle)
-				local manned = (seat and seat:IsA("VehicleSeat") and seat.Occupant ~= nil) or (gunner ~= nil and gunner.Occupant ~= nil)
-				local yaw = manned and vehicle:GetAttribute("AimYaw") or 0
-				local pitch = manned and vehicle:GetAttribute("AimPitch") or other.restPitch or 0
-				swingTurret(vehicle, other, yaw, pitch, dt)
+		if vehicle.PrimaryPart and (vehicle.PrimaryPart.Position - eye).Magnitude < 400 then
+			local modelId = vehicle:GetAttribute("VehicleModel")
+			for _, other in ipairs(VehicleWeaponData.Mounts) do
+				local otherSpec = VehicleWeaponData.ForModel(modelId, other)
+				if otherSpec and not (vehicle == mine and other == mount) then
+					local seat = other == "turret" and gunnerSeatOf(vehicle) or vehicle:FindFirstChild("DriverSeat")
+					local manned = seat ~= nil and seat.Occupant ~= nil
+					local attributes = VehicleWeaponData.Attributes[other]
+					local yaw = manned and vehicle:GetAttribute(attributes.yaw) or 0
+					local pitch = manned and vehicle:GetAttribute(attributes.pitch) or otherSpec.restPitch or 0
+					swingMount(vehicle, other, otherSpec, yaw, pitch, dt)
+				end
 			end
 		end
 	end

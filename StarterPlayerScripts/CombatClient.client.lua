@@ -356,7 +356,8 @@ local hiddenModels, hiddenValues = {}, {}
 
 RunService.RenderStepped:Connect(function()
 	local character = player.Character
-	local hide = player.CameraMode == Enum.CameraMode.LockFirstPerson and 1 or 0
+	-- (The gunner's first-person view, GunnerView, is first person too: its camera is Scriptable.)
+	local hide = (player.CameraMode == Enum.CameraMode.LockFirstPerson or player:GetAttribute("GunnerView") == true) and 1 or 0
 
 	for _, name in ipairs(HIDE_IN_FIRST_PERSON) do
 		local model = character and character:FindFirstChild(name)

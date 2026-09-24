@@ -1964,7 +1964,15 @@ local function shootAt(bot, target, targetRoot, distance, head)
 		if headshot then
 			damage *= (def.headshotMultiplier or 1) * CombatService.HeadshotScale
 		end
-		CombatService.DealDamage(bot, target, damage, def.id, headshot)
+		-- Someone behind an armoured car's armour (its driver, its passengers) is shot through the car,
+		-- as a player's traced bullet is: the car takes it (VehicleService.ShieldingVehicle, VehicleArmor).
+		local coverCar = lazy("VehicleService") and lazy("VehicleService").ShieldingVehicle
+			and lazy("VehicleService").ShieldingVehicle(target)
+		if coverCar and CombatService.DamageVehicle then
+			CombatService.DamageVehicle(bot, coverCar, damage, "bullet", def.id, targetRoot.Position)
+		else
+			CombatService.DealDamage(bot, target, damage, def.id, headshot)
+		end
 	end
 end
 
@@ -3585,8 +3593,12 @@ BotService.IsUnderArmed = isUnderArmed
 -- the bot holds it, works the gun itself only once attacked, and gives it up after BotGunnerWait.
 -- With a gunner, the bot at the wheel circles the target at the gun's range and the gunner fires.
 --
--- On the gun, every shot goes through VehicleWeapons.Fire, the very function a player's trigger
--- reaches, with the same seat, rate, ammo and team checks. Where the bot aims comes from the same aim
+-- Each seat works its own weapon (VehicleWeapons, WHO WORKS WHAT): the bot at the wheel fires the
+-- driver's gun, a short-arc gun at the front, at whoever passes through its arc (and, waiting for a
+-- gunner, only once something shoots at it); the bot on the gun works the turret. A driver alone
+-- cannot work the turret.
+-- Every shot goes through VehicleWeapons.Fire, the very function a player's trigger reaches, with the
+-- same seat, rate, ammo and team checks. Where the bot aims comes from the same aim
 -- dials as a bot on foot (Vehicles.vehicleHitChance, which is shootAt's chance line for line, and
 -- tools/bot_driving_combat.py fails if the two ever differ) with the mount's own spread allowed for,
 -- and a miss aimed clear of the target. It fires in bursts, lets the belt cool rather than run it dry,
@@ -3796,11 +3808,16 @@ function Vehicles.vehicleTrigger(bot, ride, now)
 		return
 	end
 	local VehicleWeapons = lazy("VehicleWeapons")
-	local vehicle = VehicleWeapons and VehicleWeapons.DrivenBy(bot)
+	-- The mount this bot's seat works: the turret from the gun's seat, the driver's gun from the wheel.
+	local vehicle, mount
+	if VehicleWeapons then
+		local found, _, _, _, which = VehicleWeapons.DrivenBy(bot)
+		vehicle, mount = found, which
+	end
 	if not vehicle then
 		return
 	end
-	local ammo, spec = VehicleWeapons.AmmoOf(vehicle)
+	local ammo, spec = VehicleWeapons.AmmoOf(vehicle, mount)
 	if not ammo then
 		return
 	end
@@ -3822,14 +3839,14 @@ function Vehicles.vehicleTrigger(bot, ride, now)
 	end
 	local targetRoot = fight.root
 	local distance = (targetRoot.Position - vehicle.PrimaryPart.Position).Magnitude
-	if not VehicleWeapons.InArc(vehicle, targetRoot.Position) then
+	if not VehicleWeapons.InArc(vehicle, targetRoot.Position, mount) then
 		return
 	end
 	if spec.kind == "round" and distance < (spec.splashRadius or 12) + 6 then
 		return
 	end
 	local hit = math.random() < Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)
-	local aim = VehicleWeapons.BotAimPoint(vehicle, targetRoot.Position, targetRoot.AssemblyLinearVelocity, hit)
+	local aim = VehicleWeapons.BotAimPoint(vehicle, targetRoot.Position, targetRoot.AssemblyLinearVelocity, hit, mount)
 	ride.nextShotAt = now + 1 / spec.fireRate
 	local ok, why = VehicleWeapons.Fire(bot, aim)
 	if ok then
@@ -4061,8 +4078,8 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 	end
 	ride.trigger = false
 
-	-- An armed vehicle is not driven anywhere with nobody on its gun: held where it is, the gun worked
-	-- from the wheel only once something shoots at it, given up after BotGunnerWait.
+	-- An armed vehicle is not driven anywhere with nobody on its gun: held where it is, the driver's own
+	-- gun fired only once something shoots at it, given up after BotGunnerWait.
 	if gunnerSeat and not gunnerSeat.Occupant then
 		if not ride.waitSince then
 			ride.waitSince = now
@@ -4078,6 +4095,9 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 	end
 	ride.waitSince = nil
 	drive.hold = false
+	-- With its gunner aboard, the driver works its own gun at whoever crosses the front arc (the
+	-- trigger checks the arc; the orbit below keeps the target mostly to the gunner's side).
+	ride.trigger = candidate ~= nil
 	-- A team driver off on a trip waits a moment for a teammate walking over to ride along.
 	if ride.offerUntil and now < ride.offerUntil and ride.riderComing then
 		drive.hold = true

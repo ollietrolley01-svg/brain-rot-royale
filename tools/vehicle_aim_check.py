@@ -67,15 +67,27 @@ def check_pure(source, weapons_src):
     for key in list(specs.keys()):
         spec = specs[key]
         ylim, pmin, pmax = spec.yawLimit, spec.pitchMin, spec.pitchMax
+        guard, rear = spec.frontGuard, spec.rearGuard
+
+        # The lowest the barrel goes at this yaw: a front guard (the Ranger's pod over its own cab)
+        # lifts the floor within its arc of straight ahead, a rear guard within its arc of straight behind.
+        def floor_at(yd):
+            if guard is not None and abs(yd) < guard.arc:
+                return max(pmin, guard.pitchMin)
+            if rear is not None and abs(yd) > 180 - rear.arc:
+                return max(pmin, rear.pitchMin)
+            return pmin
+
         cases = []
         for yd in (-0.9 * ylim, 0, 0.5 * ylim):
-            for pd in (pmin + 0.1 * (pmax - pmin), pmin + 0.5 * (pmax - pmin), pmin + 0.9 * (pmax - pmin)):
+            lo = floor_at(yd)
+            for pd in (lo + 0.1 * (pmax - lo), lo + 0.5 * (pmax - lo), lo + 0.9 * (pmax - lo)):
                 cases.append((yd, pd, False))
         if ylim < 180:
             cases.append((ylim + 20, 0, True))
             cases.append((-(ylim + 20), 0, True))
         cases.append((0, pmax + 10, True))
-        cases.append((0, pmin - 10, True))
+        cases.append((0, floor_at(0) - 10, True))
         for yd, pd, outside in cases:
             examined += 1
             dx, dy, dz = api.directionFromAngles(math.radians(yd), math.radians(pd))
@@ -88,7 +100,7 @@ def check_pure(source, weapons_src):
                                 f"({math.degrees(yaw):.1f}, {math.degrees(pitch):.1f})")
             if outside:
                 edge_y = min(max(yd, -ylim), ylim)
-                edge_p = min(max(pd, pmin), pmax)
+                edge_p = min(max(pd, floor_at(edge_y)), pmax)
                 if abs(math.degrees(yaw) - edge_y) > 1e-3 or abs(math.degrees(pitch) - edge_p) > 1e-3:
                     problems.append(f"{key}: an aim outside the arc was not held on its edge")
     return problems, examined
