@@ -1460,7 +1460,7 @@ CombatService.OnElimination = function(victim, killer, weaponDef, weaponId)
 	local hazard = weaponId == "ExplosiveBarrel" or weaponId == "RotMine"
 	if not method and type(weaponId) == "string" then
 		method = string.match(weaponId, "^Companion:(.+)$")
-			or ((hazard or ItemData.Get(weaponId)) and CombatService.DescribeWeapon(weaponId)) or nil
+			or ((hazard or weaponId == "Roadkill" or ItemData.Get(weaponId)) and CombatService.DescribeWeapon(weaponId)) or nil
 	end
 	if hazard and Combatants.IsPlayer(killer) and killer ~= victim then
 		QuestService.Progress(killer, "hazardKills", 1)
