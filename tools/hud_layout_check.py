@@ -22,6 +22,15 @@ The checks, at every size:
   3. No two drawn HUD rects overlap, except pairs in ALLOWED (intentional stacking, each justified).
   4. Static: every `.Visible =` write on a piece the phone layout can drop goes through hudLayout.show
      (examined count reported).
+  5-6. "Is it me?" by UserId; the effects pill (see their comments below).
+  7. The player's-eye additions (#86 C14, C37, C39, C40, M4, M13, M32), with the real ItemData,
+     WeaponData, Rarity, GameModes and InventoryPanel, at every size: the held item's description and cap
+     rule on the desktop hotbar (and nowhere on a phone plate), fitting beside the ammo; the gun's type
+     word on the HUD line only when its name lacks it; a tier letter in every filled cell's corner, clear
+     of the item name; the bag card's detail on hover (description, or a gun's reach) inside the card,
+     above its name; the crosshair greying while AimBeyondRange is up; KOTH's per-objective line from the
+     server's status string, from MY side, clear of the team tags; the recap's "DOWNED BY X — BACK IN n"
+     counting down off RespawnAt (or the recap's own respawnDelay) and gone when it runs out.
 
     python3 tools/hud_layout_check.py .            the checks
     python3 tools/hud_layout_check.py . --plant    the planted faults; every one must be caught
@@ -44,6 +53,14 @@ SCRIPTS = ["HudClient.client.lua", "ModeScoreHud.client.lua", "BoonHud.client.lu
            # The driving HUD: its speed panel, hint and damage line, placed by PhoneLayout on a touch screen.
            "VehicleClient.client.lua"]
 MODULES = ["PhoneLayout", "UiKit", "StaminaBar", "CompanionAbilityIcon", "EventBanner"]
+# Check 7 only: the bag module, and the shared data modules the words come from. CreativeArsenal is
+# stubbed (its rounds pull in Ballistics); its guns are covered by player_eye_check.py "gunword".
+EYE_MODULES = ["InventoryPanel"]
+EYE_SHARED = ["ItemData", "WeaponData", "ArsenalExpansion", "WorkshopArsenal", "Rarity", "GameModes"]
+EYE_STUBS = {"CreativeArsenal": "return { Weapons = {} }",
+             # No 3D icons in a mock: the cards and cells fall back to no picture, as when a model fails.
+             "ItemModels": "return { Build = function() return nil end }",
+             "GunModels": "return { Build = function() return nil end }"}
 
 # (name, width, height, touch). Touch screens have no keyboard, so PhoneLayout.Mode decides from shape.
 SIZES = [
@@ -119,7 +136,7 @@ def site_names(sources):
 
 
 class World:
-    def __init__(self, root, size, sources, force=None):
+    def __init__(self, root, size, sources, force=None, shared=None, extra_modules=()):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         mock = open(os.path.join(root, "tools", "hud_mock_world.lua"), encoding="utf-8").read()
         self.W = self.lua.execute(mock)
@@ -131,7 +148,9 @@ class World:
         # A stand-in for ReplicatedStorage's BrainrotData, so the companion tile gets real numbers and its
         # stats line is drawn (the check asserts it is hidden on a touch screen).
         self.W.sources["BrainrotData"] = BRAINROT_STUB
-        for m in MODULES:
+        for name, text in (shared or {}).items():
+            self.W.sources[name] = luau_to_lua(text)
+        for m in list(MODULES) + list(extra_modules):
             self.W.addModule(m)
         if force:
             # PhoneLayout's own test hook; the module is required from the folder, so set it on the
@@ -386,6 +405,8 @@ def check(root, sources, dump=False, quiet=False):
     if after != "false":
         problems.append("the effects pill stays up after every effect has ended")
 
+    problems += check_player_eye(root, sources, quiet)
+
     # 4. static: writers of droppable pieces go through the gate
     hud = sources["HudClient.client.lua"]
     start = hud.index("-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)")
@@ -403,6 +424,265 @@ def check(root, sources, dump=False, quiet=False):
     if not quiet:
         print(f"hud_layout_check: {len(SIZES)} sizes, {examined_elements} drawn elements, {examined_pairs} pairs examined; "
               f"{len(piece_vars)} layout pieces, {writes} direct Visible writes on them found")
+    return problems
+
+
+EYE_LUA = r"""
+local W, crossSite = ...
+local out = {}
+local function find(pred)
+    for _, inst in ipairs(W.created) do
+        if pred(inst) then return inst end
+    end
+end
+local function all(pred)
+    local list = {}
+    for _, inst in ipairs(W.created) do
+        if pred(inst) then table.insert(list, inst) end
+    end
+    return list
+end
+local function rect(inst)
+    local r = W.rectOf(inst)
+    return r and { r.x, r.y, r.w, r.h } or nil
+end
+local function shown(inst)
+    local node = inst
+    while node and W.instClass(node) ~= 'ScreenGui' do
+        if not node.Visible then return false end
+        node = rawget(node, '__parent')
+    end
+    return true
+end
+local Shared = W.game:GetService('ReplicatedStorage'):WaitForChild('Shared')
+local ItemData = require(Shared:WaitForChild('ItemData'))
+local WeaponData = require(Shared:WaitForChild('WeaponData'))
+local Panel = require(W.scriptsFolder:WaitForChild('InventoryPanel'))
+local slots = {
+    { kind = 'item', id = 'RotBarricade', name = 'Rot Barricade', rarity = 'Rare', itemKind = 'defense', count = 2 },
+    { kind = 'weapon', id = 'DoomscrollSMG', name = 'Scrolla Scrolla Brrrap', rarity = 'Uncommon', style = 'smg', mag = 30, magSize = 30, reserve = 90 },
+    { kind = 'weapon', id = 'RotSMG', name = 'Rot SMG', rarity = 'Common', style = 'smg', mag = 28, magSize = 28, reserve = 90 },
+    false, false, false, false, false,
+}
+local function loadout(equipped)
+    W.fire('LoadoutChanged', { slots = slots, equipped = equipped, ammo = {}, maxHealth = 100, health = 100 })
+    W.frame(2)
+end
+
+-- C14 / M13: the held item's line.
+loadout(1)
+local detail = find(function(i) return i.Name == 'ItemDetail' end)
+local frame = rawget(detail, '__parent')
+local ammo = find(function(i) return rawget(i, '__parent') == frame and W.instClass(i) == 'TextLabel' and i.TextSize == 30 end)
+local item = ItemData.Get('RotBarricade')
+out.itemWant = item.description .. ' ' .. (item.capRule or '')
+out.itemText = detail.Text
+out.itemShown = shown(detail) and W.paints(detail)
+out.detailRect, out.ammoRect, out.frameRect = rect(detail), rect(ammo), rect(frame)
+out.ammoText = ammo.Text
+out.detailNatural = 666 + detail.Size.X.Offset  -- the plate's 690 less its 12 px padding each side
+-- Every item's text against the box: longest description + cap rule.
+local longest = 0
+for id, it in pairs(ItemData.Items) do
+    local text = (it.description or '') .. ' ' .. (it.capRule or '')
+    if #text > longest then longest = #text ; out.longestId = id end
+end
+out.longest = longest
+-- M4: tier letters in the cells.
+local tiers = all(function(i) return i.Name == 'Tier' end)
+out.tierTexts = {}
+out.tierClear = true
+for index, t in ipairs(tiers) do
+    out.tierTexts[index] = t.Text
+    local cell = rawget(t, '__parent')
+    for _, sib in ipairs(rawget(cell, '__children')) do
+        if W.instClass(sib) == 'TextLabel' and sib ~= t and sib.Text ~= '' then
+            local a, b = W.rectOf(t), W.rectOf(sib)
+            local w = math.min(a.x + a.w, b.x + b.w) - math.max(a.x, b.x)
+            local h = math.min(a.y + a.h, b.y + b.h) - math.max(a.y, b.y)
+            if t.Text ~= '' and w > 0.5 and h > 0.5 then out.tierClear = false ; out.tierHit = sib.Text end
+        end
+    end
+end
+-- C39: the gun lines.
+local nameLabel = find(function(i) return rawget(i, '__parent') == frame and W.instClass(i) == 'TextLabel' and i.TextSize == 15 end)
+loadout(2)
+out.gunLine = nameLabel.Text
+out.gunDetailShown = shown(detail) and detail.Text ~= ''
+loadout(3)
+out.smgLine = nameLabel.Text
+out.gunDescribe = Panel.Describe(slots[3])
+out.gunRange = WeaponData.Get('RotSMG').range
+
+-- The bag card on hover (C14, C40).
+local screen = Instance.new('ScreenGui')
+screen.Parent = W.playerGui
+local bag = Panel.new(screen, {})
+bag:Open({ slots = slots, equipped = 1 })
+bag.hovered = 1
+bag:_render()
+local card = bag.cards[1]
+out.cardDetail = card.detail.Text
+out.cardDetailShown = card.detail.Visible
+out.cardIconHidden = not card.icon.Visible and not card.count.Visible
+out.cardRects = { rect(card.card), rect(card.detail), rect(card.name), rect(card.sub) }
+bag.hovered = nil
+bag:_render()
+out.cardAfter = card.detail.Visible
+
+-- C40: the crosshair.
+local cross = find(function(i) return W.instSite(i) == crossSite end)
+local arms = {}
+for _, c in ipairs(rawget(cross, '__children')) do
+    if W.instClass(c) == 'Frame' then table.insert(arms, c) end
+end
+W.player:SetAttribute('AimBeyondRange', true)
+out.armsBeyond = arms[1] and arms[1].BackgroundTransparency
+W.player:SetAttribute('AimBeyondRange', nil)
+out.armsNear = arms[1] and arms[1].BackgroundTransparency
+out.armCount = #arms
+
+-- C37: objectives, from each side.
+W.fire('MatchChanged', { state = 'InProgress', mode = 'KingOfTheHill', teams = true, aliveCount = 8, playerCount = 8 })
+loadout(1)
+local objectives = find(function(i) return i.Name == 'Objectives' end)
+local function koth(team, status)
+    W.character:SetAttribute('Team', team)
+    W.fire('ModeChanged', { mode = 'KingOfTheHill', scores = { 30, 12 }, target = 250, secondsLeft = 200,
+        hillStatus = status, hillHolder = 1 })
+    W.frame(1)
+    return objectives.Text
+end
+out.koth1 = koth(1, 'A Ember Squad · B open')
+out.koth2 = koth(2, 'A Ember Squad · B open')
+out.koth3 = koth(1, 'A Teal Crew · B Ember Squad')
+out.kothShown = shown(objectives)
+local tags = {}
+for _, c in ipairs(rawget(rawget(objectives, '__parent'), '__children')) do
+    if W.instClass(c) == 'TextLabel' and c ~= objectives and c.Position.Y.Scale == 1 then table.insert(tags, rect(c)) end
+end
+out.kothRect, out.tagRects = rect(objectives), tags
+W.fire('ModeChanged', { mode = 'KingOfTheHill', scores = { 30, 12 }, target = 250, secondsLeft = 200 })
+out.kothNoStatus = objectives.Visible
+
+-- M32: the recap countdown.
+W.player:SetAttribute('RespawnAt', W.now + 4.5)
+W.fire('DeathRecap', { killer = 'Rival', taken = 60, sources = {} })
+W.frame(1)
+local title = find(function(i) return W.instClass(i) == 'TextLabel' and type(i.Text) == 'string' and string.find(i.Text, 'RIVAL', 1, true) ~= nil end)
+out.recap1 = title and title.Text or ''
+W.frame(70)
+out.recap2 = title and title.Text or ''
+W.frame(300)
+out.recap3 = title and title.Text or ''
+W.player:SetAttribute('RespawnAt', nil)
+W.fire('DeathRecap', { killer = 'Rival', taken = 60, sources = {}, respawnDelay = 3 })
+W.frame(1)
+out.recap4 = title and title.Text or ''
+W.fire('DeathRecap', { taken = 0, sources = {} })
+W.frame(1)
+out.recap5 = title and title.Text or ''
+return out
+"""
+
+
+def check_player_eye(root, sources, quiet=False):
+    """Check 7: the #86 player's-eye additions, at every size."""
+    problems = []
+    shared = {n: open(os.path.join(root, "ReplicatedStorage", "Shared", n + ".lua"), encoding="utf-8").read()
+              for n in EYE_SHARED}
+    shared.update(EYE_STUBS)
+    names = site_names(sources)
+    cross_site = next(k for k, v in names.items() if v == "crosshair" and k.startswith("HudClient.client:"))
+    for size in SIZES:
+        tag, w, h, touch = size
+        world = World(root, size, sources, shared=shared, extra_modules=EYE_MODULES)
+        world.play()
+        try:
+            o = world.lua.execute(EYE_LUA, world.W, cross_site)
+        except Exception as err:  # a script error is a failed check, not a crash of the checker
+            problems.append(f"[{tag}] eye check could not run: {str(err)[:300]}")
+            continue
+        errs, _ = world.errors()
+        for e in errs:
+            if "InventoryPanel" in e or "ModeScoreHud" in e or "ItemDetail" in e:
+                problems.append(f"[{tag}] script error: {e[:200]}")
+        phone = o.detailNatural is None or touch
+        # C14 / M13
+        if o.itemText != o.itemWant:
+            problems.append(f"[{tag}] held item's line is {o.itemText!r}, want its description and cap rule {o.itemWant!r}")
+        if touch and o.itemShown:
+            problems.append(f"[{tag}] the item description is drawn on the phone hotbar plate, which has no row for it")
+        if not touch:
+            if not o.itemShown:
+                problems.append(f"[{tag}] the held item's description is not drawn on a desktop hotbar")
+            d, a, f = list(o.detailRect.values()), list(o.ammoRect.values()), list(o.frameRect.values())
+            k = d[2] / o.detailNatural
+            ammo_w = len(o.ammoText) * 30 * 0.62 * k
+            if d[0] + d[2] > a[0] + a[2] - ammo_w + 0.5 or d[0] < f[0] - 0.5:
+                problems.append(f"[{tag}] the item description box {d} runs under the ammo text {o.ammoText!r} ({a})")
+            # Two lines of 12 pt Gotham at about 0.55 em a character.
+            if o.longest * 12 * 0.55 > 2 * o.detailNatural:
+                problems.append(f"[{tag}] {o.longestId}'s description + cap rule ({o.longest} chars) is more than two lines of the box")
+        if o.gunDetailShown:
+            problems.append(f"[{tag}] a held gun shows an item description line")
+        # C39
+        if not touch:
+            if "· SMG" not in o.gunLine:
+                problems.append(f"[{tag}] Scrolla Scrolla Brrrap's HUD line has no type word: {o.gunLine!r}")
+            if "· SMG" in o.smgLine:
+                problems.append(f"[{tag}] Rot SMG's HUD line repeats its type: {o.smgLine!r}")
+        if f"reach {int(o.gunRange)} studs" not in o.gunDescribe:
+            problems.append(f"[{tag}] a gun's bag detail does not give its reach ({o.gunRange}): {o.gunDescribe!r}")
+        # M4
+        tiers = [o.tierTexts[i] for i in range(1, len(o.tierTexts) + 1)]
+        if tiers[:3] != ["R", "U", "C"] or any(t for t in tiers[3:]):
+            problems.append(f"[{tag}] hotbar tier letters {tiers}, want R U C and blanks for empty slots")
+        if not o.tierClear:
+            problems.append(f"[{tag}] a hotbar tier letter sits on the cell's {o.tierHit!r} label")
+        # The bag card
+        if not o.cardDetailShown or o.cardDetail != o.itemWant or not o.cardIconHidden or o.cardAfter:
+            problems.append(f"[{tag}] bag card hover detail: shown {o.cardDetailShown}, text {o.cardDetail!r}, "
+                            f"picture hidden {o.cardIconHidden}, still up after hover {o.cardAfter}")
+        rects = [list(o.cardRects[i].values()) for i in range(1, 5)]
+        card, det, nm, sub = rects
+        if det[0] < card[0] - 0.5 or det[0] + det[2] > card[0] + card[2] + 0.5 or det[1] < card[1] - 0.5 \
+                or det[1] + det[3] > nm[1] + 0.5:
+            problems.append(f"[{tag}] bag card detail box {det} is not inside the card {card} above its name {nm}")
+        # C40
+        if o.armCount != 4 or not (o.armsBeyond > 0.5 > o.armsNear):
+            problems.append(f"[{tag}] crosshair does not grey out of range: {o.armCount} arms, "
+                            f"transparency {o.armsBeyond} beyond / {o.armsNear} in reach")
+        # C37
+        strip = lambda s: re.sub(r"<[^>]+>", "", s or "")
+        want = [("A YOU  B OPEN", o.koth1), ("A FOE  B OPEN", o.koth2), ("A FOE  B YOU", o.koth3)]
+        for good, got in want:
+            if strip(got) != good:
+                problems.append(f"[{tag}] objectives line {strip(got)!r}, want {good!r}")
+        if not o.kothShown or o.kothNoStatus:
+            problems.append(f"[{tag}] objectives line shown {o.kothShown} with a status, {o.kothNoStatus} without one")
+        kr = list(o.kothRect.values())
+        tag_rects = [list(o.tagRects[i].values()) for i in range(1, len(o.tagRects) + 1)]
+        if len(tag_rects) != 2:
+            problems.append(f"[{tag}] found {len(tag_rects)} team tags beside the objectives line, want 2")
+        for tr in tag_rects:
+            if overlap(tuple(kr), tuple(tr)):
+                problems.append(f"[{tag}] objectives line {kr} overlaps a team tag {tr}")
+        if kr[0] < -0.5 or kr[0] + kr[2] > w + 0.5 or kr[1] + kr[3] > h + 0.5:
+            problems.append(f"[{tag}] objectives line {kr} is off the screen")
+        # M32
+        if o.recap1 != "DOWNED BY RIVAL — BACK IN 5" or o.recap2 != "DOWNED BY RIVAL — BACK IN 4":
+            problems.append(f"[{tag}] recap countdown reads {o.recap1!r} then {o.recap2!r}, want BACK IN 5 then 4")
+        if o.recap3 != "ELIMINATED BY RIVAL":
+            problems.append(f"[{tag}] recap after the wait reads {o.recap3!r}, want the plain title back")
+        if o.recap4 != "DOWNED BY RIVAL — BACK IN 3":
+            problems.append(f"[{tag}] recap with respawnDelay 3 in its payload reads {o.recap4!r}")
+        if o.recap5 != "THE STORM GOT YOU":
+            problems.append(f"[{tag}] a battle royale storm death's recap reads {o.recap5!r}")
+        if phone and not touch:
+            problems.append(f"[{tag}] the item description box was never built")
+    if not quiet:
+        print(f"hud_layout_check: player's-eye additions checked at {len(SIZES)} sizes")
     return problems
 
 
@@ -428,13 +708,31 @@ PLANTS = [
      "HudClient.client.lua", "-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)",
      "create('Frame', { Size = UDim2.fromOffset(60, 60), Position = UDim2.new(1, -120, 0, 140), AnchorPoint = Vector2.new(0, 0), Parent = screenGui })\n"
      "-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)"),
+    # Check 7 (#86 player's-eye additions).
+    ("the item line dropping the structure cap rule",
+     "InventoryPanel.lua", 'text = text .. " " .. item.capRule', "text = text"),
+    ("the item description drawn on the phone plate",
+     "HudClient.client.lua", 'itemDetail.Visible = itemDetail.Text ~= "" and weaponFrame:GetAttribute("PhoneShape") ~= true',
+     'itemDetail.Visible = itemDetail.Text ~= ""'),
+    ("the gun type word repeated when the name says it",
+     "InventoryPanel.lua", "if string.find(flat, wordFlat, 1, true) or string.find(flat, style, 1, true) then", "if false then"),
+    ("the hotbar tier letter dropped",
+     "HudClient.client.lua", "refs.tier.Text = (slot and", "refs.tier.Text = '' or (slot and"),
+    ("the crosshair ignoring AimBeyondRange",
+     "HudClient.client.lua", "arm.BackgroundTransparency = beyond and 0.65 or 0.15", "arm.BackgroundTransparency = 0.15"),
+    ("the objectives line ignoring which side I am on",
+     "ModeScoreHud.client.lua", 'word = owner == mine and "YOU" or "FOE"', 'word = owner == 1 and "YOU" or "FOE"'),
+    ("the recap countdown ignoring RespawnAt",
+     "HudClient.client.lua", 'local at = recap.backAt or player:GetAttribute("RespawnAt")', "local at = recap.backAt"),
+    ("the bag card's gun detail without its reach",
+     "InventoryPanel.lua", 'table.insert(parts, string.format("reach %d studs", def.range))', "local _ = parts"),
 ]
 
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "."
     sources = {n: read(root, n) for n in SCRIPTS}
-    for m in MODULES:
+    for m in MODULES + EYE_MODULES:
         sources[m + ".lua"] = read(root, m + ".lua")
     if "--plant" in sys.argv:
         missed = 0

@@ -11,6 +11,13 @@ MatchEvents) in a Lua interpreter (lupa) and asserts what a player would read or
   3. odds      every crate's disclosed odds name each rarity in full: no "Unco", "Lege", "Secr".
   4. bundle    no bundle line stacks two multipliers ("5x 2x Health Boost").
   5. events    Zone Rush's card quotes the storm speed it actually applies.
+  6. gunword   the floor label (LootService) and the HUD/bag (InventoryPanel) name every gun's type with
+               the same word, every style in the arsenal has one, and a name that already says it
+               ("Rot SMG") gets none (#86 C39). Both files' real functions run over every gun.
+  7. range     CombatClient's out-of-range test (#86 C40): past `range` marks, inside does not, the sky
+               (nothing hit) and launcher rounds never do.
+  8. stormtick StormClient's per-tick cue (#86 M19): only outside, only when health was lost, never on
+               a dead body, and no more than once per TICK_GAP.
 
     python tools/player_eye_check.py .            the checks
     python tools/player_eye_check.py . --plant    each check run against a planted fault; all must fail
@@ -198,8 +205,111 @@ def check_events(lua, req):
     return examined, bad
 
 
+def client_source(root, folder, name):
+    return luau_to_lua(open(os.path.join(root, folder, name), encoding="utf-8").read())
+
+
+def lua_block(text, start, end_marker):
+    """The source from `start` up to and including the first `end_marker` after it."""
+    i = text.index(start)
+    j = text.index(end_marker, i) + len(end_marker)
+    return text[i:j]
+
+
+GUN_SOURCES = [("ReplicatedStorage/Shared", n) for n in
+               ("WeaponData.lua", "ArsenalExpansion.lua", "CreativeArsenal.lua", "WorkshopArsenal.lua")]
+
+
+def gunword_sources(root, plant):
+    loot = client_source(root, "ServerScriptService/Modules", "LootService.lua")
+    panel = client_source(root, "StarterPlayerScripts", "InventoryPanel.lua")
+    if plant == "gunword":
+        loot = loot.replace('dmr = "MARKSMAN",', "", 1)
+    return loot, panel
+
+
+def check_gunword(lua, req, root=".", plant=None):
+    loot, panel = gunword_sources(root, plant)
+    fn_loot = lua_block(loot, "local GUN_TYPE_WORDS = {", "\n\treturn word\nend\n")
+    fn_panel = lua_block(panel, "local GUN_TYPE_WORDS = {", "\n\treturn word\nend\n").replace(
+        "function InventoryPanel.GunTypeWord(", "local function gunTypeWord(")
+    rt = LuaRuntime(unpack_returned_tuples=True)
+    words_loot = rt.execute(fn_loot + "\nreturn gunTypeWord")
+    words_panel = rt.execute(fn_panel + "\nreturn gunTypeWord")
+    table_loot = dict(rt.execute(fn_loot + "\nreturn GUN_TYPE_WORDS").items())
+    table_panel = dict(rt.execute(fn_panel + "\nreturn GUN_TYPE_WORDS").items())
+    examined, bad = 0, []
+    if table_loot != table_panel:
+        bad.append(("tables differ", sorted(set(table_loot.items()) ^ set(table_panel.items()))))
+    guns = []
+    for folder, name in GUN_SOURCES:
+        text = open(os.path.join(root, folder, name), encoding="utf-8").read()
+        guns += re.findall(r'name = "([^"]+)",(?:(?!name = ").){0,400}?style = "(\w+)"', text, flags=re.S)
+    for gun, style in guns:
+        examined += 1
+        a, b = words_loot(gun, style), words_panel(gun, style)
+        if a != b:
+            bad.append((gun, style, a, b))
+        if style not in table_loot or style not in table_panel:
+            bad.append((gun, style, "no word for this style"))
+            continue
+        flat = re.sub(r"\s", "", gun.lower())
+        says = table_panel[style].replace(" ", "").lower() in flat or style in flat
+        if (a is None) != says:
+            bad.append((gun, style, a, "name says it" if says else "name does not say it"))
+    return examined, bad
+
+
+def check_range(lua, req, root=".", plant=None):
+    text = client_source(root, "StarterPlayerScripts", "CombatClient.client.lua")
+    if plant == "range":
+        text = text.replace("or not hitSomething then", "then", 1)
+    fn = lua_block(text, "local function beyondRange(", "\n\tend\n")
+    rt = LuaRuntime(unpack_returned_tuples=True)
+    beyond = rt.execute("""
+        local V = {}
+        V.__index = V
+        V.__sub = function(a, b)
+            local x, y, z = a.X - b.X, a.Y - b.Y, a.Z - b.Z
+            return setmetatable({ X = x, Y = y, Z = z, Magnitude = math.sqrt(x * x + y * y + z * z) }, V)
+        end
+        local function v(x, y, z) return setmetatable({ X = x, Y = y, Z = z }, V) end
+        """ + fn + """
+        return function(def, distance, hit)
+            local d = def == 'launcher' and { range = 400, projectile = 'rocket' } or def
+            return beyondRange(d, v(0, 0, 0), distance and v(distance, 0, 0) or nil, hit)
+        end
+    """)
+    rifle = rt.eval("{ range = 700 }")
+    cases = [((rifle, 500, True), False), ((rifle, 900, True), True), ((rifle, 1499, False), False),
+             (("launcher", 900, True), False), ((rifle, None, True), False), ((None, 900, True), False)]
+    bad = [(args[1:], want) for args, want in cases if bool(beyond(*args)) != want]
+    return len(cases), bad
+
+
+def check_stormtick(lua, req, root=".", plant=None):
+    text = client_source(root, "StarterPlayerScripts", "StormClient.client.lua")
+    if plant == "stormtick":
+        text = text.replace("return outside and before ~= nil", "return before ~= nil", 1)
+    consts = re.search(r"^local TICK_GAIN, TICK_PITCH, TICK_GAP = .*$", text, flags=re.M).group(0)
+    fn = lua_block(text, "local function stormTickDue(", "\nend\n")
+    rt = LuaRuntime(unpack_returned_tuples=True)
+    due = rt.execute(consts + "\n" + fn + "\nreturn stormTickDue, TICK_GAP")
+    fn_due, gap = due
+    cases = [((True, 92, 100, 10.0, 8.0), True),       # outside, lost 8, a tick ago: yes
+             ((False, 92, 100, 10.0, 8.0), False),     # inside: bullets, not the storm
+             ((True, 100, 100, 10.0, 8.0), False),     # nothing lost
+             ((True, 92, 100, 10.0, 10.0 - gap / 2), False),  # inside the gap
+             ((True, 0, 8, 10.0, 8.0), False),         # the tick that killed you
+             ((True, 92, None, 10.0, 8.0), False)]     # first poll: nothing to compare
+    bad = [(args, want) for args, want in cases if bool(fn_due(*args)) != want]
+    return len(cases), bad
+
+
 CHECKS = [("vote", check_vote), ("achieve", check_achieve), ("odds", check_odds),
-          ("bundle", check_bundle), ("events", check_events)]
+          ("bundle", check_bundle), ("events", check_events), ("gunword", check_gunword),
+          ("range", check_range), ("stormtick", check_stormtick)]
+SOURCE_CHECKS = {"gunword", "range", "stormtick"}
 
 
 def run(root, plant=None):
@@ -208,7 +318,10 @@ def run(root, plant=None):
         if plant and plant != name:
             continue
         lua, req = runtime(root, plant)
-        examined, bad = fn(lua, req)
+        if name in SOURCE_CHECKS:
+            examined, bad = fn(lua, req, root, plant)
+        else:
+            examined, bad = fn(lua, req)
         status = "FAIL" if bad or examined == 0 else "ok"
         print("  %-8s %s  (%d candidates examined, %d bad)%s" % (
             name, status, examined, len(bad), ("  e.g. " + repr(bad[0])) if bad else ""))

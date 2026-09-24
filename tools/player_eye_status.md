@@ -7,9 +7,9 @@ Line numbers are the CURRENT tree's, not the review's.
 Status key: **fixed-now** (this branch) · **already-fixed** (in the tree before this branch) · **still-open** · **needs-Studio** (a layout/render call; a number would not settle it).
 Sites in files other workers own right now (HudClient, PhoneLayout, MatchConfig, …) carry the exact edit as BEFORE → AFTER instead of a change.
 
-Logic check: `python tools/player_eye_check.py .` (5 checks on the real modules) and `--plant` (5 planted faults, all caught).
+Logic check: `python tools/player_eye_check.py .` (8 checks on the real modules and sources) and `--plant` (8 planted faults, all caught). Layout: `python tools/hud_layout_check.py .` check 7 and `--plant` (16 plants, all caught).
 
-Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 (a row with two halves counts under its first status).
+Totals: fixed-now 53 · already-fixed 22 · still-open 0 · needs-Studio 7 = 82 (a row with two halves counts under its first status).
 
 ## Blocks play (2)
 
@@ -35,7 +35,7 @@ Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 
 | C11 | HudClient:2726 bounty warning misses display names | already-fixed | `HudClient.client.lua:2877` compares `player.Name` (what the server sends). |
 | C12 | HudClient:2842 phone never sees reserve | fixed-now | `HudClient.client.lua:1437` phone cells read "mag/reserve" (`PhoneShape` attribute set by setHotbarShape, which redraws); "NO AMMO" in red at `:1436` when both are 0. Cell width at phone scale wants a render. |
 | C13 | LobbyService:3220 Start-over on the Ready key | fixed-now | `LobbyService.lua:3316` KeyboardKeyCode H, GamepadKeyCode ButtonB. |
-| C14 | ItemData:198 item descriptions never shown | still-open | No client reads `ItemData.description`. Needs space on the held-item line (HudClient `:1503`) or the bag card (`InventoryPanel.lua:605`, a 16 px line already full); a layout call. |
+| C14 | ItemData:198 item descriptions never shown | fixed-now | Desktop hotbar: `HudClient.client.lua:1223` ItemDetail, two lines of 12 pt in the left of the ammo row (empty while an item is held; the slots start 6 px under the item line, so there is no row below it), text from `InventoryPanel.Describe` `InventoryPanel.lua:97`, set in renderWeapon `HudClient.client.lua:1610`, hidden on the phone plate (setHotbarShape). Bag: card detail over the icon and ammo chip on hover, tap-select or pad selection `InventoryPanel.lua:629`, `:880`. Held by `hud_layout_check.py` check 7 (text, desktop-only, clear of the ammo, every item fits two lines, card detail inside the card above its name; plants caught). Readability of the scaled card text wants a render. |
 | C15 | MovementService:274 Blink Bean dead click | fixed-now | `MovementService.lua:277` returns a reason; threaded `WeaponService.lua:1894` (applyItem) and `:1955` (StartUse) to Bootstrap's existing toast; description `ItemData.lua:112`. |
 | C16 | WeaponService:1809 "only heals up to 75" at 113 HP | fixed-now | `WeaponService.lua:1869` quotes `math.floor(healCap(...))`; `ItemData.lua:29` "up to 75% of your max health". |
 | C17 | HudClient:983 no boots pill / no countdown | already-fixed (soda) · fixed-now (boots) | Soda countdown as before; the same pill now also counts Bounce Boots down off `BounceBootsUntil` (`HudClient.client.lua:4005` effects list), text scaled into the pill. Held by `hud_layout_check.py` check 6 (plant = boots dropped, caught). |
@@ -58,10 +58,10 @@ Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 
 | C34 | HudClient:2441 nothing points at the hill | fixed-now | `HudClient.client.lua:2677` compass markers "A" / "B" from `workspace.Hill.Objective<letter>` HillX/HillZ (ModeKingOfTheHill.buildObjective); hidden when the hill is gone. Owner colours not shown (one accent colour). |
 | C35 | HudClient:3510 "+0 / +0" and "#2" in team modes | already-fixed | `ResultsScreen.client.lua:325` VICTORY / DEFEAT / DRAW; the old "+0" result is gone (header comment `:4`). |
 | C36 | HudClient:3587 "50 ALIVE" in respawn modes | already-fixed (players) · fixed-now (late joiner) | `HudClient.client.lua:3893` a respawn mode's banner names the mode (GameModes.Get(mode).name) instead of a living count. |
-| C37 | ModeScoreHud:187 "level", hill status invisible | fixed-now (TIED) · still-open (status) | `ModeScoreHud.client.lua:271` "TIED". Hill status line not added: KOTH now scores several objectives, one status word no longer describes it. |
+| C37 | ModeScoreHud:187 "level", hill status invisible | fixed-now | "TIED" as before; per-objective line "A YOU  B OPEN" in each side's colour, centred in the tags row `ModeScoreHud.client.lua:137`, parsed from the server's `hillStatus` ("A Ember Squad · B open", ModeKingOfTheHill.Tick) `:328`; tags narrowed and use the short team name. Contested is not shown: the status string does not carry it (proposed edit in the report). Check 7 (from both sides, clear of the tags, on screen at 7 sizes; plant = ignores my side, caught). |
 | C38 | ModeScoreHud:200 TDM has no clock | fixed-now | `ModeScoreHud.client.lua:278` "FIRST TO 100\n7:42", red in the last 30 s. |
-| C39 | ArsenalExpansion:14 gun names carry no type | still-open | Needs `def.style` in the slot payload and a type word on floor label / HUD line; floor label already carries rarity (`LootService.lua:284`). |
-| C40 | WeaponData:18 range never shown, out-of-range silent | still-open | Crosshair dimming is CombatClient + WeaponData range; inventory line is full (`InventoryPanel.lua:605`). |
+| C39 | ArsenalExpansion:14 gun names carry no type | fixed-now | `style` in the slot payload `WeaponService.lua:181`; type word from style (`InventoryPanel.lua:72` GunTypeWord, copy in `LootService.lua:122`), left off when the name says it ("Rot SMG"). Floor label + prompt `LootService.lua:310`; HUD line `HudClient.client.lua:1667` ("UNCOMMON  Scrolla Scrolla Brrrap · SMG"); bag detail. `player_eye_check.py` "gunword" (62 guns, both files' functions agree; plant = a word missing, caught). The longer floor label shrinks its TextScaled text: floor_label_gallery render. |
+| C40 | WeaponData:18 range never shown, out-of-range silent | fixed-now | `CombatClient.client.lua:687` beyondRange, 10 Hz, head to aim point vs `range` (not the sky, not launchers) raises AimBeyondRange; crosshair ticks grey and fade `HudClient.client.lua:367`. Range in the bag detail "reach 180 studs" `InventoryPanel.lua:124`. `player_eye_check.py` "range" (plant = sky marks, caught); check 7 crosshair + reach (plants caught). In-game feel needs a play. |
 | C41 | LobbyService:2134 dummies read as pet-only | fixed-now | `LobbyService.lua:2138` "TARGET PRACTICE"; podium `:2214` "take it and shoot the targets". |
 | C42 | LobbyService:2204 "chest loot only" points at chests | fixed-now (partly) | `LobbyService.lua:2214` no longer says chests; it says take-and-try (C41's ask) rather than "supply drops": one 0.9-stud line cannot carry both. |
 | C43 | LootService:273 ammo restock invisible | fixed-now | Floor gun `LootService.lua:312`, chest `:531` "+ammo for your guns". Duplicate-gun "Take Ammo" prompt not done (changes pickup rules). |
@@ -76,7 +76,7 @@ Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 
 | M1 | ControlsHint:98 12 px grey legend | already-fixed | ControlsHint.client.lua removed (#90, commit 4918382). |
 | M2 | HudClient:207 "[F] join next match" on phones | fixed-now | `HudClient.client.lua:229` touch or pad: "tap to join next match" / "tap to stay in lobby", no key. |
 | M3 | HudClient:885 tips hard-code F, M, T, 1-8, Q | fixed-now | `HudClient.client.lua:916-922` {Ready}, {Slot1}/{Slot8}/{NextSlot}, {ToggleCamera}, filled from this player's bindings by the existing filler. |
-| M4 | HudClient:1372 rarity colour-only | already-fixed (floor) · still-open (hotbar) | Floor label/prompt carry the word `LootService.lua:284`. Hotbar `HudClient.client.lua:1383` colour only; proposal: a one-letter tier tag in the cell corner. |
+| M4 | HudClient:1372 rarity colour-only | already-fixed (floor) · fixed-now (hotbar) | Floor label/prompt carry the word. Hotbar: tier letter (C U R E L M S) in each filled cell's bottom-right corner, in the tier colour `HudClient.client.lua:1375`, `:1471`; item name stops 14 px short of it. Check 7 (letters, clear of the name; plant caught). 10 pt at phone scale wants a render (as C2). |
 | M5 | HudClient:1493 "click to use" on a pad | fixed-now | `HudClient.client.lua:1556-1562` "RT to use" on a pad, "tap FIRE to use" on touch, "click to use" otherwise. |
 | M6 | HudClient:2224 minimap names 9 px, towns vs landmarks by colour | needs-Studio | `HudClient.client.lua:2273`, `:2438` TextSize 9; diamond markers need a render. |
 | M7 | MenuClient:646 filter chips 28 px | needs-Studio | `MenuClient.client.lua:658`; growing to 44 px wraps the row, needs a render. |
@@ -85,13 +85,13 @@ Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 
 | M10 | LobbyService:2135 [G] with no companion does nothing | fixed-now | `Bootstrap.server.lua:664` throttled "No companion yet" toast when UseAbility fails and no companion is equipped. |
 | M11 | LobbyService:3168 sprint key never named | fixed-now | `LobbyService.lua:3265` KeyHint "Hold [{Sprint}] for the long leaps"; the ControlsHint half is moot (removed). |
 | M12 | HudClient:890 "Stay inside the storm" | fixed-now | `HudClient.client.lua:921` "Stay inside the zone — the purple storm wall hurts. …". |
-| M13 | ItemData:149 three-structure cap unstated | still-open | Text exists as `capRule` `ItemData.lua:253`, but nothing reads it. Proposal: MenuClient/HUD caption appends `item.capRule` wherever the description is shown (none yet, see C14). |
+| M13 | ItemData:149 three-structure cap unstated | fixed-now | `capRule` appended wherever the description is shown (`InventoryPanel.Describe` `InventoryPanel.lua:107`: HUD item line and bag card). Check 7 (plant = rule dropped, caught). The menu shows no item descriptions, so nothing to add there. |
 | M14 | ProjectileService:587 driver's throw refused silently | fixed-now | `HudClient.client.lua:1558` a held item in a VehicleSeat reads "hands on the wheel". |
 | M15 | SupplyDropService:251 supplies never announced | fixed-now | Spilled on the ground since #85; toast names every piece `SupplyDropService.lua:268`. |
 | M16 | HudClient:1492 first click after a swap eaten | fixed-now | `HudClient.client.lua:1549` a held item shows "RAISING" while `equipReadyIn` runs, as guns do. |
 | M17 | MatchEvents:77 "half again as fast"; Shield Up "drops in" | fixed-now | `MatchEvents.lua:81` composed from the speed ("50% faster"); `:53` "Everyone starts with 50 shield." Check "events" (plant = field 1.75, caught). |
 | M18 | MatchService:1739 countdown 15 → 7 | fixed-now | `MatchService.lua:1910` an all-ready lobby enters Countdown at AllReadyCountdown. VoteScreen's bar total is still LobbyCountdown (VoteDropClient passes it): bar starts part-empty rather than snapping. |
-| M19 | StormService:269 storm damage silent | already-fixed (enter/leave) · still-open (tick) | `StormClient.client.lua:206` StormEnter/StormLeave cues (#45). No per-tick sound. |
+| M19 | StormService:269 storm damage silent | already-fixed (enter/leave) · fixed-now (tick) | `StormClient.client.lua:173` stormTickDue: on the 0.4 s poll, health lost while outside plays StormEnter at 0.3 gain, pitch 1.25, at most every 0.8 s `:226`. `player_eye_check.py` "stormtick" (plant = inside counts, caught). Loudness wants a listen. |
 | M20 | VoteScreen:62 "Fifty in" vs 30 alive | already-fixed | BR fills to 50: `MatchConfig.lua:124` BotFillTargetBattleRoyale = 50. |
 | M21 | VoteScreen:347 no pitch on phone shapes | needs-Studio | `VoteScreen.lua:372/382` pitch only on the card shape; row/compact need a render (tools/vote_drop_gallery.lua). |
 | M22 | AchievementData:67 rank-score formula in copy | fixed-now | Formula dropped `AchievementData.lua:68-72`; ProgressText `:113`; menu shows it `MenuClient.client.lua:2047`. Check "achieve" (12 rows; plant = raw score, caught). |
@@ -104,7 +104,7 @@ Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 
 | M29 | MenuClient:2551 restock timer on the Style tab | fixed-now | `MenuClient.client.lua:2760` stockHeader(…, true): no timer; ticker left alone. |
 | M30 | MenuClient:3340 invite vanishes without warning | fixed-now | `MenuClient.client.lua:3585` "Expires in Ns" (wall clock). Refusal messages reach the screen via guard. |
 | M31 | ProgressionPanel:1429 "pull it in play" | fixed-now | `ProgressionPanel.lua:1557` "BOUGHT — get one\nfrom a coin crate" (old line lengths). |
-| M32 | GameMode:382 respawn wait only in a 2.6 s toast | still-open | Needs the recap (HudClient `:3540`) to carry a countdown: add `respawnDelay` to the recap payload and title it `"DOWNED BY " .. name .. " — BACK IN " .. n`. |
+| M32 | GameMode:382 respawn wait only in a 2.6 s toast | fixed-now | The recap is CombatService's and is sent before the death reaches the mode, so GameMode puts `RespawnAt` (server time) on the player `GameMode.lua:364`; HudClient titles the recap "DOWNED BY RIVAL — BACK IN 5", counting down per frame `HudClient.client.lua:3767`, then the plain title; also reads a payload `respawnDelay` if CombatService adds it (proposed edit in the report). Title scales to fit. Check 7 (5 → 4 → plain, payload path; plant = attribute ignored, caught). |
 | M33 | VoteScreen:70 KOTH pitch drops "alone" | already-fixed (superseded) | KOTH is now objective capture; pitch `VoteScreen.lua:70` "Two teams, two objectives. Capture and hold them, first to %d." |
 | M34 | LootService:247 rarity colour-only on the floor | already-fixed (floor) · fixed-now (HUD) | `HudClient.client.lua:1599` the held gun's line leads with its tier word ("LEGENDARY  Crocodilo Rifle"). |
 
@@ -115,3 +115,7 @@ Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 
 - Start a match from the lobby: the MATCH EVENT card should appear after the NEXT MATCH reveal, not under it.
 - Get shot, then die in the storm: recap sources list "Storm"; the headline no longer names the shooter and the title reads "THE STORM GOT YOU".
 - Team match: shoot a team-mate (grey + tick), watch the TDM clock under FIRST TO 100.
+- Hold a Rot Barricade on a desktop: its description and the "Up to 3 ..." rule sit left of the ammo count; open the bag (B) and hover a card: the detail replaces the picture. A floor "Scrolla Scrolla Brrrap" label ends "· SMG" (render: tools/floor_label_gallery.lua).
+- Aim a Rot SMG (reach 180) at a wall 250 studs off: the crosshair ticks go grey; step closer and they come back.
+- Objective Capture: the line under the scoreline reads "A YOU  B OPEN" and changes as objectives change hands. Die there: the recap counts "BACK IN 5 ... 1".
+- Stand outside the storm: a quiet, higher groan with each tick of damage.
