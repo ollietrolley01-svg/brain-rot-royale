@@ -904,9 +904,13 @@ function W.setup(vx, vy, touch, keyboard)
 	})
 	W.UserInputService = service("UserInputService", {
 		GetLastInputType = function()
+			if W.lastInput then
+				return _G.Enum.UserInputType[W.lastInput]
+			end
 			return touch and _G.Enum.UserInputType.Touch or _G.Enum.UserInputType.Keyboard
 		end,
-		GetMouseLocation = function() return Vector2.new(0, 0) end,
+		-- Settable by a check: where the cursor is, in viewport pixels.
+		GetMouseLocation = function() return W.mouse or Vector2.new(W.viewport.X / 2, W.viewport.Y / 2) end,
 		IsKeyDown = function() return false end,
 		GetConnectedGamepads = function() return {} end,
 		GetFocusedTextBox = function() return nil end,
@@ -994,7 +998,11 @@ function W.setup(vx, vy, touch, keyboard)
 	rawset(camera, "__special", {
 		WorldToViewportPoint = function() return Vector3.new(0, 0, -1), false end,
 		WorldToScreenPoint = function() return Vector3.new(0, 0, -1), false end,
-		ViewportPointToRay = function() return { Origin = Vector3.new(0, 0, 0), Direction = Vector3.new(0, 0, -1) } end,
+		-- Records the point it was asked for, so a check can see which screen point a ray went through.
+		ViewportPointToRay = function(_, x, y)
+			W.lastRay = { x = x, y = y }
+			return { Origin = Vector3.new(0, 0, 0), Direction = Vector3.new(0, 0, -1) }
+		end,
 		ScreenPointToRay = function() return { Origin = Vector3.new(0, 0, 0), Direction = Vector3.new(0, 0, -1) } end,
 	})
 	W.camera = camera

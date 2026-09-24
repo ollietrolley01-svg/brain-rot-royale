@@ -18,6 +18,7 @@ local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
@@ -34,6 +35,61 @@ local AIM_RANGE = 1000
 -- attribute reads as a turret turning rather than one jumping.
 local SWING_RATE = 240
 local TAG = "ArmedVehicle"
+
+--------------------------------------------------------------------------------
+-- Aiming at the mouse (Oliver: "the aim to follow your mouse")
+--------------------------------------------------------------------------------
+
+-- With a mouse, the gun aims along the ray through the cursor, not the middle of the screen: the
+-- turret follows the mouse, the aim mark is drawn at the cursor (the OS arrow is hidden while it is)
+-- and the shot goes through that point. Outside the mount's arc the mark stops at the arc's edge and
+-- greys, and the shot goes along that edge (the server clamps to the same arc). A pad and a touch
+-- screen keep the middle, and so does a mouse locked to the middle (first person, shift-lock), where
+-- the cursor IS the middle. tools/vehicle_aim_check.py runs the block marked PURE on its own.
+
+-- PURE BEGIN (plain Lua, no Roblox types)
+local MOUSE_INPUTS = {
+	MouseMovement = true, MouseButton1 = true, MouseButton2 = true, MouseButton3 = true, MouseWheel = true,
+	Keyboard = true,
+}
+
+-- "mouse" when the player is on a mouse and it is free to move, else "centre".
+local function aimMode(lastInputName, mouseLocked)
+	if MOUSE_INPUTS[lastInputName] and not mouseLocked then
+		return "mouse"
+	end
+	return "centre"
+end
+
+-- The screen point (viewport pixels, the frame GetMouseLocation and ViewportPointToRay share) the gun
+-- aims through: the cursor, held on the screen, or the middle.
+local function aimScreenPoint(mode, mouseX, mouseY, width, height)
+	if mode == "mouse" then
+		return math.clamp(mouseX, 0, width), math.clamp(mouseY, 0, height)
+	end
+	return width / 2, height / 2
+end
+
+-- The mount-space direction (front -Z, up +Y) for a yaw and pitch: the inverse of
+-- VehicleWeaponData.ClampAim's two angles.
+local function directionFromAngles(yaw, pitch)
+	return -math.sin(yaw) * math.cos(pitch), math.sin(pitch), -math.cos(yaw) * math.cos(pitch)
+end
+
+-- Whether the aim was held back by the arc: the clamped angles differ from the wanted ones.
+local function pinnedToArc(wantYaw, wantPitch, yaw, pitch)
+	return math.abs(wantYaw - yaw) > 1e-4 or math.abs(wantPitch - pitch) > 1e-4
+end
+-- PURE END
+
+local function aimScreen()
+	local viewport = camera.ViewportSize
+	local locked = UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+	local mode = aimMode(UserInputService:GetLastInputType().Name, locked)
+	local mouse = UserInputService:GetMouseLocation()
+	local x, y = aimScreenPoint(mode, mouse.X, mouse.Y, viewport.X, viewport.Y)
+	return x, y, mode
+end
 
 --------------------------------------------------------------------------------
 -- HUD
@@ -93,7 +149,8 @@ barFill.BorderSizePixel = 0
 barFill.Parent = barBack
 Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
 
--- The combat crosshair stands down while you drive; the mount fires along the middle of the view.
+-- The gun's one aim mark (HudClient's crosshair stands down while VehicleGunActive): at the cursor with
+-- a mouse, in the middle otherwise, grey and held at the arc's edge when the aim is outside it.
 local reticle = Instance.new("Frame")
 reticle.AnchorPoint = Vector2.new(0.5, 0.5)
 reticle.Position = UDim2.fromScale(0.5, 0.5)
@@ -150,9 +207,8 @@ local function drivenVehicle()
 end
 
 -- What's under the middle of the view, past the vehicle and everyone in it.
-local function aimPoint(vehicle)
-	local viewport = camera.ViewportSize
-	local ray = camera:ViewportPointToRay(viewport.X / 2, viewport.Y / 2)
+local function aimPoint(vehicle, screenX, screenY)
+	local ray = camera:ViewportPointToRay(screenX, screenY)
 	local filter = { vehicle }
 	if player.Character then
 		table.insert(filter, player.Character)
@@ -299,25 +355,68 @@ local function followVehiclePanel()
 	end
 end
 
+local reticleAt = nil
+local function placeReticle(x, y, pinned)
+	local key = string.format("%.1f %.1f %s", x, y, tostring(pinned))
+	if key == reticleAt then
+		return
+	end
+	reticleAt = key
+	reticle.Position = UDim2.fromOffset(x, y)
+	reticle.BackgroundColor3 = pinned and Color3.fromRGB(150, 154, 164) or Color3.fromRGB(255, 255, 255)
+	reticle.BackgroundTransparency = pinned and 0.4 or 0.15
+end
+
+-- The OS arrow is hidden while the aim mark is the cursor, and given back when it is not (a menu, a
+-- pad, leaving the seat). Only ever put back by this script if this script took it away.
+local hidCursor = false
+local function setCursorHidden(hide)
+	if hide == hidCursor then
+		return
+	end
+	hidCursor = hide
+	UserInputService.MouseIconEnabled = not hide
+end
+
 RunService.RenderStepped:Connect(function(dt)
 	local mine, spec = drivenVehicle()
 	setBound(mine ~= nil)
 	gui.Enabled = mine ~= nil
 	if mine then
 		followVehiclePanel()
+	else
+		setCursorHidden(false)
 	end
 
 	local now = workspace:GetServerTimeNow()
 	if mine then
-		local target = aimPoint(mine)
-		-- The driver's own turret follows their camera straight away, by the server's own limits.
+		local screenX, screenY, mode = aimScreen()
+		setCursorHidden(mode == "mouse" and player:GetAttribute("MenuOpen") ~= true)
+		local target = aimPoint(mine, screenX, screenY)
+		placeReticle(screenX, screenY, false)
+		-- The turret follows the aim straight away, by the server's own limits.
 		local yawPart, pitchPart = mine:FindFirstChild("TurretYaw"), mine:FindFirstChild("TurretPitch")
 		if yawPart and pitchPart then
 			local joint = yawPart:FindFirstChild("Joint")
 			-- The unswung mount frame: the yaw pivot's rest frame from its joint's parent.
 			local rest = joint and joint.Part0 and joint.Part0.CFrame * joint.C0 or yawPart.CFrame
-			local yaw, pitch = VehicleWeaponData.ClampAim(spec, rest:VectorToObjectSpace(target - pitchPart.Position))
+			local toTarget = target - pitchPart.Position
+			local direction = rest:VectorToObjectSpace(toTarget)
+			local yaw, pitch = VehicleWeaponData.ClampAim(spec, direction)
 			swingTurret(mine, spec, math.deg(yaw), math.deg(pitch), dt * 3)
+			local wantYaw = math.atan2(-direction.X, -direction.Z)
+			local wantPitch = math.atan2(direction.Y, math.sqrt(direction.X * direction.X + direction.Z * direction.Z))
+			if pinnedToArc(wantYaw, wantPitch, yaw, pitch) then
+				-- The mark goes where the gun can point: along the arc's edge, as far out as the aim.
+				local dx, dy, dz = directionFromAngles(yaw, pitch)
+				local edge = pitchPart.Position + rest:VectorToWorldSpace(Vector3.new(dx, dy, dz)) * toTarget.Magnitude
+				local screen, onScreen = camera:WorldToViewportPoint(edge)
+				if onScreen then
+					placeReticle(screen.X, screen.Y, true)
+				else
+					placeReticle(screenX, screenY, true)
+				end
+			end
 		end
 
 		if firing and now - lastShotAt >= 1 / spec.fireRate then
