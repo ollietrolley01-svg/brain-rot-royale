@@ -590,6 +590,15 @@ local function onDeath(token, killerToken, method)
 	local victimTeam = ModeTeams.TeamOf(token)
 	local killerTeam = killerToken and ModeTeams.TeamOf(killerToken) or nil
 
+	-- Rewards bookkeeping (kills, assists, streaks, revenge, defends) while both teams are still known.
+	-- Protected: a bookkeeping error must never stop the death being scored and the respawn scheduled.
+	-- BEFORE the score: the winning kill's addScore runs FinishNow synchronously, and the payout reads
+	-- the ledgers, so credited after it the kill that won the match was missing from the killer's card.
+	local credited, creditError = pcall(creditDeath, token, killerToken, victimTeam, killerTeam)
+	if not credited then
+		warn("[GameMode] team reward bookkeeping failed: " .. tostring(creditError))
+	end
+
 	-- Team Deathmatch scores eliminations. King of the Hill scores the hill, so a kill there is
 	-- worth nothing on the scoreboard and everything in practice.
 	if current.id == "TeamDeathmatch" then
@@ -600,13 +609,6 @@ local function onDeath(token, killerToken, method)
 			-- there is no way to stall by dying to the world.
 			addScore(GameModes.OtherTeam(victimTeam), 1)
 		end
-	end
-
-	-- Rewards bookkeeping (kills, assists, streaks, revenge, defends) while both teams are still known.
-	-- Protected: a bookkeeping error must never stop the death being scored and the respawn scheduled.
-	local credited, creditError = pcall(creditDeath, token, killerToken, victimTeam, killerTeam)
-	if not credited then
-		warn("[GameMode] team reward bookkeeping failed: " .. tostring(creditError))
 	end
 
 	ModeTeams.MarkDown(token)

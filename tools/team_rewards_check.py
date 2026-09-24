@@ -25,6 +25,8 @@ Matches it plays, and what it holds the code to (every one an invariant the code
           down before the payout (MatchService pays after StopWorld).
   live    MatchService's live kill call (RewardService.AwardKill at killScale) pays nothing and still counts.
   streak  the team streak's window, step pay and labels are MatchService's own.
+  finish  the kill that reaches the score target (FinishNow, synchronously) is already on the killer's
+          ledger when the match hands over to the payout.
   bonus   TEAM BONUS across a run of matches: the first win of the day pays once (Epic Crate included) and
           again the next UTC day; consecutive wins pay a growing win streak, capped at maxSteps, ended by a
           loss and by an idle match; the milestone cosmetics unlock at their win counts, once each, never
@@ -608,6 +610,26 @@ do
 		end
 	end
 end
+
+-- ======================================================================== the winning kill (FinishNow)
+-- The kill that reaches the score target ends the match synchronously (addScore -> FinishNow -> the host's
+-- Finish, which is where MatchService's payout starts). That kill must already be on the killer's ledger.
+do
+	local mode = start("TeamDeathmatch")
+	local closer = W.player("Closer", 1, vec(0, 0, 0))
+	mode.scoreTarget = 1
+	local onLedger = nil
+	W.GameMode.Bind({ Finish = function()
+		local ledger = I.ledgers[closer]
+		onLedger = ledger and ledger.botKills or 0
+	end })
+	killBot(mode, closer, 2)
+	W.GameMode.Bind({ Finish = function() W.finished = true end })
+	mode.scoreTarget = nil
+	mode.StopWorld()
+	check(onLedger ~= nil, "the kill that reached the score target finished the match")
+	check(onLedger == 1, "the winning kill is on the killer's ledger when the match finishes: " .. tostring(onLedger) .. " bot kill(s)")
+end
 return out
 """
 
@@ -634,6 +656,17 @@ def plant(path, old, new):
     source = read(path)
     assert source.count(old) == 1, (path, old)
     return {path: source.replace(old, new)}
+
+
+def credit_after_score():
+    """GameMode.onDeath with the old order: the TDM score (which can FinishNow) before creditDeath."""
+    source = read("ServerScriptService/Modules/GameMode.lua")
+    credit = source.index("\t-- Rewards bookkeeping (kills, assists")
+    score = source.index("\t-- Team Deathmatch scores eliminations.")
+    down = source.index("\tModeTeams.MarkDown(token)")
+    assert credit < score < down
+    return {"ServerScriptService/Modules/GameMode.lua":
+            source[:credit] + source[score:down] + source[credit:score] + source[down:]}
 
 
 RS = "ServerScriptService/Modules/RewardService.lua"
@@ -674,6 +707,7 @@ PLANTS = [
     ("time on the objective uncapped",
      plant(RS, "local seconds = math.min(n(summary.holdSeconds), rules.hold.capSeconds or math.huge)",
            "local seconds = n(summary.holdSeconds)")),
+    ("the winning kill credited after the score that ends the match", credit_after_score()),
     ("a defend counted anywhere",
      plant(GM, "\t\tif owner == killerTeam then\n\t\t\tkiller.defends += 1", "\t\tif true then\n\t\t\tkiller.defends += 1")),
 ]
