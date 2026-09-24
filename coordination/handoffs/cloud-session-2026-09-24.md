@@ -1,4 +1,4 @@
-STATUS: IN PROGRESS (cloud session still landing work; wait for ALL DONE)
+STATUS: HANDOVER CANCELLED (Oliver: continue in the cloud session; a PC tab should NOT act on this file)
 
 # Handoff: cloud session (Oliver's "do the tasks" run), 2026-09-24
 
