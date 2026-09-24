@@ -1766,7 +1766,18 @@ local function buildItemView(slot, character)
 		offsets = offsets,
 		glows = glows,
 		grip = gripPart and offsets[gripPart].Position or Vector3.zero,
-		arms = Viewmodel.Arms.new(model, character),
+		-- Guarded like buildViewmodel (critic C5): a failed avatar copy falls back to stand-in arms.
+		arms = (function()
+			local ok, arms = pcall(Viewmodel.Arms.new, model, character)
+			if ok then
+				return arms
+			end
+			if not warnedViewmodel then
+				warnedViewmodel = true
+				warn("[CombatClient] item viewmodel with your avatar's arms failed, using stand-in arms: " .. tostring(arms))
+			end
+			return Viewmodel.Arms.new(model, nil)
+		end)(),
 		startedAt = os.clock(),
 	}
 end
