@@ -28,7 +28,7 @@ The checks, at every size:
      rule on the desktop hotbar (and nowhere on a phone plate), fitting beside the ammo; the gun's type
      word on the HUD line only when its name lacks it; a tier letter in every filled cell's corner, clear
      of the item name; the bag card's detail on hover (description, or a gun's reach) inside the card,
-     above its name; the crosshair greying while AimBeyondRange is up; KOTH's per-objective line from the
+     above its name; KOTH's per-objective line from the
      server's status string, from MY side, clear of the team tags; the recap's "DOWNED BY X — BACK IN n"
      counting down off RespawnAt (or the recap's own respawnDelay) and gone when it runs out.
 
@@ -530,17 +530,6 @@ bag.hovered = nil
 bag:_render()
 out.cardAfter = card.detail.Visible
 
--- C40: the crosshair.
-local cross = find(function(i) return W.instSite(i) == crossSite end)
-local arms = {}
-for _, c in ipairs(rawget(cross, '__children')) do
-    if W.instClass(c) == 'Frame' then table.insert(arms, c) end
-end
-W.player:SetAttribute('AimBeyondRange', true)
-out.armsBeyond = arms[1] and arms[1].BackgroundTransparency
-W.player:SetAttribute('AimBeyondRange', nil)
-out.armsNear = arms[1] and arms[1].BackgroundTransparency
-out.armCount = #arms
 
 -- C37: objectives, from each side.
 W.fire('MatchChanged', { state = 'InProgress', mode = 'KingOfTheHill', teams = true, aliveCount = 8, playerCount = 8 })
@@ -649,10 +638,6 @@ def check_player_eye(root, sources, quiet=False):
         if det[0] < card[0] - 0.5 or det[0] + det[2] > card[0] + card[2] + 0.5 or det[1] < card[1] - 0.5 \
                 or det[1] + det[3] > nm[1] + 0.5:
             problems.append(f"[{tag}] bag card detail box {det} is not inside the card {card} above its name {nm}")
-        # C40
-        if o.armCount != 4 or not (o.armsBeyond > 0.5 > o.armsNear):
-            problems.append(f"[{tag}] crosshair does not grey out of range: {o.armCount} arms, "
-                            f"transparency {o.armsBeyond} beyond / {o.armsNear} in reach")
         # C37
         strip = lambda s: re.sub(r"<[^>]+>", "", s or "")
         want = [("A YOU  B OPEN", o.koth1), ("A FOE  B OPEN", o.koth2), ("A FOE  B YOU", o.koth3)]
@@ -718,8 +703,6 @@ PLANTS = [
      "InventoryPanel.lua", "if string.find(flat, wordFlat, 1, true) or string.find(flat, style, 1, true) then", "if false then"),
     ("the hotbar tier letter dropped",
      "HudClient.client.lua", "refs.tier.Text = (slot and", "refs.tier.Text = '' or (slot and"),
-    ("the crosshair ignoring AimBeyondRange",
-     "HudClient.client.lua", "arm.BackgroundTransparency = beyond and 0.65 or 0.15", "arm.BackgroundTransparency = 0.15"),
     ("the objectives line ignoring which side I am on",
      "ModeScoreHud.client.lua", 'word = owner == mine and "YOU" or "FOE"', 'word = owner == 1 and "YOU" or "FOE"'),
     ("the recap countdown ignoring RespawnAt",

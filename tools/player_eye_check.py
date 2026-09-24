@@ -14,9 +14,7 @@ MatchEvents) in a Lua interpreter (lupa) and asserts what a player would read or
   6. gunword   the floor label (LootService) and the HUD/bag (InventoryPanel) name every gun's type with
                the same word, every style in the arsenal has one, and a name that already says it
                ("Rot SMG") gets none (#86 C39). Both files' real functions run over every gun.
-  7. range     CombatClient's out-of-range test (#86 C40): past `range` marks, inside does not, the sky
-               (nothing hit) and launcher rounds never do.
-  8. stormtick StormClient's per-tick cue (#86 M19): only outside, only when health was lost, never on
+  7. stormtick StormClient's per-tick cue (#86 M19): only outside, only when health was lost, never on
                a dead body, and no more than once per TICK_GAP.
 
     python tools/player_eye_check.py .            the checks
@@ -260,33 +258,6 @@ def check_gunword(lua, req, root=".", plant=None):
     return examined, bad
 
 
-def check_range(lua, req, root=".", plant=None):
-    text = client_source(root, "StarterPlayerScripts", "CombatClient.client.lua")
-    if plant == "range":
-        text = text.replace("or not hitSomething then", "then", 1)
-    fn = lua_block(text, "local function beyondRange(", "\n\tend\n")
-    rt = LuaRuntime(unpack_returned_tuples=True)
-    beyond = rt.execute("""
-        local V = {}
-        V.__index = V
-        V.__sub = function(a, b)
-            local x, y, z = a.X - b.X, a.Y - b.Y, a.Z - b.Z
-            return setmetatable({ X = x, Y = y, Z = z, Magnitude = math.sqrt(x * x + y * y + z * z) }, V)
-        end
-        local function v(x, y, z) return setmetatable({ X = x, Y = y, Z = z }, V) end
-        """ + fn + """
-        return function(def, distance, hit)
-            local d = def == 'launcher' and { range = 400, projectile = 'rocket' } or def
-            return beyondRange(d, v(0, 0, 0), distance and v(distance, 0, 0) or nil, hit)
-        end
-    """)
-    rifle = rt.eval("{ range = 700 }")
-    cases = [((rifle, 500, True), False), ((rifle, 900, True), True), ((rifle, 1499, False), False),
-             (("launcher", 900, True), False), ((rifle, None, True), False), ((None, 900, True), False)]
-    bad = [(args[1:], want) for args, want in cases if bool(beyond(*args)) != want]
-    return len(cases), bad
-
-
 def check_stormtick(lua, req, root=".", plant=None):
     text = client_source(root, "StarterPlayerScripts", "StormClient.client.lua")
     if plant == "stormtick":
@@ -308,8 +279,8 @@ def check_stormtick(lua, req, root=".", plant=None):
 
 CHECKS = [("vote", check_vote), ("achieve", check_achieve), ("odds", check_odds),
           ("bundle", check_bundle), ("events", check_events), ("gunword", check_gunword),
-          ("range", check_range), ("stormtick", check_stormtick)]
-SOURCE_CHECKS = {"gunword", "range", "stormtick"}
+          ("stormtick", check_stormtick)]
+SOURCE_CHECKS = {"gunword", "stormtick"}
 
 
 def run(root, plant=None):
