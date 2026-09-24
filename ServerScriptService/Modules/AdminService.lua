@@ -123,7 +123,10 @@ local HANDLERS = {
 			return nil
 		end
 		amount = math.min(math.floor(amount), MAX_COINS_PER_GRANT)
-		modules().Monetization.EarnCoins(player, amount, "admin")
+		local m = modules()
+		m.Monetization.EarnCoins(player, amount, "admin")
+		-- Show it now, as the crate grant does: nothing else pushes a snapshot until something happens.
+		pcall(m.StateSync.Push, player)
 		return "coins " .. amount
 	end,
 

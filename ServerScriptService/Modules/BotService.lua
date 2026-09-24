@@ -1852,7 +1852,8 @@ local function clusterAround(bot, targetRoot)
 	local count, sum = 0, Vector3.zero
 	local at = targetRoot.Position
 	for _, entry in ipairs(combatantList) do
-		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - at).Magnitude <= 10 then
+		-- Enemies only: a team-mate in melee with the target isn't a reason to throw.
+		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - at).Magnitude <= 10 and hostile(bot, entry.token) then
 			count += 1
 			sum += entry.position
 		end
@@ -2780,7 +2781,14 @@ local function updateBot(bot)
 			end
 			return
 		end
-		if not mark or flatDistance(root.Position, mark.position) > 6 or bot.lootHoldStart then
+		-- Standing still ON its objective is the job (holding a KOTH ring), not idling: kicking it off
+		-- every few seconds left the ring unguarded.
+		local onObjective = false
+		if mark and not bot.lootHoldStart and now - mark.at > 6 then
+			local objective = modeObjective(bot, root, BotService.ModeState(bot), now)
+			onObjective = objective ~= nil and flatDistance(objective, root.Position) < 10
+		end
+		if not mark or flatDistance(root.Position, mark.position) > 6 or bot.lootHoldStart or onObjective then
 			bot.idleMark = { position = root.Position, at = now }
 		elseif now - mark.at > 6 then
 			STATS.teamIdleKicks = (STATS.teamIdleKicks or 0) + 1

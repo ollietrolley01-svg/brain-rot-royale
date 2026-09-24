@@ -1812,6 +1812,7 @@ local function buildDailySpin(lobby, base)
 	local restAngle = 0
 	prompt.Triggered:Connect(function(player)
 		if spinning then
+			StateSync.Notify(player, "The wheel is still turning. One moment.", true)
 			return
 		end
 		local ok, message, landed = LobbyService.OnDailySpin(player)
@@ -2533,6 +2534,13 @@ end
 
 -- player -> { started = os.clock() when the run began, checkpoint = number, spot = CFrame }
 local climbRuns = {}
+
+-- A match ends a climb run: without this, a run started before the match was still live after it,
+-- so the lantern sent you to the old checkpoint and the summit paid a clear (first-clear coins and
+-- the quest) timed across the whole match, without climbing the lower course again.
+function LobbyService.ClearClimb(player)
+	climbRuns[player] = nil
+end
 local obbyClearedUserIds = {}
 local obbyBest = nil
 local obbyBestLabel = nil
