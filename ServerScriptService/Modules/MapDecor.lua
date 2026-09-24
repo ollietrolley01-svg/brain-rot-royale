@@ -295,8 +295,10 @@ end
 -- How many of a town's kerbside cars are real designs; the rest are the plain car. A design built
 -- static is 200 to 290 parts against the plain car's 11 (tools/parked_car_check.py prints them),
 -- and the biggest map is already past its part budget (#121), so this is the knob: each step up
--- costs roughly 225 parts a town, 900 to 1,600 a map.
-local DETAILED_CARS_PER_TOWN = 1
+-- costs roughly 225 parts a town, 900 to 1,600 a map. Oliver 09-24: every kerbside car is a real
+-- design (up to count("cars", 4) a town, so about 900 parts a town); the plain car is only the
+-- fallback if a design can't be built.
+local DETAILED_CARS_PER_TOWN = math.huge
 
 -- Length (along the nose) and width over everything, mirrors included, about the point the car is
 -- placed by (the middle of the wheelbase, which is not the middle of a van: its body runs a stud
