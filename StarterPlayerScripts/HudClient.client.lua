@@ -2852,7 +2852,12 @@ end)
 
 RunService.RenderStepped:Connect(function()
 	local radius = matchState.mapRadius
-	if matchState.state ~= "InProgress" or not radius or radius <= 0 then
+	-- The map and compass are for the match's own players: someone with a loadout, or someone
+	-- eliminated and spectating (MatchService keeps `InMatch` true for them until they leave the
+	-- match). A lobby player during a match (joined late, or never readied) has neither, and was
+	-- shown a map of an arena they are not in.
+	if matchState.state ~= "InProgress" or not radius or radius <= 0
+		or not (loadout or player:GetAttribute("InMatch") == true) then
 		hudLayout.show(minimap, false)
 		hudLayout.show(compass, false)
 		return
