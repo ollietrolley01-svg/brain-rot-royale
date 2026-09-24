@@ -769,6 +769,7 @@ local function tryParkour(now)
 		speed = math.max(speed, arrivalSpeed(runUp, direction, now, RUN_UP_WINDOW)),
 		grounded = grounded,
 		allowVault = recentlyGrounded,
+		windowDrop = true,
 		exhausted = MovementState.exhausted and not MovementState.rush,
 	})
 	if not plan then
@@ -788,25 +789,10 @@ local function tryParkour(now)
 	end
 	-- In the air, a vault only takes over where the jump itself would NOT clear the obstacle (the same
 	-- rule as the climb above): a knee-high rail you jumped at early stays a free hop, no stamina, no
-	-- pose. A window always takes over, glass or no glass: a body cannot fit a window at the top of a
-	-- jump. It used to be recognised by its pane alone, so once the pane was broken -- always, going back
-	-- out the way you came in -- a jump from inside (the sill is 0.5 lower from the floor slab) "cleared"
-	-- the sill, the vault stood aside, and the head hit the lintel. Now anything overhead closer than a
-	-- body's height above the top counts (tools/window_vault_out_probe.lua). Cleared means the feet are
-	-- still above the top, with margin, both where the body reaches the near edge and where it leaves
-	-- the far one.
-	local function openAbove()
-		local mid = (plan.points[2] + plan.points[3]) / 2
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.FilterDescendantsInstances = { character }
-		params.RespectCanCollide = true
-		local body = Parkour.Metrics(character)
-		local need = (body and body.height or 5) + 0.3
-		-- Starts just over the top (inside an intact pane, which a ray starting in it doesn't see).
-		return workspace:Raycast(Vector3.new(mid.X, plan.topY + 0.2, mid.Z), Vector3.new(0, need, 0), params) == nil
-	end
-	if plan.kind == "vault" and not grounded and not (plan.panes and #plan.panes > 0) and openAbove() then
+	-- pose. A window always takes over: its pane is in the plan's clearance box, and a body cannot fit a
+	-- window at the top of a jump anyway. Cleared means the feet are still above the top, with margin,
+	-- both where the body reaches the near edge and where it leaves the far one.
+	if plan.kind == "vault" and not grounded and not (plan.panes and #plan.panes > 0) then
 		local feet = root.Position.Y - humanoid.HipHeight - root.Size.Y / 2
 		local velocity = root.AssemblyLinearVelocity
 		local toward = flat(velocity):Dot(plan.forward)

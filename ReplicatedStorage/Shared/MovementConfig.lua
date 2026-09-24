@@ -158,6 +158,11 @@ MovementConfig.Parkour = {
 	VaultMaxRise = 4.8,
 	VaultMaxDepth = 3.2,
 	VaultMaxDrop = 9,
+	-- Through a window (a lintel over the sill) the landing may be this far down instead: out of an upstairs
+	-- window to the street (a storey is 15, so a second-floor sill is ~19 up; Oliver, 2026-09-24). The vault
+	-- ends just outside the window at this forward speed and the rest is a plain fall (no fall damage).
+	WindowMaxDrop = 40,
+	WindowDropExitSpeed = 10,
 	-- Room needed over the top to get through: a vault is a tucked dive, so a 5-stud window works.
 	VaultClearance = 3.4,
 	-- You have to be moving at least this fast (studs/s) toward it to vault; slower and it's a climb.

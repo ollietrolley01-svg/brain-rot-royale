@@ -1,5 +1,10 @@
 -- Window vault-OUT probe (Oliver, 2026-09-24: "i cant vault back out through a window from the inside").
 --
+-- RESULT OF THE FIRST RUN (ground floor only): the air-rule theory below was WRONG -- the vault stood
+-- aside 0 times and inside worked as well as outside. The real gap was upstairs: a vault needs a landing
+-- within VaultMaxDrop (9) and a storey is 15. Oliver: "let upstairs windows drop to the ground", so
+-- Parkour.Find now takes `windowDrop` (WindowMaxDrop 40) and the UPSTAIRS sweeps below measure it.
+--
 -- Run with:
 --   powershell -ExecutionPolicy Bypass -File tools/gallery.ps1 -Gallery tools/window_vault_out_probe.lua -OutDir <folder> -TimeoutSeconds 1800
 --
@@ -104,12 +109,13 @@ local function buildRow(holder)
 end
 
 -- Ground-floor panes, at most `per` per building, spread across its walls.
-local function pickPanes(built, per)
+local function pickPanes(built, per, upstairs)
 	local picked = {}
 	for _, entry in ipairs(built) do
 		local panes = {}
 		for _, part in ipairs(entry.model:GetChildren()) do
-			if part:IsA("BasePart") and part.Name == "WindowGlass" and part.Position.Y < entry.origin.Y + 12 then
+			local ground = part.Position.Y < entry.origin.Y + 12
+			if part:IsA("BasePart") and part.Name == "WindowGlass" and ground ~= (upstairs == true) then
 				table.insert(panes, part)
 			end
 		end
@@ -149,7 +155,8 @@ local function decide(rig, humanoid, root, direction, state, rule)
 	local velocity = flat(root.AssemblyLinearVelocity)
 	local speed = math.max(velocity:Dot(direction), 0)
 	local recentlyGrounded = grounded or os.clock() - state.groundedAt < 0.35
-	local plan = Parkour.Find(rig, direction, { groundY = state.lastGroundY, speed = speed, grounded = grounded, allowVault = recentlyGrounded })
+	local plan = Parkour.Find(rig, direction, { groundY = state.lastGroundY, speed = speed, grounded = grounded, allowVault = recentlyGrounded,
+		windowDrop = rule == "drop" })
 	if not plan then
 		return nil
 	end
@@ -193,7 +200,8 @@ local function run(rig, humanoid, root, window, side, speed, jumpAt, rule)
 	local outward = side == "inside" and -normal or normal
 	local centre = window.cframe.Position
 	local faceSide = centre + outward * (WALL_THICKNESS / 2)
-	local floorY = side == "inside" and ORIGIN.Y + 0.5 or ORIGIN.Y
+	local sillTop = window.cframe.Position.Y - window.size.Y / 2 + 0.1
+	local floorY = side == "inside" and sillTop - 3.5 or ORIGIN.Y
 	local stand = humanoid.HipHeight + root.Size.Y / 2
 	local start = Vector3.new(faceSide.X, floorY + stand + 0.05, faceSide.Z) + outward * RUNUP
 	local direction = flat(-outward).Unit
@@ -261,6 +269,11 @@ local function run(rig, humanoid, root, window, side, speed, jumpAt, rule)
 	end
 	local across = (flat(root.Position) - flat(centre)):Dot(-outward)
 	if across > WALL_THICKNESS / 2 + 0.5 then
+		-- Out and on the ground outside (a drop that hung on the wall or a ledge is not out).
+		local feet = root.Position.Y - stand
+		if side == "inside" and feet > ORIGIN.Y + 3 and floorY > ORIGIN.Y + 5 then
+			return "HUNG", moveKind, state.stoodAside
+		end
 		return "OUT", moveKind, state.stoodAside
 	elseif across > -(WALL_THICKNESS / 2 + 0.5) and root.Position.Y > floorY + 3 then
 		return "SILL", moveKind, state.stoodAside
@@ -321,13 +334,16 @@ local measurement = {
 		end
 		table.insert(cases, { speed = 0, jumpAt = nil, label = "walk into the wall, then jump" })
 
-		local function sweep(title, side, rule, intact)
+		local upstairs = pickPanes(built, 3, true)
+		note("upstairs windows: %d panes", #upstairs)
+		local function sweep(title, side, rule, intact, set)
+			set = set or windows
 			note("== %s ==", title)
-			local total = { OUT = 0, SILL = 0, IN = 0, NOAPPROACH = 0 }
+			local total = { OUT = 0, SILL = 0, IN = 0, NOAPPROACH = 0, HUNG = 0 }
 			for _, case in ipairs(cases) do
-				local tally = { OUT = 0, SILL = 0, IN = 0, NOAPPROACH = 0 }
+				local tally = { OUT = 0, SILL = 0, IN = 0, NOAPPROACH = 0, HUNG = 0 }
 				local kinds, aside = {}, 0
-				for _, window in ipairs(windows) do
+				for _, window in ipairs(set) do
 					-- A fresh pane state per run: broken means removed, intact means put back.
 					if window.pane and window.pane.Parent and not intact then
 						window.pane.Parent = nil
@@ -345,20 +361,26 @@ local measurement = {
 					table.insert(kindText, kind .. " " .. count)
 				end
 				table.sort(kindText)
-				note("  %-30s OUT %d SILL %d IN %d (no approach %d) | %s | vault stood aside %d", case.label, tally.OUT, tally.SILL, tally.IN,
+				note("  %-30s OUT %d SILL %d IN %d HUNG %d (no approach %d) | %s | vault stood aside %d", case.label, tally.OUT, tally.SILL, tally.IN, tally.HUNG,
 					tally.NOAPPROACH, table.concat(kindText, ", "), aside)
 			end
-			note("  TOTAL %s: OUT %d SILL %d IN %d (no approach %d)", title, total.OUT, total.SILL, total.IN, total.NOAPPROACH)
+			note("  TOTAL %s: OUT %d SILL %d IN %d HUNG %d (no approach %d)", title, total.OUT, total.SILL, total.IN, total.HUNG, total.NOAPPROACH)
 		end
 
 		for _, window in ipairs(windows) do
 			window.home = window.pane.Parent
 		end
-		sweep("inside, glass intact, OLD rule (the census case)", "inside", "old", true)
-		sweep("outside, glass broken, OLD rule (control: Oliver says this works)", "outside", "old", false)
-		sweep("inside, glass broken, OLD rule (the bug)", "inside", "old", false)
-		sweep("inside, glass broken, NEW rule (the fix)", "inside", "new", false)
-		sweep("outside, glass broken, NEW rule (no regression)", "outside", "new", false)
+		for _, window in ipairs(upstairs) do
+			window.home = window.pane.Parent
+		end
+		-- Upstairs: without the long drop (what shipped) and with it (the change), glass intact and broken.
+		sweep("UPSTAIRS inside, glass intact, no window drop (before)", "inside", "old", true, upstairs)
+		sweep("UPSTAIRS inside, glass intact, window drop (after)", "inside", "drop", true, upstairs)
+		sweep("UPSTAIRS inside, glass broken, window drop (after)", "inside", "drop", false, upstairs)
+		-- Ground floor: the long drop must change nothing there.
+		sweep("ground inside, glass intact, no window drop", "inside", "old", true)
+		sweep("ground inside, glass intact, window drop", "inside", "drop", true)
+		sweep("ground outside, glass broken, window drop", "outside", "drop", false)
 		note("done")
 
 		camera.CFrame = CFrame.lookAt(windows[1].cframe.Position + windows[1].cframe.LookVector * 20 + Vector3.new(0, 6, 0), windows[1].cframe.Position)
