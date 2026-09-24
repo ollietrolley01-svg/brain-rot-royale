@@ -3639,6 +3639,17 @@ Vehicles.roads = nil
 
 function BotService.SetRoads(network)
 	Vehicles.roads = network
+	-- Broken road and fallen bridges close their stretch of the network to bot drivers (BotNav).
+	if not Vehicles.roadWatch then
+		local destructible = lazy("DestructibleService")
+		if destructible and destructible.OnRoadBroken then
+			Vehicles.roadWatch = destructible.OnRoadBroken(function(position, size)
+				if Vehicles.roads then
+					BotNav.BlockRoadAt(Vehicles.roads, position, size)
+				end
+			end)
+		end
+	end
 end
 
 function Vehicles.teamsActive()

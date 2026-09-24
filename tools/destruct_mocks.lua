@@ -39,7 +39,28 @@ function V.Abs(a) return vec(math.abs(a.X), math.abs(a.Y), math.abs(a.Z)) end
 function V.Min(a, b) return vec(math.min(a.X, b.X), math.min(a.Y, b.Y), math.min(a.Z, b.Z)) end
 function V.Max(a, b) return vec(math.max(a.X, b.X), math.max(a.Y, b.Y), math.max(a.Z, b.Z)) end
 Vector3 = { new = vec, zero = vec(0, 0, 0), one = vec(1, 1, 1), xAxis = vec(1, 0, 0), yAxis = vec(0, 1, 0), zAxis = vec(0, 0, 1) }
-Vector2 = { new = function(x, y) return { X = x or 0, Y = y or 0, __type = "Vector2" } end }
+local V2 = {}
+V2.__index = function(v, key)
+	if key == "Magnitude" then
+		return math.sqrt(v.X * v.X + v.Y * v.Y)
+	elseif key == "Unit" then
+		local m = math.sqrt(v.X * v.X + v.Y * v.Y)
+		return Vector2.new(v.X / m, v.Y / m)
+	end
+	return V2[key]
+end
+local function vec2(x, y) return setmetatable({ X = x or 0, Y = y or 0, __type = "Vector2" }, V2) end
+V2.__add = function(a, b) return vec2(a.X + b.X, a.Y + b.Y) end
+V2.__sub = function(a, b) return vec2(a.X - b.X, a.Y - b.Y) end
+V2.__unm = function(a) return vec2(-a.X, -a.Y) end
+V2.__mul = function(a, b)
+	if type(a) == "number" then return vec2(a * b.X, a * b.Y) end
+	if type(b) == "number" then return vec2(a.X * b, a.Y * b) end
+	return vec2(a.X * b.X, a.Y * b.Y)
+end
+V2.__div = function(a, b) return vec2(a.X / b, a.Y / b) end
+function V2.Dot(a, b) return a.X * b.X + a.Y * b.Y end
+Vector2 = { new = vec2, zero = vec2(0, 0) }
 
 -- CFrame: position p and rotation columns r (right), u (up), b (back) ------------------------
 local C = {}
@@ -265,7 +286,7 @@ local function newInstance(className)
 	instanceCount = instanceCount + 1
 	local inst = { __instance = true, __props = { ClassName = className, Name = className, Transparency = 0,
 		CanCollide = true, CanQuery = true, CanTouch = true, Anchored = false, Size = vec(4, 1, 2),
-		CFrame = CFrame.new(), Color = col(0.6, 0.6, 0.6), Material = Enum.Material.Plastic, Massless = false,
+		CFrame = CFrame.new(), Color = col(0.6, 0.6, 0.6), Material = Enum.Material.Plastic, Massless = false, Shape = Enum.PartType.Block,
 		AssemblyLinearVelocity = vec(0, 0, 0), AssemblyAngularVelocity = vec(0, 0, 0) },
 		__children = {}, __attributes = {}, __destroying = signal(), __id = instanceCount }
 	table.insert(mock.created, inst)
@@ -276,6 +297,8 @@ I.__index = function(inst, key)
 	if key == "Parent" then return rawget(inst, "__parent") end
 	if key == "Destroying" then return rawget(inst, "__destroying") end
 	if key == "Position" and props.CFrame then return props.CFrame.Position end
+	if key == "AssemblyCenterOfMass" and props.CFrame then return props.CFrame.Position end
+	if key == "AssemblyMass" and props.Size then return props.Size.X * props.Size.Y * props.Size.Z * 0.7 end
 	if I[key] then return I[key] end
 	if props[key] ~= nil then return props[key] end
 	-- A child by name, the way Roblox resolves inst.Child.
@@ -309,6 +332,11 @@ I.__newindex = function(inst, key, value)
 	props[key] = value
 end
 I.__tostring = function(inst) return inst.Name end
+function I.GetMass(inst)
+	local size = inst.Size
+	return size.X * size.Y * size.Z * 0.7
+end
+function I.SetNetworkOwner() end
 function I.IsA(inst, className)
 	local cls = inst.ClassName
 	if className == cls or className == "Instance" then return true end
@@ -412,11 +440,60 @@ terrain.Name = "Terrain"
 terrain.Parent = workspace
 mock.fills = {}
 function terrain.FillBall(_, centre, radius, material) table.insert(mock.fills, { centre, radius, material }) end
+-- A cylinder along the frame's Y axis (every crater ring is upright here).
+function terrain.FillCylinder(_, c, height, radius, material)
+	table.insert(mock.fills, { c.Position, radius, material, height })
+end
 function terrain.FillBlock() end
 function terrain.ReplaceMaterial() end
 workspace.CurrentCamera = { CFrame = CFrame.new() }
 -- Raycasts answer from a harness-set function: mock.raycast(origin, direction, params) -> result or nil.
 mock.raycast = function() return nil end
+-- A flat world for mock.raycast: ground whose top is at `top` and underside at `bottom`, of
+-- `material`, lowered wherever a crater (Terrain:FillBall with Air, recorded in mock.fills) dug it.
+-- Rays down from above the ground hit its top, rays up from under it hit its underside; `solids`
+-- (optional) is a list of parts rays down hit first when they pass through them.
+function mock.flatWorld(top, bottom, material, edge)
+	material = material or Enum.Material.Grass
+	edge = edge or math.huge
+	local function surfaceAt(x, z)
+		local y = top
+		-- Until nothing lowers it further (a stack of rings is dug from the top down).
+		local changed = true
+		while changed do
+			changed = false
+			for _, fill in ipairs(mock.fills) do
+				local c, r = fill[1], fill[2]
+				local d2 = (x - c.X) ^ 2 + (z - c.Z) ^ 2
+				if fill[3] == Enum.Material.Air and d2 < r * r then
+					local half = fill[4] and fill[4] / 2 or math.sqrt(r * r - d2)
+					if c.Y + half >= y - 1e-6 and c.Y - half < y - 1e-6 then
+						y = c.Y - half
+						changed = true
+					end
+				end
+			end
+		end
+		return y
+	end
+	mock.surfaceAt = surfaceAt
+	return function(origin, direction)
+		if math.abs(origin.X) > edge or math.abs(origin.Z) > edge then
+			return nil
+		end
+		if direction.Y < 0 then
+			local y = surfaceAt(origin.X, origin.Z)
+			if origin.Y >= y and origin.Y + direction.Y <= y then
+				return { Instance = workspace.Terrain, Position = vec(origin.X, y, origin.Z), Material = material, Normal = vec(0, 1, 0) }
+			end
+		elseif direction.Y > 0 then
+			if origin.Y <= bottom and origin.Y + direction.Y >= bottom then
+				return { Instance = workspace.Terrain, Position = vec(origin.X, bottom, origin.Z), Material = material, Normal = vec(0, -1, 0) }
+			end
+		end
+		return nil
+	end
+end
 function workspace.Raycast(_, origin, direction, params) return mock.raycast(origin, direction, params) end
 -- Overlaps: every BasePart under the include list whose box reaches the sphere.
 function workspace.GetPartBoundsInRadius(_, centre, radius, params)
@@ -434,6 +511,73 @@ function workspace.GetPartBoundsInRadius(_, centre, radius, params)
 		end
 	end
 	return out
+end
+-- A part's world-axis box (min, max), turned or not.
+local function aabb(c, size)
+	local h = size / 2
+	local ex = math.abs(c.r.X) * h.X + math.abs(c.u.X) * h.Y + math.abs(c.b.X) * h.Z
+	local ey = math.abs(c.r.Y) * h.X + math.abs(c.u.Y) * h.Y + math.abs(c.b.Y) * h.Z
+	local ez = math.abs(c.r.Z) * h.X + math.abs(c.u.Z) * h.Y + math.abs(c.b.Z) * h.Z
+	return vec(c.p.X - ex, c.p.Y - ey, c.p.Z - ez), vec(c.p.X + ex, c.p.Y + ey, c.p.Z + ez)
+end
+mock.aabb = aabb
+-- Box overlaps the way Roblox's GetPartBoundsInBox reads them: the parts' bounding boxes against the
+-- query box (both taken as world-axis boxes here, which is generous for a turned query).
+function workspace.GetPartBoundsInBox(_, c, size, params)
+	local out = {}
+	local lo, hi = aabb(c, size)
+	for _, root in ipairs(params and params.FilterDescendantsInstances or { workspace }) do
+		for _, d in ipairs(root:GetDescendants()) do
+			if d:IsA("BasePart") and d.CanQuery then
+				local a, b = aabb(d.CFrame, d.Size)
+				if a.X <= hi.X and b.X >= lo.X and a.Y <= hi.Y and b.Y >= lo.Y and a.Z <= hi.Z and b.Z >= lo.Z then
+					table.insert(out, d)
+				end
+			end
+		end
+	end
+	return out
+end
+-- Region3 and the terrain's voxels: ground is solid below mock.groundY (0 unless a check moves it),
+-- or whatever mock.voxel(x, y, z) says for the 4-stud cell whose low corner that is.
+Region3 = { new = function(lo, hi)
+	local r = { Min = lo, Max = hi, __type = "Region3" }
+	function r.ExpandToGrid(self, res)
+		local function down(v) return math.floor(v / res) * res end
+		local function up(v) return math.ceil(v / res) * res end
+		return Region3.new(vec(down(self.Min.X), down(self.Min.Y), down(self.Min.Z)), vec(up(self.Max.X), up(self.Max.Y), up(self.Max.Z)))
+	end
+	return r
+end }
+mock.groundY = 0
+function terrain.ReadVoxels(_, region, res)
+	local materials, occupancies = {}, {}
+	local nx = math.max(1, math.floor((region.Max.X - region.Min.X) / res + 0.5))
+	local ny = math.max(1, math.floor((region.Max.Y - region.Min.Y) / res + 0.5))
+	local nz = math.max(1, math.floor((region.Max.Z - region.Min.Z) / res + 0.5))
+	for i = 1, nx do
+		materials[i], occupancies[i] = {}, {}
+		for j = 1, ny do
+			materials[i][j], occupancies[i][j] = {}, {}
+			for k = 1, nz do
+				local x, y, z = region.Min.X + (i - 1) * res, region.Min.Y + (j - 1) * res, region.Min.Z + (k - 1) * res
+				local solid = mock.voxel and mock.voxel(x, y, z)
+				if solid == nil then solid = y < mock.groundY end
+				if type(solid) == "table" then
+					materials[i][j][k], occupancies[i][j][k] = solid, 1
+				else
+					materials[i][j][k] = solid and Enum.Material.Grass or Enum.Material.Air
+					occupancies[i][j][k] = solid and 1 or 0
+				end
+			end
+		end
+	end
+	return materials, occupancies
+end
+function workspace.BulkMoveTo(_, parts, frames)
+	for index, part in ipairs(parts) do
+		part.CFrame = frames[index]
+	end
 end
 RaycastParams = { new = function() return { FilterDescendantsInstances = {} } end }
 OverlapParams = { new = function() return { FilterDescendantsInstances = {} } end }
