@@ -152,7 +152,14 @@ local function put(parent, name, size, at, color, material, opts)
 			part.Transparency = opts.transparency
 		end
 		if opts.tag ~= nil then
-			part:SetAttribute("Destructible", opts.tag)
+			local tag = opts.tag
+			-- A "Kind:id" pool is keyed map-wide by its string (DestructibleService), and both bases
+			-- are built from one layout: without the site on the end, a shot at one team's sandbags
+			-- counted toward the same sandbags at the other team's base.
+			if type(tag) == "string" and string.find(tag, ":") then
+				tag = tag .. "@" .. B.site
+			end
+			part:SetAttribute("Destructible", tag)
 		end
 		if opts.health then
 			part:SetAttribute("DestructibleHealth", opts.health)
@@ -922,8 +929,8 @@ local function buildSupply(model)
 	-- Four chest alcoves along the back wall, between shelving partitions, each with its number
 	-- painted over it in the team's colour.
 	for _, x in ipairs({ 14, 24, 34 }) do
-		box(room, "Shelf", x - 0.5, x + 0.5, ROOM_FLOOR, 6.3, 34, 39.8, WOOD, MAT.WoodPlanks)
-		box(room, "ShelfTin", x - 0.4, x + 0.4, 6.3, 7.0, 35.2, 36.4, OLIVE, MAT.Metal, TRIM)
+		box(room, "Shelf", x - 0.5, x + 0.5, ROOM_FLOOR, 6.3, 34, 39.8, WOOD, MAT.WoodPlanks, { tag = "Shelf:" .. x })
+		box(room, "ShelfTin", x - 0.4, x + 0.4, 6.3, 7.0, 35.2, 36.4, OLIVE, MAT.Metal, trimWith({ tag = "Shelf:" .. x }))
 	end
 	-- One more on the open floor in front of the alcoves, beside the way in from the door.
 	table.insert(B.chests, { name = "SupplyFloor", at = CFrame.new(20.5, ROOM_FLOOR, 31.5) })
@@ -944,8 +951,9 @@ local function buildSupply(model)
 	box(room, "Crate", 9.6, 12.6, ROOM_FLOOR, ROOM_FLOOR + 3, 25, 28, WOOD_DARK, MAT.WoodPlanks, stackA)
 	box(room, "Crate", 7.5, 10.5, ROOM_FLOOR + 3, ROOM_FLOOR + 6, 25.2, 28.2, WOOD, MAT.WoodPlanks, stackA)
 	for _, band in ipairs({ { 6.5, 9.5, 25 }, { 9.6, 12.6, 25 } }) do
+		-- In the stack's pool, so the band goes when its crate does rather than hanging in the air.
 		facePlate(room, "CrateBand", "z", band[3], -1, 0.08, band[1] + 0.2, band[2] - 0.2, ROOM_FLOOR + 1.3, ROOM_FLOOR + 1.7,
-			STEEL_DARK, MAT.Metal)
+			STEEL_DARK, MAT.Metal, trimWith({ tag = stackA.tag }))
 	end
 	put(room, "Crate", Vector3.new(2.4, 2.4, 2.4), CFrame.new(14.6, ROOM_FLOOR + 1.2, 26.3) * CFrame.Angles(0, 0.3, 0) * CFrame.Angles(math.pi / 2, 0, 0),
 		WOOD, MAT.WoodPlanks, { tag = "Crate:tipped" })
@@ -966,11 +974,11 @@ local function buildSupply(model)
 	put(room, "VatDome", Vector3.new(4.6, 4.6, 4.6), CFrame.new(vat.X, ROOM_FLOOR + 6.2, vat.Z), STEEL, MAT.Metal,
 		{ shape = Enum.PartType.Ball, tag = "Prop:vat" })
 	local glow = rod(room, "VatWindow", Vector3.new(vat.X, ROOM_FLOOR + 2.6, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 3.8, vat.Z), 4.72,
-		ROT_GREEN, MAT.Neon, trimWith({ transparency = 0.15 }))
+		ROT_GREEN, MAT.Neon, trimWith({ transparency = 0.15, tag = "Prop:vat" }))
 	light(glow, ROT_GREEN, 12, 0.9)
-	rod(room, "VatPipe", Vector3.new(41.5, ROOM_FLOOR + 5.2, vat.Z), Vector3.new(44.1, ROOM_FLOOR + 5.2, vat.Z), 0.55, RUST, MAT.CorrodedMetal, TRIM)
-	rod(room, "VatPipe", Vector3.new(vat.X, ROOM_FLOOR + 8.1, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 10.4, vat.Z), 0.55, RUST, MAT.CorrodedMetal, TRIM)
-	rod(room, "VatPipe", Vector3.new(vat.X - 0.3, ROOM_FLOOR + 10.1, vat.Z), Vector3.new(vat.X - 0.3, 11.2, 23.6), 0.45, RUST, MAT.CorrodedMetal, TRIM)
+	rod(room, "VatPipe", Vector3.new(41.5, ROOM_FLOOR + 5.2, vat.Z), Vector3.new(44.1, ROOM_FLOOR + 5.2, vat.Z), 0.55, RUST, MAT.CorrodedMetal, trimWith({ tag = "Prop:vat" }))
+	rod(room, "VatPipe", Vector3.new(vat.X, ROOM_FLOOR + 8.1, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 10.4, vat.Z), 0.55, RUST, MAT.CorrodedMetal, trimWith({ tag = "Prop:vat" }))
+	rod(room, "VatPipe", Vector3.new(vat.X - 0.3, ROOM_FLOOR + 10.1, vat.Z), Vector3.new(vat.X - 0.3, 11.2, 23.6), 0.45, RUST, MAT.CorrodedMetal, trimWith({ tag = "Prop:vat" }))
 	groundDisc(room, "RotGoo", 37.0, 32.2, 2.6, ROT_GREEN, MAT.Neon, 0, ROOM_FLOOR)
 	groundDisc(room, "RotGoo", 38.6, 33.2, 1.4, ROT_GREEN, MAT.Neon, 1, ROOM_FLOOR)
 
@@ -1121,7 +1129,7 @@ local function buildYard(model)
 			local y = TILE_TOP + (index - 1) * 0.9
 			rod(yard, "Tyre", Vector3.new(x, y, z), Vector3.new(x, y + 0.9, z), 2.4, RUBBER, MAT.Plastic, { tag = "Prop:" .. tag })
 		end
-		disc(yard, "TyreHole", Vector3.new(x, TILE_TOP + count * 0.9, z), Vector3.new(0, 1, 0), 0.06, 1.2, SOOT, MAT.Slate)
+		disc(yard, "TyreHole", Vector3.new(x, TILE_TOP + count * 0.9, z), Vector3.new(0, 1, 0), 0.06, 1.2, SOOT, MAT.Slate, trimWith({ tag = "Prop:" .. tag }))
 	end
 	tyres(18.75, -24, 3, "tyresA")
 	tyres(31.25, -30, 2, "tyresB")
@@ -1139,14 +1147,14 @@ local function buildYard(model)
 	put(yard, "GateLeaf", Vector3.new(0.46, 6.2, 0.3), leaf * CFrame.new(0, 3.25, -3.35), STEEL, MAT.Metal, leafOpts)
 	put(yard, "GateLeaf", Vector3.new(0.46, 6.2, 0.3), leaf * CFrame.new(0, 3.25, 3.35), STEEL, MAT.Metal, leafOpts)
 	put(yard, "GateMesh", Vector3.new(0.08, 5.9, 6.4), leaf * CFrame.new(0, 3.25, 0), STEEL_DARK, MAT.Metal,
-		trimWith({ transparency = 0.45 }))
+		trimWith({ transparency = 0.45, tag = leafOpts.tag }))
 
 	-- The jersey barriers between the yard and the courtyard, with gaps to walk through.
 	for index, span in ipairs({ { -38, -32 }, { -24, -18 }, { -15, -10 } }) do
 		local opts = { tag = "Barrier:" .. index }
 		box(yard, "Barrier", 4.2, 5.8, TILE_TOP, TILE_TOP + 1.0, span[1], span[2], CONCRETE_LIGHT, MAT.Concrete, opts)
 		box(yard, "Barrier", 4.55, 5.45, TILE_TOP + 1.0, TILE_TOP + 2.9, span[1] + 0.1, span[2] - 0.1, CONCRETE_LIGHT, MAT.Concrete, opts)
-		facePlate(yard, "TeamBarrierPaint", "x", 4.55, -1, 0.08, span[1] + 0.8, span[2] - 0.8, TILE_TOP + 1.9, TILE_TOP + 2.5, B.team, MAT.SmoothPlastic)
+		facePlate(yard, "TeamBarrierPaint", "x", 4.55, -1, 0.08, span[1] + 0.8, span[2] - 0.8, TILE_TOP + 1.9, TILE_TOP + 2.5, B.team, MAT.SmoothPlastic, trimWith({ tag = opts.tag }))
 	end
 
 	-- The lane behind the bays: a workbench against the supply wall, a lamp post come down.
@@ -1157,8 +1165,8 @@ local function buildYard(model)
 			box(yard, "BenchLeg", x, x + 0.3, TILE_TOP, TILE_TOP + 2.9, z, z + 0.3, WOOD_DARK, MAT.WoodPlanks, bench)
 		end
 	end
-	box(yard, "Toolbox", 8.6, 10.4, TILE_TOP + 3.2, TILE_TOP + 4.1, 20.0, 20.9, BRICK, MAT.Metal, TRIM)
-	box(yard, "Vice", 11.6, 12.4, TILE_TOP + 3.2, TILE_TOP + 3.9, 19.7, 20.3, STEEL, MAT.Metal, TRIM)
+	box(yard, "Toolbox", 8.6, 10.4, TILE_TOP + 3.2, TILE_TOP + 4.1, 20.0, 20.9, BRICK, MAT.Metal, trimWith({ tag = bench.tag }))
+	box(yard, "Vice", 11.6, 12.4, TILE_TOP + 3.2, TILE_TOP + 3.9, 19.7, 20.3, STEEL, MAT.Metal, trimWith({ tag = bench.tag }))
 	rod(yard, "FallenLampPost", Vector3.new(8, TILE_TOP + 0.25, -3.6), Vector3.new(18, TILE_TOP + 0.25, -3.6), 0.5, STEEL_DARK, MAT.Metal,
 		{ tag = "Prop:fallenLamp" })
 	box(yard, "FallenLampHead", 17.9, 19.4, TILE_TOP, TILE_TOP + 0.7, -4.2, -3.0, STEEL_DARK, MAT.Metal, { tag = "Prop:fallenLamp" })
@@ -1248,7 +1256,7 @@ local function buildCourtyard(model)
 	for index = 0, 2 do
 		local angle = index * math.pi * 2 / 3 + 0.4
 		rod(yard, "TripodLeg", apex, Vector3.new(-26 + math.cos(angle) * 0.6, TILE_TOP + 3 * BAG_HIGH - 0.1, -20.3 + math.sin(angle) * 0.35),
-			0.12, STEEL_DARK, MAT.Metal, TRIM)
+			0.12, STEEL_DARK, MAT.Metal, trimWith({ tag = "Sandbags:nestFront" }))
 	end
 	box(yard, "AmmoTin", -29.6, -28.6, TILE_TOP - 0.1, TILE_TOP + 1.0, -14.5, -13.4, OLIVE, MAT.Metal, { tag = "Prop:nestTin" })
 	table.insert(B.chests, { name = "MachineGunNest", at = CFrame.new(-26, TILE_TOP, -15.8) })
@@ -1266,19 +1274,19 @@ local function buildCourtyard(model)
 	table.insert(B.chests, { name = "LeanTo", at = CFrame.new(-40.8, TILE_TOP, -22) })
 	local radio = { tag = "Crate:radio" }
 	box(yard, "Crate", -43.9, -41.1, TILE_TOP, TILE_TOP + 2.4, -29.4, -26.6, WOOD, MAT.WoodPlanks, radio)
-	box(yard, "MemeRadio", -43.4, -41.6, TILE_TOP + 2.4, TILE_TOP + 3.5, -28.6, -27.4, OLIVE, MAT.Metal, TRIM)
-	box(yard, "MemeRadioDial", -42.9, -42.1, TILE_TOP + 2.7, TILE_TOP + 3.2, -28.72, -28.52, ROT_GREEN, MAT.Neon, TRIM)
-	rod(yard, "MemeRadioAerial", Vector3.new(-41.9, TILE_TOP + 3.3, -27.8), Vector3.new(-41.3, TILE_TOP + 6.2, -27.5), 0.1, STEEL_DARK, MAT.Metal, TRIM)
+	box(yard, "MemeRadio", -43.4, -41.6, TILE_TOP + 2.4, TILE_TOP + 3.5, -28.6, -27.4, OLIVE, MAT.Metal, trimWith({ tag = radio.tag }))
+	box(yard, "MemeRadioDial", -42.9, -42.1, TILE_TOP + 2.7, TILE_TOP + 3.2, -28.72, -28.52, ROT_GREEN, MAT.Neon, trimWith({ tag = radio.tag }))
+	rod(yard, "MemeRadioAerial", Vector3.new(-41.9, TILE_TOP + 3.3, -27.8), Vector3.new(-41.3, TILE_TOP + 6.2, -27.5), 0.1, STEEL_DARK, MAT.Metal, trimWith({ tag = radio.tag }))
 
 	-- The flag: a concrete block, the pole, the team's colours with the Rot Eye on them.
 	box(yard, "Plinth", -4.7, -2.3, TILE_TOP, TILE_TOP + 1.0, -30.2, -27.8, CONCRETE_LIGHT, MAT.Concrete, { tag = false })
 	rod(yard, "FlagPole", Vector3.new(-3.5, TILE_TOP + 0.7, -29), Vector3.new(-3.5, 15.5, -29), 0.36, STEEL, MAT.Metal, { tag = "Prop:flag" })
 	put(yard, "FlagFinial", Vector3.new(0.6, 0.6, 0.6), CFrame.new(-3.5, 15.6, -29), YELLOW_PAINT, MAT.Metal,
-		trimWith({ shape = Enum.PartType.Ball }))
-	box(yard, "TeamFlag", -3.5, 1.1, 12.4, 15.2, -29.05, -28.95, B.team, MAT.Fabric, TRIM)
-	box(yard, "TeamFlagTatter", 0.2, 1.9, 12.0, 12.9, -28.97, -28.87, mix(B.team, SOOT, 0.35), MAT.Fabric, TRIM)
+		trimWith({ shape = Enum.PartType.Ball, tag = "Prop:flag" }))
+	box(yard, "TeamFlag", -3.5, 1.1, 12.4, 15.2, -29.05, -28.95, B.team, MAT.Fabric, trimWith({ tag = "Prop:flag" }))
+	box(yard, "TeamFlagTatter", 0.2, 1.9, 12.0, 12.9, -28.97, -28.87, mix(B.team, SOOT, 0.35), MAT.Fabric, trimWith({ tag = "Prop:flag" }))
 	-- Through the cloth, so it reads from both sides.
-	disc(yard, "FlagEye", Vector3.new(-1.5, 13.9, -29), Vector3.new(0, 0, -1), 0.11, 1.8, WHITE_PAINT, MAT.SmoothPlastic)
+	disc(yard, "FlagEye", Vector3.new(-1.5, 13.9, -29), Vector3.new(0, 0, -1), 0.11, 1.8, WHITE_PAINT, MAT.SmoothPlastic, trimWith({ tag = "Prop:flag" }))
 
 	-- The Rot Generator by the west door: a skid-mounted brainrot dynamo, blown, one window still lit,
 	-- its cable run across the paving to the bunker.
@@ -1286,11 +1294,11 @@ local function buildCourtyard(model)
 	box(yard, "GeneratorSkid", -40, -39.4, TILE_TOP, TILE_TOP + 0.3, 0.1, 3.5, STEEL_DARK, MAT.Metal, gen)
 	box(yard, "GeneratorSkid", -36.6, -36, TILE_TOP, TILE_TOP + 0.3, 0.1, 3.5, STEEL_DARK, MAT.Metal, gen)
 	box(yard, "RotGenerator", -40, -36, TILE_TOP + 0.3, TILE_TOP + 3.1, 0.3, 3.3, OLIVE, MAT.Metal, gen)
-	rod(yard, "GeneratorFlywheel", Vector3.new(-40.3, TILE_TOP + 1.8, 1.8), Vector3.new(-39.7, TILE_TOP + 1.8, 1.8), 2.2, STEEL, MAT.Metal, TRIM)
-	rod(yard, "GeneratorExhaust", Vector3.new(-39, TILE_TOP + 3.0, 2.6), Vector3.new(-39, TILE_TOP + 5.4, 2.6), 0.6, RUST, MAT.CorrodedMetal, TRIM)
-	local window = box(yard, "GeneratorWindow", -38.8, -37.2, TILE_TOP + 1.3, TILE_TOP + 2.3, 0.22, 0.38, ROT_GREEN, MAT.Neon, TRIM)
+	rod(yard, "GeneratorFlywheel", Vector3.new(-40.3, TILE_TOP + 1.8, 1.8), Vector3.new(-39.7, TILE_TOP + 1.8, 1.8), 2.2, STEEL, MAT.Metal, trimWith({ tag = gen.tag }))
+	rod(yard, "GeneratorExhaust", Vector3.new(-39, TILE_TOP + 3.0, 2.6), Vector3.new(-39, TILE_TOP + 5.4, 2.6), 0.6, RUST, MAT.CorrodedMetal, trimWith({ tag = gen.tag }))
+	local window = box(yard, "GeneratorWindow", -38.8, -37.2, TILE_TOP + 1.3, TILE_TOP + 2.3, 0.22, 0.38, ROT_GREEN, MAT.Neon, trimWith({ tag = gen.tag }))
 	light(window, ROT_GREEN, 8, 0.6)
-	facePlate(yard, "Scorch", "z", 0.3, -1, 0.1, -39.8, -38.9, TILE_TOP + 2.4, TILE_TOP + 2.9, SOOT, MAT.Slate)
+	facePlate(yard, "Scorch", "z", 0.3, -1, 0.1, -39.8, -38.9, TILE_TOP + 2.4, TILE_TOP + 2.9, SOOT, MAT.Slate, trimWith({ tag = gen.tag }))
 	local cable = { Vector3.new(-36.2, TILE_TOP + 0.1, 1.6), Vector3.new(-34.2, TILE_TOP + 0.1, 3.4), Vector3.new(-34.6, TILE_TOP + 0.1, 7.9) }
 	for index = 1, #cable - 1 do
 		rod(yard, "PowerCable", cable[index], cable[index + 1], 0.22, RUBBER, MAT.Plastic, TRIM)
@@ -1317,7 +1325,7 @@ local function buildCourtyard(model)
 	rod(yard, "CannonMuzzle", muzzle - dir * 0.5, muzzle + dir * 0.1, 1.3, STEEL, MAT.Metal, cannon)
 	for _, t in ipairs({ 0.35, 0.55 }) do
 		local at = breech + (muzzle - breech) * t
-		rod(yard, "CannonCoil", at - dir * 0.2, at + dir * 0.2, 1.1, ROT_GREEN, MAT.Neon, TRIM)
+		rod(yard, "CannonCoil", at - dir * 0.2, at + dir * 0.2, 1.1, ROT_GREEN, MAT.Neon, trimWith({ tag = cannon.tag }))
 	end
 	groundDisc(yard, "RotGoo", -12.4, -9.2, 1.6, ROT_GREEN, MAT.Neon, 0)
 
@@ -1348,9 +1356,9 @@ local function buildCourtyard(model)
 	-- A lamp post at the corner of the bunker.
 	box(yard, "LampBase", 0.2, 1.4, TILE_TOP, TILE_TOP + 0.6, 4.6, 5.8, CONCRETE_DARK, MAT.Concrete, { tag = "Prop:lampPost" })
 	rod(yard, "LampPost", Vector3.new(0.8, TILE_TOP + 0.5, 5.2), Vector3.new(0.8, 9.8, 5.2), 0.4, STEEL_DARK, MAT.Metal, { tag = "Prop:lampPost" })
-	box(yard, "LampArm", -1.2, 0.8, 9.25, 9.55, 5.05, 5.35, STEEL_DARK, MAT.Metal, TRIM)
-	box(yard, "LampHead", -1.9, -0.9, 8.75, 9.25, 4.8, 5.6, STEEL_DARK, MAT.Metal, TRIM)
-	local glassPart = box(yard, "LampGlass", -1.8, -1.0, 8.65, 8.75, 4.9, 5.5, WARM, MAT.Neon, TRIM)
+	box(yard, "LampArm", -1.2, 0.8, 9.25, 9.55, 5.05, 5.35, STEEL_DARK, MAT.Metal, trimWith({ tag = "Prop:lampPost" }))
+	box(yard, "LampHead", -1.9, -0.9, 8.75, 9.25, 4.8, 5.6, STEEL_DARK, MAT.Metal, trimWith({ tag = "Prop:lampPost" }))
+	local glassPart = box(yard, "LampGlass", -1.8, -1.0, 8.65, 8.75, 4.9, 5.5, WARM, MAT.Neon, trimWith({ tag = "Prop:lampPost" }))
 	light(glassPart, WARM, 26, 1.3)
 
 	table.insert(B.loot, CFrame.new(-13, TILE_TOP, -30))
@@ -1370,6 +1378,8 @@ end
 function TeamBaseRuins.Layout(frame, teamColor, seed)
 	B = {
 		frame = frame,
+		-- Where this build stands, to the stud: the suffix that keeps its pools its own.
+		site = string.format("%d,%d", math.floor(frame.Position.X + 0.5), math.floor(frame.Position.Z + 0.5)),
 		rng = Random.new(seed or 1),
 		team = teamColor,
 		pads = {},

@@ -188,6 +188,16 @@ function topOf(part, model)
     end
     return node == part and "(root)" or node.Name
 end
+function pooledModel(part, model)
+    local node = part.Parent
+    while node and node ~= model do
+        if node.ClassName == "Model" and type(node:GetAttribute("Destructible")) == "string" then
+            return node.Name
+        end
+        node = node.Parent
+    end
+    return ""
+end
 function makeFrame(x, y, z, yaw)
     return CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0)
 end
@@ -747,8 +757,10 @@ def check_destruct(build, model, parts_by_order, log):
             return on_line
         return False
 
+    flags = []
     for part in live:
         can = service.FromPart(part) is not None
+        flags.append(can)
         top = top_of(part, model)
         if can:
             breakable += 1
@@ -769,8 +781,46 @@ def check_destruct(build, model, parts_by_order, log):
         hi = [max(m["aabb"][1][i] for m in members) for i in range(3)]
         if max(hi[0] - lo[0], hi[2] - lo[2]) > 90:
             problems.append("destruct: pool %s spans more than 90" % tag)
-    log("destruct: %d parts examined, %d breakable, %d wall panels that must break, %d tagged pools"
-        % (len(live), breakable, required, len(pools)))
+    # Dressing left hanging: a piece of trim (no collision, no query) that touches only parts which can
+    # break must go with them -- by being a wall's dressing (DestructibleService drops it), by sharing
+    # the pool's tag, or by being inside the same tagged Model. A crate band that is not in its crate's
+    # pool floats when the crate goes.
+    pooled = lua.globals().pooledModel
+    pool_model = [pooled(p, model) for p in live]
+    carries = {"Wall", "Floor", "Roof", "Gable", "Parapet", "Stair", "Balcony"}
+    boxes = [obb(p) for p in parts_by_order]
+    hanging, trims = [], 0
+    for i, t in enumerate(parts_by_order):
+        if t["collide"] or t["query"]:
+            continue
+        lo, hi = t["aabb"]
+        touching = []
+        for j, c in enumerate(parts_by_order):
+            if not c["collide"]:
+                continue
+            clo, chi = c["aabb"]
+            if any(lo[k] > chi[k] + TOUCH or clo[k] > hi[k] + TOUCH for k in range(3)):
+                continue
+            if obb_overlap(boxes[i], boxes[j], TOUCH):
+                touching.append(j)
+        if not touching:
+            continue
+        trims += 1
+        held = False
+        for j in touching:
+            c = parts_by_order[j]
+            if not flags[j] or (c["name"] in carries and c["path"] == t["path"]) \
+                    or (":" in c["tag"] and c["tag"] == t["tag"] and c["path"] == t["path"]) \
+                    or (pool_model[j] and pool_model[j] == pool_model[i]):
+                held = True
+                break
+        if not held:
+            hanging.append("%s (on %s)" % (t["name"], ", ".join(sorted({parts_by_order[j]["name"] for j in touching}))))
+    for line in hanging[:40]:
+        problems.append("destruct: %s is left hanging when that breaks" % line)
+    log("destruct: %d parts examined, %d breakable, %d wall panels that must break, %d tagged pools; "
+        "%d pieces of dressing on something, %d left hanging when it breaks"
+        % (len(live), breakable, required, len(pools), trims, len(hanging)))
     if required < 20:
         problems.append("destruct: only %d wall panels found to check" % required)
     model.Parent = None
@@ -1047,6 +1097,13 @@ def run(src, log):
     a = local_rows(parts, (0, 0, 0), 0)
     b = local_rows(parts2, (512.5, 7.25, -300.0), yaw2)
     diff = same_rows(a, b)
+    # Each base's tagged pools are its own: DestructibleService keys a "Kind:id" pool by the string
+    # map-wide, so a string both bases carry would make a shot at one count toward the other.
+    tags1 = {p["tag"] for p in parts if ":" in p["tag"]}
+    shared = sorted(tags1 & {p["tag"] for p in parts2 if ":" in p["tag"]})
+    log("pools: %d tagged pool strings at team 1's base, %d shared with team 2's" % (len(tags1), len(shared)))
+    if shared:
+        problems.append("pools: both bases carry %d of the same pool tags (%s)" % (len(shared), ", ".join(shared[:4])))
     recolored = [ra[0] for ra, rb in zip(a, b) if any(abs(x - y) > 1e-6 for x, y in zip(ra[5], rb[5]))]
     stray = sorted({n for n in recolored if not n.startswith("Team")})
     team_parts = [ra[0] for ra in a if ra[0].startswith("Team")]
@@ -1136,6 +1193,9 @@ PLANTS = [
      "is in Bay5's way out"),
     ("a chest spot short", [('	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(-39, TILE_TOP, -34.8) })\n', '')],
      "but LootService.BaseStock.chest is"),
+    ("one pool tag for both bases", [('\t\t\t\ttag = tag .. "@" .. B.site\n', '')], "both bases carry"),
+    ("crate band out of its pool", [('STEEL_DARK, MAT.Metal, trimWith({ tag = stackA.tag }))', 'STEEL_DARK, MAT.Metal)')],
+     "CrateBand (on Crate) is left hanging"),
     ("crate on a chest spot", [('	table.insert(B.chests, { name = "LeanTo"',
                                 '	box(yard, "Crate", -42, -39.6, TILE_TOP, TILE_TOP + 2.4, -23, -21, WOOD, MAT.WoodPlanks)\n'
                                 '	table.insert(B.chests, { name = "LeanTo"')], "chest LeanTo: not clear"),
