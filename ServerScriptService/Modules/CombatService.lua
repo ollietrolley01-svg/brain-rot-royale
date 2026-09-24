@@ -336,6 +336,7 @@ end
 
 function CombatService.SetAiming(player, value)
 	aiming[player] = value == true
+	if player.Character then player.Character:SetAttribute("Aiming", value == true or nil) end -- #13 third-person aim tilt
 end
 
 function CombatService.IsAiming(player)

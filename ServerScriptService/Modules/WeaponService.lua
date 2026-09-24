@@ -1454,6 +1454,7 @@ end
 -- Holding a slot. Cancels a reload or a use in progress on whatever was held before.
 local function selectSlot(player, loadout, index)
 	loadout.reloading = false
+	if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 	loadout.reloadToken += 1
 	loadout.useToken += 1
 	loadout.using = nil
@@ -1530,6 +1531,7 @@ function WeaponService.TakeSlot(player, slotIndex)
 
 	if loadout.equipped == slotIndex then
 		loadout.reloading = false
+		if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 		loadout.reloadToken += 1
 		loadout.useToken += 1
 		loadout.using = nil
@@ -1656,6 +1658,7 @@ function WeaponService.SwapHeldForItem(player, itemId, amount)
 
 	-- Whatever was being done with the old slot stops with it.
 	loadout.reloading = false
+	if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 	loadout.reloadToken += 1
 	loadout.useToken += 1
 	loadout.using = nil
@@ -1815,6 +1818,7 @@ function WeaponService.Reload(player)
 	end
 
 	loadout.reloading = true
+	if player.Character then player.Character:SetAttribute("Reloading", def.reloadTime); player.Character:SetAttribute("ReloadEmpty", slot.mag <= 0) end -- #13: other clients pose this reload
 	loadout.reloadToken += 1
 	local token = loadout.reloadToken
 	WeaponService.Push(player)
@@ -1836,6 +1840,7 @@ function WeaponService.Reload(player)
 		slot.mag += moved
 		slot.reserve -= moved
 		loadout.reloading = false
+		if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 		WeaponService.Push(player)
 	end)
 end
