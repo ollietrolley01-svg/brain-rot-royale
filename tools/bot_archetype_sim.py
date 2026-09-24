@@ -53,7 +53,6 @@ import importlib.util
 import math
 import os
 import re
-import subprocess
 import sys
 
 from lupa import LuaRuntime
@@ -1494,11 +1493,16 @@ def main():
     runs = 4 if "--quick" in args else 8
     rev = args[args.index("--before") + 1] if "--before" in args else None
     if rev is None:
-        log = subprocess.run(["git", "-C", root, "log", "--format=%H", "--diff-filter=A", "--", "tools/bot_archetype_sim.py"],
-                             capture_output=True, text=True).stdout.split()
-        rev = (log[-1] + "~1") if log else "HEAD"
+        rev = perf.default_before(root, "tools/bot_archetype_sim.py")
     tree = read_tree(root, BOTSERVICE)
-    before_src = perf.read_rev(root, rev, BOTSERVICE)
+    try:
+        before_src = perf.read_rev(root, rev, BOTSERVICE)
+    except perf.NoRevision as err:
+        # No git: the working tree is its own baseline. The aim expectation and the rounds-a-minute
+        # comparison then measure the tree against itself (a planted fault is still measured against
+        # the unplanted tree, which is what --plant needs); only the stock-revision comparison is lost.
+        perf.no_before_note("bot_archetype_sim", err)
+        rev, before_src = "working tree: no git", tree
 
     before_rt = Runtime(root, before_src, before_src)
     before = measure(before_rt, runs, False)

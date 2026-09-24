@@ -10,9 +10,10 @@ Each part is the REAL function cut out of the source and run in lupa against a s
             second LEAVE is refused (no second body at the pier), the arena can no longer be streamed
             through FocusTarget -- and the next match's reset lets them spectate again.
   afk       MatchService's battle royale AFK rule (the `afk` table): a player who never moves is paid the
-            `afk` line only, not their placement; moving or hurting someone is playing; a player killed
-            before their first check is not idle. finishMatch and the leave path both pay through it,
-            and the 1 s loop checks only living participants.
+            `afk` line only, not their placement; moving, hurting someone, being hurt by someone, and
+            firing, reloading or using an item (WeaponService.NoteActivity, findings C2) are playing, a
+            storm tick is not; a player killed before their first check is not idle. finishMatch and the
+            leave path both pay through it, and the 1 s loop checks only living participants.
   loading   MatchService.IsPlaying is false while the match is Loading (everyone is already alive to
             IsAlive then), and Bootstrap's DropSlot and UseSelected ask it.
   leave     Bootstrap's invite-cooldown cleanup matches a leaving UserId exactly (it used a substring, so
@@ -35,6 +36,7 @@ MATCH = "ServerScriptService/Modules/MatchService.lua"
 BOOT = "ServerScriptService/Bootstrap.server.lua"
 BOTS = "ServerScriptService/Modules/BotService.lua"
 GAMEMODE = "ServerScriptService/Modules/GameMode.lua"
+WEAPONS = "ServerScriptService/Modules/WeaponService.lua"
 
 
 def luau_to_lua(source):
@@ -142,19 +144,31 @@ local env = setmetatable({
     },
     StateSync = { Push = function() end },
     CombatService = { OnDamage = function(fn) table.insert(listeners, fn) end },
+    WeaponService = {},
 }, { __index = _G })
 local afk = assert(load(src .. "\nreturn afk", "MatchService.afk", "t", env))()
 local function player(name) return { Name = name, isPlayer = true, root = { Position = vec(0, 0, 0) } } end
 local idle, runner, camper, early = player("Idle"), player("Runner"), player("Camper"), player("Early")
-for _, p in ipairs({ idle, runner, camper, early }) do env.participants[p] = true end
+local target, shooter, stormed = player("Target"), player("Shooter"), player("Stormed")
+for _, p in ipairs({ idle, runner, camper, early, target, shooter, stormed }) do env.participants[p] = true end
+local bot = { Name = "Bot" }
 for i = 1, 20 do
     runner.root.Position = vec(i * 10, 0, 0)
     if i % 2 == 0 then for _, fn in ipairs(listeners) do fn(camper, {}, 12) end end
-    for _, p in ipairs({ idle, runner, camper }) do afk.sample(p) end
+    -- Shot at by a bot, standing still (pinned behind cover, healing, trading shots it misses).
+    if i % 2 == 0 then for _, fn in ipairs(listeners) do fn(bot, target, 9) end end
+    -- Fires, reloads or drinks: WeaponService tells MatchService through OnActivity.
+    if i % 2 == 0 and env.WeaponService.OnActivity then env.WeaponService.OnActivity(shooter) end
+    -- The storm (no attacker) and its own grenade (attacker == victim) are not someone else's hit.
+    for _, fn in ipairs(listeners) do fn(nil, stormed, 4); fn(stormed, stormed, 4) end
+    for _, p in ipairs({ idle, runner, camper, target, shooter, stormed }) do afk.sample(p) end
 end
 check(afk.isIdle(idle) == true, "a player who never moved or hurt anyone in 20 checks is idle")
 check(afk.isIdle(runner) == false, "a player who moved is not")
 check(afk.isIdle(camper) == false, "a player who stood still but kept hitting people is not")
+check(afk.isIdle(target) == false, "a player who stood still being shot at is not")
+check(afk.isIdle(shooter) == false, "a player who stood still firing, reloading or using items is not")
+check(afk.isIdle(stormed) == true, "a player standing in the storm (or hurting only themselves) still is")
 check(afk.isIdle(early) == false, "a player killed before their first check is not")
 local card = afk.award(idle, 3)
 check(placements[idle] == nil and card.afk == true and card.crate == nil and card.coins == afkLine.coins and xp[idle] == afkLine.xp,
@@ -168,9 +182,9 @@ return out
 """
 
 
-def afk_rows(src):
+def afk_rows(src, weapons):
     block = between(src, "local afk = {", "\n-- Hurting someone is playing")
-    listener = between(src, "-- Hurting someone is playing", "\nend)\n") + "\nend)\n"
+    listener = between(src, "-- Hurting someone is playing", "\n-- Players' out-of-combat regen")
     cfg = open(os.path.join(ROOT, "ReplicatedStorage/Shared/MatchConfig.lua"), encoding="utf-8").read()
     m = re.search(r"afk = \{ coins = (\d+), xp = (\d+) \}", cfg)
     rows = run_lua(AFK, luau_to_lua(block + "\n" + listener), {"coins": int(m.group(1)), "xp": int(m.group(2))})
@@ -180,6 +194,10 @@ def afk_rows(src):
     leave = cut(src, "function MatchService.OnPlayerRemoving(")
     rows.append(("pcall(afk.award, player, placements[player])" in leave and "RewardService.AwardPlacement" not in leave,
                  "a spectator who leaves is paid through the AFK rule too"))
+    for head, what in (("function WeaponService.ConsumeAmmo(", "a round fired"), ("function WeaponService.Reload(", "a reload"),
+                       ("function WeaponService.StartUse(", "an item used")):
+        body = cut(weapons, head)
+        rows.append(("WeaponService.NoteActivity(player)" in body, "WeaponService tells the AFK rule about %s" % what))
     loop = between(src, "afk.tick += 1", "\n\t\t\tif state == \"Waiting\" then")
     rows.append(("Combatants.IsPlayer(token) and alive[token]" in loop and "pcall(afk.sample, token)" in loop,
                  "the 1 s loop checks living participants only (dead and spectating time is not sampled)"))
@@ -287,7 +305,7 @@ def all_rows(sources):
     rows = []
     for name, fn in (
         ("spectate", lambda: spectate_rows(sources[MATCH])),
-        ("afk", lambda: afk_rows(sources[MATCH])),
+        ("afk", lambda: afk_rows(sources[MATCH], sources[WEAPONS])),
         ("edges", lambda: edge_rows(sources[MATCH], sources[BOOT])),
         ("retire", lambda: retire_rows(sources[BOTS], sources[GAMEMODE])),
     ):
@@ -305,6 +323,12 @@ PLANTS = [
      "\t\taliveCount = 0\n\t\ttable.clear(leftSpectate)\n", "\t\taliveCount = 0\n"),
     ("an idle player paid their placement", MATCH, "\tif not afk.isIdle(player) then\n", "\tif true then\n"),
     ("hurting someone doesn't count as playing", MATCH, "\tif moved or record.busy then\n", "\tif moved then\n"),
+    ("being hurt doesn't count as playing (the old rule)", MATCH,
+     "\t\tafk.busy(attacker)\n\t\tafk.busy(victim)\n", "\t\tafk.busy(attacker)\n"),
+    ("the storm counts as playing", MATCH,
+     "if (dealt or 0) > 0 and attacker ~= nil and attacker ~= victim then", "if (dealt or 0) > 0 then"),
+    ("firing, reloading and items don't count", MATCH, "WeaponService.OnActivity = afk.busy\n", "WeaponService.OnActivity = function() end\n"),
+    ("a reload is not activity", WEAPONS, "\tloadout.reloading = true\n\tWeaponService.NoteActivity(player)\n", "\tloadout.reloading = true\n"),
     ("killed before the first check counts as idle", MATCH,
      "return record ~= nil and record.samples > 0 and record.active", "return record == nil or record.active"),
     ("finishMatch pays placements directly", MATCH, "or afk.award(token, rank)", "or RewardService.AwardPlacement(token, rank)"),
@@ -323,7 +347,7 @@ PLANTS = [
 def main():
     global ROOT
     ROOT = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "."
-    sources = {rel: open(os.path.join(ROOT, rel), encoding="utf-8").read() for rel in (MATCH, BOOT, BOTS, GAMEMODE)}
+    sources = {rel: open(os.path.join(ROOT, rel), encoding="utf-8").read() for rel in (MATCH, BOOT, BOTS, GAMEMODE, WEAPONS)}
     if "--plant" in sys.argv:
         caught = 0
         for label, rel, old, new in PLANTS:
