@@ -480,6 +480,9 @@ RunService.Heartbeat:Connect(function()
 
 	local rest = anchorRest[anchor]
 	if not rest then
+		-- Only this character's anchor matters: a new one means the old body is gone, even if its
+		-- Destroying never reached this client.
+		table.clear(anchorRest)
 		rest = anchor.Position
 		anchorRest[anchor] = rest
 		anchor.Destroying:Connect(function()

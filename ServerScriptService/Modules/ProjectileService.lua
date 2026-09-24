@@ -320,6 +320,25 @@ local function kickBodies(centre, radius, sourceId)
 	end
 end
 
+-- A combatant's team in a team mode, or nil. Required lazily and guarded, the way CompanionService
+-- does: ModeTeams is optional to this module.
+local modeTeams = nil
+local function teamOf(token)
+	if modeTeams == nil then
+		local module = script.Parent:FindFirstChild("ModeTeams")
+		local ok, result = false, nil
+		if module then
+			ok, result = pcall(require, module)
+		end
+		modeTeams = ok and type(result) == "table" and result or false
+	end
+	if not modeTeams or not modeTeams.TeamOf or token == nil then
+		return nil
+	end
+	local ok, team = pcall(modeTeams.TeamOf, token)
+	return ok and team or nil
+end
+
 -- The blast itself. `blast` = { id, kind, owner, weaponId, position, normal, damage, radius,
 -- innerRadius, wallDamage, direct = { token, bonus, headshot, multiplier }? }. Returns a list of
 -- { token, amount, scale, reach, headshot } for everyone it hurt, for the probe.
@@ -356,10 +375,9 @@ local function explode(blast)
 				amount *= SELF_SCALE
 			end
 			local taken = 0
-			-- A thrower who has left is no longer creditable, but their team still is: friendly fire
-			-- stays off for their round rather than reaching teammates as ownerless damage.
-			if owner ~= nil or blast.owner == nil or not CombatService.DamageVeto
-				or not CombatService.DamageVeto(blast.owner, victim.token, blast.weaponId) then
+			-- A thrower who has left is no longer creditable (and ModeTeams has forgotten them), but the
+			-- team stamped on the round at launch still keeps friendly fire off their teammates.
+			if owner ~= nil or blast.ownerTeam == nil or teamOf(victim.token) ~= blast.ownerTeam then
 				taken = CombatService.DealDamage(owner, victim.token, amount, blast.weaponId, headshot)
 			end
 			table.insert(dealt, { token = victim.token, amount = taken, scale = scale, reach = reach, headshot = headshot })
@@ -417,6 +435,9 @@ local function newEntry(ownerToken, character, kindName, spec, weaponId)
 		kindName = kindName,
 		spec = spec,
 		owner = ownerToken,
+		-- Stamped at launch: a thrower who leaves is forgotten by ModeTeams at once, and their round
+		-- still has to keep off their team.
+		ownerTeam = teamOf(ownerToken),
 		weaponId = weaponId,
 		gravity = workspace.Gravity,
 		age = 0,
@@ -472,6 +493,7 @@ local function burst(entry, position, normal, directToken, headshot)
 		id = entry.id,
 		kind = entry.kindName,
 		owner = entry.owner,
+		ownerTeam = entry.ownerTeam,
 		weaponId = entry.weaponId,
 		position = position,
 		normal = normal,

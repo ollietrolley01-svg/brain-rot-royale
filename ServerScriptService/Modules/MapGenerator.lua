@@ -706,7 +706,7 @@ function MapGenerator.Build(mapId)
 	ziplines.Name = "Ziplines"
 	ziplines.Parent = map
 	local plateaus = MapTerrain.Plateaus(terrain, ziplines, preset, radius, centers, townSpread, space, chestSpots, lootSpots,
-		MapGenerator.GroundHeightAt, plateauPlan)
+		MapGenerator.GroundHeightAt, plateauPlan, riverPlan)
 
 	-- Rolling ground between the towns — hills, ridges, craters, dunes on sand — kept clear of
 	-- the towns, the roads, the plateaus and the middle where the last circle lands.

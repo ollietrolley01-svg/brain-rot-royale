@@ -112,7 +112,9 @@ end
 
 -- Fills the plateaus `placed` by PlanPlateaus (planning them first if not given), then dresses
 -- each to its real top. Returns the list of { X, Z, radius, height, rampYaw } placed.
-function MapTerrain.Plateaus(terrain, parent, preset, radius, centers, townSpread, space, chestSpots, lootSpots, groundHeightAt, placed)
+-- `riverPlan` (optional, MapTerrain.PlanRiver's): the river isn't carved yet, so `space` can't see it;
+-- a zipline landing is kept off its planned channel and banks directly.
+function MapTerrain.Plateaus(terrain, parent, preset, radius, centers, townSpread, space, chestSpots, lootSpots, groundHeightAt, placed, riverPlan)
 	placed = placed or MapTerrain.PlanPlateaus(preset, radius, centers, townSpread, space)
 	for _, plateau in ipairs(placed) do
 		-- Filled to `height` less the surface lift; what the top actually reads as is measured below
@@ -158,7 +160,8 @@ function MapTerrain.Plateaus(terrain, parent, preset, radius, centers, townSprea
 		local rim = Vector3.new(x, height, z) + away * (size - 3)
 		for _, reach in ipairs({ 110, 90, 130 }) do
 			local lx, lz = rim.X + away.X * reach, rim.Z + away.Z * reach
-			if space:IsFree(lx, lz, 5) then
+			local wet = riverPlan ~= nil and MapTerrain.InRiver({ points = riverPlan.points, width = RIVER_WIDTH }, lx, lz, 40)
+			if not wet and space:IsFree(lx, lz, 5) then
 				local ground = groundHeightAt(lx, lz)
 				if ground < height - 12 then
 					local landing = Vector3.new(lx, ground, lz)
