@@ -176,13 +176,13 @@ local function countUp(textLabel, target, format)
 	textLabel.Text = format(0)
 end
 
-local function runCounters(token, isCurrent)
+local function runCounters(token, stillShowing)
 	local list = counters
 	counters = {}
 	task.spawn(function()
 		local started = os.clock()
 		local duration = 0.9
-		while isCurrent(token) do
+		while stillShowing(token) do
 			local t = math.clamp((os.clock() - started) / duration, 0, 1)
 			local eased = 1 - (1 - t) ^ 3
 			for _, entry in ipairs(list) do

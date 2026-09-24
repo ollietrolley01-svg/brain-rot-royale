@@ -27,3 +27,7 @@ scratchpad/
 
 # Scratch backups the tabs write before an edit (the fleet writes .pre-, not .pre_).
 *.pre-*
+
+# Python bytecode
+__pycache__/
+*.pyc

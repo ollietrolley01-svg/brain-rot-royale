@@ -145,13 +145,19 @@ function RangeService.Give(player, weaponId)
 			return false, "Couldn't hand you that."
 		end
 		-- GiveWeapon only puts a gun in your hands when they were empty; this is the gun you just
-		-- reached for, so hold it.
+		-- reached for, so hold it. If it isn't in the range loadout after all (the loadout was swapped
+		-- underneath us), say so rather than telling the player they got a gun they can't see.
+		local held = false
 		for index = 1, WeaponService.SlotCount do
 			local slot = ours.slots[index]
 			if slot and slot.kind == "weapon" and slot.id == weaponId then
 				WeaponService.Equip(player, index)
+				held = true
 				break
 			end
+		end
+		if not held then
+			return false, "Couldn't hand you that."
 		end
 		rangeState:FireClient(player, true)
 		return true, message

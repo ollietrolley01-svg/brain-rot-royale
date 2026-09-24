@@ -832,7 +832,7 @@ _phooks = [
     ("ServerScriptService/Bootstrap.server.lua", "BattlePassService.OnXp = ProgressionService.OnPassXp", "the OnXp wiring"),
     ("ServerScriptService/Bootstrap.server.lua", "MatchService.OnKillCredited = ProgressionService.OnKillCredited", "the OnKillCredited wiring"),
     ("ServerScriptService/Bootstrap.server.lua", "ProgressionService.OnProfileLoaded(player)", "the join hook"),
-    ("StarterPlayerScripts/MenuClient.client.lua", "ProgressionPanel.Render(content, profile, { rerender = renderTab })", "the Pass tab hub"),
+    ("StarterPlayerScripts/MenuClient.client.lua", "ProgressionPanel.Render(content, profile, { rerender = renderTab, noTabs = true })", "the Pass tab hub"),
     # Robux never turns into Brain Cells: purchased brainrots and pulls from Robux crates are logged as Purchased.
     ("ServerScriptService/Bootstrap.server.lua", "if pulled and result.purchased then", "the Robux crate pull check in openCrateFor"),
     ("ServerScriptService/Modules/ProgressionService.lua", "elseif state == ProgressionData.Purchased then", "ClaimIndex refusing Purchased entries"),
