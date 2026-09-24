@@ -2794,13 +2794,6 @@ local function blacklistLoot(bot, item, seconds, now)
 end
 
 local function lootAllowed(bot, item, distance, center, radius, now)
-	-- Tagged by the map as somewhere a bot can't get to (a chest on a summit steeper than the agent's
-	-- slope). The blacklist below still catches anything nobody tagged, but this costs nothing and
-	-- stops the walk before it starts.
-	if item:GetAttribute("BotIgnore") == true then
-		STATS.lootIgnored += 1
-		return false
-	end
 	local banned = bot.lootBlacklist[item]
 	if banned and now < banned then
 		return false
