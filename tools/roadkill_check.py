@@ -90,7 +90,7 @@ Combatants = {
     GetName = function(t) return tostring(t) end,
 }
 local teamOf, active = {}, false
-ModeTeams = { IsProtected = function() return false end }
+ModeTeams = { IsProtected = function() return false end, BreakProtection = function() end }
 load("local teamOf, active = ...\n" .. veto, "veto")(teamOf, false)
 MatchConfig = { CombatDamageScale = 1 }
 WeaponService = { AbsorbDamage = function(_, amount) return amount, 0 end }

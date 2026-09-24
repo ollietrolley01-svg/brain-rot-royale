@@ -442,7 +442,7 @@ local function startWorld(mapInfo)
 						if missing > 0 then
 							local inner = kind == "chest" and 20 or 10
 							local gap = kind == "chest" and 14 or 6
-							LootService.SeedAt(ModeTeams.BaseLootSpots(team, missing, inner, LootService.BaseRadius - 5, gap), kind)
+							LootService.SeedAt(ModeTeams.BaseLootSpots(team, missing, inner, LootService.BaseRadius - 5, gap, kind), kind)
 						end
 					end
 				end
