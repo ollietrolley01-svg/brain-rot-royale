@@ -12,7 +12,8 @@ What it proves: a victim strafing at BaseWalkSpeed, aimed at dead centre by a sh
 a ping over the cap is ruled on the present and misses; the rewind is computed from the server's own
 GetNetworkPing and nothing else on the Player is read; a bot shooter is never rewound; a body a
 piercing shot has passed is never struck again; the shooter-wins cover trade holds; a player's own
-Roblox hat no longer swallows a headshot; and CombatService's shot budget is untouched.
+Roblox hat no longer swallows a headshot; the ring buffer writes over its entries once full instead
+of allocating one per body per step; and CombatService's shot budget is untouched.
 
 What it cannot prove: real ping. GetNetworkPing is a parameter here; tools/hitreg_rewind_probe.lua
 measures it in a live session.
@@ -204,6 +205,37 @@ do
     note(name == "Head", "rewound shot at the top of the head, a queryable hat Handle over it: " .. tostring(name))
 end
 
+-- 9. The ring buffer reuses its entries once full (findings I10): after the first lap, Record allocates
+--    no sample tables, and every rewind above (1-8; a run past 20 steps reads reused entries) is unchanged.
+do
+    local history
+    for i = 1, 20 do
+        local name, value = debug.getupvalue(Lag.Record, i)
+        if name == nil then break end
+        if name == "history" then history = value end
+    end
+    Lag.Clear()
+    for k in pairs(registered) do registered[k] = nil end
+    local body, root = M.character("Ring", CFrame.new(0, 3, 0))
+    registered[body] = { isBot = true }
+    local n = Lag.Samples
+    for i = 1, n do M.clock = i * STEP; heartbeat() end
+    local first = {}
+    local entry = history and history[body]
+    for i = 1, n do first[i] = entry and entry.samples[i] end
+    for i = n + 1, 3 * n + 7 do
+        M.clock = i * STEP
+        rawget(root, "_props").CFrame = CFrame.new(i, 3, 0)
+        heartbeat()
+    end
+    local same = entry ~= nil and #entry.samples == n
+    for i = 1, n do same = same and entry.samples[i] == first[i] end
+    note(history ~= nil and same, string.format("after one lap the ring's %d sample tables are written over, not replaced", n))
+    local at = (3 * n + 2.5) * STEP
+    local p = Lag.RootAt(body, at, (3 * n + 7) * STEP).Position
+    note(math.abs(p.X - (3 * n + 2.5)) < 1e-6, string.format("...and a rewind into the reused entries is exact (x %.3f, want %.1f)", p.X, 3 * n + 2.5))
+end
+
 return out
 """
 
@@ -324,6 +356,9 @@ PLANTS = [
     ("ignore the shot's filter", [("if character.Parent and not excluded[character] then", "if character.Parent then"), ("if not skip then", "if true then")]),
     ("hats swallow headshots", [("part.CanQuery and part:FindFirstAncestorWhichIsA(\"Accessory\") == nil", "part.CanQuery")]),
     ("no rewind at all", [("sample.t <= at", "sample.t <= math.huge")]),
+    ("a new sample table every step (the old Record)", [("\t\t\tif sample then\n\t\t\t\tsample.cframe, sample.t = root.CFrame, now\n\t\t\telse",
+                                                          "\t\t\tif false then\n\t\t\telse")]),
+    ("a reused entry keeps its old time", [("sample.cframe, sample.t = root.CFrame, now", "sample.cframe = root.CFrame")]),
 ]
 
 

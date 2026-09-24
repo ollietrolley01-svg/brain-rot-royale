@@ -1165,9 +1165,17 @@ local function installGlobals()
 		defer = function(fn, ...)
 			return _G.task.spawn(fn, ...)
 		end,
-		delay = function() return nil end,
-		wait = function()
+		-- Delays and waits are RECORDED, and run only when a check calls W.advance: W.frame does not run
+		-- them, so every check that never advances sees exactly the old never-resumed behaviour.
+		delay = function(t, fn, ...)
+			local args = table.pack(...)
+			table.insert(W.timers, { at = W.now + (tonumber(t) or 0), fn = function() fn(table.unpack(args, 1, args.n)) end })
+			return nil
+		end,
+		wait = function(t)
 			if coroutine.isyieldable() then
+				local co = coroutine.running()
+				table.insert(W.timers, { at = W.now + (tonumber(t) or 0), co = co })
 				coroutine.yield()
 			end
 			return 0.03
@@ -1300,6 +1308,40 @@ function W.lastToast()
 		end
 	end
 	return ""
+end
+
+-- Moves the clock on by `seconds` and runs the task.delay / task.wait timers that fall due, in time
+-- order (a timer a woken one schedules inside the span runs too). No frames are stepped.
+W.timers = {}
+function W.advance(seconds)
+	local target = W.now + seconds
+	while true do
+		local best, index = nil, nil
+		for i, timer in ipairs(W.timers) do
+			if timer.at <= target and (best == nil or timer.at < best.at) then
+				best, index = timer, i
+			end
+		end
+		if not best then
+			break
+		end
+		table.remove(W.timers, index)
+		W.now = math.max(W.now, best.at)
+		local ok, err
+		if best.co then
+			if coroutine.status(best.co) == "suspended" then
+				ok, err = coroutine.resume(best.co)
+			else
+				ok = true
+			end
+		else
+			ok, err = pcall(best.fn)
+		end
+		if not ok then
+			note(W.errors, "timer: " .. tostring(err))
+		end
+	end
+	W.now = target
 end
 
 function W.frame(n)

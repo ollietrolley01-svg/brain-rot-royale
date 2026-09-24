@@ -1639,6 +1639,19 @@ local SPIN_TIME = 4
 -- How big the wheel is, measured from the axle to the rim.
 local WHEEL_RADIUS = 11
 
+-- Who hears "X spun Y on the Daily Spin!": everyone else still in the lobby. Not a player in a match
+-- (InMatch, MatchService's own tag, spectators included): a toast about a lobby wheel landing mid-fight
+-- is noise, and it took the one toast slot over whatever the match had just said (findings C6).
+function LobbyService.SpinWitnesses(spinner, players)
+	local list = {}
+	for _, other in ipairs(players) do
+		if other ~= spinner and other:GetAttribute("InMatch") ~= true then
+			table.insert(list, other)
+		end
+	end
+	return list
+end
+
 local function buildDailySpin(lobby, base)
 	-- No booth: the wheel stands in the open on its own dais, twice the size it was, so it reads
 	-- from across the plaza.
@@ -1860,10 +1873,8 @@ local function buildDailySpin(lobby, base)
 				playgroundFx:FireAllClients({ kind = "spin", position = hub.Position, color = segment and segment.color or GOLD })
 				-- The prize is announced when the wheel stops, not when it starts.
 				StateSync.Notify(player, message or "Spun!")
-				for _, other in ipairs(Players:GetPlayers()) do
-					if other ~= player then
-						StateSync.Notify(other, string.format("%s spun %s on the Daily Spin!", player.DisplayName, segment and segment.label or "a prize"))
-					end
+				for _, other in ipairs(LobbyService.SpinWitnesses(player, Players:GetPlayers())) do
+					StateSync.Notify(other, string.format("%s spun %s on the Daily Spin!", player.DisplayName, segment and segment.label or "a prize"))
 				end
 			end
 		end)

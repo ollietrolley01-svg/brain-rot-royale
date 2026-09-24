@@ -42,6 +42,8 @@ def block(src):
     parts = [
         "local pushQueued = {}\n",
         cut(src, "function WeaponService.PushSoon("),
+        # ConsumeAmmo tells the AFK rule a round went (findings C2); nothing listens here.
+        cut(src, "function WeaponService.NoteActivity("),
         cut(src, "function WeaponService.ConsumeAmmo("),
         cut(src, "function WeaponService.AbsorbDamage("),
         # Clear, with the loadout and shield bookkeeping it also does.

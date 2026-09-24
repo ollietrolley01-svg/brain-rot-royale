@@ -91,6 +91,16 @@ local function warnIfUnwired(where)
 	end
 end
 
+-- Every circle Start walks: MatchConfig.StormPhases, then the sudden-death collapse to nothing. Without
+-- the last one a battle royale could not end while two players held the final circle.
+function StormService.Phases()
+	local phases = table.clone(MatchConfig.StormPhases)
+	if MatchConfig.StormSuddenDeath then
+		table.insert(phases, MatchConfig.StormSuddenDeath)
+	end
+	return phases
+end
+
 local function broadcast()
 	stormChanged:FireAllClients({
 		center = state.center,
@@ -98,7 +108,7 @@ local function broadcast()
 		targetCenter = state.targetCenter,
 		targetRadius = state.targetRadius,
 		phase = state.phase,
-		totalPhases = #MatchConfig.StormPhases,
+		totalPhases = #StormService.Phases(),
 		status = state.status,
 		secondsLeft = math.max(0, math.floor(state.secondsLeft)),
 		damagePerSecond = state.damagePerSecond,
@@ -232,7 +242,7 @@ function StormService.Start(radius)
 	broadcast()
 
 	task.spawn(function()
-		for phaseIndex, phase in ipairs(MatchConfig.StormPhases) do
+		for phaseIndex, phase in ipairs(StormService.Phases()) do
 			if not running or generation ~= myGeneration then
 				return
 			end
@@ -281,6 +291,7 @@ function StormService.Start(radius)
 			broadcast()
 		end
 
+		-- After sudden death the circle is gone (radius 0): everyone still standing is outside it.
 		state.status = "Final"
 		broadcast()
 	end)
