@@ -1154,6 +1154,68 @@ CosmeticData.Items = {
 		color = Color3.fromRGB(36, 112, 134),
 		description = "Crate exclusive. Swims through space. Glides through lobbies.",
 	},
+
+	-- Kill animations (#24, 2026-09-24): what plays where a body falls when the owner gets the
+	-- kill. KillAnimService fires the equipped one to every client and KillAnimFxClient builds it,
+	-- keyed by these ids, with a cap on parts and particles and a lifetime under three seconds.
+	-- Priced inside the same rarity bands as the skins, auras and parachutes. None is a crate
+	-- exclusive, because no crate draws this kind yet: a crateOnly one could never be had.
+	KillConfettiPop = {
+		name = "Party Popper",
+		kind = "KillAnimation",
+		rarity = "Common",
+		price = 3000,
+		color = Color3.fromRGB(255, 120, 190),
+		description = "Pop. Streamers. Nobody asked.",
+	},
+	KillRotPuddle = {
+		name = "Rot Puddle",
+		kind = "KillAnimation",
+		rarity = "Common",
+		price = 3500,
+		color = Color3.fromRGB(150, 196, 96),
+		description = "They melt into a bubbling green puddle. Mind your shoes.",
+	},
+	KillBigBonk = {
+		name = "Big Bonk",
+		kind = "KillAnimation",
+		rarity = "Uncommon",
+		price = 7000,
+		color = Color3.fromRGB(168, 122, 72),
+		description = "A bat the size of a lamppost comes down from the sky. Bonk.",
+	},
+	KillRotGhost = {
+		name = "Rot Ghost",
+		kind = "KillAnimation",
+		rarity = "Uncommon",
+		price = 8000,
+		color = Color3.fromRGB(214, 236, 255),
+		description = "Their ghost floats up, waves, and fades. Very polite.",
+	},
+	KillDrumStamp = {
+		name = "Drum Stamp",
+		kind = "KillAnimation",
+		rarity = "Rare",
+		price = 15000,
+		color = Color3.fromRGB(206, 150, 80),
+		description = "A spinning war drum slams down and stamps a ring in the ground.",
+	},
+	KillCoinFountain = {
+		name = "Coin Fountain",
+		kind = "KillAnimation",
+		rarity = "Rare",
+		price = 16000,
+		color = Color3.fromRGB(255, 196, 64),
+		description = "A fountain of SahurCoins. Sadly not real ones.",
+	},
+	KillBrainBlast = {
+		name = "Brain Blast",
+		kind = "KillAnimation",
+		rarity = "Epic",
+		price = 30000,
+		color = Color3.fromRGB(255, 150, 176),
+		description = "A giant brain swells, wobbles and pops in a pink shockwave.",
+	},
 }
 
 for id, item in pairs(CosmeticData.Items) do

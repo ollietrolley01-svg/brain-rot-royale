@@ -551,7 +551,7 @@ local function onDetonate(info)
 	if distance <= (CUE_REACH[cue] or 800) then
 		Sfx.PlayAt(cue, position, 0.12)
 	elseif distance < FAR_RUMBLE then
-		Sfx.Play("ExplosionFar", 0.2)
+		Sfx.PlayDistant("ExplosionFar", position, 0.2)
 	end
 
 	-- The kick: hard at point blank, nothing past a few radii. A smaller blast kicks less.

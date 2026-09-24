@@ -136,6 +136,7 @@ function StateSync.Build(player)
 			aura = data.Cosmetics.aura,
 			accessory = data.Cosmetics.accessory,
 			parachute = data.Cosmetics.parachute,
+			killAnimation = data.Cosmetics.killAnimation,
 		},
 		pass = {
 			xp = data.Pass.xp,

@@ -13,8 +13,12 @@ picture (see the end of this docstring).
 Checks (each carries a permanent planted fault, run every time):
   * FLUSH: pairs of box faces pointing the same way, within 0.03 of one plane and overlapping
     (sampled 5x5 over each face). That is the z-fight shape. Planted: two slabs 0.01 apart.
-  * FOOTPRINT: every box corner of an egg inside its declared `footprint` radius (plus 0.1).
-    Planted: a part 3 studs past the SixSeven footprint.
+  * FOOTPRINT: every visible part of an egg inside its declared `footprint` radius (plus 0.1),
+    measured shape-true (cylinders round their end circles, balls as centre plus radius, sphere
+    meshes over their ellipsoid, everything else by its corners). Planted: a part 3 studs past the
+    SixSeven footprint; a 46-stud disc must read 23, not its box's 32.5; a ball reads centre + radius.
+  * FLUSH and FOOTPRINT are asserted for EVERY egg (#42), each line naming how many parts it examined.
+    Against the tree before #42 this fails 10 checks (Camp 22 flush, Obby 16, Arrest 26.2/20, ...).
   * ARREST ARMS (#41): every limb (a decor Fabric block, square across, over twice as long as it
     is wide) has a Ball joint over BOTH ends, so no arm stops in mid-air. Planted: a limb with no
     joint at its far end.
@@ -131,18 +135,60 @@ function A.flushPairs(parts)
 	return pairsFound, list
 end
 
-function A.reach(model, origin)
+-- How far one part's visible surface reaches across the ground from `origin`. Shape-true, because
+-- the question is "does the egg stay on its levelled site" and a box's corners overstate a round
+-- thing by up to 41% (a 46-stud ripple disc read 32.5 against its true 23): a Cylinder is sampled
+-- round both end circles (its length is its X axis), a Ball is its centre plus radius, a block with
+-- a sphere mesh is sampled over its ellipsoid, and everything else (blocks, wedges) by its corners.
+local function partReach(part, origin)
+	local c, s = part.CFrame, part.Size
 	local worst = 0
-	for _, part in ipairs(model:GetDescendants()) do
-		if part:IsA("BasePart") and part.Transparency < 1 then
-			local c, s = part.CFrame, part.Size
-			for _, x in ipairs({ -1, 1 }) do for _, y in ipairs({ -1, 1 }) do for _, z in ipairs({ -1, 1 }) do
-				local p = c * Vector3.new(x * s.X / 2, y * s.Y / 2, z * s.Z / 2)
-				worst = math.max(worst, Vector3.new(p.X - origin.X, 0, p.Z - origin.Z).Magnitude)
-			end end end
+	local function at(p)
+		worst = math.max(worst, Vector3.new(p.X - origin.X, 0, p.Z - origin.Z).Magnitude)
+	end
+	local mesh = part:FindFirstChildOfClass("SpecialMesh")
+	if part.Shape == "PartType.Cylinder" then
+		local r = math.min(s.Y, s.Z) / 2
+		for _, x in ipairs({ -1, 1 }) do
+			for k = 0, 63 do
+				local t = k / 64 * math.pi * 2
+				at(c * Vector3.new(x * s.X / 2, math.cos(t) * r, math.sin(t) * r))
+			end
 		end
+	elseif part.Shape == "PartType.Ball" then
+		local p = c.Position
+		worst = Vector3.new(p.X - origin.X, 0, p.Z - origin.Z).Magnitude + math.min(s.X, s.Y, s.Z) / 2
+	elseif mesh then
+		for i = 0, 8 do
+			local phi = i / 8 * math.pi
+			for k = 0, 31 do
+				local t = k / 32 * math.pi * 2
+				at(c * Vector3.new(math.sin(phi) * math.cos(t) * s.X / 2, math.cos(phi) * s.Y / 2, math.sin(phi) * math.sin(t) * s.Z / 2))
+			end
+		end
+	else
+		for _, x in ipairs({ -1, 1 }) do for _, y in ipairs({ -1, 1 }) do for _, z in ipairs({ -1, 1 }) do
+			at(c * Vector3.new(x * s.X / 2, y * s.Y / 2, z * s.Z / 2))
+		end end end
 	end
 	return worst
+end
+
+-- Returns the worst reach, how many visible parts were examined, and up to 20 of those past `limit`.
+function A.reach(model, origin, limit)
+	local worst, examined, over = 0, 0, {}
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Transparency < 1 then
+			examined = examined + 1
+			local r = partReach(part, origin)
+			worst = math.max(worst, r)
+			if limit and r > limit and #over < 20 then
+				table.insert(over, string.format("%s %s(%.2f,%.2f,%.2f)@(%.1f,%.1f,%.1f) reach %.2f", part.Material, part.Shape,
+					part.Size.X, part.Size.Y, part.Size.Z, part.Position.X - origin.X, part.Position.Y, part.Position.Z - origin.Z, r))
+			end
+		end
+	end
+	return worst, examined, over
 end
 
 function A.limbsWithoutJoints(model)
@@ -256,10 +302,14 @@ def run_eggs(source):
         model = models[index]
         origin = lua.eval(f"Vector3.new({(index - 1) * 90}, 0, 0)")
         parts = [d for d in model.GetDescendants(model).values() if d.IsA(d, "BasePart")]
-        flush, examples = analysis.flushPairs(analysis.boxes(model))
+        boxes = analysis.boxes(model)
+        flush, examples = analysis.flushPairs(boxes)
+        footprint = footprints.get(model.Name)
+        reach, examined, over = analysis.reach(model, origin, (footprint or 0) + 0.1)
         result["eggs"][model.Name] = {
-            "parts": len(parts), "flush": flush, "examples": list(examples.values()),
-            "reach": analysis.reach(model, origin), "footprint": footprints.get(model.Name), "model": model, "origin": origin,
+            "parts": len(parts), "boxes": len(list(boxes.values())), "flush": flush, "examples": list(examples.values()),
+            "reach": reach, "reached": examined, "over": list(over.values()),
+            "footprint": footprint, "model": model, "origin": origin,
         }
     return lua, analysis, result
 
@@ -345,6 +395,16 @@ def main():
               + (f"  e.g. {e['examples'][:3]}" if e["flush"] else ""))
     check(now["warnings"] == 0 and len(now["eggs"]) == 10, f"all {len(now['eggs'])} eggs build with {now['warnings']} warnings")
 
+    # #42: every egg, not just the ones last worked on, is held at zero flush pairs and inside its
+    # declared footprint. Each line names how many parts it examined, so a filter that matched nothing
+    # can't read as a clean sweep.
+    for name, e in now["eggs"].items():
+        check(e["boxes"] > 0 and e["flush"] == 0,
+              f"{name}: {e['flush']} flush face pairs among {e['boxes']} boxes" + (f"  e.g. {e['examples'][:2]}" if e["flush"] else ""))
+        check(e["footprint"] is not None and e["reached"] > 0 and e["reach"] <= e["footprint"] + 0.1,
+              f"{name}: {e['reached']} visible parts reach {e['reach']:.2f} from its centre, footprint {e['footprint']}"
+              + (f"  past it: {e['over'][:2]}" if e["over"] else ""))
+
     six = now["eggs"]["SixSeven"]
     check(six["flush"] == 0, f"SixSeven: {six['flush']} flush face pairs among {len(list(A.boxes(six['model']).values()))} boxes")
     check(six["reach"] <= six["footprint"] + 0.1, f"SixSeven: reaches {six['reach']:.2f} from its centre, footprint {six['footprint']}")
@@ -379,6 +439,21 @@ def main():
     end""")(A, six["model"], six["origin"])
     check(planted["flush"] == 1, f"planted: two slabs 0.01 apart give {planted['flush']} flush pair (want 1)")
     check(planted["reach"] > six["footprint"] + 0.1, f"planted: a part past the footprint reads as reach {planted['reach']:.1f}")
+    # The shape-true reach both ways: a flat disc 46 across reads its true 23 (a box's corners said
+    # 32.5), and the same disc is still caught past a 14-stud footprint; a ball's reach is its centre
+    # plus its radius.
+    disc, ball = lua.eval("""function(...)
+        local A = ...
+        local f = Instance.new('Folder')
+        local d = Instance.new('Part') d.Shape = 'PartType.Cylinder' d.Size = Vector3.new(0.2, 46, 46)
+        d.CFrame = CFrame.new(0, 0.4, 0) * CFrame.Angles(0, 0, math.pi / 2) d.Parent = f
+        local disc = A.reach(f, Vector3.new(0, 0, 0))
+        d.Parent = nil
+        local b = Instance.new('Part') b.Shape = 'PartType.Ball' b.Size = Vector3.new(3, 3, 3) b.CFrame = CFrame.new(10, 2, 0) b.Parent = f
+        return disc, (A.reach(f, Vector3.new(0, 0, 0)))
+    end""")(A)
+    check(abs(disc - 23) < 0.05 and disc > 14.1, f"planted: a disc 46 across reads reach {disc:.2f} (want 23, and past a 14 footprint)")
+    check(abs(ball - 11.5) < 1e-6, f"planted: a ball 3 across centred 10 out reads reach {ball:.2f} (want 11.50)")
     check(A.gloveClearance(six["model"], 1.5) < 0, "planted: a cap 1.5 higher is reported as inside a bobbing glove")
     bare_planted = lua.eval("""function(...)
         local A, model = ...

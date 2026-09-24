@@ -28,6 +28,8 @@ local UiKit = require(script.Parent:WaitForChild("UiKit"))
 local UiParts = require(script.Parent:WaitForChild("UiParts"))
 local MergeDialog = require(script.Parent:WaitForChild("MergeDialog"))
 local ProgressionPanel = require(script.Parent:WaitForChild("ProgressionPanel"))
+-- #78: which HUD button opens which tabs, each tab's look, row previews and the Kill Animations tab.
+local MenuScreens = require(script.Parent:WaitForChild("MenuScreens"))
 
 local UserInputService = game:GetService("UserInputService")
 
@@ -204,7 +206,7 @@ end
 
 -- Returns the row's button container so callers can append their own buttons.
 local function makeRow(order, title, titleColor, subtitle)
-	local narrow = narrowContent()
+	local narrow = (narrowContent())
 	local row = create("Frame", {
 		Size = UDim2.new(1, -8, 0, narrow and 112 or 64),
 		BackgroundColor3 = C.Panel,
@@ -258,8 +260,12 @@ local function makeRow(order, title, titleColor, subtitle)
 end
 
 local function addButton(parent, order, text, color, onClick, enabled)
+	-- Stacked, a row's strip is the row less 28, which on a 390 px phone is 285 px: three 94 px buttons
+	-- and their gaps are 294, and the Pass header's DAILY SPIN ran off the left. There a button takes a
+	-- third of the strip, never more than 94 (the constraint), so one or two look exactly as before.
+	local stackedRow = (narrowContent())
 	local button = create("TextButton", {
-		Size = UDim2.fromOffset(94, 38),
+		Size = stackedRow and UDim2.new(1 / 3, -4, 0, 38) or UDim2.fromOffset(94, 38),
 		BackgroundColor3 = enabled == false and C.PanelAlt or color,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
@@ -269,7 +275,7 @@ local function addButton(parent, order, text, color, onClick, enabled)
 		AutoButtonColor = enabled ~= false,
 		LayoutOrder = order,
 		Parent = parent,
-	}, { rounded(8) })
+	}, { rounded(8), stackedRow and create("UISizeConstraint", { MaxSize = Vector2.new(94, 38) }) or nil })
 
 	if enabled ~= false and onClick then
 		button.Activated:Connect(function()
@@ -1383,9 +1389,13 @@ local function renderCrates()
 					end
 				end
 			end
+			-- As many as the text column holds: five are 226 px, and a 320 px phone's column is 179.
+			local fits = narrow and math.max(1, math.floor((contentWidth - 8 + textWidth + 4) / 46)) or #best
 			for position, def in ipairs(best) do
-				local photo = brainrotPhoto(card, def, 42)
-				photo.Position = UDim2.fromOffset(textX + (position - 1) * 46, narrow and (106 + shift) or 70)
+				if position <= fits then
+					local photo = brainrotPhoto(card, def, 42)
+					photo.Position = UDim2.fromOffset(textX + (position - 1) * 46, narrow and (106 + shift) or 70)
+				end
 			end
 		else
 			-- Item crates: what they hold, and how much of that set you already own.
@@ -1409,7 +1419,9 @@ local function renderCrates()
 			Parent = card,
 		}, {
 			create("UIGridLayout", {
-				CellSize = UDim2.fromOffset(95, 39),
+				-- Two across in the column, never wider than 95: at 95 a 320 px phone's 179 px column
+				-- wrapped OPEN onto a second row, below the bottom of the card.
+				CellSize = UDim2.fromOffset(narrow and math.min(95, math.floor((contentWidth - 8 + textWidth - 6) / 2)) or 95, 39),
 				CellPadding = UDim2.fromOffset(6, 6),
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
@@ -1555,12 +1567,6 @@ end
 -- find. Buyable items that aren't in stock right now are left out, with a note that more rotate in.
 local function renderCosmetics()
 	stockHeader(0, "SHOP  •  a new selection every 5 minutes, rarer items less often")
-	-- Loaded here rather than at the top: the main chunk is at Luau's 200-local limit. require caches, and a
-	-- module that fails to load just costs the rows their previews.
-	local okPreview, cosmeticPreview = pcall(require, Shared:WaitForChild("CosmeticPreview"))
-	if not okPreview then
-		cosmeticPreview = nil
-	end
 	local cosmetics = profile and profile.cosmetics
 	local sections = {
 		{ title = "ON SALE NOW", items = {} },
@@ -1573,7 +1579,10 @@ local function renderCosmetics()
 	local rotatingOut = 0
 
 	for _, item in ipairs(sortedCosmetics()) do
-		if cosmetics and cosmetics.owned[item.id] then
+		if item.kind == MenuScreens.KillAnimationKind then
+			-- Nothing: they have their own tab (#24) and are bought and equipped there. Listed here as
+			-- well they would be counted twice, and in the "more rotate through" line besides.
+		elseif cosmetics and cosmetics.owned[item.id] then
 			table.insert(sections[2].items, item)
 		elseif item.rankOnly then
 			table.insert(sections[5].items, item)
@@ -1610,7 +1619,8 @@ local function renderCosmetics()
 			order += 1
 			local id = item.id
 			local equipped = cosmetics
-				and (cosmetics.gunSkin == id or cosmetics.aura == id or cosmetics.accessory == id or cosmetics.parachute == id)
+				and (cosmetics.gunSkin == id or cosmetics.aura == id or cosmetics.accessory == id or cosmetics.parachute == id
+					or cosmetics.killAnimation == id)
 
 			local subtitle
 			if item.kind == "Accessory" then
@@ -1620,20 +1630,15 @@ local function renderCosmetics()
 			end
 
 			local buttons = makeRow(order, item.name, item.rarity and Rarity.Color(item.rarity) or item.color, subtitle)
-			if item.kind == "Parachute" then
+			-- #78, previews everywhere: every row has one now, stacked rows included. A stacked row used to
+			-- go without, because the only spot was the wide row's, where a stacked subtitle runs; the
+			-- stacked spot is bottom left, level with the right-aligned button. Parachutes keep their own
+			-- swinging preview on a wide row. Each tears itself down with the row.
+			local stacked = buttons.Parent.Size.Y.Offset > 64
+			if item.kind == "Parachute" and not stacked then
 				parachutePreview(buttons.Parent, id)
-			elseif cosmeticPreview and buttons.Parent.Size.Y.Offset <= 64 then
-				-- Accessories, gun skins and auras get a live preview in the same spot as a parachute's
-				-- (Shared/CosmeticPreview, finished and never hooked up). Only on a wide row: a stacked
-				-- one on a narrow screen runs its subtitle under that spot. It tears itself down with the row.
-				local holder = create("Frame", {
-					AnchorPoint = Vector2.new(1, 0.5),
-					Position = UDim2.new(1, -118, 0.5, 0),
-					Size = UDim2.fromOffset(72, 56),
-					BackgroundTransparency = 1,
-					Parent = buttons.Parent,
-				}, { rounded(8) })
-				pcall(cosmeticPreview.Fill, holder, id)
+			else
+				MenuScreens.RowPreview(buttons.Parent, id, stacked)
 			end
 
 			if sectionIndex == 5 then
@@ -2569,13 +2574,16 @@ local function sliderRow(order, entry)
 	local track = create("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -84, 0.5, 0),
-		Size = UDim2.fromOffset(240, 10),
+		-- 240 wide where there is room, and otherwise what is left right of the label (which takes
+		-- 0.45 of the row). A flat 240 plus the 84 for the value ran 11 px off the left of a 313 px row
+		-- on a 390 px phone, across the setting's own name.
+		Size = UDim2.new(0.55, -92, 0, 10),
 		BackgroundColor3 = C.PanelAlt,
 		BorderSizePixel = 0,
 		AutoButtonColor = false,
 		Text = "",
 		Parent = row,
-	}, { rounded(5) })
+	}, { rounded(5), create("UISizeConstraint", { MaxSize = Vector2.new(240, 10) }) })
 	local fill = create("Frame", {
 		Size = UDim2.fromScale(0, 1),
 		BackgroundColor3 = C.Accent,
@@ -2729,10 +2737,17 @@ local function renderStyleCrates()
 		-- best and three when the panel is narrow, and the row has to be tall enough for the worst
 		-- case before the label is measured.
 		local lineHeight = UiKit.Type.Caption.Size + 6
+		-- Measured, not assumed: three lines was the worst case down to about 360 px, and on a 320 px
+		-- phone the odds wrap to four and ran out of the bottom of the row. The column's width is
+		-- splitRow's own (media 72 or 102, 16 padding, and the three buttons beside the text when wide).
+		local oddsText = table.concat(CrateData.OddsLine(crate, luck, false), "   ")
+		local oddsColumn = width < 560 and (width - 16 - 72 - 12 - 16) or (width - 16 - 102 - 12 - (92 + 104 + 96 + 16) - 12 - 16)
+		local oddsHeight = game:GetService("TextService"):GetTextSize(oddsText, UiKit.Type.Caption.Size, UiKit.Type.Caption.Font,
+			Vector2.new(math.max(oddsColumn, 80), 10000)).Y
 		local row = UiParts.splitRow(content, {
 			width = width,
 			mediaInstance = crateIcon(nil, crate.color or Rarity.Color(tier), 102, tier),
-			textHeight = UiKit.Type.Heading.Size + 6 + lineHeight * 4,
+			textHeight = UiKit.Type.Heading.Size + 6 + lineHeight * 2 + math.max(lineHeight * 2, oddsHeight + 6),
 			layoutOrder = index,
 			actions = actions,
 		})
@@ -2744,7 +2759,7 @@ local function renderStyleCrates()
 		-- the Style Crate's odds, the two rarities somebody spending 8,000 coins is buying for. A
 		-- displayed probability on something sold may never be cut off, so this label grows to fit
 		-- (AutomaticSize) and truncation is off outright.
-		UiParts.text(row.Text, UiKit.Type.Caption, table.concat(CrateData.OddsLine(crate, luck, false), "   "),
+		UiParts.text(row.Text, UiKit.Type.Caption, oddsText,
 			UiKit.Role.Text, {
 				Size = UDim2.new(1, 0, 0, 0),
 				AutomaticSize = Enum.AutomaticSize.Y,
@@ -2766,6 +2781,25 @@ local TABS = {
 	{ key = "Crates", label = "Crates", render = renderCrates },
 	{ key = "Style", label = "Style Crates", render = renderStyleCrates },
 	{ key = "Cosmetics", label = "Cosmetics", render = renderCosmetics },
+	-- #24. Drawn from CosmeticData.OfKind("KillAnimation") with this file's own rows, and bought and
+	-- equipped through the same two remotes as every other cosmetic.
+	{ key = "KillAnimations", label = "Kill Animations", render = function()
+		MenuScreens.RenderKillAnimations({
+			profile = profile,
+			makeRow = makeRow,
+			addButton = addButton,
+			emptyMessage = emptyMessage,
+			stockHeader = stockHeader,
+			formatNumber = formatNumber,
+			narrow = (narrowContent()),
+			buy = function(id)
+				invoke(buyCosmetic, id)
+			end,
+			equip = function(id)
+				invoke(equipCosmetic, id)
+			end,
+		})
+	end },
 	-- Oliver 09-22 14:15: rank, mastery and the cell shop were all under the Pass tab. Each progression
 	-- page is its own tab now; they share the Pass renderer, which hands every page but PASS to
 	-- ProgressionPanel.
@@ -2779,63 +2813,20 @@ local TABS = {
 	{ key = "Settings", label = "Settings", render = renderSettings },
 }
 
--- The eight tabs, handed to the shell as destinations. The old strip was eight 85x34 buttons in a
--- 728 px row -- under the 44 px touch target, with no room for a ninth -- and the shell draws them
--- as a rail, an icon rail or a bottom bar depending on the screen. The glyphs and subtitles are new;
--- everything else, including which renderer each one runs, is unchanged.
---
--- BEFORE YOU ADD A DESTINATION, the arithmetic that decides this list:
---
--- On the `tall` version at 320 px wide the bottom bar fits FIVE cells per row at a full 44 px touch
--- target. Eight entries is already two rows, 112 px of a 412 px panel -- 27% of the screen spent on
--- navigation. Ten would be three rows and 38%, which is not a menu, it is a bar with a view of some
--- content. So `large` and `short` carry every entry flat, and `tall` carries five
--- (COLLECTION, CRATES, STYLE, PROGRESS, SHOP) with everything else living inside one of them:
--- cosmetic crates are a tier filter inside CRATES, kill animations sit inside STYLE.
---
--- Adding a ninth or tenth flat entry is fine for large and short. Adding a SIXTH tall destination
--- costs a whole row of the smallest screen in the game, so do that only with a measurement in hand.
-local DESTINATION_LOOK = {
-	Brainrots = { glyph = "★", sub = "Your collection" },
-	Trade = { glyph = "⇄", sub = "Swap with players" },
-	Crates = { glyph = "▣", sub = "Open and buy" },
-	-- `Style` had no entry, so the cosmetic-crates tab drew in the rail with an empty icon slot and
-	-- no subtitle -- it was added to TABS after DESTINATION_LOOK was written and nobody noticed,
-	-- because the rail is the one place the omission shows. One line, and the ninth tab stops
-	-- looking like a bug. The #78 revamp replaces this whole list; until then it should be right.
-	Style = { glyph = "✦", sub = "Cosmetic crates" },
-	Cosmetics = { glyph = "◆", sub = "Skins and auras" },
-	Pass = { glyph = "▲", sub = "Brainrot Pass" },
-	Rank = { glyph = "★", sub = "Rot Rank" },
-	Mastery = { glyph = "◎", sub = "Gun mastery" },
-	Index = { glyph = "▦", sub = "Every brainrot" },
-	CellShop = { glyph = "✚", sub = "Spend Brain Cells" },
-	Quests = { glyph = "✓", sub = "Daily and weekly" },
-	Robux = { glyph = "$", sub = "Robux" },
-	Settings = { glyph = "⚙", sub = "Keys and audio" },
-}
-
--- Oliver, 2026-09-22 13:59-14:00: no single menu -- separate buttons, each its own page. A button opens
--- its GROUP, and the rail shows only that group's tabs. Quests sit under PROGRESS with the pass.
-local TAB_GROUP = {
-	Crates = "Shop", Style = "Shop", Cosmetics = "Shop",
-	Brainrots = "Brainrots", Trade = "Brainrots",
-	Pass = "Progress", Rank = "Progress", Mastery = "Progress", Index = "Progress", CellShop = "Progress", Quests = "Progress",
-	Robux = "Robux",
-	Settings = "Settings",
-}
-
+-- The tabs, handed to the shell as destinations -- only the tabs of the screen the active one is on
+-- (Oliver, 2026-09-22 13:59: "separate buttons, each its own page"). Which screen holds which tab,
+-- each tab's glyph and subtitle, and how many a portrait phone's bar can carry, live in MenuScreens;
+-- this only says what each tab is called and which renderer it runs.
 local function renderTabStrip()
-	local destinations = {}
-	local group = TAB_GROUP[activeTab]
-	for _, tab in ipairs(TABS) do
-		if group and TAB_GROUP[tab.key] ~= group then
-			continue
+	local destinations, screen = MenuScreens.Destinations(activeTab, function(key)
+		for _, tab in ipairs(TABS) do
+			if tab.key == key then
+				return tab.label
+			end
 		end
-		local index = #destinations + 1
-		local look = DESTINATION_LOOK[tab.key] or {}
-		destinations[index] = { key = tab.key, label = string.upper(tab.label), glyph = look.glyph, sub = look.sub }
-	end
+		return nil
+	end)
+	shell:SetTitle(screen and screen.title or "BRAINROT BATTLES")
 	shell:SetDestinations(destinations, activeTab)
 end
 
@@ -3602,16 +3593,15 @@ end
 -- Declared here, assigned below once openTab exists.
 local hudButtonOpen
 menuButton.Activated:Connect(function()
-	hudButtonOpen("Crates")
+	hudButtonOpen(MenuScreens.Screens[1].tabs[1])
 end)
 -- The other four buttons ride on the SHOP button as children, so every place that shows, hides or
 -- stacks menuButton (phone layout, MenuStackToggle) moves all five together.
-for index, spec in ipairs({
-	{ "BRAINROTS", "Brainrots" },
-	{ "PROGRESS", "Pass" },
-	{ "ROBUX", "Robux" },
-	{ "SETTINGS", "Settings" },
-}) do
+-- One per MenuScreens screen after the first (SHOP is menuButton itself), labelled and landing where
+-- that list says, so a button and the screen it opens cannot disagree.
+for index = 1, #MenuScreens.Screens - 1 do
+	local screen = MenuScreens.Screens[index + 1]
+	local spec = { screen.button, screen.tabs[1] }
 	local button = create("TextButton", {
 		Position = UDim2.new(0, 0, 0, index * (HUD_BUTTON_H + HUD_BUTTON_GAP)),
 		Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
@@ -3676,7 +3666,7 @@ end
 
 -- A HUD button: open its group, or close it if that group is what is showing.
 hudButtonOpen = function(key)
-	if panel.Visible and TAB_GROUP[activeTab] == TAB_GROUP[key] then
+	if panel.Visible and MenuScreens.ScreenOf(activeTab) == MenuScreens.ScreenOf(key) then
 		toggleMenu()
 		return
 	end
@@ -4256,7 +4246,7 @@ task.spawn(function()
 		local window = ShopRotation.Window()
 		if window ~= lastWindow then
 			lastWindow = window
-			if panel.Visible and (activeTab == "Crates" or activeTab == "Cosmetics") then
+			if panel.Visible and (activeTab == "Crates" or activeTab == "Cosmetics" or activeTab == "KillAnimations") then
 				renderTab()
 			end
 		end

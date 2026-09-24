@@ -235,9 +235,11 @@ function MenuShell:SetViewport(viewport, touch)
 	-- player can actually see rather than under the top bar.
 	self.panel.Position = UDim2.new(0.5, 0, 0.5, math.floor((safe.Top - safe.Bottom) / 2))
 
-	-- The small version's header is 40, not 64: it is the single cheapest 24 px on a screen with
+	-- The small version's header is 44, not 64: it is the single cheapest 20 px on a screen with
 	-- 260 px of panel, and the title still reads at Heading size.
-	local headerHeight = (mode == "short" and 40) or (phone and 52) or 64
+	-- 44 rather than 40 since #20: the header's buttons are full 44 px touch targets, and at 40 they
+	-- hung 2 px over the header's top and bottom (tools/menu_screens_check.py).
+	local headerHeight = (mode == "short" and UiKit.Touch) or (phone and 52) or 64
 	self.header.Size = UDim2.new(1, 0, 0, headerHeight)
 	local headerTitle = self.header:FindFirstChildOfClass("TextLabel")
 	if headerTitle then
@@ -255,7 +257,12 @@ function MenuShell:SetViewport(viewport, touch)
 		headerTitle.Size = UDim2.new(1, -(actionsWidth + Space.SM + (showSlot and slotWidth + Space.SM or 0)), 1, 0)
 	end
 
-	local railWidth = (phone and 0)
+	-- #78: a screen with one tab (ROBUX, SETTINGS) is a whole page, not a page beside a one-item rail
+	-- that goes nowhere. No navigation at all, and the content has the panel's full width.
+	local solo = #self.destinations <= 1
+	self.Solo = solo
+	self.nav.Visible = not solo
+	local railWidth = ((phone or solo) and 0)
 		or (mode == "short" and RAIL_ICON)
 		or (viewport.X < 1280 and RAIL_NARROW or RAIL_WIDE)
 
@@ -267,7 +274,7 @@ function MenuShell:SetViewport(viewport, touch)
 	if phone then
 		perRow, rows = barLayout(size.X, #self.destinations)
 	end
-	local barHeight = phone and (rows * UiKit.Touch + (rows - 1) * Space.SM + Space.MD * 2) or 0
+	local barHeight = (phone and not solo) and (rows * UiKit.Touch + (rows - 1) * Space.SM + Space.MD * 2) or 0
 	self.railWidth, self.barHeight = railWidth, barHeight
 	self.navPerRow, self.navRows = perRow, rows
 
@@ -302,9 +309,11 @@ function MenuShell:SetViewport(viewport, touch)
 		self.nav.ScrollingEnabled = true
 	end
 
-	self.Content.Position = UDim2.fromOffset(railWidth + (phone and Space.MD or 0), headerHeight)
-	self.Content.Size = UDim2.new(1, -railWidth - (phone and Space.MD * 2 or Space.LG), 1, -headerHeight - barHeight - Space.MD)
-	self.ContentWidth = size.X - railWidth - (phone and Space.MD * 2 or Space.LG)
+	-- Without a rail the content still wants a gutter on its left, or it runs into the panel's edge.
+	local left = (phone and Space.MD) or (solo and Space.LG) or 0
+	self.Content.Position = UDim2.fromOffset(railWidth + left, headerHeight)
+	self.Content.Size = UDim2.new(1, -railWidth - left - (phone and Space.MD or Space.LG), 1, -headerHeight - barHeight - Space.MD)
+	self.ContentWidth = size.X - railWidth - left - (phone and Space.MD or Space.LG)
 
 	if #self.destinations > 0 then
 		self:SetDestinations(self.destinations, self.active)
@@ -386,6 +395,16 @@ function MenuShell:SetDestinations(destinations, active)
 			end,
 		})
 	end
+end
+
+-- The header's title: each HUD button's screen names itself (#78), so SHOP reads SHOP rather than the
+-- game's name over every page.
+function MenuShell:SetTitle(text)
+	local title = self.header:FindFirstChildOfClass("TextLabel")
+	if title then
+		title.Text = text
+	end
+	self.Title = text
 end
 
 function MenuShell:Select(key)
