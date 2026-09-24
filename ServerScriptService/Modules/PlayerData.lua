@@ -43,7 +43,7 @@ local function defaultData()
 		Brainrots = {},
 		Crates = {
 			Common = 0, Uncommon = 0, Rare = 0, Epic = 0, Legendary = 0, Mythic = 0,
-			Accessory = 0, Skin = 0, Aura = 0, Super = 0, Parachute = 0,
+			Accessory = 0, Skin = 0, Aura = 0, Super = 0, Parachute = 0, DeathEffect = 0,
 			-- The Style Crate tiers (2026-09-18). Additive: an older save simply has none of them.
 			Style = 0, DeluxeStyle = 0, PrestigeStyle = 0,
 		},

@@ -3246,7 +3246,7 @@ local function stepParticles(list, dt)
 	end
 end
 
-local CATEGORY_LABEL = { Brainrot = " BRAINROT", Accessory = " ACCESSORY", GunSkin = " GUN SKIN", Aura = " AURA", Parachute = " PARACHUTE", Refund = "" }
+local CATEGORY_LABEL = { Brainrot = " BRAINROT", Accessory = " ACCESSORY", GunSkin = " GUN SKIN", Aura = " AURA", Parachute = " PARACHUTE", KillAnimation = " DEATH EFFECT", Refund = "" }
 
 crateOpened.OnClientEvent:Connect(function(result)
 	clearReveal()
@@ -3297,7 +3297,8 @@ crateOpened.OnClientEvent:Connect(function(result)
 			revealValue.Text = string.format("Worth %s SahurCoins  •  equip it from Brainrots to have it fight for you",
 				formatNumber(result.coinValue or 0))
 		else
-			revealValue.Text = "New! Equip it from the Cosmetics tab."
+			revealValue.Text = kind == "KillAnimation" and "New! Equip it from Shop → Death Effects."
+				or "New! Equip it from the Cosmetics tab."
 		end
 	end
 	revealRarity.TextColor3 = prizeColor
