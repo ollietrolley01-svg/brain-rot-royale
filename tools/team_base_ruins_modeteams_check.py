@@ -5,7 +5,7 @@ the compound section, BaseLootSpots, Teardown and the base vehicles) plus ClearS
 world of tools/team_vehicles_check.py (flat ground with a hill, a hole, buildings and loot round each
 base; VehicleService.Create parks where it is told). TeamBaseRuins itself is a stub here: its geometry
 is tools/team_base_ruins_check.py's business. The stub hands back a compound shaped like the real one
-(8 pads, 8 named chest spots, 3 bays facing the centre, 15 loot spots, in the frame it was given) and
+(8 pads, 8 named chest spots, 6 bays in two rows, 15 loot spots, in the frame it was given) and
 records what it was asked for. Measured, per match:
 
   * each team's spawn pads ARE its compound's pads, and both compounds got the same seed;
@@ -79,7 +79,9 @@ TeamBaseRuins = {
             for _, x in ipairs({ -36, -27, -18, -9 }) do table.insert(ruin.pads, site(frame, x, z)) end
         end
         for i = 1, 8 do table.insert(ruin.chestSpots, site(frame, -40 + i * 9, 36.9)) end
-        for _, x in ipairs({ 12.5, 25, 37.5 }) do table.insert(ruin.vehicleBays, site(frame, x, 3)) end
+        -- Six bays, as the real yard: three facing the gate, three across the east end facing out.
+        for _, x in ipairs({ 12.5, 25, 37.5 }) do table.insert(ruin.vehicleBays, site(frame, x, -26)) end
+        for _, z in ipairs({ -7, 4, 15 }) do table.insert(ruin.vehicleBays, site(frame, 32, z) * CFrame.Angles(0, -math.pi / 2, 0)) end
         for i = 1, 15 do table.insert(ruin.lootSpots, site(frame, -40 + i * 5, -20)) end
         R.lastRuin = R.lastRuin or {}
         R.lastRuin[team] = ruin

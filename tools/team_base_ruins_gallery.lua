@@ -19,7 +19,7 @@
 -- report it.
 --
 -- Views: 01 overview (team 1), 02 the other base (team 2, same compound turned), 03 the front at eye
--- level from the arena, 04 the spawn shelter, 05 the collapsed corner, 06 the vehicle yard, 07 the
+-- level from the arena, 04 the spawn shelter, 05 the collapsed corner, 06 the vehicle yard (six bays), 06b the east gate from outside, 07 the
 -- supply room, 08 the courtyard from the watchtower, 09 the compound at dusk with its lamps lit.
 
 local MAP_ID, SEED = "RotRidge", 101
@@ -245,8 +245,17 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			-- From the lane behind the bays, over the parked vehicles, out through the gate.
-			look(camera, at(1, 25, 9, 22), at(1, 25, 2, -30), 65)
+			-- From above the workbench corner, over both rows of parked vehicles: the back row (bays
+			-- 4-6) facing the east gate, the front row (1-3) facing the main gate.
+			look(camera, at(1, 8, 14, 18), at(1, 30, 1, -16), 70)
+		end,
+	},
+	{
+		name = "06b_east_gate_from_outside",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			look(camera, at(1, 78, 6, 4), at(1, 32, 3, 4), 60)
 		end,
 	},
 	{

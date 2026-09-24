@@ -126,7 +126,8 @@ MatchConfig.XpPerKill = 60
 --                  is parked; never more live base vehicles than slots.
 MatchConfig.TeamBaseVehicles = {
 	Enabled = true,
-	Slots = { "armed", "car", "bike" },
+	-- Oliver, 2026-09-24: "add more cars to spawn bases". Six, one for each bay of the compound's yard.
+	Slots = { "armed", "armed", "car", "car", "car", "bike" },
 	Inner = 22,
 	Outer = 75,
 	PadClearance = 18,

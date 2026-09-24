@@ -45,7 +45,7 @@ from vehicle_models_axis_check import MOCK, luau_to_lua  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
 
-BUDGET = (400, 700)
+BUDGET = (400, 760)
 BODY_RADIUS, BODY_HEIGHT, STEP = 1.0, 5.2, 1.5
 GRID = 0.5
 FLAT_X, FLAT_Z = 50.0, 46.0
@@ -54,6 +54,11 @@ CHEST_CLEAR = 2.4
 PAD_CHEST, PAD_BAY, PAD_LOOT, CHEST_LOOT = 7.0, 18.0, 6.0, 3.0
 CAR = (8.9, 16.6)
 CORRIDOR_HALF, CORRIDOR_HEIGHT = 4.8, 7.5
+# Past the compound's middle, along a bay's nose, that its way out must stay clear to: beyond every
+# wall (they stand at 41 and 45).
+DRIVE_OUT = 62
+# One bay per base vehicle (MatchConfig.TeamBaseVehicles.Slots, read from the source).
+BAYS = None
 FOOTING_TOLERANCE = 0.5
 TOUCH = 0.12
 
@@ -180,6 +185,13 @@ end
 """
 
 
+def slot_count(repo):
+    text = (Path(repo) / "ReplicatedStorage/Shared/MatchConfig.lua").read_text()
+    block = text[text.index("MatchConfig.TeamBaseVehicles = {"):]
+    slots = re.search(r"Slots = \{([^}]*)\}", block).group(1)
+    return len(re.findall(r'"\w+"', slots))
+
+
 def sources(repo):
     root = Path(repo)
     return {
@@ -298,6 +310,24 @@ def box_obb(lo, hi):
 def hits_box(parts, lo, hi, want):
     """Parts passing `want` whose OBB meets the axis-aligned box lo..hi."""
     probe = box_obb(lo, hi)
+    out = []
+    for p in parts:
+        if not want(p):
+            continue
+        plo, phi = p["aabb"]
+        if any(plo[i] > hi[i] or phi[i] < lo[i] for i in range(3)):
+            continue
+        if obb_overlap(obb(p), probe):
+            out.append(p)
+    return out
+
+
+def hits_obb(parts, centre, axes, half, want):
+    """Parts passing `want` whose OBB meets the given box."""
+    probe = (centre, axes, half)
+    ext = [sum(abs(axes[k][i]) * half[k] for k in range(3)) for i in range(3)]
+    lo = [centre[i] - ext[i] for i in range(3)]
+    hi = [centre[i] + ext[i] for i in range(3)]
     out = []
     for p in parts:
         if not want(p):
@@ -570,30 +600,54 @@ def check_all(build, frame, model, info, parts, log):
         if any(math.hypot(cx - x, cz - z) < CHEST_LOOT for cx, _, cz in chests):
             problems.append("loot (%.1f, %.1f) within %.0f of a chest" % (x, z, CHEST_LOOT))
         for b in bays:
-            if abs(x - b[0]) < CAR[0] / 2 + 0.5 and abs(z - b[2]) < CAR[1] / 2 + 0.5:
+            dx, dz = x - b[0], z - b[2]
+            across = abs(dx * b[3] + dz * b[5])
+            along = abs(dx * b[9] + dz * b[11])
+            if across < CAR[0] / 2 + 0.5 and along < CAR[1] / 2 + 0.5:
                 problems.append("loot (%.1f, %.1f) in a bay" % (x, z))
     log("loot spots: %d" % len(loot))
 
-    # bays
+    # bays, each in its own heading: level footing, nothing queryable over it, and a straight way out
+    # along its nose from the car's tail to DRIVE_OUT studs past the compound's middle -- which is out
+    # through a gate or it hits a wall. Bays must not overlap one another.
+    hx, hz = CAR[0] / 2, CAR[1] / 2
+    frames = []
     for name, b in zip(bay_names, bays):
         x, y, z = b[0], b[1], b[2]
-        look = (-b[9], -b[10], -b[11])
-        if not (abs(look[0]) < 1e-6 and abs(look[2] + 1) < 1e-6):
-            problems.append("%s does not face the gate (look %s)" % (name, look))
-        hx, hz = CAR[0] / 2, CAR[1] / 2
+        look = (-b[9], 0.0, -b[11])
+        side = (b[3], 0.0, b[5])
+        frames.append((x, z, look, side))
+        if abs(b[10]) > 1e-6 or abs(math.hypot(look[0], look[2]) - 1) > 1e-6:
+            problems.append("%s is not level (look %s)" % (name, look))
         heights = []
         for fx, fz in ((1, 1), (-1, 1), (1, -1), (-1, -1), (1, 0), (-1, 0), (0, 1), (0, -1)):
-            heights.append(top_under(parts, x + fx * hx, z + fz * hz, y + 24, lambda p: p["query"]))
+            px = x + side[0] * fx * hx + look[0] * fz * hz
+            pz = z + side[2] * fx * hx + look[2] * fz * hz
+            heights.append(top_under(parts, px, pz, y + 24, lambda p: p["query"]))
         if None in heights or max(heights) - min(heights) > FOOTING_TOLERANCE or abs(max(heights) - y) > 0.06:
             problems.append("%s: footing %s, bay at %.2f" % (name, heights, y))
-        over = hits_box(parts, (x - hx, y + 0.6, z - hz), (x + hx, y + 40, z + hz), lambda p: p["query"])
+        axes = (side, (0.0, 1.0, 0.0), look)
+        over = hits_obb(parts, (x, y + 20.3, z), axes, (hx, 19.7, hz), lambda p: p["query"])
         if over:
             problems.append("%s: queryable over the bay (%s)" % (name, ", ".join(sorted({p["name"] for p in over}))))
-        way = hits_box(parts, (x - CORRIDOR_HALF, y + 0.6, -62), (x + CORRIDOR_HALF, y + CORRIDOR_HEIGHT, z + hz),
-                       lambda p: p["collide"])
+        # from the tail (-hz) to DRIVE_OUT past the middle, measured along the nose
+        reach = DRIVE_OUT - (x * look[0] + z * look[2])
+        length = reach + hz
+        mid = (reach - hz) / 2
+        centre = (x + look[0] * mid, y + (0.6 + CORRIDOR_HEIGHT) / 2, z + look[2] * mid)
+        way = hits_obb(parts, centre, axes, (CORRIDOR_HALF, (CORRIDOR_HEIGHT - 0.6) / 2, length / 2), lambda p: p["collide"])
         if way:
             problems.append("%s: drive-out blocked by %s" % (name, ", ".join(sorted({p["name"] for p in way}))))
+    for i in range(len(frames)):
+        for j in range(i + 1, len(frames)):
+            a, b2 = frames[i], frames[j]
+            box_a = ((a[0], 0, a[1]), (a[3], (0, 1, 0), a[2]), (hx, 1, hz))
+            box_b = ((b2[0], 0, b2[1]), (b2[3], (0, 1, 0), b2[2]), (hx, 1, hz))
+            if obb_overlap(box_a, box_b):
+                problems.append("%s and %s overlap" % (bay_names[i], bay_names[j]))
     log("bays: %d (%s)" % (len(bays), ", ".join(bay_names)))
+    if len(bays) != BAYS:
+        problems.append("bays: %d, want %d (MatchConfig.TeamBaseVehicles slots)" % (len(bays), BAYS))
 
     # walk
     walk = Walk(parts)
@@ -897,7 +951,12 @@ PLANTS = [
                             '	sandbags(room, "plantA", 19, 21, 28, 21, 3, TILE_TOP)\n'
                             '	sandbags(room, "plantB", 5.3, 27, 5.3, 36, 3, ROOM_FLOOR)\n'
                             '	table.insert(B.doorways, { name = "SupplyDoor"')], "walk: cannot reach chest Supply"),
-    ("tyres in bay 2's way", [('tyres(18.75, -24, 3, "tyresA")', 'tyres(25, -24, 3, "tyresA")')], "drive-out"),
+    ("tyres in bay 2's way", [('tyres(18.75, -24, 3, "tyresA")', 'tyres(25, -24, 3, "tyresA")')], "Bay2: drive-out"),
+    ("east gate walled up", [('perimeterRun(walls, "z", 45, -39.8, -14.6, 1, false, true, -27,',
+                              'perimeterRun(walls, "z", 45, -39.8, 13, 1, false, true, -27,')], "Bay4: drive-out"),
+    ("back row on the front row", [("local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32", "local BACK_BAYS, BACK_X = { -20, 4, 15 }, 32")],
+     "overlap"),
+    ("a bay short", [("local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32", "local BACK_BAYS, BACK_X = { -7, 4 }, 32")], "bays: 5, want 6"),
     ("queryable camo net", [("local netOpts = trimWith({ transparency = 0.12 })", "local netOpts = { transparency = 0.12 }")],
      "queryable over the bay"),
     ("spawn shelter breakable", [('bunker.Name = "Spawn"\n\tbunker:SetAttribute("Destructible", false)',
@@ -922,11 +981,32 @@ PLANTS = [
 ]
 
 
+def sweep_seeds(src, seeds, log):
+    """The wear differs by seed and a match rolls its own, so the geometry checks run over a spread of
+    seeds too (z-fighting at source, floating, walking, bays, doorways, spots), not only SEED."""
+    problems, counts = [], []
+    for seed in seeds:
+        b = Build(src)
+        frame, model, info = b.layout(0, 0, 0, 0, TEAM1, seed)
+        found = check_zfight(b, model, lambda *_: None)
+        parts = b.dump(model)
+        for p in parts:
+            p["aabb"] = aabb(p)
+        found += check_all(b, frame, model, info, parts, lambda *_: None)
+        counts.append(len(parts))
+        problems += ["seed %d: %s" % (seed, line) for line in found]
+    log("seeds: %d more seeds swept, %d problems, %d..%d parts" % (len(seeds), len(problems), min(counts), max(counts)))
+    return problems
+
+
 def main(argv):
     repo = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else "."
     plant = "--plant" in argv
+    global BAYS
+    BAYS = slot_count(repo)
     src = sources(repo)
     problems = run(src, print)
+    problems += sweep_seeds(src, range(1, 25), print)
     for line in problems:
         print("  FAIL " + line)
     print("team_base_ruins_check: %d problems" % len(problems))
