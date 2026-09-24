@@ -24,6 +24,8 @@ What it holds (each a line in the output):
       never echoes;
   M5  ratio: `stacks` quick hits mark the victim (DamageTakenScale = scale) for `duration`; a gap longer
       than `window` resets the count; a marked victim does not re-mark early;
+  M8  chill: wears off after `duration` and a freeze's immunity lapses, both on the module's game clock
+      (the harness pins os.clock, so a timer read from CPU time never moves);
   B1  every reworked gun's TTK is within 12% of its old one, and the one-shot rule holds.
 The new guns' rounds run from the REAL Ballistics.lua (its steer / onContact / onLaunch / onDetonate, and
 Ballistics.FreeStep, the step the server and every client take):
@@ -326,10 +328,14 @@ end
 local defs = {
 	Echo = { id = "Echo", damage = 15, echo = { ratio = 0.3, delay = 0.25 } },
 	Ratio = { id = "Ratio", damage = 19, ratio = { stacks = 5, window = 1.5, duration = 3, scale = 1.12 } },
+	Chill = { id = "Chill", damage = 10, chill = { slow = 0.2, duration = 2, stacks = 3, freeze = 1 } },
 }
+local speeds = {}
 local modules = {
 	CombatService = CombatService, Combatants = Combatants,
-	MatchService = { SetStatusSpeed = function() end }, MovementService = { Launch = function() end },
+	MatchService = { SetStatusSpeed = function(victim, kind, factor, seconds)
+		table.insert(speeds, { victim = victim, kind = kind, at = CLOCK })
+	end }, MovementService = { Launch = function() end },
 	WeaponData = { Get = function(id) return defs[id] end },
 }
 local function folder() return { WaitForChild = function(_, name) return modules[name] or folder() end } end
@@ -338,6 +344,9 @@ local env = setmetatable({
 	require = function(m) return m end,
 	task = { spawn = function() end, delay = function() end, wait = function() end },
 	warn = function(...) print("warn", ...) end,
+	-- CPU time stands still here: the module is driven by its game clock (CLOCK) alone, so a timer that
+	-- reads os.clock instead never moves (#A5: a chill that never wore off, a freeze immunity for good).
+	os = setmetatable({ clock = function() return 0 end }, { __index = os }),
 }, { __index = _G })
 local StatusEffects = assert(load(src, "=StatusEffects", "t", env))()
 StatusEffects.Clock = function() return CLOCK end
@@ -366,6 +375,9 @@ function api.clear() for k in pairs(dealtLog) do dealtLog[k] = nil end end
 function api.pending() return #delayed end
 function api.kill(t) alive[t] = false end
 function api.revive(t) alive[t] = true end
+function api.chilled(t) local _, chill = StatusEffects.Get(t); return chill ~= nil end
+function api.tick() StatusEffects.Tick() end
+function api.freezes(t) local n = 0; for _, s in ipairs(speeds) do if s.victim == t and s.kind == "freeze" then n = n + 1 end end; return n end
 api.scale = StatusEffects.DamageTakenScale
 return api
 """
@@ -414,6 +426,28 @@ def check_status(repo, src):
     gapped = api.scale("victim")
     ok = ok and gapped == 1
     out.append((ok, f"M5 ratio: scale per hit {scales} (want 1 x4 then 1.12), {after} once it lapses, {gapped} after a gap resets the count"))
+    # M8 chill, on the game clock: a chill wears off after its duration, and a frozen victim is immune to
+    # a second freeze for freeze + FREEZE_IMMUNITY, then can be frozen again.
+    api.hit("shooter", "other", "Chill", 10)
+    held = api.chilled("other")
+    api.advance(2.5)
+    api.tick()
+    worn = not api.chilled("other")
+
+    def burst():
+        for _ in range(4):
+            api.hit("shooter", "victim", "Chill", 10)
+            api.advance(0.1)
+    burst()
+    first = api.freezes("victim")
+    burst()
+    immune = api.freezes("victim")
+    api.advance(4)
+    burst()
+    again = api.freezes("victim")
+    ok = held and worn and (first, immune, again) == (1, 1, 2)
+    out.append((ok, f"M8 chill: {'held' if held else 'NOT held'} after one hit, {'worn off' if worn else 'STILL ON'} 2.5 s later "
+                    f"(duration 2); freezes after bursts {first}/{immune}/{again} (want 1, 1 inside the immunity, 2 after it)"))
     return out
 
 
@@ -746,6 +780,9 @@ PLANTS = [
     ("M6 noclip through every wall", "combat", "if victimToken == nil and walls > 0 then\n\t\t\t\twalls -= 1", "if victimToken == nil and walls > 0 then\n\t\t\t\twalls -= 0"),
     ("M7 a streak that never breaks", "combat", "entry.weaponId ~= def.id or now - entry.at > window then", "entry.weaponId ~= def.id then"),
     ("M5 a ratio with no window", "status", "if now - state.at > window then", "if false then"),
+    ("M8 a chill timed by CPU time", "status", "applyChill(victim, def.chill, StatusEffects.Clock())", "applyChill(victim, def.chill, os.clock())"),
+    ("M8 a chill that expires by CPU time", "status", "\tlocal now = StatusEffects.Clock()\n\tfor victim, state in pairs(chills) do",
+     "\tlocal now = os.clock()\n\tfor victim, state in pairs(chills) do"),
     # The new guns' rounds (Ballistics) and numbers (WeaponData).
     ("N1 a dart that homes on a wide miss", "ballistics", "cone = math.rad(10)", "cone = math.rad(40)"),
     ("N2 drumlets that bounce off people", "ballistics",
