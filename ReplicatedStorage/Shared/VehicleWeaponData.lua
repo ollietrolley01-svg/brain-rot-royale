@@ -1,11 +1,18 @@
 -- Mounted vehicle weapons: what each armed vehicle model carries and how it behaves.
 -- Oliver: "vehicles with different guns and explosive weapons on them".
 --
---   VehicleWeaponData.ForModel(modelId)  -> spec or nil   (modelId: the VehicleModel attribute)
---   VehicleWeaponData.Weapons[id]        -> spec
+--   VehicleWeaponData.ForModel(modelId, mount)  -> spec or nil   (modelId: the VehicleModel attribute;
+--                                                 mount "turret" (the default) or "driver")
+--   VehicleWeaponData.Weapons[id]               -> spec
+--   VehicleWeaponData.Parts[mount], .Attributes[mount]   the part and attribute names of a mount
 --
--- The metal is in VehicleModels (Mounts); the server rules are in VehicleWeapons; the HUD and the
--- turret's swing are in VehicleWeaponClient. Two-wheelers carry nothing.
+-- An armed vehicle carries two weapons (Oliver 09-24: "make the car guns controllable by a gunner seat"
+-- and "make the drivers have their own gun that they can control"):
+--   turret   ByModel: worked ONLY from the GunnerSeat. A driver alone in the vehicle cannot work it
+--            (the gunner's seat has to be manned; VehicleWeapons.DrivenBy).
+--   driver   DriverByModel: a short-arc gun at the front, worked only from the driving seat.
+-- The metal is in VehicleModels (Mounts, DriverMounts); the server rules are in VehicleWeapons; the HUD,
+-- the aim and the gunner's first-person view are in VehicleWeaponClient. Two-wheelers carry nothing.
 --
 -- A spec:
 --   id            the weapon id damage is credited with; the kill feed shows it as written
@@ -16,12 +23,23 @@
 --                 falloff, sounds and looks are exactly the hand launchers'
 --   damage, range, spread, pellets, headshotMultiplier   ("hitscan") as WeaponData
 --   splashRadius  ("round") blast radius
+--   damageClass   what a hit is to a vehicle (VehicleArmor.Classes): "bullet" (the default for a
+--                 hitscan gun) or "heavy" (a heavy machine gun's round, which armour stops less of);
+--                 a round's blast is always "explosive"
 --   fireRate      shots a second, held to the same budget CombatService puts on a hand gun
 --   magazine      shots before it runs dry
 --   recharge      shots a second it gets back, once it has not fired for `rechargeDelay` seconds
+--   overheat      (optional) a belt run dry overheats the gun: it will not fire again until it has
+--                 cooled back up to this share of its magazine (the HUD's heat bar shows it)
 --   yawLimit      degrees either side of straight ahead the mount turns (180: all the way round)
 --   pitchMin, pitchMax   degrees below/above level the barrel tips (negative is down)
+--   frontGuard    (optional) { arc, pitchMin }: within `arc` degrees of straight ahead the barrel
+--                 does not go below `pitchMin`, so it never fires into its own cab
+--   rearGuard     (optional) the same within `arc` degrees of straight BEHIND (a turret over the hull's
+--                 own back end). Both are measured: tools/vehicle_weapons_gallery.lua's sweep casts the
+--                 shot's first stretch at every pose and names what it meets.
 --   restPitch     where the barrel sits when nobody is aiming it
+--   slew          (turret) degrees a second the gunner can turn it (the first-person view rides it)
 --   rarity        colours the tracer and flash like a gun of that rarity
 --   hud           the short name on the ammo readout
 
@@ -41,10 +59,14 @@ VehicleWeaponData.Weapons = {
 		magazine = 40,
 		recharge = 12,
 		rechargeDelay = 1.2,
+		overheat = 0.5,
 		yawLimit = 180,
 		pitchMin = -12,
-		pitchMax = 40,
+		-- 25, not 40: on its pintle out in front of the gunner, the spade grips at 40 came down through
+		-- the hatch ring (tools/vehicle_models_axis_check.py sweeps the arc).
+		pitchMax = 25,
 		restPitch = 0,
+		slew = 320,
 		rarity = "Uncommon",
 	},
 	-- Rocket pod: four rockets, a slow reload. The hand launcher's round and blast.
@@ -60,10 +82,17 @@ VehicleWeaponData.Weapons = {
 		magazine = 4,
 		recharge = 0.5,
 		rechargeDelay = 1.5,
-		yawLimit = 150,
+		-- All the way round now it stands in the middle of the bed on its pedestal.
+		yawLimit = 180,
 		pitchMin = -8,
 		pitchMax = 30,
+		-- Over the cab the launcher's lowest tubes (7.45 up) must clear the cab roof and its light bar
+		-- (top 7.35, 2.95 studs ahead of the tubes): 4 degrees up does it (VehicleModels, the Ranger).
+		-- The roof's corners reach out to 52 degrees either side at the pod's lowest pitch (the gallery
+		-- sweep, 09-24: 45 degrees and -8 went through the roof panel), so the guard runs to 54.
+		frontGuard = { arc = 54, pitchMin = 4 },
 		restPitch = 4,
+		slew = 200,
 		rarity = "Epic",
 	},
 	-- Mortar: lobs 40mm grenades in an arc, three to a load.
@@ -83,19 +112,191 @@ VehicleWeaponData.Weapons = {
 		pitchMin = 10,
 		pitchMax = 60,
 		restPitch = 30,
+		slew = 160,
+		rarity = "Rare",
+	},
+	-- The scout car's heavy machine gun: harder hitting and steadier than the Rotster's, a heavier
+	-- round that armour stops less of, and a belt that overheats if it is run dry.
+	TartarugaHMG = {
+		id = "Tartaruga HMG",
+		hud = "HEAVY MG",
+		kind = "hitscan",
+		damageClass = "heavy",
+		damage = 14,
+		headshotMultiplier = 1.5,
+		range = 420,
+		spread = 1.1,
+		fireRate = 7,
+		magazine = 50,
+		recharge = 12,
+		rechargeDelay = 1.4,
+		overheat = 0.5,
+		yawLimit = 180,
+		pitchMin = -8,
+		pitchMax = 25,
+		restPitch = 0,
+		slew = 260,
+		rarity = "Epic",
+	},
+	-- The carrier's automatic grenade launcher: 40mm grenades fired flat and fast, ten to a can. Smaller
+	-- blasts than the mortar's or a hand launcher's, many more of them.
+	CameloGrenadeLauncher = {
+		id = "Camelo Grenade Launcher",
+		hud = "GRENADES",
+		kind = "round",
+		projectile = "grenade",
+		damage = 34,
+		splashRadius = 8,
+		headshotMultiplier = 1,
+		spread = 0.8,
+		fireRate = 2.2,
+		magazine = 10,
+		recharge = 0.8,
+		rechargeDelay = 1.6,
+		yawLimit = 180,
+		pitchMin = -8,
+		pitchMax = 30,
+		-- Turned right round, the lowest pitches go into the carrier's own rear hump (the gallery sweep:
+		-- 170-180 degrees at -7 and -8); 6 degrees down clears it.
+		rearGuard = { arc = 15, pitchMin = -6 },
+		restPitch = 2,
+		slew = 180,
+		rarity = "Epic",
+	},
+
+	-- The drivers' guns: light machine guns at the front, a 20-degree arc either side and a little up
+	-- and down, fired from the wheel. Weaker than any hand gun a passenger could lean out with (58
+	-- damage a second at most against a Rare rifle's 214): something to do with the wheel in your hands,
+	-- not a reason to drive rather than fight. Each overheats when run dry.
+	RotsterNoseGun = {
+		id = "Rotster Nose Gun",
+		hud = "NOSE GUN",
+		kind = "hitscan",
+		damage = 7,
+		headshotMultiplier = 1.25,
+		range = 260,
+		spread = 1.5,
+		fireRate = 9,
+		magazine = 36,
+		recharge = 12,
+		rechargeDelay = 1.0,
+		overheat = 0.5,
+		yawLimit = 20,
+		pitchMin = -5,
+		pitchMax = 10,
+		restPitch = 0,
+		rarity = "Uncommon",
+	},
+	RangerBonnetGun = {
+		id = "Ranger Bonnet Gun",
+		hud = "BONNET GUN",
+		kind = "hitscan",
+		damage = 8,
+		headshotMultiplier = 1.25,
+		range = 280,
+		spread = 1.4,
+		fireRate = 8,
+		magazine = 36,
+		recharge = 12,
+		rechargeDelay = 1.0,
+		overheat = 0.5,
+		yawLimit = 20,
+		pitchMin = -5,
+		pitchMax = 10,
+		restPitch = 0,
+		rarity = "Uncommon",
+	},
+	VanBumperGun = {
+		id = "Sahur Bumper Gun",
+		hud = "BUMPER GUN",
+		kind = "hitscan",
+		damage = 7,
+		headshotMultiplier = 1.25,
+		range = 260,
+		spread = 1.5,
+		fireRate = 9,
+		magazine = 36,
+		recharge = 12,
+		rechargeDelay = 1.0,
+		overheat = 0.5,
+		yawLimit = 20,
+		pitchMin = -5,
+		pitchMax = 10,
+		restPitch = 0,
+		rarity = "Uncommon",
+	},
+	TartarugaBowGun = {
+		id = "Tartaruga Bow Gun",
+		hud = "BOW GUN",
+		kind = "hitscan",
+		damage = 8,
+		headshotMultiplier = 1.25,
+		range = 300,
+		spread = 1.3,
+		fireRate = 8,
+		magazine = 40,
+		recharge = 12,
+		rechargeDelay = 1.0,
+		overheat = 0.5,
+		yawLimit = 20,
+		pitchMin = -5,
+		pitchMax = 10,
+		restPitch = 0,
+		rarity = "Rare",
+	},
+	CameloBonnetGun = {
+		id = "Camelo Bonnet Gun",
+		hud = "BONNET GUN",
+		kind = "hitscan",
+		damage = 8,
+		headshotMultiplier = 1.25,
+		range = 300,
+		spread = 1.3,
+		fireRate = 8,
+		magazine = 40,
+		recharge = 12,
+		rechargeDelay = 1.0,
+		overheat = 0.5,
+		yawLimit = 20,
+		pitchMin = -5,
+		pitchMax = 10,
+		restPitch = 0,
 		rarity = "Rare",
 	},
 }
 
--- Vehicle model -> weapon. Must match VehicleModels.Mounts (the harness checks they agree).
+-- Vehicle model -> turret weapon. Must match VehicleModels.Mounts (the harness checks they agree).
 VehicleWeaponData.ByModel = {
 	Rotster = "RotsterRoofGun",
 	CrocodiloRanger = "RangerRocketPod",
 	SahurVan = "VanMortar",
+	TartarugaScout = "TartarugaHMG",
+	CameloCarrier = "CameloGrenadeLauncher",
 }
 
-function VehicleWeaponData.ForModel(modelId)
-	local key = type(modelId) == "string" and VehicleWeaponData.ByModel[modelId] or nil
+-- Vehicle model -> the driver's gun. Must match VehicleModels.DriverMounts.
+VehicleWeaponData.DriverByModel = {
+	Rotster = "RotsterNoseGun",
+	CrocodiloRanger = "RangerBonnetGun",
+	SahurVan = "VanBumperGun",
+	TartarugaScout = "TartarugaBowGun",
+	CameloCarrier = "CameloBonnetGun",
+}
+
+-- The two mounts, their parts on the model and what the server publishes on it for each.
+VehicleWeaponData.Mounts = { "turret", "driver" }
+VehicleWeaponData.Parts = {
+	turret = { yaw = "TurretYaw", pitch = "TurretPitch", muzzle = "TurretMuzzle" },
+	driver = { yaw = "DriverGunYaw", pitch = "DriverGunPitch", muzzle = "DriverGunMuzzle" },
+}
+VehicleWeaponData.Attributes = {
+	turret = { ammo = "WeaponAmmo", firedAt = "WeaponFiredAt", yaw = "AimYaw", pitch = "AimPitch", hot = "WeaponHot" },
+	driver = { ammo = "DriverGunAmmo", firedAt = "DriverGunFiredAt", yaw = "DriverAimYaw", pitch = "DriverAimPitch", hot = "DriverGunHot" },
+}
+
+function VehicleWeaponData.ForModel(modelId, mount)
+	local byModel = mount == "driver" and VehicleWeaponData.DriverByModel or VehicleWeaponData.ByModel
+	local key = type(modelId) == "string" and byModel[modelId] or nil
 	return key and VehicleWeaponData.Weapons[key] or nil
 end
 
@@ -109,6 +310,32 @@ function VehicleWeaponData.AmmoAt(spec, ammo, firedAt, now)
 	return math.min(spec.magazine, ammo + idle * spec.recharge)
 end
 
+-- Whether a mount holding `ammo` (as AmmoAt counts it) with its overheat flag `hot` may fire, and the
+-- flag afterwards. A belt run dry overheats a gun with `overheat`; it stays hot until it has cooled
+-- back up to that share of its magazine.
+function VehicleWeaponData.Ready(spec, ammo, hot)
+	if ammo < 1 then
+		return false, spec.overheat ~= nil
+	end
+	if hot and spec.overheat and ammo < spec.magazine * spec.overheat then
+		return false, true
+	end
+	return true, false
+end
+
+-- The lowest the barrel may go at `yaw` (radians): pitchMin, or the front guard's floor inside its arc.
+function VehicleWeaponData.PitchFloor(spec, yaw)
+	local guard = spec.frontGuard
+	if guard and math.abs(yaw) < math.rad(guard.arc) then
+		return math.rad(math.max(spec.pitchMin, guard.pitchMin))
+	end
+	local rear = spec.rearGuard
+	if rear and math.abs(yaw) > math.pi - math.rad(rear.arc) then
+		return math.rad(math.max(spec.pitchMin, rear.pitchMin))
+	end
+	return math.rad(spec.pitchMin)
+end
+
 -- Yaw and pitch (radians) that point the mount along `direction`, held inside its arc.
 -- `direction` is in the mount's own space (front -Z, up +Y). Yaw is positive to the left, pitch
 -- positive up, which is what CFrame.Angles(0, yaw, 0) and CFrame.Angles(pitch, 0, 0) do to the
@@ -119,8 +346,58 @@ function VehicleWeaponData.ClampAim(spec, direction)
 	local pitch = math.atan2(direction.Y, flat)
 	local yawLimit = math.rad(spec.yawLimit)
 	yaw = math.clamp(yaw, -yawLimit, yawLimit)
-	pitch = math.clamp(pitch, math.rad(spec.pitchMin), math.rad(spec.pitchMax))
+	pitch = math.clamp(pitch, VehicleWeaponData.PitchFloor(spec, yaw), math.rad(spec.pitchMax))
 	return yaw, pitch
+end
+
+-- A mount-space vector turned by the pitch pivot (about X), then the yaw pivot (about Y): what the
+-- two Motor6D Transforms do to a point of the barrel.
+function VehicleWeaponData.Turn(v, yaw, pitch)
+	local cp, sp, cy, sy = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
+	local y1 = v.Y * cp - v.Z * sp
+	local z1 = v.Y * sp + v.Z * cp
+	return Vector3.new(v.X * cy + z1 * sy, y1, -v.X * sy + z1 * cy)
+end
+
+-- THE AIM, solved exactly, for the server's shot and the client's turret and sight alike.
+--   frame    the yaw pivot's frame at rest (world); the yaw axis is its Y through its position
+--   pivot    the pitch pivot at rest, in that frame (on its YZ plane: x = 0)
+--   muzzle   the muzzle at rest, relative to the pitch pivot, in that frame (x = 0)
+--   aim      the world point the shot should pass through
+-- Returns yaw, pitch (radians, clamped to the arc), and the world origin (the muzzle at those angles)
+-- and unit direction of the shot; nil for an aim on top of the mount.
+-- Because the pitch pivot and the muzzle sit on the yaw pivot's YZ plane, the barrel's vertical plane
+-- always holds the yaw axis: the yaw is the aim's own bearing about that axis, however far out in
+-- front the pitch pivot is (the Rotster's pintle stands 1.75 ahead of its ring). The pitch is then
+-- found in that plane so the line out of the MUZZLE -- not the pivot -- runs through the aim point:
+-- a close target is hit where it is aimed at rather than a barrel's length beside it.
+function VehicleWeaponData.Solve(spec, frame, pivot, muzzle, aim)
+	local q = frame:PointToObjectSpace(aim)
+	local flat = math.sqrt(q.X * q.X + q.Z * q.Z)
+	if flat < 0.05 then
+		return nil
+	end
+	local yaw = math.atan2(-q.X, -q.Z)
+	-- The aim in the barrel's plane: straight ahead of the unturned mount, `flat` out.
+	local toAim = Vector3.new(0, q.Y, -flat) - pivot
+	if toAim.Magnitude < 1 then
+		return nil
+	end
+	local pitch = math.atan2(toAim.Y, -toAim.Z)
+	for _ = 1, 3 do
+		local mouth = VehicleWeaponData.Turn(muzzle, 0, pitch)
+		local fromMouth = toAim - mouth
+		if fromMouth.Magnitude <= 1 then
+			break
+		end
+		pitch = math.atan2(fromMouth.Y, -fromMouth.Z)
+	end
+	local yawLimit = math.rad(spec.yawLimit)
+	yaw = math.clamp(yaw, -yawLimit, yawLimit)
+	pitch = math.clamp(pitch, VehicleWeaponData.PitchFloor(spec, yaw), math.rad(spec.pitchMax))
+	local origin = frame:PointToWorldSpace(VehicleWeaponData.Turn(pivot, yaw, 0) + VehicleWeaponData.Turn(muzzle, yaw, pitch))
+	local direction = frame:VectorToWorldSpace(VehicleWeaponData.Turn(Vector3.new(0, 0, -1), yaw, pitch))
+	return yaw, pitch, origin, direction
 end
 
 return VehicleWeaponData

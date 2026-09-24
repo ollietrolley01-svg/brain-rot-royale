@@ -213,7 +213,11 @@ MatchConfig.XpPerKill = 60
 MatchConfig.TeamBaseVehicles = {
 	Enabled = true,
 	-- Oliver, 2026-09-24: "add more cars to spawn bases". Six, one for each bay of the compound's yard.
-	Slots = { "armed", "armed", "car", "car", "car", "bike" },
+	-- Then "we need armored vehicles too": one of the two gun cars is an armoured car (the scout car or
+	-- the carrier, rolled once for both bases), so each side has exactly one and neither has two. In the
+	-- world they are rare (VehicleModels weights 6 and 4 against the cars' 86); at a base, one of six is
+	-- a fair share for a mode built round pushing across one arena.
+	Slots = { "armored", "armed", "car", "car", "car", "bike" },
 	Inner = 22,
 	Outer = 75,
 	PadClearance = 18,

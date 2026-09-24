@@ -45,8 +45,11 @@ local RELIEF = 0.08
 -- Names DestructibleService gives health to under workspace.Map.
 -- Bodywork above the belt line: these stop a shot even though they are not part of the collision
 -- hull (see Build). Matched on the start of a part's name, so PillarBL and PillarCR both count.
+-- "Armor" is every armoured car's plate above the belt line AND its armoured glass: shot at, an
+-- armoured cabin stops the round and the vehicle takes it (VehicleArmor), where a car's glass lets it
+-- through to whoever is behind it.
 local SOLID_NAMES = { "Pillar", "Sail", "BedWall", "BedCorner", "Tailgate", "DoorTop", "CabHead",
-	"PostB", "Header", "Roof", "Quarter" }
+	"PostB", "Header", "Roof", "Quarter", "Armor" }
 
 local RESERVED_NAMES = {
 	Wall = true, Floor = true, Roof = true, Gable = true, Parapet = true, Stair = true,
@@ -784,7 +787,20 @@ VehicleModels.Models.Rotster = {
 			b:wedge("PillarC" .. n, V(0.36, roofY - belt, hatchFoot - hatchTop), CF(s * 2.93, (belt + roofY) / 2, (hatchTop + hatchFoot) / 2) * A(0, 180, 0), "accent")
 			b:box("WindowSeal" .. n, V(0.12, 0.1, hatchTop - wsTop + 0.16), V(s * 3.02, belt + 0.1, (wsTop + hatchTop) / 2), "trim")
 		end
-		b:box("RoofPanel", V(5.3, 0.25, hatchTop + 0.1 - 0.2), V(0, roofY + 0.125, (0.2 + hatchTop + 0.1) / 2), "accent")
+		-- The roof is built round the gunner's hatch (Mounts below: the roof gun rides a ring round it and
+		-- the gunner stands in it, Oliver 09-24 "make the car guns controllable by a gunner seat"): four
+		-- panels leave a 2.2-stud square hole centred at z 2.4 -- wide enough for a body turning in it (hips
+		-- 2 across), with the square coaming and the ring over its edge -- and the roof reads the same from
+		-- the street when it is built unarmed, because an unarmed build gets a hatch lid instead.
+		local hatchZ, hatchHalf = 2.4, 1.1
+		local roofBack = hatchTop + 0.1
+		b:box("RoofPanel", V(5.3, 0.25, hatchZ - hatchHalf - 0.2), V(0, roofY + 0.125, (0.2 + hatchZ - hatchHalf) / 2), "accent")
+		b:box("RoofPanelBack", V(5.3, 0.25, roofBack - hatchZ - hatchHalf), V(0, roofY + 0.125, (hatchZ + hatchHalf + roofBack) / 2), "accent")
+		for _, s in ipairs({ -1, 1 }) do
+			b:box(s < 0 and "RoofPanelL" or "RoofPanelR", V(2.65 - hatchHalf, 0.25, 2 * hatchHalf),
+				V(s * (hatchHalf + 2.65) / 2, roofY + 0.125, hatchZ), "accent")
+		end
+		b.hatch = { at = V(0, roofY + 0.25, hatchZ), half = hatchHalf }
 		b:bevel("RoofBrow", V(0, roofY + 0.125, 0.05), 5.3, 0.3, 0.25, FRONT, UP, "accent")
 		for _, s in ipairs({ -1, 1 }) do
 			b:bevel(s < 0 and "RoofEdgeL" or "RoofEdgeR", V(s * 2.76, roofY + 0.125, (hatchTop + 0.1 - 0.1) / 2), hatchTop + 0.2, 0.22, 0.25, V(s, 0, 0), UP, "accent")
@@ -1248,20 +1264,25 @@ VehicleModels.Models.CrocodiloRanger = {
 		b:bevel("RoofBrow", V(0, roofY + 0.125, wsTop + 0.1), 5.9, 0.3, 0.25, FRONT, UP, "accent")
 		for _, s in ipairs({ -1, 1 }) do
 			b:bevel(s < 0 and "RoofEdgeL" or "RoofEdgeR", V(s * 3.05, roofY + 0.125, (wsTop - 0.05 + cabBack + 0.15) / 2), cabBack + 0.2 - wsTop, 0.2, 0.25, V(s, 0, 0), UP, "accent")
-			b:box(s < 0 and "LightBarFootL" or "LightBarFootR", V(0.16, 0.34, 0.34), V(s * 2.2, roofY + 0.42, 0.0), "trim")
 		end
-		b:box("LightBar", V(5.0, 0.34, 0.5), V(0, roofY + 0.76, 0.0), "trim")
+		-- The light bar lies low on the roof's front edge. It stood on 0.34-stud feet (top at 7.83), right
+		-- across the line the bed's rocket launcher fires forward along (Mounts below): its lower tubes
+		-- leave at 7.45 and pass the light bar's line 2.95 studs on, so a bar that tall had every rocket
+		-- fired over the cab come out through it. Down here (top 7.35) the launcher's front-arc floor of 4
+		-- degrees (VehicleWeaponData, RangerRocketPod.frontGuard) carries the lowest rocket clear of it.
+		b:box("LightBar", V(4.6, 0.2, 0.42), V(0, roofY + 0.25 + 0.1, 0.1), "trim")
 		for index = 1, 6 do
-			b:layer("LightBarLamp" .. index, Vector2.new(0.62, 0.22), V(-2.1 + (index - 1) * 0.84, roofY + 0.76, -0.25), FRONT, 0.08, "lamp")
+			b:layer("LightBarLamp" .. index, Vector2.new(0.56, 0.08), V(-1.9 + (index - 1) * 0.76, roofY + 0.35, -0.11), FRONT, 0.08, "lamp")
 		end
 		b:pipe("Snorkel", { V(3.78, 4.2, -2.4), V(3.78, 5.0, -1.9), V(3.42, 6.85, -0.55), V(3.4, 7.3, -0.5) }, 0.4, "trim")
 		b:box("SnorkelHead", V(0.55, 0.5, 0.8), V(3.4, 7.45, -0.65), "trim")
 		b:bevel("SnorkelMouth", V(3.4, 7.45, -1.2), 0.55, 0.3, 0.5, FRONT, V(0, -1, 0), "trim")
 
-		-- Bed: spare wheel, roll bar with braces.
-		b:cyl("SpareTyre", 1.2, 3.2, CF(0, bedY + 0.6, 5.1) * A(0, 0, 90), "tyre")
-		b:cyl("SpareRim", 0.3, 2.0, CF(0, bedY + 1.2 + 0.08 - 0.15, 5.1) * A(0, 0, 90), "rim")
-		b:cyl("SpareCap", 0.3, 0.7, CF(0, bedY + 1.2 + 0.16 - 0.15, 5.1) * A(0, 0, 90), "chrome")
+		-- Bed: the roll bar with its braces. The spare wheel that lay flat in the middle of the bed has gone
+		-- under the tail (below), because the bed is the gunner's now: a pedestal rocket launcher bolted to
+		-- its floor, with the gunner walking round it (Mounts, "pedestal"). Its floor is clear from the cab to
+		-- the tailgate for exactly that. An unarmed Ranger (a parked one) gets a load of crates instead.
+		b.bedFloor = { y = bedY, z0 = cabBack, z1 = tailZ - 0.3 }
 		-- #61: the bed roll bar's top crossbar (RollBar3, the longest run at 5.3 studs) measured the
 		-- single worst ratio on the Ranger, 17.7 at the original 0.3 diameter -- thickened here along
 		-- with the rest of the pipe (one continuous tube reads as one gauge throughout; thickening
@@ -1286,6 +1307,12 @@ VehicleModels.Models.CrocodiloRanger = {
 		b:box("BumperStep", V(2.2, 0.1, 0.5), V(0, 2.5, tailZ + 0.45), "chrome")
 		b:tube("HitchStem", V(0, 2.1, tailZ + 0.7), V(0, 2.1, tailZ + 1.15), 0.2, "trim")
 		b:ball("HitchBall", 0.42, V(0, 2.42, tailZ + 1.15), "chrome")
+		-- The spare wheel, slung flat under the tail on a cradle bolted to the underside of the tail block
+		-- (sill 1.9), the way a pickup carries it, between and behind the rear wheels; its face (the rim,
+		-- 0.06 proud of the tyre) is 1.22 off the ground.
+		b:box("SpareCradle", V(1.7, 0.12, 0.3), V(0, sill - 0.06, 6.25), "trim")
+		b:cyl("SpareTyre", 0.5, 2.3, CF(0, sill - 0.12 - 0.25, 6.25) * A(0, 0, 90), "tyre")
+		b:cyl("SpareRim", 0.3, 1.5, CF(0, sill - 0.12 - 0.5 + 0.15 - 0.06, 6.25) * A(0, 0, 90), "rim")
 
 		-- Sides.
 		for _, s in ipairs({ -1, 1 }) do
@@ -1339,7 +1366,10 @@ VehicleModels.Models.CrocodiloRanger = {
 		return {
 			seats = {
 				driver = CF(-1.5, 2.66, 0.55),
-				passengers = { CF(1.5, 2.66, 0.55), CF(2.65, shoulder - 0.05, rz) * A(0, 90, 0), CF(-2.65, shoulder - 0.05, rz) * A(0, -90, 0) },
+				-- The two in the bed sit up on its rails facing out, legs over the side, the way people ride
+				-- on a technical: sat on the wheel tubs facing in (as they were) their knees reached 1.2 into
+				-- the bed, right through where the gunner stands when the launcher is turned to the side.
+				passengers = { CF(1.5, 2.66, 0.55), CF(3.3, railY + 0.14, 5.0) * A(0, -90, 0), CF(-3.3, railY + 0.14, 5.0) * A(0, 90, 0) },
 			},
 			exits = { CF(-6.0, 0, 0.3), CF(6.0, 0, 0.3), CF(-6.0, 0, 4.6), CF(6.0, 0, 4.6), CF(0, 0, -10.8), CF(0, 0, 10.4), CF(0, 7.5, 0.85) },
 			pose = { kind = "car" },
@@ -2125,119 +2155,1025 @@ VehicleModels.Models.BrrStreetfighter = {
 	end,
 }
 
+-- A plate lying on a sloped face (a wedge's slope running from (y0, z0) up and back to (y1, z1)), at
+-- `t` of the way up it and `x` across: its Z along the slope, its Y out of it, standing `stand` proud.
+-- Builder:layer only lays detail on faces square to an axis; armour is sloped.
+function Builder:slopePlate(name, y0, z0, y1, z1, t, x, size, stand, role)
+	local rise, run = y1 - y0, z1 - z0
+	local normal = V(0, run, -rise).Unit
+	local surface = V(x, y0 + rise * t, z0 + run * t)
+	return self:box(name, size, CFrame.fromMatrix(surface + normal * (stand - size.Y / 2), V(1, 0, 0), normal), role)
+end
+
+-- Tartaruga Scout: a light armoured scout car, low and broad, with a turtle's domed shell over its
+-- back half -- diamond scutes on top, plates down its flanks -- a sloped glacis with the bow gun's ball
+-- in it, a beak-like snout, and an open gun ring on the shell where the gunner stands behind a
+-- shielded heavy machine gun. Armoured all round: its vision blocks and slits are armoured glass, so
+-- the two up front are shot through the car, not the windows (VehicleArmor). Quick for its weight,
+-- still slower and heavier than any car (VehicleDynamics). Rarer than a car in the world, and never
+-- parked at the kerb (drivableOnly: VehicleModels.Pick leaves it out unless asked).
+VehicleModels.Models.TartarugaScout = {
+	kind = "car",
+	displayName = "Tartaruga Scout",
+	weight = 6,
+	drivableOnly = true,
+	schemes = {
+		{ name = "Snapping Olive", body = Color3.fromRGB(98, 114, 66), accent = Color3.fromRGB(72, 62, 42), stripe = Color3.fromRGB(214, 190, 120), seat = Color3.fromRGB(60, 52, 40), rim = Color3.fromRGB(56, 58, 52) },
+		{ name = "Desert Shell", body = Color3.fromRGB(196, 168, 118), accent = Color3.fromRGB(124, 94, 60), stripe = Color3.fromRGB(96, 122, 70), seat = Color3.fromRGB(90, 70, 50), rim = Color3.fromRGB(80, 74, 62) },
+		{ name = "Sea Turtle", body = Color3.fromRGB(70, 132, 128), accent = Color3.fromRGB(40, 72, 74), stripe = Color3.fromRGB(236, 214, 150), seat = Color3.fromRGB(40, 50, 52), rim = Color3.fromRGB(40, 50, 52) },
+		{ name = "Night Shell", body = Color3.fromRGB(48, 54, 52), accent = Color3.fromRGB(30, 32, 30), stripe = Color3.fromRGB(150, 230, 90), seat = Color3.fromRGB(26, 28, 28), rim = Color3.fromRGB(30, 32, 30) },
+		{ name = "Mango Shell", body = Color3.fromRGB(232, 150, 52), accent = Color3.fromRGB(110, 70, 36), stripe = Color3.fromRGB(250, 226, 140), seat = Color3.fromRGB(60, 44, 32), rim = Color3.fromRGB(60, 44, 32) },
+	},
+	build = function(b)
+		local HW = 3.3
+		local r, tw, track = 1.6, 1.05, 3.05
+		local fz, rz = -4.3, 4.3
+		local R = 1.95
+		local sill, deck = 1.6, 3.6
+		local noseZ, tailZ = -7.0, 6.9
+		local screenZ, cabBack = -3.4, 0.8
+		local topY = 6.0 -- the cabin roof and the shell's top, which the gun ring stands on
+		local glacisTop = 4.7
+		local doorFront, doorBack = fz + R, rz - R
+		local FRONT, BACK, UP = V(0, 0, -1), V(0, 0, 1), V(0, 1, 0)
+
+		b:hull("Chassis", V(6.4, 2.6, 13.6), V(0, 2.9, -0.05), 2.2)
+		b:hull("Hull_Upper", V(5.6, 1.8, 10.0), V(0, 5.1, 1.6), 0.1)
+
+		-- The lower hull: nose and tail blocks, the flanks between the wheels, the panels round each
+		-- opening, the wells, and armoured flares over the tyres.
+		b:box("NoseBlock", V(2 * HW - 0.2, deck - sill, fz - R - noseZ), V(0, (sill + deck) / 2, (noseZ + fz - R) / 2), "body")
+		b:box("TailBlock", V(2 * HW - 0.2, deck - sill, tailZ - rz - R), V(0, (sill + deck) / 2, (rz + R + tailZ) / 2), "body")
+		b:box("Belly", V(2 * (HW - 1.4) - 0.1, deck - sill, doorBack - doorFront), V(0, (sill + deck) / 2, (doorFront + doorBack) / 2), "mesh")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:box("ArmorFlank" .. n, V(0.5, deck - sill, doorBack - doorFront), V(s * (HW - 0.25), (sill + deck) / 2, (doorFront + doorBack) / 2), "body")
+			b:archPanel("ArchPanelF" .. n, r, fz, R, deck, s, HW - 1.4, HW, 12, "body")
+			b:archPanel("ArchPanelR" .. n, r, rz, R, deck, s, HW - 1.4, HW, 12, "body")
+			b:box("WellF" .. n, V(0.1, 2.0, 3.6), V(s * 1.95, 2.45, fz), "mesh")
+			b:box("WellR" .. n, V(0.1, 2.0, 3.6), V(s * 1.95, 2.45, rz), "mesh")
+			b:archLip("LipF" .. n, r, fz, R, s * (HW + 0.02), 0.56, 0.32, -104, 104, 12, "accent")
+			b:archLip("LipR" .. n, r, rz, R, s * (HW + 0.02), 0.56, 0.32, -104, 104, 12, "accent")
+			b:bevel("Rocker" .. n, V(s * (HW - 0.17), sill + 0.2, (doorFront + doorBack) / 2), doorBack - doorFront, 0.34, 0.4, V(s, 0, 0), V(0, -1, 0), "accent")
+		end
+
+		-- The glacis: one plate from the snout up to the cabin, the engine's louvres in it, the bow
+		-- gun's ball (DriverMounts) off to the right, and the eye-lamps in cages at its front corners.
+		b:wedge("ArmorGlacis", V(2 * HW - 0.4, glacisTop - deck, screenZ - noseZ), V(0, (deck + glacisTop) / 2, (noseZ + screenZ) / 2), "body")
+		b:slopePlate("EngineGrille", deck, noseZ, glacisTop, screenZ, 0.66, -0.9, V(2.2, 0.2, 1.1), 0.06, "mesh")
+		for index = 1, 4 do
+			b:slopePlate("EngineLouvre" .. index, deck, noseZ, glacisTop, screenZ, 0.53 + index * 0.052, -0.9, V(2.0, 0.2, 0.08), 0.12, "trim")
+		end
+		b:slopePlate("GlacisPlate", deck, noseZ, glacisTop, screenZ, 0.2, 0, V(4.6, 0.2, 0.9), 0.08, "accent")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			local eye = V(s * 2.35, deck + 0.38, noseZ + 0.3)
+			b:box("EyePod" .. n, V(1.0, 0.76, 0.7), eye, "accent")
+			b:cylZ("HeadlampRing" .. n, 0.3, 0.64, eye + V(0, 0, -0.42), "trim")
+			b:cylZ("Headlamp" .. n, 0.3, 0.46, eye + V(0, 0, -0.48), "lamp")
+			for _, x in ipairs({ -0.14, 0.14 }) do
+				b:box(string.format("EyeCage%s%d", n, x < 0 and 1 or 2), V(0.06, 0.74, 0.06), eye + V(x, 0, -0.7), "mesh")
+			end
+			b:box("EyeCageTop" .. n, V(0.66, 0.06, 0.34), eye + V(0, 0.4, -0.56), "mesh")
+			b:layer("Indicator" .. n, Vector2.new(0.3, 0.2), V(s * 2.9, deck - 0.35, noseZ), FRONT, 0.1, "amber")
+		end
+
+		-- The snout: a beaked bumper with a slatted mouth, tow hooks, and a plate.
+		b:box("FrontBumper", V(5.8, 0.8, 0.5), V(0, sill + 0.55, noseZ - 0.25), "trim")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:beam("TowHook" .. n, V(s * 1.9, sill + 0.35, noseZ - 0.45), V(s * 1.9, sill + 0.35, noseZ - 0.8), 0.16, 0.28, "tail")
+		end
+		b:box("Snout", V(2.6, 0.8, 0.5), V(0, deck - 0.2, noseZ - 0.25), "accent")
+		for index, y in ipairs({ deck - 0.42, deck - 0.2, deck + 0.02 }) do
+			b:layer("SnoutSlat" .. index, Vector2.new(2.2, 0.08), V(0, y, noseZ - 0.5), FRONT, 0.06, "mesh")
+		end
+		b:plate("PlateFront", V(1.7, 0.42, 0.3), V(0, sill + 0.55, noseZ - 0.5 - 0.12 + 0.15), "TRT 01", Enum.NormalId.Front)
+
+		-- The cabin: a sloped front plate with two vision blocks, flanks with slits, a flat roof.
+		local screenTop = topY - 0.2
+		b:wedge("ArmorScreen", V(5.4, screenTop - glacisTop, 1.0), V(0, (glacisTop + screenTop) / 2, screenZ + 0.5), "body")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:slopePlate("ArmorGlass" .. n, glacisTop, screenZ, screenTop, screenZ + 1.0, 0.55, s * 1.25, V(1.8, 0.2, 0.62), 0.07, "glass")
+			b:slopePlate("ArmorGlassFrame" .. n, glacisTop, screenZ, screenTop, screenZ + 1.0, 0.55, s * 1.25, V(2.0, 0.2, 0.8), 0.04, "trim")
+			b:box("ArmorCabin" .. n, V(0.3, screenTop - deck, cabBack - screenZ - 1.0), V(s * 2.55, (deck + screenTop) / 2, (screenZ + 1.0 + cabBack) / 2), "body")
+			b:layer("ArmorSlit" .. n, Vector2.new(1.0, 0.16), V(s * 2.7, 5.15, -1.3), V(s, 0, 0), 0.06, "glass")
+			b:layer("ArmorSlitFrame" .. n, Vector2.new(1.2, 0.34), V(s * 2.7, 5.15, -1.3), V(s, 0, 0), 0.03, "trim")
+			b:beam("MirrorArm" .. n, V(s * 2.7, 5.3, -2.15), V(s * 3.2, 5.42, -2.25), 0.18, 0.16, "trim")
+			b:box("Mirror" .. n, V(0.26, 0.56, 0.42), V(s * 3.3, 5.45, -2.25), "accent")
+			b:layer("MirrorGlass" .. n, Vector2.new(0.16, 0.44), V(s * 3.3, 5.45, -2.04), BACK, 0.08, "chrome")
+		end
+		b:box("ArmorCabinRoof", V(5.4, 0.2, cabBack - screenZ - 1.0), V(0, topY - 0.1, (screenZ + 1.0 + cabBack) / 2), "accent")
+		b:bevel("ArmorCabinBrow", V(0, topY - 0.1, screenZ + 0.85), 5.4, 0.3, 0.2, FRONT, UP, "accent")
+
+		-- The shell: three tiers, each bevelled in, the top one carrying the gun ring (Mounts) and
+		-- diamond scutes behind it; plates down the flanks; a rear slope with the hatch.
+		local shellBack = tailZ - 0.3
+		b:box("ShellLow", V(5.6, 1.3, shellBack - cabBack), V(0, deck + 0.65, (cabBack + shellBack) / 2), "body")
+		b:box("ShellMid", V(4.8, 0.7, shellBack - 0.4 - cabBack), V(0, deck + 1.65, (cabBack + shellBack - 0.4) / 2), "body")
+		b:box("ShellTop", V(4.0, 0.4, shellBack - 1.0 - cabBack), V(0, topY - 0.2, (cabBack + shellBack - 1.0) / 2), "accent")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:bevel("ShellMidEdge" .. n, V(s * 2.6, deck + 1.65, (cabBack + shellBack - 0.4) / 2), shellBack - 0.4 - cabBack, 0.4, 0.7, V(s, 0, 0), UP, "body")
+			b:bevel("ShellTopEdge" .. n, V(s * 2.2, topY - 0.2, (cabBack + shellBack - 1.0) / 2), shellBack - 1.0 - cabBack, 0.4, 0.4, V(s, 0, 0), UP, "accent")
+			for index, z in ipairs({ 1.9, 3.6, 5.3 }) do
+				b:layer(string.format("ShellPlate%s%d", n, index), Vector2.new(1.5, 0.9), V(s * 2.8, deck + 0.62, z), V(s, 0, 0), 0.08, "accent")
+			end
+			b:layer("ShellBand" .. n, Vector2.new(shellBack - cabBack - 0.2, 0.12), V(s * 2.8, deck + 1.18, (cabBack + shellBack) / 2), V(s, 0, 0), 0.05, "stripe")
+		end
+		b:bevel("ShellMidBack", V(0, deck + 1.65, shellBack - 0.2), 4.8, 0.4, 0.7, BACK, UP, "body")
+		b:bevel("ShellTopBack", V(0, topY - 0.2, shellBack - 0.8), 4.0, 0.4, 0.4, BACK, UP, "accent")
+		for index, at in ipairs({ V(-0.8, 0, 4.35), V(0.8, 0, 4.35), V(0, 0, 5.05) }) do
+			b:box("ShellScute" .. index, V(0.9, 0.12, 0.9), CF(at.X, topY + 0.02, at.Z) * A(0, 45, 0), "stripe")
+		end
+		b:cyl("TurretWell", 0.06, 2.2, CF(0, topY + 0.03, 1.55) * A(0, 0, 90), "mesh")
+
+		-- The tail: the hatch, two jerry cans, lamps in guards, the bumper and the hitch.
+		local tailFace = V(0, 0, shellBack)
+		b:layer("RearHatch", Vector2.new(2.2, 1.0), tailFace + V(0, deck + 0.6, 0), BACK, 0.08, "accent")
+		b:layer("RearHatchHandle", Vector2.new(0.9, 0.12), tailFace + V(0, deck + 0.75, 0), BACK, 0.16, "chrome")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:box("JerryCan" .. n, V(0.7, 1.0, 0.34), V(s * 1.95, deck + 0.55, shellBack + 0.17), "stripe")
+			b:box("JerryCanCap" .. n, V(0.16, 0.14, 0.16), V(s * 1.95 + s * 0.18, deck + 1.12, shellBack + 0.17), "trim")
+			b:box("JerryStrap" .. n, V(0.78, 0.1, 0.42), V(s * 1.95, deck + 0.6, shellBack + 0.17), "mesh")
+			b:lamp("Tail" .. n, V(s * 2.65, deck - 0.4, tailZ), BACK, Vector2.new(0.5, 0.36), "tail", "redlens")
+			b:box("TailGuard" .. n, V(0.7, 0.08, 0.3), V(s * 2.65, deck - 0.1, tailZ + 0.15), "mesh")
+		end
+		b:box("RearBumper", V(5.8, 0.6, 0.4), V(0, sill + 0.4, tailZ + 0.2), "trim")
+		b:plate("PlateRear", V(1.7, 0.42, 0.3), V(0, deck - 0.8, tailZ + 0.12 - 0.15), "TRT 01", Enum.NormalId.Back)
+		b:tube("HitchStem", V(0, sill + 0.3, tailZ + 0.4), V(0, sill + 0.3, tailZ + 0.85), 0.2, "trim")
+		b:ball("HitchBall", 0.4, V(0, sill + 0.6, tailZ + 0.85), "chrome")
+
+		-- Inside (seen through the blocks): floor, dash, wheel, two seats.
+		b:box("CabinPan", V(4.6, 0.2, 3.8), V(0, 2.35, -1.15), "interior")
+		b:box("Dash", V(4.6, 0.6, 0.8), V(0, 4.0, -2.8), "dash")
+		b:tube("Column", V(-1.2, 4.0, -2.55), V(-1.2, 4.2, -2.2), 0.2, "dash")
+		b:steeringWheel("SteeringWheel", V(-1.2, 4.25, -2.1), V(0, 0.45, 0.89).Unit, 0.5)
+		b:bucketSeat("SeatDriver", V(-1.2, 2.64, -1.1), 1.8, 1.7, 2.1, 10)
+		b:bucketSeat("SeatPassenger", V(1.2, 2.64, -1.1), 1.8, 1.7, 2.1, 10)
+
+		for _, w in ipairs({ { "Wheel_FL", -1, fz, true }, { "Wheel_FR", 1, fz, true }, { "Wheel_RL", -1, rz, false }, { "Wheel_RR", 1, rz, false } }) do
+			b:roadWheel(w[1], V(w[2] * track, r, w[3]), r, tw, w[2], { steer = w[4], style = "offroad", spokes = 6, rimScale = 0.56, tread = 16 })
+		end
+
+		return {
+			seats = {
+				driver = CF(-1.2, 2.7, -1.1),
+				passengers = { CF(1.2, 2.7, -1.1) },
+			},
+			exits = { CF(-5.4, 0, -1.1), CF(5.4, 0, -1.1), CF(-5.4, 0, 3.2), CF(5.4, 0, 3.2), CF(0, 0, -9.8), CF(0, 0, 9.6), CF(0, 7.2, 4.2) },
+			pose = { name = "CarDriver" },
+		}
+	end,
+}
+
+-- Camelo Carrier: a heavy armoured carrier on big wheels, after Frigo Camelo -- a tall, square,
+-- fridge-white box with a camel's face (sleepy lidded eye-lamps, two nostrils over a slatted mouth),
+-- two humps on its back (the gunner's open cupola with a grenade machine gun, and a rounded hatch),
+-- and a fridge door at the back with the long chrome handle. Up to six ride inside behind armoured
+-- glass. The slowest and toughest thing on wheels (VehicleDynamics, VehicleArmor); rarer than the
+-- scout car, never parked at the kerb.
+VehicleModels.Models.CameloCarrier = {
+	kind = "car",
+	displayName = "Camelo Carrier",
+	weight = 4,
+	drivableOnly = true,
+	schemes = {
+		{ name = "Frigo White", body = Color3.fromRGB(236, 234, 226), accent = Color3.fromRGB(196, 158, 104), stripe = Color3.fromRGB(96, 150, 196), seat = Color3.fromRGB(70, 64, 58), rim = Color3.fromRGB(70, 66, 60) },
+		{ name = "Sand Camel", body = Color3.fromRGB(206, 170, 112), accent = Color3.fromRGB(150, 110, 66), stripe = Color3.fromRGB(246, 232, 196), seat = Color3.fromRGB(96, 74, 50), rim = Color3.fromRGB(96, 74, 50) },
+		{ name = "Oasis Night", body = Color3.fromRGB(44, 58, 72), accent = Color3.fromRGB(210, 170, 90), stripe = Color3.fromRGB(210, 170, 90), seat = Color3.fromRGB(30, 34, 40), rim = Color3.fromRGB(30, 34, 40) },
+		{ name = "Mint Fridge", body = Color3.fromRGB(170, 222, 200), accent = Color3.fromRGB(236, 236, 228), stripe = Color3.fromRGB(230, 110, 120), seat = Color3.fromRGB(60, 70, 66), rim = Color3.fromRGB(236, 236, 228) },
+		{ name = "Olive Caravan", body = Color3.fromRGB(104, 112, 72), accent = Color3.fromRGB(70, 62, 44), stripe = Color3.fromRGB(226, 196, 120), seat = Color3.fromRGB(56, 50, 40), rim = Color3.fromRGB(56, 50, 40) },
+	},
+	build = function(b)
+		local HW = 3.5
+		local r, tw, track = 1.85, 1.25, 3.2
+		local fz, rz = -5.0, 4.5
+		local R = 2.2
+		local sill, deck = 2.0, 4.4
+		local noseZ, tailZ = -7.7, 7.5
+		local hoodTop = deck + 0.45
+		local screenZ = -4.0
+		local roofY = 7.25
+		local doorFront, doorBack = fz + R, rz - R
+		local FRONT, BACK, UP = V(0, 0, -1), V(0, 0, 1), V(0, 1, 0)
+
+		b:hull("Chassis", V(6.8, 2.6, 15.0), V(0, 3.3, -0.1), 2.6)
+		b:hull("Hull_Upper", V(6.6, roofY + 0.2 - deck, tailZ - screenZ), V(0, (deck + roofY + 0.2) / 2, (screenZ + tailZ) / 2), 0.1)
+
+		-- Lower hull, as the scout car's but deeper.
+		b:box("NoseBlock", V(2 * HW - 0.2, deck - sill, fz - R - noseZ), V(0, (sill + deck) / 2, (noseZ + fz - R) / 2), "body")
+		b:box("TailBlock", V(2 * HW - 0.2, deck - sill, tailZ - rz - R), V(0, (sill + deck) / 2, (rz + R + tailZ) / 2), "body")
+		b:box("Belly", V(2 * (HW - 1.6) - 0.1, deck - sill, doorBack - doorFront), V(0, (sill + deck) / 2, (doorFront + doorBack) / 2), "mesh")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:box("ArmorFlank" .. n, V(0.5, deck - sill, doorBack - doorFront), V(s * (HW - 0.25), (sill + deck) / 2, (doorFront + doorBack) / 2), "body")
+			b:archPanel("ArchPanelF" .. n, r, fz, R, deck, s, HW - 1.6, HW, 12, "body")
+			b:archPanel("ArchPanelR" .. n, r, rz, R, deck, s, HW - 1.6, HW, 12, "body")
+			b:box("WellF" .. n, V(0.1, 2.3, 4.0), V(s * 1.95, 3.0, fz), "mesh")
+			b:box("WellR" .. n, V(0.1, 2.3, 4.0), V(s * 1.95, 3.0, rz), "mesh")
+			b:archLip("LipF" .. n, r, fz, R, s * (HW + 0.02), 0.6, 0.34, -104, 104, 12, "accent")
+			b:archLip("LipR" .. n, r, rz, R, s * (HW + 0.02), 0.6, 0.34, -104, 104, 12, "accent")
+			b:bevel("Rocker" .. n, V(s * (HW - 0.17), sill + 0.2, (doorFront + doorBack) / 2), doorBack - doorFront, 0.34, 0.4, V(s, 0, 0), V(0, -1, 0), "accent")
+			b:box("SideStep" .. n, V(0.6, 0.14, 2.2), V(s * (HW + 0.3), sill - 0.1, -2.0), "trim")
+			b:box("StepBracket" .. n, V(0.5, 0.3, 0.2), V(s * (HW + 0.05), sill + 0.05, -2.0), "trim")
+		end
+
+		-- The bonnet, the face and the bumper. The camel: big eye-lamps with heavy lids, two nostrils,
+		-- a slatted mouth.
+		b:box("Hood", V(2 * HW - 0.4, hoodTop - deck, screenZ - noseZ - 0.3), V(0, (deck + hoodTop) / 2, (noseZ + 0.3 + screenZ) / 2), "body")
+		b:bevel("HoodNose", V(0, (deck + hoodTop) / 2, noseZ + 0.15), 2 * HW - 0.4, 0.3, hoodTop - deck, FRONT, UP, "body")
+		b:layer("HoodVent", Vector2.new(2.6, 1.6), V(0, hoodTop, -5.3), UP, 0.06, "mesh")
+		for index = 1, 5 do
+			b:layer("HoodLouvre" .. index, Vector2.new(2.4, 0.08), V(0, hoodTop, -6.2 + index * 0.25), UP, 0.12, "trim")
+		end
+		local face = V(0, 0, noseZ)
+		b:layer("Mouth", Vector2.new(3.6, 0.85), face + V(0, sill + 1.3, 0), FRONT, 0.08, "mesh")
+		for index = 1, 7 do
+			b:layer("MouthBar" .. index, Vector2.new(0.1, 0.73), face + V(-1.5 + (index - 1) * 0.5, sill + 1.3, 0), FRONT, 0.16, "trim")
+		end
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:cylZ("Nostril" .. n, 0.3, 0.52, V(s * 0.7, deck - 0.35, noseZ - 0.1 + 0.15), "mesh")
+			b:cylZ("NostrilRim" .. n, 0.3, 0.7, V(s * 0.7, deck - 0.35, noseZ - 0.04 + 0.15), "accent")
+			local eye = V(s * 2.3, deck - 0.3, noseZ)
+			b:cylZ("EyeHousing" .. n, 0.3, 1.2, eye + V(0, 0, -0.08 + 0.15), "trim")
+			b:cylZ("EyeLens" .. n, 0.3, 0.98, eye + V(0, 0, -0.14 + 0.15), "lens")
+			b:cylZ("Headlamp" .. n, 0.3, 0.64, eye + V(0, 0, -0.2 + 0.15), "lamp")
+			b:wedge("EyeLid" .. n, V(1.4, 0.36, 0.5), CF(eye + V(0, 0.62, -0.1)) * A(0, 0, s * -6), "accent")
+			b:layer("Indicator" .. n, Vector2.new(0.36, 0.22), face + V(s * 3.0, deck + 0.2, 0), FRONT, 0.1, "amber")
+		end
+		b:box("FrontBumper", V(6.8, 1.0, 0.6), V(0, sill + 0.3, noseZ - 0.3), "trim")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:beam("TowHook" .. n, V(s * 2.1, sill + 0.05, noseZ - 0.55), V(s * 2.1, sill + 0.05, noseZ - 0.9), 0.18, 0.3, "tail")
+		end
+		b:cyl("Winch", 1.7, 0.55, CF(0, sill + 0.05, noseZ - 0.72), "engine")
+		b:box("WinchHook", V(0.16, 0.3, 0.12), V(0, sill - 0.25, noseZ - 1.02), "chrome")
+		b:plate("PlateFront", V(1.7, 0.42, 0.3), V(0, sill + 0.55, noseZ - 0.6 - 0.12 + 0.15), "CML 22", Enum.NormalId.Front)
+
+		-- The cab's steep armoured screen (two thick panes with a post between), under a visor.
+		b:wedge("ArmorScreen", V(6.4, roofY - hoodTop, 0.8), V(0, (hoodTop + roofY) / 2, screenZ + 0.4), "body")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:slopePlate("ArmorGlass" .. n, hoodTop, screenZ, roofY, screenZ + 0.8, 0.5, s * 1.5, V(2.5, 0.2, 1.5), 0.14, "glass")
+			b:slopePlate("ArmorGlassFrame" .. n, hoodTop, screenZ, roofY, screenZ + 0.8, 0.5, s * 1.5, V(2.7, 0.2, 1.7), 0.07, "trim")
+		end
+		b:slopePlate("ArmorScreenPost", hoodTop, screenZ, roofY, screenZ + 0.8, 0.5, 0, V(0.24, 0.2, 1.7), 0.1, "accent")
+		b:bevel("RoofVisor", V(0, roofY + 0.1, screenZ + 0.65), 6.4, 0.3, 0.2, FRONT, UP, "accent")
+
+		-- The box: flanks, roof, the fridge-door back; windows and a band down each side.
+		local boxFront = screenZ + 0.8
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			local side = V(s, 0, 0)
+			b:box("ArmorSide" .. n, V(0.4, roofY - deck, tailZ - boxFront), V(s * (HW - 0.3), (deck + roofY) / 2, (boxFront + tailZ) / 2), "body")
+			b:layer("ArmorDoorGlass" .. n, Vector2.new(1.3, 0.9), V(s * (HW - 0.1), 6.3, -2.4), side, 0.14, "glass")
+			b:layer("ArmorDoorFrame" .. n, Vector2.new(1.5, 1.1), V(s * (HW - 0.1), 6.3, -2.4), side, 0.07, "trim")
+			for index, z in ipairs({ 1.4, 4.2 }) do
+				b:layer(string.format("ArmorPort%s%d", n, index), Vector2.new(0.8, 0.5), V(s * (HW - 0.1), 6.35, z), side, 0.14, "glass")
+				b:layer(string.format("ArmorPortFrame%s%d", n, index), Vector2.new(1.0, 0.7), V(s * (HW - 0.1), 6.35, z), side, 0.07, "trim")
+			end
+			b:layer("DoorSeamFront" .. n, Vector2.new(0.06, 2.6), V(s * (HW - 0.1), 5.75, -3.3), side, 0.03, "mesh")
+			b:layer("DoorSeamBack" .. n, Vector2.new(0.06, 2.6), V(s * (HW - 0.1), 5.75, -1.2), side, 0.03, "mesh")
+			b:layer("DoorHandle" .. n, Vector2.new(0.5, 0.14), V(s * (HW - 0.1), 5.2, -1.6), side, 0.12, "chrome")
+			b:layer("Band" .. n, Vector2.new(tailZ - boxFront - 0.4, 0.22), V(s * (HW - 0.1), 5.0, (boxFront + tailZ) / 2), side, 0.05, "stripe")
+			b:plate("SideName" .. n, V(0.3, 0.45, 1.8), V(s * (HW - 0.1 + 0.12 - 0.15), 6.35, 2.8), "CAMELO",
+				s < 0 and Enum.NormalId.Left or Enum.NormalId.Right, "accent", "stripe")
+			b:box("Stowage" .. n, V(0.6, 0.7, 2.0), V(s * (HW + 0.2), deck + 0.45, rz), "accent")
+			b:box("StowageLid" .. n, V(0.66, 0.08, 2.06), V(s * (HW + 0.2), deck + 0.84, rz), "trim")
+			b:beam("MirrorArm" .. n, V(s * (HW - 0.1), 6.4, boxFront + 0.3), V(s * (HW + 0.45), 6.55, boxFront + 0.2), 0.2, 0.18, "trim")
+			b:box("Mirror" .. n, V(0.3, 0.9, 0.5), V(s * (HW + 0.6), 6.4, boxFront + 0.18), "accent")
+			b:layer("MirrorGlass" .. n, Vector2.new(0.18, 0.74), V(s * (HW + 0.6), 6.4, boxFront + 0.43), BACK, 0.08, "chrome")
+		end
+		b:box("ArmorRoof", V(2 * (HW - 0.1) + 0.14, 0.2, tailZ - boxFront), V(0, roofY + 0.1, (boxFront + tailZ) / 2), "accent")
+
+		-- The back hump: a rounded hatch, stepped in twice, with its handle.
+		local humpZ = 4.6
+		b:box("HumpLow", V(3.0, 0.45, 2.6), V(0, roofY + 0.2 + 0.225, humpZ), "accent")
+		b:box("HumpTop", V(2.0, 0.3, 1.6), V(0, roofY + 0.2 + 0.45 + 0.15, humpZ), "accent")
+		for _, e in ipairs({ { "L", V(-1, 0, 0) }, { "R", V(1, 0, 0) }, { "F", FRONT }, { "B", BACK } }) do
+			local out = e[2]
+			local lowLen = math.abs(out.X) > 0.5 and 2.6 or 3.0
+			local topLen = math.abs(out.X) > 0.5 and 1.6 or 2.0
+			local lowOff = math.abs(out.X) > 0.5 and 1.5 + 0.2 or 1.3 + 0.2
+			local topOff = math.abs(out.X) > 0.5 and 1.0 + 0.2 or 0.8 + 0.2
+			b:bevel("HumpLowEdge" .. e[1], V(0, roofY + 0.425, humpZ) + out * lowOff, lowLen, 0.4, 0.45, out, UP, "accent")
+			b:bevel("HumpTopEdge" .. e[1], V(0, roofY + 0.8, humpZ) + out * topOff, topLen, 0.4, 0.3, out, UP, "accent")
+		end
+		b:box("HumpHandle", V(0.7, 0.1, 0.12), V(0, roofY + 1.0, humpZ + 0.3), "chrome")
+		b:cyl("TurretWell", 0.06, 2.5, CF(0, roofY + 0.23, -1.2) * A(0, 0, 90), "mesh")
+
+		-- The back: a fridge's door, long chrome handle and all, lamps, steps, the hitch.
+		b:box("ArmorRear", V(2 * (HW - 0.5), roofY - deck, 0.3), V(0, (deck + roofY) / 2, tailZ - 0.15), "body")
+		b:layer("FridgeSeal", Vector2.new(3.0, 2.7), V(0, 5.75, tailZ), BACK, 0.07, "trim")
+		b:layer("FridgeDoor", Vector2.new(2.8, 2.5), V(0, 5.75, tailZ), BACK, 0.14, "body")
+		b:box("FridgeHandle", V(0.14, 1.6, 0.12), V(1.05, 5.75, tailZ + 0.34), "chrome")
+		for _, y in ipairs({ 5.1, 6.4 }) do
+			b:cylZ(y < 6 and "FridgeHandleFootLow" or "FridgeHandleFootHigh", 0.3, 0.1, V(1.05, y, tailZ + 0.14), "chrome")
+		end
+		b:plate("FridgeBadge", V(1.6, 0.4, 0.3), V(-0.4, 6.6, tailZ + 0.21 - 0.15), "FRIGO", Enum.NormalId.Back, "stripe", "body")
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:lamp("Tail" .. n, V(s * 2.9, deck + 0.3, tailZ), BACK, Vector2.new(0.46, 0.9), "tail", "redlens")
+		end
+		b:box("RearBumper", V(6.6, 0.6, 0.5), V(0, sill + 0.3, tailZ + 0.25), "trim")
+		b:box("RearStep", V(2.4, 0.12, 0.5), V(0, sill + 0.66, tailZ + 0.3), "chrome")
+		b:plate("PlateRear", V(1.7, 0.42, 0.3), V(0, deck - 0.5, tailZ + 0.12 - 0.15), "CML 22", Enum.NormalId.Back)
+		b:tube("HitchStem", V(0, sill + 0.2, tailZ + 0.5), V(0, sill + 0.2, tailZ + 0.95), 0.22, "trim")
+		b:ball("HitchBall", 0.44, V(0, sill + 0.52, tailZ + 0.95), "chrome")
+
+		-- Inside: floor, dash, wheel, the two up front and benches down both sides of the box.
+		b:box("CabinPan", V(5.6, 0.2, tailZ - 0.4 - screenZ), V(0, 2.6, (screenZ + tailZ - 0.4) / 2), "interior")
+		b:box("Dash", V(5.8, 0.7, 0.8), V(0, 4.6, -3.45), "dash")
+		b:tube("Column", V(-1.4, 4.7, -3.2), V(-1.4, 4.95, -2.8), 0.22, "dash")
+		b:steeringWheel("SteeringWheel", V(-1.4, 5.0, -2.7), V(0, 0.5, 0.87).Unit, 0.56)
+		b:bucketSeat("SeatDriver", V(-1.4, 3.2, -1.9), 1.9, 1.8, 2.2, 10)
+		b:bucketSeat("SeatPassenger", V(1.4, 3.2, -1.9), 1.9, 1.8, 2.2, 10)
+		for _, s in ipairs({ -1, 1 }) do
+			local n = s < 0 and "L" or "R"
+			b:box("Bench" .. n, V(0.9, 0.45, 4.2), V(s * 2.2, 3.4, 3.7), "seat")
+			b:box("BenchBack" .. n, V(0.3, 1.6, 4.2), V(s * 2.75, 4.4, 3.7), "seat")
+		end
+
+		for _, w in ipairs({ { "Wheel_FL", -1, fz, true }, { "Wheel_FR", 1, fz, true }, { "Wheel_RL", -1, rz, false }, { "Wheel_RR", 1, rz, false } }) do
+			b:roadWheel(w[1], V(w[2] * track, r, w[3]), r, tw, w[2], { steer = w[4], style = "offroad", spokes = 8, rimScale = 0.54, tread = 18 })
+		end
+
+		return {
+			seats = {
+				driver = CF(-1.4, 3.26, -1.9),
+				passengers = { CF(1.4, 3.26, -1.9), CF(-2.2, 3.7, 2.6) * A(0, -90, 0), CF(2.2, 3.7, 2.6) * A(0, 90, 0),
+					CF(-2.2, 3.7, 4.8) * A(0, -90, 0), CF(2.2, 3.7, 4.8) * A(0, 90, 0) },
+			},
+			exits = { CF(-5.9, 0, -1.9), CF(5.9, 0, -1.9), CF(-5.9, 0, 3.6), CF(5.9, 0, 3.6), CF(0, 0, -10.6), CF(0, 0, 10.4), CF(0, 8.8, 2.6) },
+			pose = { name = "CarDriver" },
+		}
+	end,
+}
+
 --------------------------------------------------------------------------------
 -- Mounted weapons (Oliver: "vehicles with different guns and explosive weapons on them")
 --------------------------------------------------------------------------------
--- What each armed model's weapon DOES lives in Shared/VehicleWeaponData; this is only the metal.
--- Every mount has the same contract, so VehicleWeapons and VehicleWeaponClient never guess:
+-- What each armed model's weapons DO lives in Shared/VehicleWeaponData; this is only the metal.
+--
+-- An armed model carries two weapons (Oliver 09-24: "make the car guns controllable by a gunner seat"
+-- and "make the drivers have their own gun that they can control"):
+--   the TURRET (VehicleModels.Mounts), worked from the GunnerSeat, named Turret*
+--   the DRIVER'S GUN (VehicleModels.DriverMounts), a short-arc gun at the front, fired from the wheel,
+--     named DriverGun*
+-- Every mount keeps the same contract, so VehicleWeapons and VehicleWeaponClient never guess (the
+-- names below are the turret's; a driver's gun is DriverGunYaw / DriverGunPitch / DriverGunMuzzle):
 --   TurretYaw     pivot (Pivot "TurretYaw") on the chassis; turns about its own Y
---   TurretPitch   pivot (Pivot "TurretPitch") hung from TurretYaw, straight above it so yawing
---                 never moves it; tips about its own X, positive is up
---   TurretMuzzle  invisible marker welded to TurretPitch at the barrel's mouth
+--   TurretPitch   pivot (Pivot "TurretPitch") hung from TurretYaw, square to it and anywhere in its
+--                 YZ plane -- straight above it (a pedestal, a plinth) or out in front on a pintle arm
+--                 (the Rotster's hatch ring, where the gunner stands on the yaw axis); tips about its
+--                 own X, positive is up
+--   TurretMuzzle  invisible marker welded to TurretPitch at the mouth, on the pitch pivot's YZ plane
 -- Both pivots are built square to the chassis and facing the front (-Z), so a Transform of
--- CFrame.Angles(0, yaw, 0) and CFrame.Angles(pitch, 0, 0) is the whole of aiming.
--- Two-wheelers carry none.
+-- CFrame.Angles(0, yaw, 0) and CFrame.Angles(pitch, 0, 0) is the whole of aiming, and because the
+-- barrel's vertical plane always holds the yaw axis, VehicleWeaponData.Solve finds both angles exactly.
+-- A ring bearing (the hatch ring) has nothing on its axis, so its yaw pivot carries RingRadius: the
+-- ring it turns on (tools/vehicle_models_runtime_check.py tests that circle instead of the axis line).
+--
+-- The gunner's markers (Attachments), read by VehicleWeaponClient's first-person view and by
+-- VehicleClient's third-person pose:
+--   on TurretYaw     GunnerEye     the gunner's eye, facing -Z: where the camera sits in first person
+--                                  (it rides the turret round; the gunner's body turns with it)
+--   on TurretPitch   GunnerSight   the eye behind the sight, looking along the bore (aiming down it)
+--                    GripR, GripL  the palms on the handles (-Z along the fingers, +Y out of the back
+--                                  of the hand, the gun keypoints' own convention)
+--   on either        ReloadHand    where the right hand goes to load
+-- TurretYaw's attribute Stance ("stand" or "kneel") says how the gunner is posed.
+-- Two-wheelers carry none; an unarmed build (a parked prop) carries neither mount.
+
 VehicleModels.Mounts = {
-	-- A pintle gun on the hatch roof, clear of the roof panel, behind the driver's head.
-	Rotster = { style = "gun", base = V(0, 6.0, 2.0) },
-	-- A rocket pod on a ring mount clamped across the top of the bed's roll bar (its crossbar tops
-	-- out at 7.01), high enough to fire forward over the cab with nothing under it but the roll bar
-	-- the truck already had. It used to stand on a 3.9-stud, 0.5-thick post in the middle of the bed,
-	-- which is exactly what "the Ranger still has poles sticking out" describes. The bed behind the
-	-- roll bar (z 3.3 to 6.5) is left clear for a gunner.
-	CrocodiloRanger = { style = "pod", base = V(0, 7.0, 2.75), column = 0.2 },
+	-- A machine gun on a ring round the roof hatch, on a pintle arm out in front of the gunner, who
+	-- stands in the hatch and turns with the ring (a Humvee's gun, on a hot hatch).
+	Rotster = { style = "ring", base = V(0, 6.0, 2.4) },
+	-- A four-tube rocket launcher on a pedestal bolted to the middle of the bed floor, the gunner on a
+	-- platform that turns with it. It used to sit on a ring clamped over the roll bar (Oliver 09-24:
+	-- "the ranger car's gun is floating in the air"; "put the gun in the truck bed on a mount").
+	CrocodiloRanger = { style = "pedestal", base = V(0, 3.1, 4.55) },
 	-- A mortar on a plinth at the back of the roof rack, between the last rack bar and the rail ends.
 	-- The plinth is 0.9 tall so the tube clears the bat and the drum wherever it points: on a 0.4
 	-- plinth, swung 30-40 degrees left at its lowest pitch (10) it went straight through the bat's
 	-- barrel and end cap, and 20-60 degrees right through the drum (0.8 still clips a drumstick).
 	-- Measured over the whole arc by tools/vehicle_models_axis_check.py.
 	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.9 },
+	-- The armoured cars' turrets (their bodies are further up): a heavy machine gun behind a shield on
+	-- the scout car's ring, and a grenade machine gun in the carrier's one-man turret.
+	TartarugaScout = { style = "shielded", base = V(0, 6.0, 1.55) },
+	CameloCarrier = { style = "agl", base = V(0, 7.45, -1.2) },
+}
+
+-- The driver's own gun on each armed model: fixed forward, a short arc either side, aimed with the
+-- mouse from the wheel. In a cowl on the Rotster's bonnet bulge, in a cowl at the front of the Ranger's
+-- bonnet deck (between the first pair of scutes, the barrel out over the bull bar and between its spot
+-- lamps), on top of the van's bumper, in a ball mount in the scout car's glacis, and in a cowl at the
+-- front of the carrier's bonnet. Every muzzle stays inside the body's own length: the Ranger's used to
+-- ride on the bull bar and stuck 1.6 studs out past the winch, which made the truck longer than every
+-- parking bay and team-base bay is laid out for (tools/car_placement_check.py, team_base_ruins_check.py).
+VehicleModels.DriverMounts = {
+	Rotster = { style = "cowl", base = V(0, 3.52, -4.6), depth = 1.1, length = 1.8 },
+	CrocodiloRanger = { style = "cowl", base = V(0, 4.35, -7.05), depth = 1.1, length = 1.7 },
+	SahurVan = { style = "cowl", base = V(0, 1.8, -7.15), depth = 0.55, length = 1.7 },
+	TartarugaScout = { style = "ball", base = V(1.1, 4.41, -5.52), normal = V(0, 3.6, -1.1) },
+	CameloCarrier = { style = "cowl", base = V(0, 4.85, -7.2), depth = 1.1, length = 1.8 },
 }
 
 -- Each armed model's gun seat, model space (Oliver, 2026-09-24: "make the bots not drive away if they
 -- have a gun on their car, wait till it's manned"). VehicleService makes it a Seat named GunnerSeat
--- with a true Gunner attribute, and whoever sits there works the gun (VehicleWeapons; VehicleWeaponClient
--- reads the same name and attribute). Behind the mount, facing the front, so a rider there is at the
--- gun: in the Rotster's hatch under its roof gun, on the Ranger's bed floor behind the roll bar (the
--- clear stretch z 3.3 to 6.5), on the van's roof behind the mortar's plinth. A seat is an invisible,
--- non-colliding part welded to the chassis; nothing about the metal changes.
-VehicleModels.GunnerSeats = {
-	Rotster = CF(0, 4.1, 3.3),
-	CrocodiloRanger = CF(0, 3.3, 5.2),
-	SahurVan = CF(0, 7.9, 6.5),
-}
+-- with a true Gunner attribute, and whoever sits there works the turret (VehicleWeapons;
+-- VehicleWeaponClient reads the same name and attribute). It is placed so the rider's eye lands on the
+-- mount's GunnerEye with the rider posed as its Stance says (VehicleModels.Poses.GunnerStand /
+-- GunnerKneel): measured in Studio, a seated R15 rider's root sits RIDER_ROOT above the seat's centre,
+-- and a standing one's eye EYE_ABOVE_ROOT above its root (tools/gunner_fp_gallery.lua prints both).
+-- A seat is an invisible, non-colliding part welded to the chassis; nothing about the metal changes.
+VehicleModels.GunnerSeats = {}
 
-local function buildMount(b, mount)
+-- A rider's root above its seat's centre, and a posed gunner's eye above its root. Measured in Studio
+-- (tools/gunner_fp_gallery.lua, 09-24): a standing R15 posed GunnerStand has its eyes 1.7 over its root;
+-- kneeling (GunnerKneel) 1.6 -- the root is the hips, which kneeling does not lower, the shins fold back.
+-- (Its eyes also sit 0.7 / 0.9 in front of where the seat puts the eye: the first-person camera stays on
+-- the mount's GunnerEye, a little behind the head, which nobody can see.)
+local RIDER_ROOT = 1.65
+local EYE_ABOVE_ROOT = { stand = 1.7, kneel = 1.6 }
+
+--------------------------------------------------------------------------------
+-- Weapon pieces (built in a pitch pivot's frame at rest: front -Z, up +Y)
+--------------------------------------------------------------------------------
+
+local function mark(pivot, name, frame)
+	local attachment = Instance.new("Attachment")
+	attachment.Name = name
+	attachment.CFrame = pivot.CFrame:ToObjectSpace(frame)
+	attachment.Parent = pivot
+	return attachment
+end
+
+-- A palm frame from where it is, the way the fingers point and the way the back of the hand faces:
+-- the convention of the gun keypoints (GunModels' Builder:hand) and of the viewmodel arms.
+local function palm(position, fingers, back)
+	local z = -fingers.Unit
+	local x = back.Unit:Cross(z).Unit
+	return CFrame.fromMatrix(position, x, z:Cross(x).Unit, z)
+end
+
+-- A belt-fed machine gun round `at`, the trunnion it tips on, at scale `s`. What one is made of, from
+-- the back: spade grips with the butterfly trigger between them on the backplate; the receiver and
+-- its hinged top cover, with the belt running into the feed tray from the ammo box on the left and the
+-- charging handle on the right; the barrel support, the ventilated jacket, the barrel, the flash hider;
+-- and iron sights -- a leaf at the back and a post at the front -- on one line 0.43 above the bore and
+-- parallel to it, so looking along them is looking along the barrel. The cradle round the receiver's
+-- belly carries the trunnion pin. opts.grips/opts.ammo leave those off a driver's gun, which is worked
+-- from the wheel. Returns the muzzle's distance ahead of `at` and the frames the gunner's markers use.
+local function machineGun(b, name, at, s, opts)
+	opts = opts or {}
+	local function P(x, y, z)
+		return at + V(x, y, z) * s
+	end
+	local bore = 0.12
+	b:box(name .. "Receiver", V(0.4, 0.44, 1.3) * s, P(0, 0.12, 0.05), "trim")
+	b:box(name .. "TopCover", V(0.52, 0.08, 0.78) * s, P(0, 0.37, 0.12), "engine")
+	b:cyl(name .. "CoverHinge", 0.64 * s, 0.1 * s, CF(P(0, 0.37, -0.29)), "mesh")
+	b:box(name .. "Support", V(0.34, 0.3, 0.3) * s, P(0, 0.12, -0.72), "trim")
+	b:tube(name .. "Jacket", P(0, bore, -0.84), P(0, bore, -1.86), 0.3 * s, "trim")
+	for index, z in ipairs({ -1.08, -1.36, -1.64 }) do
+		b:tube(name .. "JacketBand" .. index, P(0, bore, z - 0.04), P(0, bore, z + 0.04), 0.36 * s, "mesh")
+	end
+	b:tube(name .. "Barrel", P(0, bore, -1.8), P(0, bore, -2.7), 0.15 * s, "mesh")
+	b:tube(name .. "FlashHider", P(0, bore, -2.62), P(0, bore, -2.96), 0.24 * s, "trim")
+	b:tube(name .. "FlashBore", P(0, bore, -2.9), P(0, bore, -3.02), 0.14 * s, "mesh")
+	-- Sights: the post's tip and the middle of the leaf's window both 0.55 up, the bore 0.12.
+	b:box(name .. "FrontSightBase", V(0.16, 0.08, 0.14) * s, P(0, 0.29, -1.78), "trim")
+	b:box(name .. "FrontSight", V(0.05, 0.22, 0.05) * s, P(0, 0.44, -1.78), "mesh")
+	b:box(name .. "RearSightFoot", V(0.24, 0.05, 0.12) * s, P(0, 0.435, 0.36), "mesh")
+	for _, x in ipairs({ -1, 1 }) do
+		b:box(string.format("%sRearSight%s", name, x < 0 and "L" or "R"), V(0.04, 0.2, 0.05) * s, P(x * 0.085, 0.56, 0.36), "mesh")
+	end
+	-- The cradle under the receiver, with the pin through its cheeks.
+	b:box(name .. "Cradle", V(0.42, 0.07, 0.6) * s, P(0, -0.135, 0.02), "mesh")
+	for _, x in ipairs({ -1, 1 }) do
+		b:box(string.format("%sCradle%s", name, x < 0 and "L" or "R"), V(0.06, 0.3, 0.52) * s, P(x * 0.24, -0.01, 0.02), "mesh")
+	end
+	b:box(name .. "ChargingHandle", V(0.1, 0.08, 0.22) * s, P(0.24, 0.16, -0.2), "chrome")
+	b:ball(name .. "ChargingKnob", 0.12 * s, P(0.31, 0.16, -0.26), "rubber")
+	local frames = {}
+	if opts.grips ~= false then
+		b:box(name .. "Backplate", V(0.52, 0.56, 0.1) * s, P(0, 0.12, 0.74), "trim")
+		for _, x in ipairs({ -1, 1 }) do
+			local n = x < 0 and "L" or "R"
+			b:tube(name .. "GripArmTop" .. n, P(x * 0.21, 0.32, 0.76), P(x * 0.21, 0.32, 1.04), 0.07 * s, "trim")
+			b:tube(name .. "GripArmLow" .. n, P(x * 0.21, -0.06, 0.76), P(x * 0.21, -0.06, 1.0), 0.07 * s, "trim")
+			b:tube(name .. "Grip" .. n, P(x * 0.21, -0.09, 1.0), P(x * 0.21, 0.35, 1.04), 0.14 * s, "rubber")
+		end
+		b:box(name .. "TriggerStem", V(0.06, 0.06, 0.12) * s, P(0, 0.14, 0.84), "trim")
+		b:box(name .. "Trigger", V(0.24, 0.1, 0.05) * s, P(0, 0.14, 0.91), "gold")
+		-- Both hands round the spade grips, thumbs on the trigger between them.
+		frames.GripR = palm(P(0.21, 0.13, 1.02), V(-0.35, 0, -1), V(1, 0.15, 0.3))
+		frames.GripL = palm(P(-0.21, 0.13, 1.02), V(0.35, 0, -1), V(-1, 0.15, 0.3))
+	end
+	if opts.ammo ~= false then
+		b:box(name .. "AmmoBracket", V(0.14, 0.18, 0.36) * s, P(-0.26, 0.06, 0.1), "mesh")
+		b:box(name .. "AmmoBox", V(0.36, 0.44, 0.62) * s, P(-0.51, 0.0, 0.1), "accent")
+		b:box(name .. "AmmoLid", V(0.4, 0.06, 0.66) * s, P(-0.51, 0.24, 0.1), "trim")
+		b:box(name .. "AmmoHandle", V(0.06, 0.06, 0.3) * s, P(-0.51, 0.3, 0.1), "rubber")
+		b:beam(name .. "Belt", P(-0.44, 0.27, 0.1), P(-0.19, 0.33, 0.1), 0.16 * s, 0.05 * s, "gold")
+		frames.ReloadHand = palm(P(-0.3, 0.44, 0.08), V(0.2, -0.3, -1), V(0.1, 1, 0))
+	end
+	frames.Sight = CF(P(0, 0.55, 1.05))
+	return 3.02 * s, frames
+end
+
+-- A trunnion pin along X through `at`, `span` wide: what a pitching weapon hangs on.
+local function trunnion(b, name, at, span, diameter)
+	b:cyl(name, span, diameter, CF(at), "chrome")
+end
+
+--------------------------------------------------------------------------------
+-- Turret styles. Each builds its fixed base on the chassis, its yaw pivot, its pitch pivot and the
+-- weapon, and returns yaw, pitch, muzzle position, markers { name = { pivot, frame } }, stance.
+--------------------------------------------------------------------------------
+
+local MountStyles = {}
+
+-- The Rotster's hatch ring. The roof has a 2.2-stud square hole at `base` (see the Rotster); a square
+-- coaming stands round it, a ring bearing (RingRadius 1.38) turns on the coaming, and a pintle arm
+-- carries the gun 1.75 in front of the ring's centre, where the gunner stands. The gun's pivot is high
+-- enough (0.78 over the ring) that with the gun turned right round and tipped to its lowest the
+-- ammo box and cradle still clear the ring, and over the rear the barrel clears the spoiler.
+function MountStyles.ring(b, mount, names)
 	local base = mount.base
-	local column = mount.column or 0
-	if column > 0 then
-		if mount.style == "pod" then
-			-- A flat cradle clamped on the roll bar, as wide as the ring it carries.
-			b:box("TurretCradle", V(2.0, column, 0.9), base + V(0, column / 2, 0), "trim")
-		else
-			b:box("TurretPlinth", V(1.4, column, 1.2), base + V(0, column / 2, 0), "trim")
+	local half = 1.1
+	local coamingTop = base.Y + 0.2
+	for _, e in ipairs({ { "F", V(0, 0, -1) }, { "B", V(0, 0, 1) }, { "L", V(-1, 0, 0) }, { "R", V(1, 0, 0) } }) do
+		local out = e[2]
+		local along = math.abs(out.X) > 0.5 and V(0.26, 0.2, 2 * half) or V(2 * half, 0.2, 0.26)
+		b:box("TurretCoaming" .. e[1], along, base + out * (half + 0.13) + V(0, 0.1, 0), "trim")
+	end
+	for _, x in ipairs({ -1, 1 }) do
+		for _, z in ipairs({ -1, 1 }) do
+			b:box(string.format("TurretCoamingCorner%s%s", x < 0 and "L" or "R", z < 0 and "F" or "B"), V(0.38, 0.14, 0.38),
+				base + V(x * (half + 0.13), 0.07, z * (half + 0.13)), "trim")
+		end
+	end
+	local yawAt = V(base.X, coamingTop, base.Z)
+	local yaw = b:pivot(names.yaw, CF(yawAt), "TurretYaw", nil, { RingRadius = 1.38 })
+	local reach = 1.75
+	local pitchAt = yawAt + V(0, 0.58, -reach)
+	local pitch = b:pivot(names.pitch, CF(pitchAt), "TurretPitch", yaw)
+	b:with(yaw, function()
+		b:ring("TurretRing", CF(yawAt + V(0, 0.07, 0)) * A(0, 0, 90), 1.24, 0.28, 0.14, 12, "accent")
+		-- The pintle: a socket plate bolted across the ring's front, reaching out under the gun, and a
+		-- fork either side of the cradle for the pin.
+		-- It stops short of the ring's middle: at full elevation (25) the receiver's back end comes down
+		-- to 0.19 over the ring, just behind it.
+		b:box("TurretPintleSocket", V(0.46, 0.08, 0.57), yawAt + V(0, 0.18, -reach + 0.085), "trim")
+		for _, x in ipairs({ -1, 1 }) do
+			b:box(x < 0 and "TurretForkL" or "TurretForkR", V(0.06, 0.44, 0.3), pitchAt + V(x * 0.3, -0.14, 0), "trim")
+		end
+	end)
+	local muzzleZ, frames
+	b:with(pitch, function()
+		trunnion(b, "TurretTrunnion", pitchAt, 0.8, 0.12)
+		muzzleZ, frames = machineGun(b, "Gun", pitchAt, 1, {})
+	end)
+	return yaw, pitch, pitchAt + V(0, 0.12, -muzzleZ), {
+		GunnerEye = { yaw, CF(yawAt + V(0, 1.13, 0.25)) },
+		GunnerSight = { pitch, frames.Sight },
+		GripR = { pitch, frames.GripR },
+		GripL = { pitch, frames.GripL },
+		ReloadHand = { pitch, frames.ReloadHand },
+	}, "stand"
+end
+
+-- The Ranger's pedestal: a base plate bolted to the bed floor with a socket and a bearing race; above
+-- the race everything turns -- the collar, the gunner's platform on two arms off it, the column, the
+-- yoke with its rounded arms, a rack of two spare rockets on the left arm -- and the launcher tips on
+-- the pins through the yoke. The launcher is a box of four tubes (mouths and bores at the front,
+-- breech caps at the back), banded twice, with a side sight on the left and a handle on each side.
+-- The pin is at 7.7: every rocket leaving over the cab (with the front arc's floor, VehicleWeaponData
+-- RangerRocketPod.frontGuard) clears the roof, the light bar and the roll bar; and the launcher never
+-- reaches the roll bar at all (its front corner stays 1.71 from the pin, which stands 1.74 behind it).
+-- The gunner stands a stud behind the pin: turned to either side, that keeps them inside the bed's
+-- 4-stud floor between the wheel tubs.
+function MountStyles.pedestal(b, mount, names)
+	local base = mount.base
+	local floorY = base.Y
+	b:box("TurretBasePlate", V(1.7, 0.14, 1.7), base + V(0, 0.07, 0), "trim")
+	for index = 1, 8 do
+		local a = rad((index - 0.5) * 45)
+		b:cyl("TurretBaseBolt" .. index, 0.12, 0.17, CF(base + V(math.cos(a) * 0.7, 0.19, math.sin(a) * 0.7)) * A(0, 0, 90), "chrome")
+	end
+	b:cyl("TurretSocket", 0.3, 1.0, CF(base + V(0, 0.29, 0)) * A(0, 0, 90), "trim")
+	for index = 1, 4 do
+		local a = rad(45 + (index - 1) * 90)
+		local out = V(math.cos(a), 0, math.sin(a))
+		local at = base + out * 0.66 + V(0, 0.28, 0)
+		b:wedge("TurretGusset" .. index, V(0.1, 0.28, 0.32), CFrame.lookAt(at, at + out), "trim")
+	end
+	b:cyl("TurretRace", 0.08, 1.12, CF(base + V(0, 0.48, 0)) * A(0, 0, 90), "chrome")
+	local yawAt = base + V(0, 0.52, 0)
+	local pitchY = 7.7
+	local pitchAt = V(base.X, pitchY, base.Z)
+	local yaw = b:pivot(names.yaw, CF(yawAt), "TurretYaw")
+	local pitch = b:pivot(names.pitch, CF(pitchAt), "TurretPitch", yaw)
+	local yokeY = pitchY - 1.02
+	b:with(yaw, function()
+		b:cyl("TurretCollar", 0.3, 0.96, CF(yawAt + V(0, 0.15, 0)) * A(0, 0, 90), "accent")
+		b:cyl("TurretColumn", yokeY - (yawAt.Y + 0.3), 0.72, CF(V(base.X, (yawAt.Y + 0.3 + yokeY) / 2, base.Z)) * A(0, 0, 90), "accent")
+		for index, y in ipairs({ yawAt.Y + 1.25, yokeY - 0.55 }) do
+			b:cyl("TurretClamp" .. index, 0.12, 0.84, CF(V(base.X, y, base.Z)) * A(0, 0, 90), "trim")
+		end
+		-- The gunner's platform, nearly a stud over the bed floor on two arms off the column: high enough
+		-- that a standing gunner's eye clears the top of the pod (at half a stud over the floor it sat level
+		-- with the pod's top edge and the pod filled the lower third of the first-person view).
+		local stepY = floorY + 0.98
+		b:box("TurretStep", V(1.6, 0.12, 0.9), V(base.X, stepY, base.Z + 1.05), "mesh")
+		for _, x in ipairs({ -1, 1 }) do
+			b:beam(x < 0 and "TurretStepArmL" or "TurretStepArmR", V(base.X + x * 0.3, stepY + 0.11, base.Z + 0.3),
+				V(base.X + x * 0.3, stepY + 0.11, base.Z + 0.6), 0.1, 0.1, "trim")
+			b:box(x < 0 and "TurretStepRibL" or "TurretStepRibR", V(0.08, 0.04, 0.78), V(base.X + x * 0.4, stepY + 0.08, base.Z + 1.05), "trim")
+		end
+		-- The yoke: a base across the column's top and two arms, rounded where the pins go through.
+		b:box("TurretYokeBase", V(2.6, 0.2, 0.7), V(base.X, yokeY + 0.1, base.Z), "accent")
+		for _, x in ipairs({ -1, 1 }) do
+			local n = x < 0 and "L" or "R"
+			-- The rounded top is a boss standing 0.06 proud of the arm either side, where the pin goes through.
+			b:box("TurretYokeArm" .. n, V(0.14, pitchY - yokeY - 0.2, 0.62), V(base.X + x * 1.0, (yokeY + 0.2 + pitchY) / 2, base.Z), "accent")
+			b:cyl("TurretYokeEye" .. n, 0.26, 0.62, CF(V(base.X + x * 1.0, pitchY, base.Z)), "accent")
+		end
+		-- Two spare rockets racked on the left arm (the reload comes from here).
+		local rackX = base.X - 1.1
+		b:box("TurretRackPlate", V(0.06, 0.56, 0.96), V(rackX, pitchY - 0.62, base.Z), "trim")
+		for index, y in ipairs({ pitchY - 0.8, pitchY - 0.46 }) do
+			local x = rackX - 0.03 - 0.14
+			b:tube("TurretSpareRocket" .. index, V(x, y, base.Z + 0.5), V(x, y, base.Z - 0.42), 0.28, "stripe")
+			b:ball("TurretSpareWarhead" .. index, 0.3, V(x, y, base.Z - 0.46), "trim")
+			b:box("TurretSpareFins" .. index, V(0.3, 0.06, 0.2), V(rackX - 0.03 - 0.15, y, base.Z + 0.44), "mesh")
+		end
+		for index, z in ipairs({ -0.22, 0.28 }) do
+			b:box("TurretRackStrap" .. index, V(0.31, 0.76, 0.08), V(rackX - 0.03 - 0.155, pitchY - 0.62, base.Z + z), "mesh")
+		end
+	end)
+	local frames = {}
+	b:with(pitch, function()
+		local function P(x, y, z)
+			return pitchAt + V(x, y, z)
+		end
+		trunnion(b, "TurretTrunnion", pitchAt, 2.28, 0.2)
+		b:box("PodCasing", V(1.2, 1.06, 1.88), P(0, 0, -0.6), "accent")
+		b:box("PodFrontFrame", V(1.3, 1.16, 0.12), P(0, 0, -1.56), "trim")
+		b:box("PodRearFrame", V(1.3, 1.16, 0.12), P(0, 0, 0.34), "trim")
+		for index, z in ipairs({ -1.02, -0.2 }) do
+			b:box("PodBand" .. index, V(1.32, 1.18, 0.12), P(0, 0, z), "stripe")
+		end
+		for row = 0, 1 do
+			for col = 0, 1 do
+				local x, y = (col - 0.5) * 0.56, (row - 0.5) * 0.5
+				b:cylZ(string.format("PodMouth%d%d", row, col), 0.3, 0.46, P(x, y, -1.57), "trim")
+				b:cylZ(string.format("PodBore%d%d", row, col), 0.2, 0.3, P(x, y, -1.68), "mesh")
+				b:cylZ(string.format("PodBreech%d%d", row, col), 0.3, 0.36, P(x, y, 0.49), "trim")
+			end
+		end
+		for _, x in ipairs({ -1, 1 }) do
+			local n = x < 0 and "L" or "R"
+			b:cyl("PodLug" .. n, 0.14, 0.36, CF(P(x * 0.67, 0, 0)), "trim")
+			-- A handle on each side, just ahead of the pins' bosses and clear of them by 0.06.
+			b:beam("PodHandleArm" .. n, P(x * 0.6, 0.3, 0.1), P(x * 0.74, 0.3, 0.1), 0.08, 0.08, "trim")
+			b:tube("PodHandle" .. n, P(x * 0.74, 0.1, 0.11), P(x * 0.74, 0.46, 0.09), 0.14, "rubber")
+		end
+		b:box("PodTrigger", V(0.05, 0.12, 0.06), P(0.74, 0.3, 0.01), "gold")
+		-- The sight on the left side, forward of the bosses: a bracket, the body, the objective at the
+		-- front and the eyepiece's rubber cup at the back.
+		b:box("PodSightBracket", V(0.1, 0.12, 0.3), P(-0.65, 0.28, -0.8), "mesh")
+		b:box("PodSight", V(0.16, 0.22, 0.6), P(-0.78, 0.3, -0.8), "trim")
+		b:cylZ("PodSightLens", 0.3, 0.14, P(-0.78, 0.32, -1.17), "glass")
+		b:cylZ("PodSightCup", 0.3, 0.18, P(-0.78, 0.32, -0.42), "rubber")
+		frames.GripR = palm(P(0.74, 0.28, 0.1), V(-0.35, -0.05, -1), V(1, 0.1, 0.35))
+		frames.GripL = palm(P(-0.74, 0.28, 0.1), V(0.35, -0.05, -1), V(-1, 0.1, 0.35))
+		frames.Sight = CF(P(-0.78, 0.32, -0.1))
+	end)
+	return yaw, pitch, pitchAt + V(0, 0, -1.78), {
+		GunnerEye = { yaw, CF(pitchAt + V(0, 1.05, 1.0)) },
+		GunnerSight = { pitch, frames.Sight },
+		GripR = { pitch, frames.GripR },
+		GripL = { pitch, frames.GripL },
+		ReloadHand = { yaw, palm(V(base.X - 1.28, pitchY - 0.63, base.Z + 0.05), V(0.2, -0.2, -1), V(-1, 0.2, 0)) },
+	}, "stand"
+end
+
+-- The van's mortar on its plinth: a bolted plinth with bevelled top edges, a turntable on it, and a
+-- cradle -- two cheeks and a baseplate -- carrying the tube on its pins, the elevating screw under it
+-- and the sight on the left. The gunner kneels behind it on the roof and turns with it.
+function MountStyles.mortar(b, mount, names)
+	local base = mount.base
+	local column = mount.column or 0.9
+	b:box("TurretPlinth", V(1.4, column, 1.2), base + V(0, column / 2, 0), "trim")
+	for _, x in ipairs({ -1, 1 }) do
+		for _, z in ipairs({ -1, 1 }) do
+			b:cyl(string.format("TurretPlinthBolt%s%s", x < 0 and "L" or "R", z < 0 and "F" or "B"), 0.12, 0.16,
+				CF(base + V(x * 0.55, column + 0.05, z * 0.45)) * A(0, 0, 90), "chrome")
 		end
 	end
 	local top = base + V(0, column, 0)
-	local ringDiameter = mount.style == "pod" and 2.0 or 1.6
-	b:cyl("TurretRing", 0.24, ringDiameter, CF(top + V(0, 0.12 + 0.02, 0)) * A(0, 0, 90), "trim")
-
+	b:cyl("TurretRing", 0.24, 1.6, CF(top + V(0, 0.12 + 0.02, 0)) * A(0, 0, 90), "trim")
 	local yawAt = top + V(0, 0.28, 0)
-	local pitchAt = yawAt + V(0, ({ gun = 0.6, pod = 0.95, mortar = 0.85 })[mount.style], 0)
-	local yaw = b:pivot("TurretYaw", CF(yawAt), "TurretYaw")
-	local pitch = b:pivot("TurretPitch", CF(pitchAt), "TurretPitch", yaw)
-	local muzzleZ
-
-	-- How far apart the cheeks stand (the trunnion spans them).
-	local spread = mount.style == "pod" and 1.8 or 0.8
+	local pitchAt = yawAt + V(0, 0.85, 0)
+	local yaw = b:pivot(names.yaw, CF(yawAt), "TurretYaw")
+	local pitch = b:pivot(names.pitch, CF(pitchAt), "TurretPitch", yaw)
 	b:with(yaw, function()
-		b:box("TurretYoke", V(spread + 0.3, 0.2, 0.9), yawAt + V(0, 0.1, 0), "accent")
+		b:box("TurretYoke", V(1.1, 0.2, 0.9), yawAt + V(0, 0.1, 0), "accent")
 		for _, s in ipairs({ -1, 1 }) do
 			b:box(s < 0 and "TurretCheekL" or "TurretCheekR", V(0.16, pitchAt.Y - yawAt.Y + 0.25, 0.7),
-				V(s * (spread / 2 + 0.08 + 0.02), (yawAt.Y + pitchAt.Y + 0.25) / 2, yawAt.Z), "accent")
+				V(s * (0.4 + 0.08 + 0.02), (yawAt.Y + pitchAt.Y + 0.25) / 2, yawAt.Z), "accent")
+		end
+		-- Three bombs in a crate on the turntable's back edge, the reload's source.
+		b:box("TurretBombCrate", V(0.8, 0.34, 0.36), yawAt + V(0, 0.37, 0.62), "wood")
+		for index = 1, 3 do
+			b:ball("TurretBombNose" .. index, 0.22, yawAt + V((index - 2) * 0.24, 0.6, 0.62), "trim")
 		end
 	end)
-
+	local frames = {}
 	b:with(pitch, function()
 		local at = pitchAt
-		-- The trunnion the weapon tips on, cheek to cheek. Without it the Rotster's gun hung between
-		-- its cheeks with 0.25 of air either side, joined to nothing (vehicle_models_runtime_check).
-		b:cyl("TurretTrunnion", spread + 0.2, 0.18, CF(at), "trim")
-		if mount.style == "gun" then
-			-- 1.1 long, from the barrel's root back: at 1.6 its back end dug into the Rotster's roof
-			-- with the gun turned round and tipped up.
-			b:box("GunReceiver", V(0.5, 0.55, 1.1), at + V(0, 0, -0.05), "trim")
-			b:tube("GunBarrel", at + V(0, 0.05, -0.6), at + V(0, 0.05, -2.8), 0.2, "mesh")
-			b:tube("GunJacket", at + V(0, 0.05, -0.6), at + V(0, 0.05, -1.7), 0.34, "trim")
-			-- 0.26 across (it was 0.3), which is what lets it pass over the Rotster's spoiler with 0.06 to spare.
-			b:tube("GunFlashHider", at + V(0, 0.05, -2.6), at + V(0, 0.05, -3.0), 0.26, "mesh")
-			b:box("GunAmmoBox", V(0.45, 0.5, 0.7), at + V(0.85, -0.05, 0.25), "stripe")
-			b:box("GunShield", V(1.5, 0.9, 0.12), at + V(0, 0.2, -0.75), "accent")
-			muzzleZ = -3.05
-		elseif mount.style == "pod" then
-			b:box("PodBody", V(1.7, 1.1, 1.9), at, "accent")
-			b:box("PodBand", V(1.74, 0.2, 1.4), at + V(0, 0.2, 0.1), "stripe")
-			for row = 0, 1 do
-				for col = 0, 1 do
-					local x, y = (col - 0.5) * 0.8, (row - 0.5) * 0.5
-					-- A dark bore set back inside a mouth that stands proud of the face.
-					b:cylZ(string.format("PodTube%d%d", row, col), 0.2, 0.44, at + V(x, y, -0.95 - 0.1 + 0.02), "trim")
-					b:cylZ(string.format("PodBore%d%d", row, col), 0.1, 0.3, at + V(x, y, -0.95 - 0.07), "mesh")
-				end
-			end
-			muzzleZ = -1.25
-		else
-			b:ball("MortarBreech", 0.8, at + V(0, 0, 0.35), "trim")
-			b:tube("MortarTube", at + V(0, 0, 0.3), at + V(0, 0, -2.0), 0.7, "trim")
-			b:tube("MortarLip", at + V(0, 0, -1.8), at + V(0, 0, -2.1), 0.84, "stripe")
-			b:tube("MortarBore", at + V(0, 0, -1.7), at + V(0, 0, -2.04), 0.5, "mesh")
-			muzzleZ = -2.2
+		trunnion(b, "TurretTrunnion", at, 1.0, 0.18)
+		b:ball("MortarBreech", 0.8, at + V(0, 0, 0.35), "trim")
+		b:tube("MortarTube", at + V(0, 0, 0.3), at + V(0, 0, -2.0), 0.7, "trim")
+		b:tube("MortarLip", at + V(0, 0, -1.8), at + V(0, 0, -2.1), 0.84, "stripe")
+		b:tube("MortarBore", at + V(0, 0, -1.9), at + V(0, 0, -2.16), 0.5, "mesh")
+		for index, z in ipairs({ -0.55, -1.25 }) do
+			b:tube("MortarBand" .. index, at + V(0, 0, z - 0.05), at + V(0, 0, z + 0.05), 0.78, "mesh")
+		end
+		-- The sight on its bracket off the left of the tube, and the traversing handwheel under it.
+		b:box("MortarSightArm", V(0.3, 0.1, 0.12), at + V(-0.45, 0.12, -0.45), "mesh")
+		b:box("MortarSight", V(0.16, 0.22, 0.36), at + V(-0.62, 0.2, -0.45), "trim")
+		b:cylZ("MortarSightEye", 0.3, 0.12, at + V(-0.62, 0.24, -0.2), "rubber")
+		b:cyl("MortarWheel", 0.08, 0.36, CF(at + V(0.46, -0.08, 0.02)), "chrome")
+		b:box("MortarWheelKnob", V(0.12, 0.06, 0.06), at + V(0.52, -0.08, -0.12), "rubber")
+		frames.GripR = palm(at + V(0.54, -0.08, -0.1), V(-0.4, -0.2, -1), V(1, 0.3, 0))
+		frames.GripL = palm(at + V(-0.36, 0.0, 0.28), V(0.6, -0.1, -1), V(-0.6, 0.8, 0))
+		frames.Sight = CF(at + V(-0.62, 0.24, 0.12))
+	end)
+	return yaw, pitch, pitchAt + V(0, 0, -2.2), {
+		-- The first-person eye is over the sight, left of the tube (behind it the tube filled the view);
+		-- the kneeling rider stays square behind the mortar (SeatEye: where its own eyes are).
+		GunnerEye = { yaw, CF(yawAt + V(-0.8, 2.9, 1.35)) },
+		SeatEye = { yaw, CF(yawAt + V(0, 2.9, 1.35)) },
+		GunnerSight = { pitch, frames.Sight },
+		GripR = { pitch, frames.GripR },
+		GripL = { pitch, frames.GripL },
+		ReloadHand = { yaw, palm(yawAt + V(0.1, 0.74, 0.5), V(0, -0.4, -1), V(0, 1, -0.3)) },
+	}, "kneel"
+end
+
+-- A shield on the gun's cradle, tipping with it: two side panels and a skirt round a slot the jacket
+-- passes through, armoured glass above the slot (the sight line runs through it), and a wing angled
+-- back at each side, carried on two arms off the cradle. `at` is the pin, `s` the gun's scale.
+local function gunShield(b, at, s, z, bottom, top)
+	local function P(x, y, zz)
+		return at + V(x, y, zz)
+	end
+	local slotLow, slotHigh = -0.1 * s, 0.36 * s
+	for _, x in ipairs({ -1, 1 }) do
+		local n = x < 0 and "L" or "R"
+		b:box("GunShield" .. n, V(0.5, top - bottom, 0.1), P(x * 0.75, (bottom + top) / 2, z), "accent")
+		local wing = CF(P(x * 1.0, (bottom + top) / 2, z)) * A(0, x * -32, 0) * CF(x * 0.28, 0, 0.14)
+		b:box("GunShieldWing" .. n, V(0.56, top - bottom - 0.2, 0.1), wing, "accent")
+		b:beam("GunShieldArm" .. n, P(x * 0.26 * s, -0.08 * s, -0.25 * s), P(x * 0.26 * s, -0.08 * s, z + 0.08), 0.08, 0.1, "mesh")
+	end
+	b:box("GunShieldSkirt", V(1.0, slotLow - bottom, 0.1), P(0, (bottom + slotLow) / 2, z), "accent")
+	b:box("GunShieldGlass", V(1.0, top - slotHigh - 0.08, 0.08), P(0, (slotHigh + top - 0.08) / 2, z), "glass")
+	b:box("GunShieldCap", V(1.0, 0.08, 0.12), P(0, top - 0.04, z), "accent")
+end
+
+-- The scout car's gun ring: the ring on the shell, a pintle out in front of the gunner as on the
+-- Rotster (the gunner stands 0.45 behind the ring's middle, 2.2 behind the pin, so the spade grips
+-- are a stud in front of them), a heavy machine gun (1.15 scale) and a shield on its cradle.
+function MountStyles.shielded(b, mount, names)
+	local base = mount.base
+	local yawAt = base + V(0, 0.2, 0)
+	b:ring("TurretCoaming", CF(base + V(0, 0.1, 0)) * A(0, 0, 90), 1.12, 0.3, 0.2, 12, "trim", 0.5)
+	local yaw = b:pivot(names.yaw, CF(yawAt), "TurretYaw", nil, { RingRadius = 1.27 })
+	local reach, s = 1.75, 1.15
+	local pitchAt = yawAt + V(0, 0.7, -reach)
+	local pitch = b:pivot(names.pitch, CF(pitchAt), "TurretPitch", yaw)
+	b:with(yaw, function()
+		b:ring("TurretRing", CF(yawAt + V(0, 0.07, 0)) * A(0, 0, 90), 1.12, 0.3, 0.14, 12, "accent")
+		b:box("TurretPintleSocket", V(0.5, 0.08, 0.66), yawAt + V(0, 0.18, -reach + 0.13), "trim")
+		for _, x in ipairs({ -1, 1 }) do
+			b:box(x < 0 and "TurretForkL" or "TurretForkR", V(0.07, 0.56, 0.32), pitchAt + V(x * 0.34, -0.2, 0), "trim")
 		end
 	end)
+	local muzzleZ, frames
+	b:with(pitch, function()
+		trunnion(b, "TurretTrunnion", pitchAt, 0.88, 0.13)
+		muzzleZ, frames = machineGun(b, "Gun", pitchAt, s, {})
+		gunShield(b, pitchAt, s, -1.3, -0.34, 0.95)
+	end)
+	return yaw, pitch, pitchAt + V(0, 0.12 * s, -muzzleZ), {
+		GunnerEye = { yaw, CF(yawAt + V(0, 1.32, 0.45)) },
+		GunnerSight = { pitch, frames.Sight },
+		GripR = { pitch, frames.GripR },
+		GripL = { pitch, frames.GripL },
+		ReloadHand = { pitch, frames.ReloadHand },
+	}, "stand"
+end
 
-	local muzzle = invisible("TurretMuzzle", CF(pitchAt + V(0, 0, muzzleZ)), b.model)
+-- The carrier's turret: an open-topped cupola (walls to the gunner's chest, a low front under the gun)
+-- turning on a ring on the roof, and an automatic grenade launcher on a mantlet at its front -- a
+-- boxy receiver, a short, thick, banded barrel and a big ammo can -- in front of the gunner, who
+-- stands in the cupola.
+function MountStyles.agl(b, mount, names)
+	local base = mount.base
+	local yawAt = base + V(0, 0.18, 0)
+	b:ring("TurretCoaming", CF(base + V(0, 0.09, 0)) * A(0, 0, 90), 1.3, 0.3, 0.18, 12, "trim", 0.5)
+	local yaw = b:pivot(names.yaw, CF(yawAt), "TurretYaw", nil, { RingRadius = 1.45 })
+	local reach, s = 1.6, 1.1
+	local pitchAt = yawAt + V(0, 0.95, -reach)
+	local pitch = b:pivot(names.pitch, CF(pitchAt), "TurretPitch", yaw)
+	b:with(yaw, function()
+		b:ring("TurretRing", CF(yawAt + V(0, 0.08, 0)) * A(0, 0, 90), 1.3, 0.3, 0.16, 12, "accent")
+		-- Walls: the back and its corners 0.95 high, the sides 0.8, and low ones either side of the gun.
+		-- Neighbouring walls stand 0.06 apart in height at the top and the foot (the foot sunk into
+		-- the ring by turns), so where their corners meet no two faces share a plane.
+		for _, e in ipairs({ { "B", 180, 0.95, 0.16 }, { "BL", 135, 0.87, 0.1 }, { "BR", -135, 0.87, 0.1 },
+			{ "L", 90, 0.73, 0.16 }, { "R", -90, 0.73, 0.16 }, { "FL", 45, 0.48, 0.1 }, { "FR", -45, 0.48, 0.1 } }) do
+			local frame = CF(yawAt) * A(0, e[2], 0) * CF(0, 0, -1.47)
+			b:box("TurretWall" .. e[1], V(1.2, e[3], 0.16), frame + V(0, e[4] + e[3] / 2, 0), "accent")
+		end
+		b:box("TurretMantlet", V(1.1, 0.55, 0.7), yawAt + V(0, 0.16 + 0.275, -reach + 0.05), "trim")
+		b:bevel("TurretMantletNose", yawAt + V(0, 0.16 + 0.275, -reach - 0.4), 1.1, 0.2, 0.55, V(0, 0, -1), V(0, 1, 0), "trim")
+		b:box("TurretCradleBase", V(0.9, 0.12, 0.5), pitchAt + V(0, -0.23, 0), "mesh")
+		for _, x in ipairs({ -1, 1 }) do
+			b:box(x < 0 and "TurretForkL" or "TurretForkR", V(0.08, 0.32, 0.34), pitchAt + V(x * 0.36, -0.01, 0), "mesh")
+		end
+		-- A spare ammo can inside the back wall: where a reload comes from.
+		b:box("TurretSpareCan", V(0.7, 0.5, 0.4), yawAt + V(0, 0.16 + 0.3, 1.1), "stripe")
+		b:box("TurretSpareCanLid", V(0.74, 0.06, 0.44), yawAt + V(0, 0.16 + 0.58, 1.1), "trim")
+	end)
+	local frames
+	b:with(pitch, function()
+		local function P(x, y, z)
+			return pitchAt + V(x, y, z) * s
+		end
+		trunnion(b, "TurretTrunnion", pitchAt, 0.92, 0.14)
+		b:box("GunReceiver", V(0.56, 0.5, 1.2) * s, P(0, 0.12, 0.1), "trim")
+		b:box("GunTopCover", V(0.7, 0.08, 0.9) * s, P(0, 0.4, 0.1), "engine")
+		b:box("GunFeedTray", V(0.2, 0.14, 0.4) * s, P(-0.38, 0.22, 0.0), "mesh")
+		b:box("GunAmmoCan", V(0.44, 0.56, 0.7) * s, P(-0.72, 0.02, 0.05), "stripe")
+		b:box("GunAmmoCanLid", V(0.5, 0.06, 0.76) * s, P(-0.72, 0.33, 0.05), "trim")
+		b:beam("GunBelt", P(-0.62, 0.34, 0.0), P(-0.36, 0.3, 0.0), 0.2 * s, 0.08 * s, "gold")
+		b:box("GunSupport", V(0.42, 0.36, 0.3) * s, P(0, 0.12, -0.62), "trim")
+		b:tube("GunJacket", P(0, 0.12, -0.74), P(0, 0.12, -1.6), 0.44 * s, "trim")
+		for index, z in ipairs({ -0.95, -1.25 }) do
+			b:tube("GunJacketBand" .. index, P(0, 0.12, z - 0.05), P(0, 0.12, z + 0.05), 0.5 * s, "mesh")
+		end
+		b:tube("GunBarrel", P(0, 0.12, -1.55), P(0, 0.12, -2.1), 0.3 * s, "mesh")
+		b:tube("GunMuzzleRing", P(0, 0.12, -2.02), P(0, 0.12, -2.26), 0.38 * s, "trim")
+		b:tube("GunMuzzleBore", P(0, 0.12, -2.2), P(0, 0.12, -2.32), 0.24 * s, "mesh")
+		b:box("GunSightPost", V(0.05, 0.2, 0.05) * s, P(0, 0.54, -0.3), "mesh")
+		b:box("GunRearSightFoot", V(0.24, 0.05, 0.12) * s, P(0, 0.465, 0.5), "mesh")
+		for _, x in ipairs({ -1, 1 }) do
+			b:box(string.format("GunRearSight%s", x < 0 and "L" or "R"), V(0.04, 0.2, 0.05) * s, P(x * 0.085, 0.59, 0.5), "mesh")
+		end
+		b:box("GunBackplate", V(0.7, 0.38, 0.1) * s, P(0, 0.12, 0.74), "trim")
+		for _, x in ipairs({ -1, 1 }) do
+			local n = x < 0 and "L" or "R"
+			b:tube("GunGripArmTop" .. n, P(x * 0.24, 0.26, 0.76), P(x * 0.24, 0.26, 1.04), 0.07 * s, "trim")
+			b:tube("GunGripArmLow" .. n, P(x * 0.24, -0.04, 0.76), P(x * 0.24, -0.04, 1.0), 0.07 * s, "trim")
+			b:tube("GunGrip" .. n, P(x * 0.24, -0.07, 1.0), P(x * 0.24, 0.37, 1.04), 0.14 * s, "rubber")
+		end
+		b:box("GunTrigger", V(0.28, 0.1, 0.05) * s, P(0, 0.15, 0.86), "gold")
+		frames = {
+			GripR = palm(P(0.24, 0.15, 1.02), V(-0.35, 0, -1), V(1, 0.15, 0.3)),
+			GripL = palm(P(-0.24, 0.15, 1.02), V(0.35, 0, -1), V(-1, 0.15, 0.3)),
+			Sight = CF(P(0, 0.57, 1.1)),
+			ReloadHand = palm(P(-0.6, 0.5, 0.1), V(0.3, -0.3, -1), V(0, 1, 0)),
+		}
+	end)
+	return yaw, pitch, pitchAt + V(0, 0.12 * s, -2.32 * s), {
+		GunnerEye = { yaw, CF(yawAt + V(0, 1.62, 0.45)) },
+		GunnerSight = { pitch, frames.Sight },
+		GripR = { pitch, frames.GripR },
+		GripL = { pitch, frames.GripL },
+		ReloadHand = { pitch, frames.ReloadHand },
+	}, "stand"
+end
+
+--------------------------------------------------------------------------------
+-- Driver's gun styles: a short-arc gun at the front, fired from the wheel.
+--------------------------------------------------------------------------------
+
+local DriverStyles = {}
+
+-- The race a ball turns in, on the yaw pivot: a ring round the ball's middle, standing proud of the
+-- ball either side (the pitch pins' housings), so the ball tips inside it and the pair turn together.
+local function ballRace(b, at)
+	b:cyl("DriverGunRace", 0.66, 0.34, CF(at), "mesh")
+end
+
+-- The gun coming out of its ball along -Z: a banded jacket, the barrel, a flash hider.
+local function ballGun(b, at, length)
+	b:ball("DriverGunBall", 0.56, at, "trim")
+	b:tube("DriverGunJacket", at + V(0, 0, -0.2), at + V(0, 0, -length * 0.62), 0.22, "trim")
+	for index, t in ipairs({ 0.34, 0.5 }) do
+		b:tube("DriverGunBand" .. index, at + V(0, 0, -length * t + 0.03), at + V(0, 0, -length * t - 0.03), 0.27, "mesh")
+	end
+	b:tube("DriverGunBarrel", at + V(0, 0, -length * 0.58), at + V(0, 0, -length + 0.12), 0.11, "mesh")
+	b:tube("DriverGunFlash", at + V(0, 0, -length + 0.18), at + V(0, 0, -length), 0.17, "trim")
+end
+
+-- A low armoured cowl on a flat surface (the Rotster's bonnet bulge, the van's bumper): the ball in
+-- its bevelled front, the gun's feed humped on its back. Yaw and pitch turn about the ball's middle.
+function DriverStyles.cowl(b, mount, names)
+	local base = mount.base
+	local depth = mount.depth or 1.1
+	local height = 0.58
+	local frontZ = base.Z
+	b:box("DriverGunCowl", V(0.9, height, depth - 0.2), V(base.X, base.Y + height / 2, frontZ + 0.2 + (depth - 0.2) / 2), "trim")
+	b:bevel("DriverGunCowlNose", V(base.X, base.Y + height / 2, frontZ + 0.1), 0.9, 0.2, height, V(0, 0, -1), V(0, 1, 0), "trim")
+	b:box("DriverGunFeed", V(0.5, 0.14, math.min(0.5, depth - 0.4)), V(base.X, base.Y + height + 0.07, frontZ + 0.2 + (depth - 0.2) / 2), "mesh")
+	local at = V(base.X, base.Y + 0.36, frontZ + 0.08)
+	local yaw = b:pivot(names.yaw, CF(at), "TurretYaw")
+	local pitch = b:pivot(names.pitch, CF(at), "TurretPitch", yaw)
+	local length = mount.length or 1.7
+	b:with(yaw, function()
+		ballRace(b, at)
+	end)
+	b:with(pitch, function()
+		ballGun(b, at, length)
+	end)
+	return yaw, pitch, at + V(0, 0, -length)
+end
+
+-- A ball mount in a sloped plate: an armoured collar set into the plate (its axis along the plate's
+-- outward normal, `mount.normal`) and the ball in it.
+function DriverStyles.ball(b, mount, names)
+	local at = mount.base
+	local normal = (mount.normal or V(0, 0.5, -1)).Unit
+	-- From the plate's face (sunk 0.05 into it) up round the ball's lower half.
+	b:cyl("DriverGunCollar", 0.44, 0.86, CFrame.lookAt(at - normal * 0.17, at + normal) * A(0, 90, 0), "trim")
+	local yaw = b:pivot(names.yaw, CF(at), "TurretYaw")
+	local pitch = b:pivot(names.pitch, CF(at), "TurretPitch", yaw)
+	local length = mount.length or 1.6
+	b:with(yaw, function()
+		ballRace(b, at)
+	end)
+	b:with(pitch, function()
+		ballGun(b, at, length)
+	end)
+	return yaw, pitch, at + V(0, 0, -length)
+end
+
+local MOUNT_NAMES = {
+	turret = { yaw = "TurretYaw", pitch = "TurretPitch", muzzle = "TurretMuzzle" },
+	driver = { yaw = "DriverGunYaw", pitch = "DriverGunPitch", muzzle = "DriverGunMuzzle" },
+}
+VehicleModels.MountNames = MOUNT_NAMES
+
+-- The gunner's seat for an eye at `eye` (a GunnerEye frame, model space) and a stance.
+function VehicleModels.GunnerSeatFor(eye, stance)
+	return CF(eye.Position - V(0, RIDER_ROOT + (EYE_ABOVE_ROOT[stance] or EYE_ABOVE_ROOT.stand), 0))
+end
+
+local function buildMount(b, which, mount)
+	local names = MOUNT_NAMES[which]
+	local style = which == "turret" and MountStyles[mount.style] or DriverStyles[mount.style]
+	assert(style, "no " .. which .. " mount style " .. tostring(mount.style))
+	local yaw, pitch, muzzleAt, markers, stance = style(b, mount, names)
+	local muzzle = invisible(names.muzzle, CF(muzzleAt), b.model)
 	b.anchors[muzzle] = pitch
-	return yaw, pitch, muzzle
+	local frames = {}
+	for name, entry in pairs(markers or {}) do
+		-- SeatEye (optional) is only where the rider's own eyes go, for the seat: no marker for it.
+		if name ~= "SeatEye" then
+			mark(entry[1], name, entry[2])
+		end
+		frames[name] = entry[2]
+	end
+	if stance then
+		yaw:SetAttribute("Stance", stance)
+	end
+	return frames, stance
+end
+
+-- What an unarmed build (a parked prop) has where the mount would be, so it reads as a whole car: a
+-- lid on the Rotster's hatch, a couple of crates in the Ranger's bed.
+local function buildUnarmed(b)
+	if b.hatch then
+		local at = b.hatch.at
+		b:box("HatchLid", V(2 * b.hatch.half + 0.3, 0.12, 2 * b.hatch.half + 0.3), at + V(0, 0.06, 0), "accent")
+		b:box("HatchHandle", V(0.6, 0.08, 0.1), at + V(0, 0.16, 0.6), "trim")
+	end
+	if b.bedFloor then
+		local floor = b.bedFloor
+		b:box("BedLoadCrateA", V(1.6, 1.1, 1.3), V(-0.9, floor.y + 0.55, floor.z0 + 1.4), "wood")
+		b:box("BedLoadCrateB", V(1.3, 0.9, 1.2), CF(0.8, floor.y + 0.45, floor.z0 + 2.2) * A(0, 14, 0), "wood")
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -2312,17 +3248,51 @@ VehicleModels.Poses = {
 		LeftElbow = { 34, 0, 0 },
 		RightElbow = { 34, 0, 0 },
 	}),
+	-- A gunner stands at the gun, legs straight under them (the seat's sit animation bends them), arms
+	-- out to the handles. VehicleClient turns the whole body round the turret's yaw axis with the gun,
+	-- and tips the arms with its pitch.
+	GunnerStand = pose({
+		Waist = { -6, 0, 0 },
+		LeftHip = { 0, 0, -3 },
+		RightHip = { 0, 0, 3 },
+		LeftKnee = { -6, 0, 0 },
+		RightKnee = { -6, 0, 0 },
+		LeftAnkle = { 6, 0, 0 },
+		RightAnkle = { 6, 0, 0 },
+		LeftShoulder = { 66, 0, 10 },
+		RightShoulder = { 66, 0, -10 },
+		LeftElbow = { 38, 0, 0 },
+		RightElbow = { 38, 0, 0 },
+	}),
+	-- Kneeling behind the mortar: thighs upright, shins flat behind, hands down on the handwheels.
+	GunnerKneel = pose({
+		Waist = { -12, 0, 0 },
+		LeftHip = { 0, 0, -6 },
+		RightHip = { 0, 0, 6 },
+		LeftKnee = { -90, 0, 0 },
+		RightKnee = { -90, 0, 0 },
+		LeftAnkle = { 30, 0, 0 },
+		RightAnkle = { 30, 0, 0 },
+		LeftShoulder = { 40, 0, 12 },
+		RightShoulder = { 40, 0, -12 },
+		LeftElbow = { 30, 0, 0 },
+		RightElbow = { 30, 0, 0 },
+	}),
 }
 
 --------------------------------------------------------------------------------
 -- API
 --------------------------------------------------------------------------------
 
-function VehicleModels.Pick(kind, rng)
+-- opts.drivable also draws from the models a map only ever parks as drivable vehicles (the armoured
+-- cars, `drivableOnly`): VehicleService.Create asks for them, MapDecor's kerbside props never do, so the
+-- streets keep the designs they had and their rolls are untouched.
+function VehicleModels.Pick(kind, rng, opts)
+	local drivable = type(opts) == "table" and opts.drivable == true
 	-- Walk in a fixed order: pairs() order isn't stable, and a pick has to be.
 	local ids, total = {}, 0
 	for id, def in pairs(VehicleModels.Models) do
-		if def.kind == kind then
+		if def.kind == kind and (drivable or not def.drivableOnly) then
 			table.insert(ids, id)
 			total += def.weight
 		end
@@ -2360,14 +3330,20 @@ function VehicleModels.Build(modelId, rng, opts)
 	local b = newBuilder(model, scheme)
 	local layout = def.build(b)
 	assert(b.chassis, modelId .. " built no Chassis")
-	-- An armed model's weapon mount (see Mounted weapons above); bikes have none.
-	-- opts.unarmed leaves the mount off: BuildStatic's parked cars are scenery, not something to man.
+	-- An armed model's weapons (see Mounted weapons above): the turret, and the driver's gun; bikes have
+	-- none. opts.unarmed leaves both off: BuildStatic's parked cars are scenery, not something to man, and
+	-- get what an unarmed car has there instead (a lid on the Rotster's hatch, crates in the Ranger's bed).
 	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" and not opts.unarmed then
-		buildMount(b, VehicleModels.Mounts[modelId])
+		local frames, stance = buildMount(b, "turret", VehicleModels.Mounts[modelId])
+		if VehicleModels.DriverMounts[modelId] then
+			buildMount(b, "driver", VehicleModels.DriverMounts[modelId])
+		end
 		model:SetAttribute("Armed", true)
-		-- The gun's own seat, alongside the driver's and the passengers'.
-		local gunner = VehicleModels.GunnerSeats[modelId]
-		if gunner and layout.seats then
+		-- The gun's own seat, alongside the driver's and the passengers', where the gunner's eye lands on
+		-- the mount's GunnerEye.
+		if frames.GunnerEye and layout.seats then
+			local gunner = VehicleModels.GunnerSeatFor(frames.SeatEye or frames.GunnerEye, stance)
+			VehicleModels.GunnerSeats[modelId] = gunner
 			local seats = { gunner = gunner }
 			for key, value in pairs(layout.seats) do
 				seats[key] = value
@@ -2376,6 +3352,8 @@ function VehicleModels.Build(modelId, rng, opts)
 		end
 		-- VehicleWeapons finds empty armed vehicles for bots by this tag.
 		game:GetService("CollectionService"):AddTag(model, "ArmedVehicle")
+	else
+		buildUnarmed(b)
 	end
 	-- A part under workspace.Map with a breakable name would be shot to pieces (see the header).
 	for _, part in ipairs(model:GetChildren()) do

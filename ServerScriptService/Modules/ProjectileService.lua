@@ -19,7 +19,9 @@
 -- Three lines from the blast to head, body and legs decide how exposed a victim is: a wall between
 -- you and it takes all of it, glass doesn't. Your own blasts hurt you at half strength. A blast wears
 -- down defenses and companions, sets off barrels, holes walls near its centre, shatters every pane in
--- reach, kicks grenades lying nearby and rocks vehicles.
+-- reach, kicks grenades lying nearby, rocks vehicles and hurts them (VehicleService.BlastDamage: the
+-- explosive class, the counter to a vehicle -- VehicleArmor), and reaches someone inside an armoured
+-- cabin at VehicleArmor.CabinBlast of its strength.
 --
 --   ProjectileService.FireWeapon(token, weaponId, origin, aimPoint)       a launcher round (bots)
 --   ProjectileService.Throw(token, itemId, targetPosition, options)       a lob onto a spot (bots)
@@ -374,6 +376,10 @@ local function explode(blast)
 			if victim.token == blast.owner then
 				amount *= SELF_SCALE
 			end
+			-- Inside an armoured cabin, the armour takes most of it (the gunner's hatch is open).
+			if VehicleService.CabinShield then
+				amount *= VehicleService.CabinShield(victim.root.Parent)
+			end
 			local taken = 0
 			-- A thrower who has left is no longer creditable (and ModeTeams has forgotten them), but the
 			-- team stamped on the round at launch still keeps friendly fire off their teammates.
@@ -417,6 +423,9 @@ local function explode(blast)
 	kickBodies(centre, radius, blast.id)
 	if VehicleService.ApplyBlast then
 		VehicleService.ApplyBlast(centre, radius, blast.damage)
+	end
+	if VehicleService.BlastDamage then
+		VehicleService.BlastDamage(blast)
 	end
 	return dealt
 end
@@ -502,6 +511,9 @@ local function burst(entry, position, normal, directToken, headshot)
 		innerRadius = spec.innerRadius or 0,
 		wallDamage = spec.wallDamage or 0,
 		direct = directToken and { token = directToken, bonus = spec.impactBonus or 0, headshot = headshot, multiplier = multiplier } or nil,
+		-- A round that struck a vehicle's hull: that vehicle takes the impact bonus as well (BlastDamage).
+		directVehicle = entry.directVehicle,
+		directBonus = entry.directVehicle and (spec.impactBonus or 0) or nil,
 	}
 	if spec.onDetonate and spec.onDetonate(entry, blast, api) == false then
 		broadcast("remove", { id = entry.id })
@@ -685,6 +697,7 @@ local function contactRound(entry, hit, centre, velocity)
 	else
 		-- A round in flight meeting a head is a headshot; a dud that bounces into one later is not.
 		local directToken = combatantOf(hit.Instance)
+		entry.directVehicle = CombatService.VehicleFromPart and CombatService.VehicleFromPart(hit.Instance) or nil
 		burst(entry, hit.Position, hit.Normal, directToken, directToken ~= nil and hit.Instance.Name == "Head")
 	end
 	return true

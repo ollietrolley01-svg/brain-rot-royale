@@ -4,7 +4,8 @@
 -- Run with: powershell -ExecutionPolicy Bypass -File tools/runtest.ps1 -Probe tools/vehicle_health_probe.lua -WaitSeconds 200
 -- (rebuild the place first: the probe runs against BrainRotRoyale.rbxlx, not the .lua files)
 --
---   attributes   VehicleMaxHealth/VehicleHealth read 300 on a car, 150 on a bike, the moment it spawns
+--   attributes   VehicleMaxHealth/VehicleHealth read the model's VehicleArmor health (the Rotster
+--                1,500, the Bananini Scoot 620) the moment it spawns
 --   collision    a hard wall hit above the 18 studs/s floor damages the vehicle by roughly the
 --                measured speed loss; the SAME vehicle coasting to a dead stop with nothing in its
 --                way (no wall) takes none -- the planted-fault half: this check can fail, and here
@@ -32,6 +33,7 @@ local Modules = ServerScriptService:WaitForChild("Modules")
 local VehicleService = require(Modules:WaitForChild("VehicleService"))
 local Combatants = require(Modules:WaitForChild("Combatants"))
 local CombatService = require(Modules:WaitForChild("CombatService"))
+local VehicleArmor = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("VehicleArmor"))
 
 local passed, failed = 0, 0
 local function check(name, ok, detail)
@@ -153,9 +155,12 @@ do
 	local car = VehicleService.Create(folder, ORIGIN + Vector3.new(0, 3, 400), 0, "car", { model = "Rotster" })
 	local bike = VehicleService.Create(folder, ORIGIN + Vector3.new(60, 3, 400), 0, "bike", { model = "BananiniScoot" })
 	task.wait(0.5)
-	check("car spawns at VehicleMaxHealth 300", car:GetAttribute("VehicleMaxHealth") == 300 and car:GetAttribute("VehicleHealth") == 300,
+	local carHealth, bikeHealth = VehicleArmor.HealthOf("Rotster", "car"), VehicleArmor.HealthOf("BananiniScoot", "bike")
+	check("car spawns at its VehicleArmor health (" .. carHealth .. ")", car:GetAttribute("VehicleMaxHealth") == carHealth
+		and car:GetAttribute("VehicleHealth") == carHealth,
 		string.format("max %s health %s", tostring(car:GetAttribute("VehicleMaxHealth")), tostring(car:GetAttribute("VehicleHealth"))))
-	check("bike spawns at VehicleMaxHealth 150", bike:GetAttribute("VehicleMaxHealth") == 150 and bike:GetAttribute("VehicleHealth") == 150,
+	check("bike spawns at its VehicleArmor health (" .. bikeHealth .. ")", bike:GetAttribute("VehicleMaxHealth") == bikeHealth
+		and bike:GetAttribute("VehicleHealth") == bikeHealth,
 		string.format("max %s health %s", tostring(bike:GetAttribute("VehicleMaxHealth")), tostring(bike:GetAttribute("VehicleHealth"))))
 	car:Destroy()
 	bike:Destroy()

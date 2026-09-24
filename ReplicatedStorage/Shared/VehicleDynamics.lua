@@ -95,6 +95,25 @@ VehicleDynamics.Handling = {
 		travelUp = 0.65, travelDown = 0.45, springHz = 1.8, dampingRatio = 0.6, antiRoll = 1.3,
 		yawDamping = 0.5, downforce = 0,
 	},
+	-- The armoured cars (Oliver 09-24: "we need armored vehicles too"): heavy, so everything about
+	-- them is slower -- top speed, pick-up, braking, how fast the wheel turns -- and they sit on softer,
+	-- longer springs that let the weight lean. The scout car is a brisk 70 (the van does 72); the carrier
+	-- is the slowest thing on four wheels, and the slowest to get going (24 against the van's 30). Both
+	-- drive all four wheels and shrug off rough ground almost as well as the Ranger.
+	TartarugaScout = {
+		topSpeed = 70, reverseSpeed = 22, accel = 30, brake = 84, coast = 15,
+		grip = 1.5, traction = 1.5, offroad = 0.75, driven = "all",
+		steerLow = 32, steerHigh = 8, steerRate = 140,
+		travelUp = 0.9, travelDown = 0.65, springHz = 1.6, dampingRatio = 0.6, antiRoll = 1.1,
+		yawDamping = 0.5, downforce = 0,
+	},
+	CameloCarrier = {
+		topSpeed = 62, reverseSpeed = 20, accel = 24, brake = 78, coast = 16,
+		grip = 1.45, traction = 1.5, offroad = 0.7, driven = "all",
+		steerLow = 30, steerHigh = 7, steerRate = 120,
+		travelUp = 1.0, travelDown = 0.7, springHz = 1.4, dampingRatio = 0.62, antiRoll = 1.2,
+		yawDamping = 0.55, downforce = 0,
+	},
 	BananiniScoot = {
 		topSpeed = 66, reverseSpeed = 12, accel = 44, brake = 104, coast = 12,
 		grip = 1.7, traction = 1.4, offroad = 0.1, driven = "rear",

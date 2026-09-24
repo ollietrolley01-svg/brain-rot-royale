@@ -54,7 +54,9 @@ SCRIPTS = ["HudClient.client.lua", "ModeScoreHud.client.lua", "BoonHud.client.lu
            "VehicleWeaponClient.client.lua", "GunfireCueClient.client.lua",
            # The driving HUD: its speed panel, hint and damage line, placed by PhoneLayout on a touch screen.
            "VehicleClient.client.lua"]
-MODULES = ["PhoneLayout", "UiKit", "StaminaBar", "CompanionAbilityIcon", "EventBanner"]
+# GunnerView: the gunner's first-person view and its sight, which stands in for the reticle in the
+# "gunner" scene (its Viewmodel arms and Ballistics are the mock's stand-ins).
+MODULES = ["PhoneLayout", "UiKit", "StaminaBar", "CompanionAbilityIcon", "EventBanner", "GunnerView"]
 # Check 7 only: the bag module, and the shared data modules the words come from. CreativeArsenal is
 # stubbed (its rounds pull in Ballistics); its guns are covered by player_eye_check.py "gunword".
 EYE_MODULES = ["InventoryPanel"]
@@ -198,11 +200,43 @@ class World:
                 local yaw = W.Instance.new('Part')
                 yaw.Name = 'TurretYaw'
                 yaw.Parent = car
+                -- The driver's own gun (VehicleModels.DriverMounts): the driving seat works it.
+                local driverGun = W.Instance.new('Part')
+                driverGun.Name = 'DriverGunYaw'
+                driverGun.Parent = car
                 if driving == 'gunner' then
                     local gunner = W.Instance.new('Seat')
                     gunner.Name = 'GunnerSeat'
                     gunner.Parent = car
                     seat = gunner
+                    -- The turret's first-person markers (VehicleModels' mount contract), so GunnerView
+                    -- really starts and its sight is what gets measured.
+                    local body = W.Instance.new('Part')
+                    body.Name = 'Body'
+                    body.Parent = car
+                    local pitch = W.Instance.new('Part')
+                    pitch.Name = 'TurretPitch'
+                    pitch.Parent = car
+                    local muzzle = W.Instance.new('Part')
+                    muzzle.Name = 'TurretMuzzle'
+                    muzzle.Parent = car
+                    for _, pair in ipairs({ { yaw, body }, { pitch, yaw } }) do
+                        local joint = W.Instance.new('Motor6D')
+                        joint.Name = 'Joint'
+                        joint.Part0 = pair[2]
+                        joint.Part1 = pair[1]
+                        joint.Parent = pair[1]
+                    end
+                    for _, name in ipairs({ 'GunnerEye' }) do
+                        local a = W.Instance.new('Attachment')
+                        a.Name = name
+                        a.Parent = yaw
+                    end
+                    for _, name in ipairs({ 'GunnerSight', 'GripR', 'GripL' }) do
+                        local a = W.Instance.new('Attachment')
+                        a.Name = name
+                        a.Parent = pitch
+                    end
                 end
                 car.Parent = W.workspace
                 W.special(W.character.Humanoid).SeatPart = seat
@@ -367,10 +401,16 @@ def check(root, sources, dump=False, quiet=False):
         elif not touch and not readout:
             problems.append(f"[{tag}, {scene}] the companion tile's stats line is hidden on a desktop screen")
         if scene in ("driving", "gunner"):
-            # One crosshair: the vehicle gun's own mark, never the hand gun's as well.
+            # One crosshair: the vehicle gun's own mark, never the hand gun's as well. The driver's is
+            # the reticle; the gunner's is GunnerView's sight, and the reticle stands down for it.
             vars_ = {e["var"] for e in drawn}
-            if "reticle" not in vars_:
+            sight = any(e["gui"] == "GunnerSight" for e in drawn)
+            if scene == "driving" and "reticle" not in vars_:
                 problems.append(f"[{tag}, {scene}] the vehicle gun's aim mark is not drawn")
+            if scene == "gunner" and not sight:
+                problems.append(f"[{tag}, {scene}] the gunner's sight (GunnerView) is not drawn")
+            if scene == "gunner" and "reticle" in vars_:
+                problems.append(f"[{tag}, {scene}] two aim marks: the reticle is drawn over the gunner's sight")
             if "crosshair" in vars_:
                 problems.append(f"[{tag}, {scene}] two crosshairs: the HUD's is drawn as well as the vehicle gun's")
             if not any(e["gui"] == "GunfireCue" for e in drawn):

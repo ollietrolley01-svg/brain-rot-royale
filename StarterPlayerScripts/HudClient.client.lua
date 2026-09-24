@@ -442,6 +442,18 @@ damageDealt.OnClientEvent:Connect(function(amount, wasKill, position, hitShield,
 		TweenService:Create(hitmarker, TweenInfo.new(0.25), { TextTransparency = 1 }):Play()
 		return
 	end
+	-- A vehicle taking the shot (VehicleService.DamageVehicle): an amber tick and the number, so wearing
+	-- a car down reads as progress but never as a hit on the person in it; WRECKED when it goes.
+	if kind == "vehicle" then
+		hitmarker.Text = wasKill and "WRECKED" or "+"
+		hitmarker.TextSize = wasKill and 26 or 24
+		hitmarker.TextColor3 = Color3.fromRGB(255, 176, 70)
+		hitmarker.TextTransparency = 0
+		TweenService:Create(hitmarker, TweenInfo.new(wasKill and 0.7 or 0.3), { TextTransparency = 1 }):Play()
+		Sfx.Play("HitConfirm", 0.2)
+		showDamageNumber(amount, position, false, false, false)
+		return
+	end
 	hitmarker.Text = wasKill and (headshot and "HEADSHOT" or "ELIM") or "X"
 	hitmarker.TextSize = headshot and 36 or 30
 	-- Blue while you're still chewing through their shield; gold for a headshot.
