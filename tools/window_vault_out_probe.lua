@@ -114,8 +114,8 @@ local function pickPanes(built, per, upstairs)
 	for _, entry in ipairs(built) do
 		local panes = {}
 		for _, part in ipairs(entry.model:GetChildren()) do
-			local ground = part.Position.Y < entry.origin.Y + 12
-			if part:IsA("BasePart") and part.Name == "WindowGlass" and ground ~= (upstairs == true) then
+			-- IsA first: a building's children include Models (the ExplosiveBarrel), which have no Position.
+			if part:IsA("BasePart") and part.Name == "WindowGlass" and (part.Position.Y < entry.origin.Y + 12) ~= (upstairs == true) then
 				table.insert(panes, part)
 			end
 		end
