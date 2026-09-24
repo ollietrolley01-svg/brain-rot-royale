@@ -1362,30 +1362,31 @@ local function buildSlotCells()
 
 		-- The tier as a letter in the bottom-right corner (#86 M4): the bar under the cell says it only in
 		-- colour. C U R E L M S -- the first letters of Rarity.Order, all different. The item name beside
-		-- it stops 14 px short to leave the corner clear.
+		-- it stops 15 px short to leave the corner clear. Both are 12 px text, the smallest the HUD uses: at
+		-- 10 they were hard to read on a phone.
 		local tier = create("TextLabel", {
 			Name = "Tier",
 			AnchorPoint = Vector2.new(1, 1),
-			Position = UDim2.new(1, -3, 1, -5),
-			Size = UDim2.fromOffset(11, 13),
+			Position = UDim2.new(1, -3, 1, -4),
+			Size = UDim2.fromOffset(12, 14),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBlack,
 			Text = "",
 			TextColor3 = C.Muted,
 			TextXAlignment = Enum.TextXAlignment.Right,
-			TextSize = 10,
+			TextSize = 12,
 			Parent = cell,
 		})
 
 		local name = create("TextLabel", {
 			Position = UDim2.new(0, 3, 1, -18),
-			Size = UDim2.new(1, -17, 0, 13),
+			Size = UDim2.new(1, -18, 0, 14),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBold,
 			Text = "",
 			TextColor3 = C.Text,
 			TextTruncate = Enum.TextTruncate.AtEnd,
-			TextSize = 10,
+			TextSize = 12,
 			Parent = cell,
 		})
 
@@ -2383,9 +2384,11 @@ local function refreshTownMarkers()
 		seen[child] = true
 		local marker = townMarkers[child]
 		if not marker then
+			-- 12 px names (9 was unreadable) in a box wide enough for most on one line; a long one
+			-- ("Grass Toucher's Rest") wraps onto a second line under the first rather than spilling sideways.
 			marker = create("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Size = UDim2.fromOffset(84, 22),
+				Size = UDim2.fromOffset(112, 22),
 				BackgroundTransparency = 1,
 				ZIndex = 0,
 				Parent = minimap,
@@ -2402,13 +2405,15 @@ local function refreshTownMarkers()
 			}, { rounded(3) })
 			create("TextLabel", {
 				Position = UDim2.new(0, 0, 0, 6),
-				Size = UDim2.new(1, 0, 0, 12),
+				Size = UDim2.new(1, 0, 0, 14),
+				AutomaticSize = Enum.AutomaticSize.Y,
 				BackgroundTransparency = 1,
 				Font = Enum.Font.GothamBold,
 				Text = name,
 				TextColor3 = color,
 				TextStrokeTransparency = 0.6,
-				TextSize = 9,
+				TextWrapped = true,
+				TextSize = 12,
 				ZIndex = 0,
 				Parent = marker,
 			})
@@ -2565,15 +2570,19 @@ local function compassMarker(key, text, color, kind)
 		elseif kind ~= "drop" then
 			create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = dot })
 		end
+		-- 12 px (9 was unreadable), filling the strip under the dot to its bottom edge. The box is as wide
+		-- as the longest name ("GRASS TOUCHER'S REST" is about 150 px at this size); the de-clutter pass below
+		-- hides a name that would print over another, by its TextBounds.
 		label = create("TextLabel", {
-			Position = UDim2.new(0, 0, 0, 10),
-			Size = UDim2.new(1, 0, 0, 12),
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 10),
+			Size = UDim2.fromOffset(180, COMPASS_H - 10),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBold,
 			Text = text,
 			TextColor3 = color,
 			TextStrokeTransparency = 0.6,
-			TextSize = 9,
+			TextSize = 12,
 			Parent = frame,
 		})
 	end
