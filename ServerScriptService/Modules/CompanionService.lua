@@ -1161,21 +1161,39 @@ function CompanionService.Start()
 		lastCondition[player] = nil
 	end)
 
-	local accumulated = 0
+	-- The boons tick every THINK_INTERVAL as before; the companions themselves take turns in
+	-- THINK_SLICES groups, one group a slice, so each still thinks once an interval but they no
+	-- longer all think in the same frame. A bot's companion with nobody in sight casts a ray at
+	-- every enemy in range (pickTarget), so with them all in one frame, 15 companions in a 50-bot
+	-- crowd could cast ~700 rays in a single frame every 0.2 s (#126/#131; tools/perf_bot_cost.py).
+	local THINK_SLICES = 4
+	local accumulated, sliceAccumulated, slice, nextSlot = 0, 0, 0, 0
 	RunService.Heartbeat:Connect(function(delta)
 		accumulated += delta
-		if accumulated < THINK_INTERVAL then
+		sliceAccumulated += delta
+		if accumulated >= THINK_INTERVAL then
+			accumulated = 0
+			for owner in pairs(companions) do
+				CompanionBoons.Tick(owner, THINK_INTERVAL)
+			end
+			CompanionBoons.TickVenom(THINK_INTERVAL)
+		end
+		if sliceAccumulated < THINK_INTERVAL / THINK_SLICES then
 			return
 		end
-		accumulated = 0
+		sliceAccumulated = 0
+		local current = slice
+		slice = (slice + 1) % THINK_SLICES
 
 		local now = os.clock()
-		for owner in pairs(companions) do
-			CompanionBoons.Tick(owner, THINK_INTERVAL)
-		end
-		CompanionBoons.TickVenom(THINK_INTERVAL)
 		for owner, entry in pairs(companions) do
-			if not entry.model.Parent or not entry.anchor.Parent then
+			if entry.slot == nil then
+				entry.slot = nextSlot
+				nextSlot = (nextSlot + 1) % THINK_SLICES
+			end
+			if entry.slot ~= current then
+				-- Another slice's turn.
+			elseif not entry.model.Parent or not entry.anchor.Parent then
 				despawn(owner)
 			else
 				local anchorPosition = entry.anchor.WorldPosition
