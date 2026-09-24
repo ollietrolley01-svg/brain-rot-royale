@@ -53,7 +53,7 @@ $capturedLen = 0
 # it is recorded twice in COORDINATION.md, which is not where anyone reads it at the moment it bites.
 # So the harness says it here, where the cost lands.
 $newestSource = Get-ChildItem "C:\Users\oliver\Downloads\claude\brain-rot-royale" -Recurse -Include *.lua -ErrorAction SilentlyContinue |
-	Where-Object { $_.FullName -notmatch '\(tools|\.git)\' } |
+	Where-Object { $_.FullName -notmatch '\\(tools|\.git)\\' } |
 	Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($newestSource -and (Test-Path $source) -and $newestSource.LastWriteTime -gt (Get-Item $source).LastWriteTime) {
 	"WARNING: $(Split-Path $source -Leaf) was built BEFORE $($newestSource.Name) changed -- this run will measure the OLD code."
