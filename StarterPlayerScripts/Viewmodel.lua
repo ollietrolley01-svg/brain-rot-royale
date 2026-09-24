@@ -335,7 +335,9 @@ local function gripShape(offsets, keyFrame, sight)
 					if hit then
 						return hit
 					end
-					if inSight(point) then
+					-- `point` is a CFrame (solid() reads its .Position); PointToObjectSpace wants a Vector3, and
+					-- handing it the CFrame threw on every frame for every gun with a sight, so no viewmodel built.
+					if inSight(point.Position) then
 						return SIGHT_LINE
 					end
 				end

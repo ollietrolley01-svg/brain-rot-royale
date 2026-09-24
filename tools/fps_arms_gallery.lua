@@ -46,6 +46,24 @@ local function newAvatar()
 		print("[BRR_Gallery] no avatar in edit mode (" .. tostring(avatar) .. ")")
 		return nil
 	end
+	-- CreateHumanoidModelFromDescription hands back a physics rig whose joints are AnimationConstraints,
+	-- and their C0 is read-only, so every body view failed on `motor.C0 = ...`. Convert to Motor6Ds, the
+	-- joint a player's character has (the same conversion as tools/crouch_gallery.lua).
+	for _, joint in ipairs(avatar:GetDescendants()) do
+		if joint:IsA("AnimationConstraint") then
+			local a0, a1 = joint.Attachment0, joint.Attachment1
+			if a0 and a1 and a0.Parent and a1.Parent then
+				local motor = Instance.new("Motor6D")
+				motor.Name = joint.Name
+				motor.Part0 = a0.Parent
+				motor.Part1 = a1.Parent
+				motor.C0 = a0.CFrame
+				motor.C1 = a1.CFrame
+				motor.Parent = joint.Parent
+				joint:Destroy()
+			end
+		end
+	end
 	return avatar
 end
 local avatar = newAvatar()
