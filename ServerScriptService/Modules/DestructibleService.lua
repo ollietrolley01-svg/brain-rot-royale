@@ -618,15 +618,13 @@ function DestructibleService.Damage(part, amount, attackerToken, from)
 	entry.health -= dealt
 
 	-- Half gone: it starts to look it, so you can read what is nearly through. (Glass has no
-	-- halfway; it just breaks.)
+	-- halfway; it just breaks.) Darker, never see-through: a wall fading toward clear read as a
+	-- ghost of cover rather than cover taking a beating (#71).
 	if entry.health <= entry.max * 0.5 and not entry.battered and entry.max > 1 then
 		entry.battered = true
 		for _, member in ipairs(entry.members) do
 			if member.Parent then
 				member.Color = member.Color:Lerp(Color3.new(0, 0, 0), 0.25)
-				if not entry.tagged then
-					member.Transparency = math.max(member.Transparency, 0.12)
-				end
 			end
 		end
 	end

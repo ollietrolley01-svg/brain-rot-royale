@@ -370,7 +370,11 @@ function I.Clone(inst)
 end
 function I.GetPivot(inst) return inst.CFrame or CFrame.new() end
 function I.PivotTo(inst, c) inst.CFrame = c end
-function I.Emit(inst, n) mock.emitted = (mock.emitted or 0) + n end
+function I.Emit(inst, n)
+	mock.emitted = (mock.emitted or 0) + n
+	mock.emitters = mock.emitters or {}
+	table.insert(mock.emitters, inst)
+end
 function I.AddTag() end
 function I.HasTag() return false end
 function I.GetPropertyChangedSignal() return signal() end

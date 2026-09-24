@@ -13,7 +13,8 @@ and checks the invariants the fix rests on:
 
 Then it plants three faults in DestructibleService's source, one per invariant it must refuse
 forever, and requires the check to FAIL on each: the model attribute lookup removed (A), the map
-root check removed (C), the per-blast dedupe removed (D).
+root check removed (C), the per-blast dedupe removed (D). (Aimed at DestructibleService's pool
+system since #56 folded the attribute into it.)
 
 MapDecor.lua is not this file's owner's to edit; the parked car becomes a pooled Model only once
 the proposed parkedCar edit lands (see PROPOSED below). Until then the check applies that edit
@@ -61,6 +62,9 @@ end
 V.__div = function(a, b) return Vector3.new(a.X / b, a.Y / b, a.Z / b) end
 function Vector3.new(x, y, z) return setmetatable({ X = x or 0, Y = y or 0, Z = z or 0 }, V) end
 function V:Dot(o) return self.X * o.X + self.Y * o.Y + self.Z * o.Z end
+V.__unm = function(a) return Vector3.new(-a.X, -a.Y, -a.Z) end
+function V:Min(o) return Vector3.new(math.min(self.X, o.X), math.min(self.Y, o.Y), math.min(self.Z, o.Z)) end
+function V:Max(o) return Vector3.new(math.max(self.X, o.X), math.max(self.Y, o.Y), math.max(self.Z, o.Z)) end
 CFrame = {}
 local C = {}
 C.__index = C
@@ -82,7 +86,11 @@ Enum = setmetatable({}, { __index = function(t, k)
   local e = setmetatable({}, { __index = function(u, j) return k .. "." .. j end })
   rawset(t, k, e) return e end })
 math.clamp = function(x, a, b) return math.max(a, math.min(b, x)) end
-typeof = function(v) if getmetatable(v) == V then return "Vector3" end return type(v) end
+typeof = function(v)
+  if getmetatable(v) == V then return "Vector3" end
+  if type(v) == "table" and rawget(v, "_p") then return "Instance" end
+  return type(v)
+end
 -- defer really defers: it queues, as Roblox runs it after the current thread yields.
 deferred = {}
 task = { spawn = function(fn, ...) fn(...) end, defer = function(fn) table.insert(deferred, fn) end, delay = function() end }
@@ -94,6 +102,7 @@ local BASE = { Part = true, WedgePart = true }
 local I = {}
 I.__index = function(self, k)
   local p = rawget(self, "_p")
+  if k == "Position" and p.CFrame then return p.CFrame.Position end
   if p[k] ~= nil then return p[k] end
   return I[k]
 end
@@ -149,6 +158,8 @@ function workspace:GetPartBoundsInRadius(position, radius)
   end
   return found
 end
+-- No terrain here: blasts find no ground, so they leave no crater.
+function workspace:Raycast() return nil end
 OverlapParams = { new = function() return {} end }
 RaycastParams = { new = function() return {} end }
 
@@ -274,9 +285,9 @@ def main():
         print("  FAIL", f)
 
     planted = [
-        ("A", "node:GetAttribute(DestructibleService.HealthAttribute)", "nil"),
-        ("C", "not ROOTS[root.Name]", "false"),
-        ("D", "if key and not hit[key] then", "if key then"),
+        ("A", 'positiveNumber(node:GetAttribute("DestructibleHealth"))', "nil"),
+        ("C", "not ROOTS[node.Name]", "false"),
+        ("D", "if key and not seen[key] then", "if key then"),
     ]
     caught = 0
     for tag, old, new in planted:
