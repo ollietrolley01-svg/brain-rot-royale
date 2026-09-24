@@ -676,6 +676,43 @@ local function aimPoint()
 end
 AimState.SetResolver(aimPoint)
 
+-- Range on the crosshair (#86 C40). A hitscan shot does its damage anywhere inside the gun's `range` and
+-- nothing at all past it (WeaponData's header), and the server measures that from the head it fires
+-- from. Aiming at something further away used to look exactly like aiming at something in reach. This
+-- raises AimBeyondRange on the local player and the HUD greys the crosshair ticks while it is up.
+-- Ten times a second, not every frame: it is one more raycast, and the answer only changes as fast as
+-- you turn. Aiming at the sky (the trace hit nothing) is not "out of range" -- there is nothing to miss.
+-- A launcher's round flies until it lands, so projectile guns never mark.
+do
+	local function beyondRange(def, origin, point, hitSomething)
+		if not def or def.projectile or type(def.range) ~= "number" or not origin or not point or not hitSomething then
+			return false
+		end
+		return (point - origin).Magnitude > def.range
+	end
+
+	local elapsed = 0
+	RunService.Heartbeat:Connect(function(delta)
+		elapsed += delta
+		if elapsed < 0.1 then
+			return
+		end
+		elapsed = 0
+		local beyond = false
+		local def = inCombat() and equippedDef() or nil
+		if def then
+			local head = player.Character and player.Character:FindFirstChild("Head")
+			local point = crosshairPoint()
+			-- crosshairPoint's miss answer is a point 1500 studs down the camera ray.
+			local hit = point ~= nil and (point - camera.CFrame.Position).Magnitude < 1499
+			beyond = beyondRange(def, head and head.Position, point, hit)
+		end
+		if (player:GetAttribute("AimBeyondRange") == true) ~= beyond then
+			player:SetAttribute("AimBeyondRange", beyond or nil)
+		end
+	end)
+end
+
 -- Defined below, alongside the decay loop and the viewmodel.
 local addRecoil
 local kickViewmodel

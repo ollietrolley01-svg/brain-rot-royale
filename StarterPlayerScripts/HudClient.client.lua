@@ -360,6 +360,19 @@ do
 			layoutCrosshair()
 		end
 	end)
+
+	-- Past the held gun's reach (#86 C40). A hitscan shot does nothing at all beyond `range` (no
+	-- falloff), and nothing used to say so: the shots just stopped counting. CombatClient measures the
+	-- aim point against the range and raises AimBeyondRange; the ticks fade and go grey while it is up.
+	local function markRange()
+		local beyond = player:GetAttribute("AimBeyondRange") == true
+		for _, arm in pairs(crossArms) do
+			arm.BackgroundTransparency = beyond and 0.65 or 0.15
+			arm.BackgroundColor3 = beyond and C.Muted or Color3.new(1, 1, 1)
+		end
+	end
+	player:GetAttributeChangedSignal("AimBeyondRange"):Connect(markRange)
+	markRange()
 end
 
 local hitmarker = create("TextLabel", {
