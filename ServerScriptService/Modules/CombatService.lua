@@ -360,7 +360,14 @@ function CombatService.GetLastAttacker(token)
 	return record.token, record.weaponId, record.at
 end
 
+-- Set by a game mode (GameMode: ModeTeams.BreakProtection): told of every shot fired, players, bots
+-- and vehicle mounts alike, so spawn protection ends the moment its holder opens fire.
+CombatService.OnShot = nil
+
 function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity)
+	if CombatService.OnShot then
+		pcall(CombatService.OnShot, shooterToken)
+	end
 	local shooterPlayer = Combatants.IsPlayer(shooterToken) and shooterToken or nil
 	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity)
 end
@@ -433,7 +440,8 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 		end
 	end
 
-	local dealt = absorbed + math.min(amount, humanoid.Health)
+	-- Whole numbers: this flows into saved quest progress, lifetime damage and companion XP.
+	local dealt = math.floor(absorbed + math.min(amount, humanoid.Health) + 0.5)
 	-- Only another combatant's hit counts as who got you: your own splash, the storm or a fall
 	-- (and a leaver's round, whose owner is gone) must not wipe the credit of whoever shot you.
 	if attackerToken ~= nil and attackerToken ~= victimToken then

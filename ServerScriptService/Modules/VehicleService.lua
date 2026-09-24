@@ -692,7 +692,6 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		lastPosition = chassis.Position,
 		restFor = 0,
 		restSkip = 0,
-		restDt = 0,
 		-- Health (#53/#57): maxHealth/health mirror the VehicleMaxHealth/VehicleHealth attributes
 		-- (the attributes are what replicate to the client HUD; these are the authoritative numbers
 		-- the server reads and writes). lastFlatSpeed starts nil on purpose (see checkCollisionDamage).
@@ -860,22 +859,23 @@ local function step(entry, dt, now)
 	local occupant = seat.Occupant
 	local chassis = rig.chassis
 
-	-- A settled, empty vehicle is stepped now and then; its forces hold it between steps.
+	-- A settled, empty vehicle is stepped now and then; its forces hold it between steps. It is stepped
+	-- with THIS frame's dt, not the frames it skipped added up: VehicleDynamics softens the springs for
+	-- a long dt (so they can't overshoot), and eight frames' worth let a parked car sag on springs far
+	-- weaker than its weight, wake (it moved), bounce back up at full rate, settle, and do it again --
+	-- the "parked cars jitter" bob. A car at rest only needs the forces that hold it where it is.
 	if not occupant and next(entry.occupants) == nil then
 		local resting = chassis.AssemblyLinearVelocity.Magnitude < 0.3 and chassis.AssemblyAngularVelocity.Magnitude < 0.3
 		entry.restFor = resting and entry.restFor + dt or 0
 		if entry.restFor > REST_AFTER then
-			entry.restDt += dt
 			entry.restSkip = (entry.restSkip + 1) % REST_EVERY
 			if entry.restSkip ~= 0 then
 				return
 			end
-			dt = entry.restDt
 		end
 	else
 		entry.restFor = 0
 	end
-	entry.restDt = 0
 
 	local ignore = {}
 	for _, humanoid in pairs(entry.occupants) do

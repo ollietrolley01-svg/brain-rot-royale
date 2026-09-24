@@ -137,7 +137,15 @@ local function leader()
 	return nil
 end
 
+-- The last state sent: KOTH ticks four times a second, and an unchanged state isn't sent again.
+local lastPushed = nil
 local function pushState()
+	local key = table.concat({ tostring(current.id), tostring(scores[1]), tostring(scores[2]),
+		tostring(GameMode.SecondsLeft()), tostring(hillStatus), tostring(hillHolder) }, "|")
+	if key == lastPushed then
+		return
+	end
+	lastPushed = key
 	announce(function()
 		modeChanged:FireAllClients({
 			mode = current.id,
@@ -308,9 +316,14 @@ local function spawnReplacementBot(team)
 		if not running or generation ~= myGeneration then
 			return
 		end
-		-- Forced onto the side that just lost one, so the sides stay level. Assign deals onto the
-		-- smaller side and cannot be asked for a particular one, so this says which.
-		ModeTeams.AssignTo(bot, team)
+		-- Onto the side that just lost one while the sides are level; onto the smaller side when they
+		-- aren't (a player quit), so a short team is made up rather than staying short all match.
+		local counts = ModeTeams.Counts()
+		if counts[1] ~= counts[2] then
+			ModeTeams.Assign(bot)
+		else
+			ModeTeams.AssignTo(bot, team)
+		end
 		-- The gun SpawnLoadout just issued: a death drops the held gun only if it is a different one
 		-- (MatchService.dropPickedUp, Oliver's #124).
 		bot.issuedWeaponId = bot.weapon and bot.weapon.id or nil
@@ -453,6 +466,7 @@ local function startWorld(mapInfo)
 	end
 
 	CombatService.DamageVeto = ModeTeams.DamageVeto
+	CombatService.OnShot = ModeTeams.BreakProtection
 
 	-- BotService pcalls this and fails OPEN: anything but a literal `false` counts as hostile, so
 	-- an error here leaves today's behaviour rather than producing pacifist bots. Return the
@@ -483,6 +497,11 @@ local function startWorld(mapInfo)
 					accumulated -= 1
 					for _, owner in ipairs(scoring or {}) do
 						addScore(owner, 1)
+						-- The first owner's point can finish the match (FinishNow runs synchronously);
+						-- nothing may score, or be broadcast, after the results were taken.
+						if not running then
+							return
+						end
 					end
 				end
 			end
@@ -502,6 +521,7 @@ local function stopWorld()
 	running = false
 	generation += 1
 	CombatService.DamageVeto = nil
+	CombatService.OnShot = nil
 	BotService.IsHostile = nil
 	BotService.SpawnLoadout = nil
 	ModeKingOfTheHill.Stop()

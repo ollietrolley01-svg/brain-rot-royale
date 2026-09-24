@@ -570,6 +570,16 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 			table.insert(filter, instance)
 		end
 	end
+	-- A bot at the wheel looks out from inside its own vehicle: its roof and panels aren't cover, or
+	-- it would never see anyone to fire the mount at.
+	local seated = botCharacter:FindFirstChildOfClass("Humanoid")
+	local node = seated and seated.SeatPart
+	while node and node ~= workspace and not node:GetAttribute("VehicleModel") do
+		node = node.Parent
+	end
+	if node and node ~= workspace then
+		table.insert(filter, node)
+	end
 	params.FilterDescendantsInstances = filter
 
 	-- Window glass is see-through, and a shot breaks it on the way (CombatService), so a pane
@@ -1842,7 +1852,8 @@ local function clusterAround(bot, targetRoot)
 	local count, sum = 0, Vector3.zero
 	local at = targetRoot.Position
 	for _, entry in ipairs(combatantList) do
-		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - at).Magnitude <= 10 then
+		-- Enemies only: a team-mate in melee with the target isn't a reason to throw.
+		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - at).Magnitude <= 10 and hostile(bot, entry.token) then
 			count += 1
 			sum += entry.position
 		end
@@ -2382,12 +2393,17 @@ BotService.IsUnderArmed = isUnderArmed
 -- shoot for a while, or the vehicle wrecked) it carries on as a bot on foot. The server steps a
 -- vehicle with no player at the wheel from its seat's ThrottleFloat/SteerFloat (VehicleService.step).
 
-local BOT_DRIVERS_MAX = 3        -- bots behind a wheel at once, across the match
-local BOT_BOARD_SEEK = 45        -- an armed vehicle this close may be taken
-local BOT_BOARD_CHANCE = 0.35    -- chance, every BOT_BOARD_EVERY seconds of a fight, that a bot looks
+-- Oliver 2026-09-24: "make sure the bots get in the cars and use the guns". Bots used to look only
+-- mid-fight, a third of the time, within 45 studs, and got out after 10 s with nobody to shoot, so
+-- a bot at a gun was a rare sight. Now roaming bots take an armed vehicle too, from further off, and
+-- keep driving toward the storm's safe ground between fights.
+local BOT_DRIVERS_MAX = 5        -- bots behind a wheel at once, across the match
+local BOT_BOARD_SEEK = 90        -- an armed vehicle this close may be taken
+local BOT_BOARD_CHANCE = 0.7     -- chance, every BOT_BOARD_EVERY seconds of a fight, that a bot looks
+local BOT_BOARD_ROAM_CHANCE = 0.4 -- the same for a bot on the move with nobody to fight
 local BOT_BOARD_EVERY = 3
-local BOT_BOARD_WALK = 7         -- seconds walking to the vehicle before giving up on it
-local BOT_DRIVE_IDLE = 10        -- seconds with nobody to shoot before getting out
+local BOT_BOARD_WALK = 12        -- seconds walking to the vehicle before giving up on it
+local BOT_DRIVE_IDLE = 30        -- seconds with nobody to shoot before getting out
 local BOT_DRIVE_CIRCLE = 45      -- closer than this, circle the target rather than drive at it
 local BOT_STEER_FULL = math.rad(35)
 
@@ -2481,13 +2497,13 @@ local function botVehicleThink(bot, humanoid, root, head, now)
 		return true
 	end
 
-	-- Only in a fight, only now and then, and only while there's room behind a wheel.
+	-- Now and then, likelier in a fight, and only while there's room behind a wheel.
 	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
-	if not fighting or now < (bot.boardCheckAt or 0) then
+	if now < (bot.boardCheckAt or 0) then
 		return false
 	end
 	bot.boardCheckAt = now + BOT_BOARD_EVERY
-	if math.random() > BOT_BOARD_CHANCE or botDriverCount() >= BOT_DRIVERS_MAX then
+	if math.random() > (fighting and BOT_BOARD_CHANCE or BOT_BOARD_ROAM_CHANCE) or botDriverCount() >= BOT_DRIVERS_MAX then
 		return false
 	end
 	local _, freeSeat = VehicleWeapons.FreeArmedNear(root.Position, BOT_BOARD_SEEK)
@@ -2765,7 +2781,14 @@ local function updateBot(bot)
 			end
 			return
 		end
-		if not mark or flatDistance(root.Position, mark.position) > 6 or bot.lootHoldStart then
+		-- Standing still ON its objective is the job (holding a KOTH ring), not idling: kicking it off
+		-- every few seconds left the ring unguarded.
+		local onObjective = false
+		if mark and not bot.lootHoldStart and now - mark.at > 6 then
+			local objective = modeObjective(bot, root, BotService.ModeState(bot), now)
+			onObjective = objective ~= nil and flatDistance(objective, root.Position) < 10
+		end
+		if not mark or flatDistance(root.Position, mark.position) > 6 or bot.lootHoldStart or onObjective then
 			bot.idleMark = { position = root.Position, at = now }
 		elseif now - mark.at > 6 then
 			STATS.teamIdleKicks = (STATS.teamIdleKicks or 0) + 1

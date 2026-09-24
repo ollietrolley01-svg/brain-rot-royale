@@ -95,7 +95,11 @@ function StateSync.Build(player)
 		tempPasses[key] = Monetization.TempRemaining(player, key)
 	end
 
-	local nextDailyIndex = (data.Daily.streak % BattlePassData.DailyCycle) + 1
+	-- A streak with a missed day in it is already over (BattlePassService.ClaimDaily restarts it at 1),
+	-- so show it as over rather than promising the next day's bonus.
+	local streakLive = (data.Daily.lastClaimDay or -1) >= StateSync.CurrentDay() - 1
+	local dailyStreak = streakLive and data.Daily.streak or 0
+	local nextDailyIndex = (dailyStreak % BattlePassData.DailyCycle) + 1
 
 	-- Everyone else in the server, for the trade tab and to see what they're showing off.
 	local others = {}
@@ -150,7 +154,7 @@ function StateSync.Build(player)
 		},
 		daily = {
 			available = StateSync.DailyAvailable(data),
-			streak = data.Daily.streak,
+			streak = dailyStreak,
 			nextIndex = nextDailyIndex,
 		},
 		stats = data.Stats,
