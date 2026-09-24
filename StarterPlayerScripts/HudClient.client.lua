@@ -4313,6 +4313,10 @@ end
 
 -- Ambient particles for the map you're on: an invisible box that rides along ahead of the
 -- camera, emitting whatever MapData.Ambient says — pollen, dust, blown sand, mist, fireflies.
+-- In a do-block, so its five locals are released at its end rather than held by the main chunk:
+-- this file sits within a handful of Luau's 200-locals-per-function limit, and one past it stops the
+-- WHOLE HUD compiling (tools/local_limit_check.py measures the headroom). Left unindented, like Drop.
+do
 local ambientPart = nil
 local ambientMap = nil
 
@@ -4421,6 +4425,7 @@ matchChanged.OnClientEvent:Connect(function(state)
 		resultsPanel.Visible = false
 	end
 end)
+end -- the ambient and match-state block
 
 loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	loadout = newLoadout

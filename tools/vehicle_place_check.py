@@ -42,6 +42,8 @@ CAR = ((6.1, 2.1, 12.6), (7.0, 4.2, 13.6))
 BIKE = ((1.0, 1.6, 5.0), (2.6, 3.6, 6.2))
 
 EXTRA = r"""
+-- The extracted block now also publishes helpers on the module table (FootingAt, FootingTolerance).
+VehicleService = {}
 local Inst = getmetatable(Instance.new("Part"))
 function Inst.FindFirstChild(i, name) for _, k in ipairs(rawget(i, "kids")) do if k.Name == name then return k end end end
 function CF.PointToWorldSpace(c, v) return c * v end
@@ -69,7 +71,8 @@ def sources(repo):
     start = vs.index("local FOOTING_TOLERANCE")
     end = vs.index("-- Other tabs' vehicle types")
     park = vs[start:end].rsplit("\n----", 1)[0]
-    fp = re.search(r"\n(\tlocal footprint = .*?position, yaw = parkOn\(.*?\)\n)", vs, re.S)
+    # The parkOn call may sit inside `if not options.exact then ... end` (team-base bays); keep the `end`.
+    fp = re.search(r"\n(\tlocal footprint = .*?position, yaw = parkOn\(.*?\)\n(?:\tend\n)?)", vs, re.S)
     assert fp, "VehicleService.Create's footprint block moved; update this check"
     call = re.search(r"VehicleService\.Create\(vehicles,.*?\n.*?\)\n", mg)
     assert call, "MapGenerator's verge Create call moved; update this check"
