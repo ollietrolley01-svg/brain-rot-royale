@@ -36,6 +36,7 @@ TrussPart and Roblox's part defaults), then measures what was built:
 Planted faults (source edits, rebuilt through the same pipeline) must each be caught:
     python3 tools/team_base_ruins_check.py [repo]            the checks
     python3 tools/team_base_ruins_check.py [repo] --plant    and the planted faults
+      --quick skips the 24-seed sweep, --only TEXT plants only the faults whose label has TEXT
 """
 
 import math
@@ -72,6 +73,8 @@ BAYS = None
 CHESTS = None
 FOOTING_TOLERANCE = 0.5
 TOUCH = 0.12
+# Trim whose underside is lower than this lies on the pad through whatever floor it is painted on.
+TILE_GROUND = 0.6
 
 EXTRA_MOCK = r"""
 -- Roblox's part defaults, TrussPart, Random, Color3 maths, script, warn.
@@ -80,6 +83,11 @@ local baseNew = Instance.new
 local PART_CLASSES = { Part = true, WedgePart = true, TrussPart = true }
 Instance.new = function(class)
     local inst = baseNew(class)
+    -- DestructibleService drops its per-instance caches on Destroying (since pc/destruction).
+    local p0 = rawget(inst, "props")
+    if p0 and p0.Destroying == nil then
+        p0.Destroying = { Connect = function() return { Disconnect = function() end } end }
+    end
     if PART_CLASSES[class] then
         local props = rawget(inst, "props")
         props.CanCollide = true
@@ -282,6 +290,20 @@ class Build:
         if self._destruct is None:
             ws = self.lua.eval('Instance.new("Workspace")')
             self.lua.globals().workspace = ws
+            # DestructibleService hooks RunService.Heartbeat at load (its rescue sweep, since the
+            # pc/destruction merge); the shared mock's services have no signals, so give them one.
+            self.lua.execute("""
+                local get = game.GetService
+                game.GetService = function(self, name)
+                    local s = get(self, name)
+                    if type(s) == "table" and s.Heartbeat == nil then
+                        s.Heartbeat = { Connect = function() return { Disconnect = function() end } end }
+                        s.GetPlayers = s.GetPlayers or function() return {} end
+                        s.GetPlayerFromCharacter = s.GetPlayerFromCharacter or function() return nil end
+                    end
+                    return s
+                end
+            """)
             self._destruct = self.lua.execute(luau_to_lua(self.src["destruct"]))
         return self._destruct
 
@@ -738,7 +760,9 @@ def check_destruct(build, model, parts_by_order, log):
     live = [p for p in model.GetDescendants(model).values() if p.IsA(p, "BasePart")]
     problems = []
     breakable, required = 0, 0
-    never_names = {"Foundation", "Paving", "Pillar", "RoofBeam", "GatePost", "Gantry", "Rubble"}
+    # Oliver, 2026-09-24: everything breaks except spawns, the lobby, the storm and the map edges.
+    # In a base that leaves the spawn shelter (the Model named "Spawn") and nothing else.
+    never_names = set()
     # The spawn shelter is whichever room holds the pads, whatever it is called.
     top_of = lua.globals().topOf
     shelter = None
@@ -810,10 +834,16 @@ def check_destruct(build, model, parts_by_order, log):
         if not touching:
             continue
         trims += 1
+        # Paint on the paving (bay lines, stains, numbers) lies within a tile's depth of the pad: if
+        # the tile goes it is left on the ground, not in the air.
+        if lo[1] < TILE_GROUND:
+            continue
         held = False
         for j in touching:
             c = parts_by_order[j]
-            if not flags[j] or (c["name"] in carries and c["path"] == t["path"]) \
+            # DestructibleService.dropDressing walks a breaking part's siblings (any part since
+            # pc/destruction, not only a building's walls) and takes the trim attached to it.
+            if not flags[j] or (c["path"] == t["path"] and (c["name"] in carries or t["path"])) \
                     or (":" in c["tag"] and c["tag"] == t["tag"] and c["path"] == t["path"]) \
                     or (pool_model[j] and pool_model[j] == pool_model[i]):
                 held = True
@@ -1379,7 +1409,9 @@ PLANTS = [
     ("a chest spot short", [('	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(-39, TILE_TOP, -34.8) })\n', '')],
      "but LootService.BaseStock.chest is"),
     ("one pool tag for both bases", [('\t\t\t\ttag = tag .. "@" .. B.site\n', '')], "both bases carry"),
-    ("crate band out of its pool", [('STEEL_DARK, MAT.Metal, trimWith({ tag = stackA.tag }))', 'STEEL_DARK, MAT.Metal)')],
+    # (in another Model than its crate: dropDressing walks only the breaking part's siblings)
+    ("crate band out of its pool", [('facePlate(room, "CrateBand"', 'facePlate(model, "CrateBand"'),
+                                    ('STEEL_DARK, MAT.Metal, trimWith({ tag = stackA.tag }))', 'STEEL_DARK, MAT.Metal)')],
      "CrateBand (on Crate) is left hanging"),
     ("crate on a chest spot", [('	table.insert(B.chests, { name = "LeanTo"',
                                 '	box(yard, "Crate", -42, -39.6, TILE_TOP, TILE_TOP + 2.4, -23, -21, WOOD, MAT.WoodPlanks)\n'
@@ -1430,7 +1462,8 @@ def main(argv):
             clear.group(0) if clear else "missing", CAR_MARGIN)
     src = sources(repo)
     problems = run(src, print)
-    problems += sweep_seeds(src, range(1, 25), print)
+    if "--quick" not in argv:
+        problems += sweep_seeds(src, range(1, 25), print)
     if bay_clear_problem:
         problems.append(bay_clear_problem)
     for line in problems:
@@ -1438,7 +1471,10 @@ def main(argv):
     print("team_base_ruins_check: %d problems" % len(problems))
     ok = not problems
     if plant:
+        only = argv[argv.index("--only") + 1] if "--only" in argv else ""
         for label, edits, expect in PLANTS:
+            if only not in label:
+                continue
             planted = dict(src)
             text = src["ruins"]
             anchored = True
