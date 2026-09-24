@@ -41,11 +41,16 @@ TownKinds.YARD_MAX_DEPTH = 54
 -- 169, so a 96-wide block beside the cross street (16 + 96 = 112) fits every map with room to spare.
 TownKinds.YARD_MAX_WIDTH = 96
 
--- A parking bay, sized for the largest vehicle (the CrocodiloRanger, 14.6 long x 6.9 wide; the
--- vehicles tab's number) plus a stud of clearance each side. `length` runs along the bay's
--- LookVector (the parked car's nose), `width` across. One size for every bay in the game, so
+-- A parking bay, sized for the biggest vehicles as they are actually built, mirrors, bumpers and
+-- spare wheel included (measured 09-24 on the real VehicleModels builds, tools/parking_lot_check.py
+-- prints them): the Sahur Van is the widest at 9.00 and the Crocodilo Ranger the longest at 17.43.
+-- The old 8.9 x 16.6 was sized off the Ranger's chassis alone (14.6 x 6.9), so a van stood over both
+-- its side lines and a Ranger over both ends. 10.2 x 18.6 leaves 0.6 a side round the van and the
+-- Ranger, which is a real car park's margin (a 2.4 x 4.8 m bay round a 2.0 m-wide, 4.5 m-long car);
+-- tools/parking_lot_check.py fails if any design grows past 0.4 a side. `length` runs along the
+-- bay's LookVector (the parked car's nose), `width` across. One size for every car park bay, so
 -- VehicleService.ParkInTowns has one number (it refuses a bay not level within half a stud).
-TownKinds.Bay = { width = 8.9, length = 16.6 }
+TownKinds.Bay = { width = 10.2, length = 18.6 }
 
 --------------------------------------------------------------------------------
 -- Palettes: wall materials and colours per kind, standing in for the map preset's where set.

@@ -178,7 +178,8 @@ def vehicle_source(faults):
 
 
 # The parked cars say where they were put (instrumentation only: the harness reads the frame back).
-DECOR_PROBE = [('\tcar.Name = "ParkedCar"\n', '\tcar.Name = "ParkedCar"\n\tcar:SetAttribute("HarnessCF", cf)\n')]
+DECOR_PROBE = [('\tcar.Name = "ParkedCar"\n', '\tcar.Name = "ParkedCar"\n\tcar:SetAttribute("HarnessCF", cf)\n'
+                '\tcar:SetAttribute("HarnessModel", design and design.id or "plain")\n')]
 
 # The world: loaded after tools/destruct_mocks.lua. Plain Lua (lupa's), not Luau, so it lives here
 # rather than in a .lua file the Luau static check would read.
@@ -524,7 +525,10 @@ local out = {}
 -- The flat things a car may stand on, or must keep off, as exact rectangles.
 local SURFACES = { Asphalt = true, JunctionAsphalt = true, Crossing = true, StopLine = true, Kerb = true, Pavement = true,
 	RoadSurface = true, BridgeRoad = true, BridgeDeck = true, Driveway = true, DroppedKerb = true, Layby = true,
-	Hardstanding = true, Paving = true, Cobbles = true }
+	Hardstanding = true, Paving = true, Cobbles = true, LotSurface = true, LotApron = true, BayLine = true, StallLine = true,
+	LotCurb = true, IslandCurb = true, IslandSoil = true, Walkway = true, WalkwayRamp = true, TimberEdging = true, WheelStop = true,
+	TimberWheelStop = true, AccessibleFill = true, HatchLine = true, AisleArrow = true, StopBar = true, CrossingStripe = true,
+	OilStain = true, AsphaltPatch = true, DrainGrate = true, TyreTrack = true, ExpansionJoint = true, AccessibleSign = true }
 local function chain(inst)
 	local names = {}
 	local node = inst.Parent
@@ -570,9 +574,9 @@ for index, car in ipairs(cars) do
 		end
 	end
 	local look = cf.LookVector
-	table.insert(out, fmt("C|%d|%s|%s|%s|%.3f|%.3f|%.3f|%.5f|%.5f|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f", index,
+	table.insert(out, fmt("C|%d|%s|%s|%s|%.3f|%.3f|%.3f|%.5f|%.5f|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f|%s", index,
 		d_kind(car), chain(car), tostring(car:GetAttribute("HarnessModel") or ""), cf.X, cf.Y, cf.Z, look.X, look.Z,
-		lo[1], hi[1], lo[2], hi[2], lo[3], hi[3]))
+		lo[1], hi[1], lo[2], hi[2], lo[3], hi[3], tostring(car:GetAttribute("ParkStyle") or "")))
 end
 -- Parts that aren't a car's: their turned corners' XZ hull is taken on the Python side.
 local function inCar(part)
@@ -608,13 +612,36 @@ local towns = map:FindFirstChild("Towns") or map
 for _, town in ipairs(towns:GetChildren()) do
 	if town.Name == "Town" then
 		local c = town:GetAttribute("TownCenter")
-		table.insert(out, fmt("T|%s|%s|%.2f|%.2f|%.2f|%s", town:GetAttribute("TownName") or "?", town:GetAttribute("TownKind") or "?",
-			c.X, c.Z, town:GetAttribute("TownSpread") or 0, ((town:GetAttribute("TownBlurb") or ""):gsub("|", "/"))))
+		table.insert(out, fmt("T|%s|%s|%.2f|%.2f|%.2f|%s|%s", town:GetAttribute("TownName") or "?", town:GetAttribute("TownKind") or "?",
+			c.X, c.Z, town:GetAttribute("TownSpread") or 0, ((town:GetAttribute("TownBlurb") or ""):gsub("|", "/")),
+			tostring(town:GetAttribute("ParkingFill") or "")))
 		local size = town:GetAttribute("ParkingBaySize")
+		-- Bays, then the accessible stalls (index negative), with the car park's kind and the bay beside.
+		local kind = tostring(town:GetAttribute("ParkingKind") or "")
 		for index = 1, town:GetAttribute("ParkingBays") or 0 do
 			local cf = town:GetAttribute("ParkingBay_" .. index)
-			table.insert(out, fmt("B|%s|%d|%.3f|%.3f|%.3f|%.5f|%.5f|%.2f|%.2f", town:GetAttribute("TownName") or "?", index,
-				cf.X, cf.Y, cf.Z, cf.LookVector.X, cf.LookVector.Z, size and size.X or 8.9, size and size.Z or 16.6))
+			table.insert(out, fmt("B|%s|%d|%.3f|%.3f|%.3f|%.5f|%.5f|%.2f|%.2f|%s|%d", town:GetAttribute("TownName") or "?", index,
+				cf.X, cf.Y, cf.Z, cf.LookVector.X, cf.LookVector.Z, size and size.X or 8.9, size and size.Z or 16.6, kind,
+				town:GetAttribute("ParkingBayNext_" .. index) or 0))
+		end
+		for index = 1, town:GetAttribute("ParkingAccessible") or 0 do
+			local cf = town:GetAttribute("ParkingAccessible_" .. index)
+			table.insert(out, fmt("B|%s|%d|%.3f|%.3f|%.3f|%.5f|%.5f|%.2f|%.2f|%s|0", town:GetAttribute("TownName") or "?", -index,
+				cf.X, cf.Y, cf.Z, cf.LookVector.X, cf.LookVector.Z, size and size.X or 8.9, size and size.Z or 16.6, kind))
+		end
+		-- The car park's model: its kind, layout, aisle, and its parts (counted here, and as it counts them).
+		local lot = town:FindFirstChild("ParkingLot")
+		if lot then
+			local parts = 0
+			for _, d in ipairs(lot:GetDescendants()) do
+				if d:IsA("BasePart") then parts = parts + 1 end
+			end
+			local a, b = lot:GetAttribute("AisleA"), lot:GetAttribute("AisleB")
+			local surface = lot:FindFirstChild("LotSurface")
+			table.insert(out, fmt("K|%s|%s|%s|%.3f|%.3f|%.3f|%.3f|%.2f|%d|%d|%.3f|%.3f", town:GetAttribute("TownName") or "?",
+				tostring(lot:GetAttribute("Kind")), tostring(lot:GetAttribute("Layout")), a and a.X or 0, a and a.Z or 0, b and b.X or 0,
+				b and b.Z or 0, lot:GetAttribute("AisleWidth") or 0, lot:GetAttribute("Parts") or -1, parts,
+				surface and surface.Position.X or 0, surface and surface.Position.Z or 0))
 		end
 	end
 end
@@ -630,6 +657,22 @@ end
 for _, node in ipairs(roads.nodes) do
 	table.insert(out, fmt("N|%s|%.2f|%.2f|%s", node.kind or "?", node.position.X, node.position.Z,
 		node.curve and fmt("%.1f", node.curve.radius or 0) or ""))
+end
+-- Car parks: the ground under each one's whole footprint (its asphalt and the kerb round it), sampled
+-- every 2 studs, for tools/parking_lot_check.py's level rule.
+for _, part in ipairs(map:GetDescendants()) do
+	if part.Name == "LotSurface" then
+		local low, high = math.huge, -math.huge
+		local hx, hz = part.Size.X / 2 + 0.8, part.Size.Z / 2 + 0.8
+		for x = -hx, hx + 0.01, 2 do
+			for z = -hz, hz + 0.01, 2 do
+				local p = part.CFrame * Vector3.new(math.min(x, hx), 0, math.min(z, hz))
+				local g = GROUND(p.X, p.Z)
+				low, high = math.min(low, g), math.max(high, g)
+			end
+		end
+		table.insert(out, fmt("L|%.3f|%.3f|%.3f|%.3f", part.Position.X, part.Position.Z, low, high))
+	end
 end
 if WORLD.river then
 	local pts = {}
@@ -650,6 +693,8 @@ class Map:
         self.river = None
         self.warnings = []
         self.surfaces = []
+        self.lot_ground = []
+        self.lots = []
         for line in text.split("\n"):
             f = line.split("|")
             tag = f[0]
@@ -658,7 +703,7 @@ class Map:
                     "index": int(f[1]), "kind": f[2], "chain": f[3], "model": f[4],
                     "x": float(f[5]), "y": float(f[6]), "z": float(f[7]), "lx": float(f[8]), "lz": float(f[9]),
                     "x0": float(f[10]), "x1": float(f[11]), "y0": float(f[12]), "y1": float(f[13]),
-                    "z0": float(f[14]), "z1": float(f[15]),
+                    "z0": float(f[14]), "z1": float(f[15]), "style": f[16] if len(f) > 16 else "",
                 })
             elif tag == "P":
                 pts = [tuple(float(v) for v in p.split(",")) for p in f[5].split(";")] if f[5] else []
@@ -666,10 +711,18 @@ class Map:
                                    "collide": f[6] == "1", "invisible": f[7] == "1"})
             elif tag == "T":
                 self.towns.append({"name": f[1], "kind": f[2], "x": float(f[3]), "z": float(f[4]), "spread": float(f[5]),
-                                   "blurb": f[6]})
+                                   "blurb": f[6], "fill": float(f[7]) if len(f) > 7 and f[7] else None})
+            elif tag == "L":
+                self.lot_ground.append({"x": float(f[1]), "z": float(f[2]), "low": float(f[3]), "high": float(f[4])})
             elif tag == "B":
                 self.bays.append({"town": f[1], "index": int(f[2]), "x": float(f[3]), "y": float(f[4]), "z": float(f[5]),
-                                  "lx": float(f[6]), "lz": float(f[7]), "w": float(f[8]), "d": float(f[9])})
+                                  "lx": float(f[6]), "lz": float(f[7]), "w": float(f[8]), "d": float(f[9]),
+                                  "lotKind": f[10] if len(f) > 10 else "", "next": int(f[11]) if len(f) > 11 else 0,
+                                  "accessible": int(f[2]) < 0})
+            elif tag == "K":
+                self.lots.append({"town": f[1], "kind": f[2], "layout": f[3], "ax": float(f[4]), "az": float(f[5]), "bx": float(f[6]),
+                                  "bz": float(f[7]), "aisle": float(f[8]), "partsAttr": int(f[9]), "parts": int(f[10]),
+                                  "x": float(f[11]), "z": float(f[12])})
             elif tag == "E":
                 spans = [tuple(float(v) for v in s.split(",")) for s in f[8].split(";")] if f[8] else []
                 self.edges.append({"index": int(f[1]), "ax": float(f[2]), "az": float(f[3]), "bx": float(f[4]),

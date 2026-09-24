@@ -38,7 +38,7 @@ and then scored against these rules (one car can break several):
              ahead or behind to turn out; anywhere else, 12 studs clear ahead or behind. Clear means no
              obstacle and no other car.
   counts     per town: cars at the kerb take at most a quarter of the town's kerb length; a car park
-             is part filled (25 to 85 percent, at least one bay empty); a town has at least 2 cars
+             is part filled (at least one car, at most 70 percent, at least one bay empty); a town has at least 2 cars
              unless its blurb says "no cars" (and then none at the kerb or on a driveway); the map
              keeps the drivable count MapGenerator asks for (wantedVehicles).
 
@@ -66,7 +66,11 @@ CROSSING_CLEAR = 8     # and from a zebra crossing or a stop line
 CLEAR_LANE = 9.0        # street left clear beside kerb cars: one car's lane and a bit
 SHRINK = 0.4
 BAY_OVERHANG = 0.6      # past a bay's end line (with SHRINK: a stud of the raw footprint), a big car's nose
-EXIT_RUN = 12           # clear run ahead or behind for a drivable car; 8 out of a bay (the aisle is 9)
+BAY_SKEW = 2.0          # a car in a stall is square to it within this (MapDecor.ParkBays leaves them 1.4 askew at most)
+BAY_SKEW_LOOSE = 3.5    # in a gravel lot, no lines to go by (3)
+BAY_SKEW_STRADDLE = 4.0 # the one straddling a line (3)
+EXIT_RUN = 12           # clear run ahead or behind for a drivable car; 8 out of a bay (the aisle is 14)
+LOT_MOST = 0.7          # no car park more full than this (MapDecor.ParkBays' LOT_FILL_MAX)
 RULES = ("surface", "align", "blocking", "spacing", "obstacle", "exit", "counts")
 
 # Flat things that are never obstacles, whatever their height (markings, surfaces, the car park's
@@ -250,7 +254,24 @@ def score(m):
         return (s["lx"], s["lz"])
 
     cars = m.cars
+
+    def straddled(car):
+        """The two stalls a straddling car stands across, as one rect: its bay and the one beside it."""
+        b = car["bay"]
+        best = None
+        for other in bays:
+            if other is b or other["town"] != b["town"] or other["accessible"]:
+                continue
+            if other["index"] == b.get("next") or b["index"] == other.get("next"):
+                if best is None or math.hypot(other["x"] - car["x"], other["z"] - car["z"]) < math.hypot(best["x"] - car["x"], best["z"] - car["z"]):
+                    best = other
+        if not best:
+            return None
+        car["pair"] = (b, best)
+        return dict(b["rect"], x=(b["x"] + best["x"]) / 2, z=(b["z"] + best["z"]) / 2, sx=b["w"] + math.hypot(b["x"] - best["x"], b["z"] - best["z"]))
+
     for car in cars:
+        car.setdefault("style", "")
         car["drivable"] = car["kind"].startswith("drivable")
         car["poly"] = car_corners(car)
         cx, cz = car["x"], car["z"]
@@ -271,8 +292,12 @@ def score(m):
         if cls == "stray":
             bad("surface", car, label(car) + ": not on a street, bay, driveway or road verge")
         elif cls == "bay":
-            # Wholly between its bay's side lines; a big car may overhang an end line by BAY_OVERHANG.
+            # Wholly between its bay's side lines; a big car may overhang an end line by BAY_OVERHANG. A car
+            # left straddling the line between two stalls (MapDecor.ParkBays' one a map) is held to the two.
             r = car["bay"]["rect"]
+            if car["style"] == "straddle":
+                pair = straddled(car)
+                r = pair or r
             out = [p for p in pts if not in_rect(p, dict(r, sz=r["sz"] + 2 * BAY_OVERHANG))]
             if out:
                 bad("surface", car, label(car) + ": %d of %d footprint points outside its bay" % (len(out), len(pts)))
@@ -301,9 +326,15 @@ def score(m):
             bad("surface", car, label(car) + ": in the river")
         # align ------------------------------------------------------------------------------
         if cls == "bay":
-            a = angle_between(lx, lz, *car["bay"]["dir"])
-            if a > 1.5:
-                bad("align", car, label(car) + ": %.1f degrees off its bay's nose direction" % a)
+            # Square to its stall, nosed in or (REVERSE) backed in, within BAY_SKEW degrees: more in a gravel
+            # lot with no lines to go by, and for the straddler.
+            want = car["bay"]["dir"]
+            if car["style"] == "reverse":
+                want = (-want[0], -want[1])
+            a = angle_between(lx, lz, *want)
+            limit = BAY_SKEW_LOOSE if car["bay"]["lotKind"] == "gravel" else (BAY_SKEW_STRADDLE if car["style"] == "straddle" else BAY_SKEW)
+            if a > limit:
+                bad("align", car, label(car) + ": %.1f degrees off its bay's %s direction" % (a, "reverse" if car["style"] == "reverse" else "nose"))
         elif cls in ("kerb", "verge"):
             if cls == "kerb":
                 s = car["street"]
@@ -436,8 +467,9 @@ def score(m):
         tstreets = [s for s in streets if s["chain"].startswith("Town") and math.hypot(s["x"] - t["x"], s["z"] - t["z"]) <= radius]
         kerb_length = sum(2 * s["sz"] for s in tstreets)
         used = sum(c["z1"] - c["z0"] for c in kerb)
-        tbays = [b for b in bays if b["town"] == t["name"]]
-        filled = [b for b in tbays if any(c["bay"] is b for c in cars)]
+        # The accessible stalls aren't counted: they're not for filling. A straddler fills the two it's across.
+        tbays = [b for b in bays if b["town"] == t["name"] and not b["accessible"]]
+        filled = [b for b in tbays if any(c["bay"] is b or b in c.get("pair", ()) for c in cars)]
         row = {"town": t["name"], "kind": t["kind"], "kerb": len(kerb), "bays": len(tbays), "filled": len(filled),
                "driveway": sum(1 for c in mine if c["cls"] == "driveway"), "total": len(mine),
                "kerbShare": used / kerb_length if kerb_length else 0}
@@ -446,11 +478,14 @@ def score(m):
         if kerb_length and used / kerb_length > 0.25:
             bad("counts", None, "%s: kerb cars take %.0f%% of its kerb (at most 25%%)" % (t["name"], 100 * used / kerb_length))
         if tbays:
+            # Part filled, each to its own fill (Oliver 09-24: "the parking lots don't all need to be
+            # full"): at least one car, at most LOT_MOST of the bays, never the last one. How the fills
+            # spread across car parks is tools/parking_lot_check.py's (occupancy).
             share = len(filled) / len(tbays)
-            if share > 0.85 or len(filled) == len(tbays):
-                bad("counts", None, "%s: car park %d of %d full (part filled: 25-85%%)" % (t["name"], len(filled), len(tbays)))
-            elif share < 0.25 and not nocars:
-                bad("counts", None, "%s: car park %d of %d full (part filled: 25-85%%)" % (t["name"], len(filled), len(tbays)))
+            if share > LOT_MOST + 1e-9 or len(filled) == len(tbays):
+                bad("counts", None, "%s: car park %d of %d full (at most %.0f%%)" % (t["name"], len(filled), len(tbays), 100 * LOT_MOST))
+            elif not filled and not nocars:
+                bad("counts", None, "%s: car park empty" % t["name"])
         if not nocars and len(mine) < 2:
             bad("counts", None, "%s (%s): only %d cars in town" % (t["name"], t["kind"], len(mine)))
         if nocars and len(mine):
@@ -520,7 +555,8 @@ PLANTS = [
     ("surface", "parked cars stand a stud off the middle of their bay, sideways",
      {"MapDecor": [("\tlocal at = frame * CFrame.new(-centre.X, 0, -centre.Z)\n", "\tlocal at = frame * CFrame.new(-centre.X + 1.2, 0, -centre.Z)\n")]}),
     ("counts", "the car parks are filled to the last bay",
-     {"MapDecor": [("\tlocal target = math.clamp(math.floor(count * share + 0.5), 1, count - 1)\n", "\tlocal target = count\n")]}),
+     {"MapDecor": [("\tlocal target = math.clamp(math.floor(count * share + 0.5), 1, math.max(1, math.floor(count * LOT_FILL_MAX)))\n",
+                    "\tlocal target = count\n")]}),
     ("obstacle", "driveways skip their clearance check",
      {"MapDecor": [("\t\t\t\tif rectClear(space, slab, halfSlabX, halfSlabZ) then\n", "\t\t\t\tif true then\n")]}),
     ("align", "verge vehicles get the old +/-0.15 yaw wobble",

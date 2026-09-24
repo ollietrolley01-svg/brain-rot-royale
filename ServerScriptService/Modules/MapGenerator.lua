@@ -345,6 +345,9 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 
 	local placed = {}
 	local target = math.floor(math.random(preset.buildingsPerTown[1], preset.buildingsPerTown[2]) * (profile.buildings or 1) + 0.5) + 3
+	-- A town whose own description says it has no cars gets none of its own: no car park, nothing at
+	-- the kerb or on a driveway.
+	local noCars = string.find(string.lower(profile.blurb or ""), "no cars", 1, true) ~= nil
 
 	local function placeNext(frontage)
 		local street = frontage.street
@@ -385,6 +388,9 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 				paintFootprint(claimCenter, yaw, claimX * 2 + 2, claimZ * 2 + 2)
 				buildBuilding(town, Vector3.new(lot.X, 0, lot.Z), preset, chestSpots, lootSpots, plan, yaw)
 				table.insert(placed, { lot = lot, plan = plan, yaw = yaw })
+				-- Where this building's lot ends along the street, before the alley after it: a car park
+				-- reserved next on this side stands right beside it (ParkingLots.Reserve).
+				frontage.built = along + span
 				street.used = math.max(street.used, along + span)
 				frontage.cursor = along + span + alleyAt(along, street.primary, profile.alley)
 				-- A town is a few thousand parts; spread the cost so the server doesn't stall.
@@ -394,6 +400,28 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 			frontage.cursor = along + 8
 		end
 		return false
+	end
+
+	-- The town's car park (#31) takes a lot in the row like a building (ParkingLots.Reserve): once every
+	-- street side has had its first building, so the square's corners are buildings and the car park
+	-- is the next lot along a street out of the square, between shops, fronting the street. Levelled and
+	-- claimed now, so the buildings after it go round it; laid once the streets are drawn.
+	local lotPlan = nil
+	local lotTried = noCars
+	local function reserveLot()
+		lotTried = true
+		local ok, result = pcall(function()
+			local ParkingLots = require(script.Parent:WaitForChild("ParkingLots"))
+			return ParkingLots.Reserve(town, {
+				frontages = frontages, space = space, rectFree = rectFree, sidewalk = SIDEWALK,
+				profile = profile, terrain = preset.terrainMaterial, paint = paintFootprint,
+			})
+		end)
+		if ok then
+			lotPlan = result
+		else
+			warn("[MapGenerator] parking lot failed: " .. tostring(result))
+		end
 	end
 
 	local progress = true
@@ -407,6 +435,12 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 				progress = true
 			end
 		end
+		if not lotTried then
+			reserveLot()
+		end
+	end
+	if not lotTried then
+		reserveLot()
 	end
 
 	-- Now draw the streets. A street a road leaves along runs all the way out to meet it; the rest
@@ -540,17 +574,19 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	-- the kerb only where the kind has kerbside cars. The car park goes first so the kerb knows whether
 	-- there is one: a town that got none keeps a few cars at the kerb, or it would have none at all. A
 	-- town whose own description says it has no cars gets none of its own.
-	local noCars = string.find(string.lower(profile.blurb or ""), "no cars", 1, true) ~= nil
-	-- The town's car park (#31): painted bays on flat asphalt near the square, published on the town
-	-- for VehicleService.ParkInTowns and MapDecor.ParkBays. After the buildings, so it only takes ground
-	-- they left, and before the street furniture, which only stands on the streets' own ground anyway.
+	-- The town's car park, on the lot it reserved (#31): asphalt, kerbs, painted bays, and its way in
+	-- from the street now that the street is drawn (the kerb dropped, the pavement cut, an apron laid
+	-- flush). Its bays are published on the town for VehicleService.ParkInTowns and MapDecor.ParkBays.
+	-- Before the street furniture, so its mouth is claimed before a bench or a kerbside car takes it.
 	local lotBays = 0
-	local okParking, parkingErr = pcall(function()
-		local ParkingLots = require(script.Parent:WaitForChild("ParkingLots"))
-		lotBays = ParkingLots.Build(town, center, spread, profile.bays and profile.bays.count or 6, space, rectFree, drawn) or 0
-	end)
-	if not okParking then
-		warn("[MapGenerator] parking lot failed: " .. tostring(parkingErr))
+	if lotPlan then
+		local okParking, parkingErr = pcall(function()
+			local ParkingLots = require(script.Parent:WaitForChild("ParkingLots"))
+			lotBays = ParkingLots.Build(town, lotPlan, space) or 0
+		end)
+		if not okParking then
+			warn("[MapGenerator] parking lot failed: " .. tostring(parkingErr))
+		end
 	end
 	if noCars then
 		town:SetAttribute("NoParkedCars", true)
@@ -791,10 +827,18 @@ function MapGenerator.Build(mapId)
 	end
 	task.wait()
 
+	local towns = {}
 	for index, center in ipairs(centers) do
-		buildTown(map, center, preset, townSpread, chestSpots, lootSpots, townName(index), space, roads:MouthsOf(index))
+		table.insert(towns, buildTown(map, center, preset, townSpread, chestSpots, lootSpots, townName(index), space, roads:MouthsOf(index)))
 		table.insert(dropSpots, center)
 		task.wait()
+	end
+	-- How full each town's car park is, dealt across the map's towns so they differ (ParkingLots.DealFills).
+	local okFills, fillsErr = pcall(function()
+		require(script.Parent:WaitForChild("ParkingLots")).DealFills(towns)
+	end)
+	if not okFills then
+		warn("[MapGenerator] dealing the car parks' fills failed: " .. tostring(fillsErr))
 	end
 
 	-- Each town's theme (#32): its set piece on a lot facing a street (or round the edge of town,
@@ -1017,9 +1061,14 @@ function MapGenerator.Build(mapId)
 		return true
 	end
 	local wantedVehicles = math.clamp(math.floor(radius / 95), 6, 16)
+	local LOT_DRIVABLE_SHARE, LOT_DRIVABLE_MOST = 0.25, 0.6
 	-- Most of them in the towns' car parks first (#31); the verge takes whatever is left.
 	local parked = 0
-	local okPark, inLots = pcall(VehicleService.ParkInTowns, vehicles, map, math.ceil(wantedVehicles * 0.6))
+	-- A quarter of any one car park at most (LOT_DRIVABLE_SHARE: one car in four or six bays, two in
+	-- eight or ten): each car park has its own fill (ParkingLots.DealFills; the quietest a sixth full),
+	-- which MapDecor.ParkBays tops up to with parked scenery, and the drivable ones spread round every
+	-- town first rather than filling one.
+	local okPark, inLots = pcall(VehicleService.ParkInTowns, vehicles, map, math.ceil(wantedVehicles * 0.6), nil, LOT_DRIVABLE_SHARE)
 	if okPark and type(inLots) == "number" then
 		parked = inLots
 	elseif not okPark then
@@ -1070,20 +1119,30 @@ function MapGenerator.Build(mapId)
 		end
 	end
 	-- A map whose roads had too few good verge spots (steep, crowded, bridged) puts the rest in the car
-	-- parks after all, up to three quarters of each, rather than go short of vehicles.
+	-- parks after all, up to LOT_DRIVABLE_MOST of each (under the 0.7 no car park is ever filled past),
+	-- rather than go short of vehicles.
 	if parked < wantedVehicles then
-		local okMore, more = pcall(VehicleService.ParkInTowns, vehicles, map, wantedVehicles - parked, nil, 0.75)
+		local okMore, more = pcall(VehicleService.ParkInTowns, vehicles, map, wantedVehicles - parked, nil, LOT_DRIVABLE_MOST)
 		if okMore and type(more) == "number" then
 			parked += more
 		end
 	end
-	-- What's left of each car park is part-filled with parked cars (scenery), so it reads as in use.
+	-- What's left of each car park is part-filled with parked cars (scenery), so it reads as in use. On
+	-- a map, more often than not, one car straddles the line between two stalls in one of the quieter
+	-- car parks, and now and then one stands in an accessible stall: never more than one of each.
+	local lotTowns = {}
 	for _, town in ipairs(map:GetChildren()) do
-		if town.Name == "Town" and not town:GetAttribute("NoParkedCars") then
-			local okBays, bayErr = pcall(MapDecor.ParkBays, town, vehicles:GetChildren())
-			if not okBays then
-				warn("[MapGenerator] parking the car parks failed: " .. tostring(bayErr))
-			end
+		if town.Name == "Town" and not town:GetAttribute("NoParkedCars") and (town:GetAttribute("ParkingBays") or 0) > 0 then
+			table.insert(lotTowns, town)
+		end
+	end
+	local straddler = #lotTowns > 0 and math.random() < 0.6 and lotTowns[math.random(1, #lotTowns)] or nil
+	local blueBadge = #lotTowns > 0 and math.random() < 0.3 and lotTowns[math.random(1, #lotTowns)] or nil
+	for _, town in ipairs(lotTowns) do
+		local okBays, bayErr = pcall(MapDecor.ParkBays, town, vehicles:GetChildren(), nil,
+			{ straddle = town == straddler, accessible = town == blueBadge })
+		if not okBays then
+			warn("[MapGenerator] parking the car parks failed: " .. tostring(bayErr))
 		end
 	end
 	task.wait()

@@ -7,7 +7,7 @@
 --   cross_top / tee_top                 a junction's arms meeting its box
 --   bridge_a_wheel / bridge_b_wheel     each end of a bridge from the driver's seat, and one side-on
 --   mouth_wheel                         a road running into a town's street
---   carpark_top / carpark_low           a car park end-on to its street, the kerb dropped at its aisle
+--   carpark_top / carpark_low           a car park in a street's row of lots, its kerb dropped and pavement cut at its aisle
 --   driveway_low                        a driveway's dropped kerb
 --
 --   powershell -ExecutionPolicy Bypass -File tools/gallery.ps1 -Gallery tools/roads_gallery.lua -OutDir <folder> -TimeoutSeconds 900
@@ -68,7 +68,7 @@ local function survey(info)
 			lots += 1
 		elseif d.Name == "DroppedKerb" then
 			dropped += 1
-			-- A car park's is AISLE + 2 = 11 wide; a driveway's the width of its strip.
+			-- A car park's is its aisle's width (ParkingLots' AISLE, 14); a driveway's the width of its strip.
 			local width = math.max(d.Size.X, d.Size.Z)
 			if width > 10 and not state.carpark then
 				state.carpark = d
