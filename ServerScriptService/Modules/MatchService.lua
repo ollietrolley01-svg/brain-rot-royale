@@ -1268,6 +1268,10 @@ local function dropLoot(token)
 		if token.weapon then
 			dropSafely(LootService.DropWeapon, token.weapon.id, position)
 		end
+		-- The second gun a bot carries (BotService's BOT LOOTING & ROTATION, bot.backup) drops as well.
+		if token.backup and token.backup.id then
+			dropSafely(LootService.DropWeapon, token.backup.id, position)
+		end
 		-- Bots loot heals and shields now, so killing one pays out the same as killing a player.
 		local heals = token.heals
 		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
@@ -1343,6 +1347,9 @@ local function dropPickedUp(token)
 	if Combatants.IsBot(token) then
 		if token.weapon and token.weapon.id and token.weapon.id ~= token.issuedWeaponId then
 			dropSafely(LootService.DropWeapon, token.weapon.id, position)
+		end
+		if token.backup and token.backup.id and token.backup.id ~= token.issuedWeaponId then
+			dropSafely(LootService.DropWeapon, token.backup.id, position)
 		end
 		local heals = token.heals
 		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then

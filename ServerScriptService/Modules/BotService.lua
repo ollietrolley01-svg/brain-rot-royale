@@ -146,10 +146,20 @@ for _, key in ipairs({
 	"buildsFortify", "buildsBlock", "buildsCross", "buildsPushed", "throwsRefusedFriendly", "buildsRefusedFriendly",
 	"rays", "raysCombat", "raysNavigation", "raysIdle", "raysDenied", "raysFrameMax", "sightDenied",
 	"candidatesExamined", "lodSkips", "lodThinks",
+	-- BOT LOOTING & ROTATION (tools/bot_loot_sim.py reads these)
+	"lootUpgrades", "lootBackups", "lootJunkDropped", "lootContested", "gunSwaps", "roadLegs",
+	"supplySkipped", "restockTrips", "dropHot", "dropQuiet", "lootStocked", "baseChestSpread", "lootBehind",
 }) do
 	STATS[key] = STATS[key] or 0
 end
 BotService.Stats = STATS
+
+-- BOT LOOTING & ROTATION (the section of that name, above updateBot): drop choice, loot routes,
+-- inventory, heal timing and zone rotation, per archetype. Declared here because functions defined
+-- before that section (tryHeal, holdLoot, FindBaseLoot) read its dials. A FIELD, not a local: the
+-- main chunk sits at the edge of Luau's 200-local limit (tools/verify.py warns from 195), so the
+-- section is reached as BotService.Loot everywhere, and tools/bot_loot_sim.py drives that table.
+BotService.Loot = {}
 
 local BOT_NAMES = {
 	"SahurFan2011", "TungTungKing", "crocodilo_xd", "TralalaGamer", "BananiniBoss",
@@ -192,8 +202,8 @@ local WEAPON_ODDS = { Common = 44, Uncommon = 38, Rare = 15, Epic = 3, Legendary
 --   BotService.Archetypes        -> name -> archetype, for probes and the mode mix
 --   BotService.WeaponClasses     -> style -> class dials
 --   BotService.AssignArchetype(bot, name) -> force one (probes, a mode that wants a set squad)
--- Loot and rotation dials (lootGreed, preferredWeaponClasses, rotateEarly, chestPriority, healPriority)
--- are DEFINED here so the whole personality is one table, and READ by the loot/rotation code.
+-- Loot and rotation dials (lootGreed, preferredWeaponClasses, rotateEarly, chestPriority, stock
+-- targets...) live in BotService.Loot.DIALS in the BOT LOOTING & ROTATION section, keyed by the same six names.
 --
 -- Dial meanings (fighting):
 --   rangeScale         multiplies the weapon class's preferred engagement distance
@@ -226,8 +236,6 @@ ARCH.Types = {
 		grenadeAt = 2, smokeToMove = false, thirdParty = false, avoidUnforced = false, flank = false,
 		holdObjective = false, buildRate = 0.15, buildFortify = false, buildToCross = false, buildToBlock = false,
 		cookFrags = false,
-		lootGreed = 0.4, preferredWeaponClasses = { "shotgun", "smg", "doublebarrel" }, rotateEarly = false,
-		chestPriority = 0.4, healPriority = 0.3,
 	},
 	Marksman = {
 		rangeScale = 1.6, coverUse = 0.8, peek = true, repositionOnHit = 0.7, targetPick = "closest",
@@ -235,8 +243,6 @@ ARCH.Types = {
 		grenadeAt = 3, smokeToMove = true, thirdParty = false, avoidUnforced = false, flank = false,
 		holdObjective = false, buildRate = 0.6, buildFortify = true, buildToCross = false, buildToBlock = false,
 		cookFrags = true,
-		lootGreed = 0.6, preferredWeaponClasses = { "sniper", "dmr", "rifle" }, rotateEarly = true,
-		chestPriority = 0.6, healPriority = 0.6,
 	},
 	Flanker = {
 		rangeScale = 0.85, coverUse = 0.6, peek = false, repositionOnHit = 0.5, targetPick = "engaged",
@@ -244,8 +250,6 @@ ARCH.Types = {
 		grenadeAt = 2, smokeToMove = true, thirdParty = false, avoidUnforced = false, flank = true,
 		holdObjective = false, buildRate = 0.35, buildFortify = false, buildToCross = true, buildToBlock = false,
 		cookFrags = true,
-		lootGreed = 0.5, preferredWeaponClasses = { "smg", "rifle", "shotgun" }, rotateEarly = false,
-		chestPriority = 0.5, healPriority = 0.5,
 	},
 	Anchor = {
 		rangeScale = 1.15, coverUse = 0.9, peek = true, repositionOnHit = 0.1, targetPick = "threat",
@@ -253,8 +257,6 @@ ARCH.Types = {
 		grenadeAt = 2, smokeToMove = false, thirdParty = false, avoidUnforced = false, flank = false,
 		holdObjective = true, buildRate = 0.9, buildFortify = true, buildToCross = false, buildToBlock = false,
 		cookFrags = false,
-		lootGreed = 0.5, preferredWeaponClasses = { "lmg", "rifle", "dmr" }, rotateEarly = true,
-		chestPriority = 0.7, healPriority = 0.6,
 	},
 	Opportunist = {
 		rangeScale = 1.2, coverUse = 0.7, peek = false, repositionOnHit = 0.4, targetPick = "weakest",
@@ -263,8 +265,6 @@ ARCH.Types = {
 		avoidUnforced = false, flank = false,
 		holdObjective = false, buildRate = 0.3, buildFortify = false, buildToCross = false, buildToBlock = false,
 		cookFrags = true,
-		lootGreed = 0.8, preferredWeaponClasses = { "rifle", "dmr", "smg" }, rotateEarly = false,
-		chestPriority = 0.8, healPriority = 0.7,
 	},
 	Survivor = {
 		rangeScale = 1.3, coverUse = 0.9, peek = true, repositionOnHit = 0.6, targetPick = "threat",
@@ -272,8 +272,6 @@ ARCH.Types = {
 		grenadeAt = 3, smokeToMove = true, thirdParty = false, avoidUnforced = true, flank = false,
 		holdObjective = true, buildRate = 0.7, buildFortify = false, buildToCross = false, buildToBlock = true,
 		cookFrags = false,
-		lootGreed = 0.7, preferredWeaponClasses = { "rifle", "dmr", "pistol" }, rotateEarly = true,
-		chestPriority = 0.6, healPriority = 0.9,
 	},
 }
 for name, archetype in pairs(ARCH.Types) do
@@ -2293,7 +2291,7 @@ end
 -- Same lull and cooldown as heals: a shield is topped up after breaking contact, never mid-duel.
 local function tryShield(bot, humanoid, now)
 	local current = humanoid:GetAttribute("Shield") or 0
-	if current >= BOT_SHIELD_LOW then
+	if current >= BotService.Loot.shieldLow(bot) then
 		return
 	end
 	if now - bot.lastCombatAt < MatchConfig.BotHealLull or now - bot.lastHealAt < MatchConfig.BotHealCooldown then
@@ -2590,8 +2588,9 @@ end
 
 local function tryHeal(bot, humanoid, now)
 	local missing = humanoid.MaxHealth - humanoid.Health
-	-- BOT ARCHETYPES: a Survivor patches up at 75%, a Rusher waits until 45%; MatchConfig is the default.
-	local healBelow = ARCH.dialsOf(bot).healBelow or MatchConfig.BotHealBelow
+	-- BOT ARCHETYPES: a Survivor patches up at 75%, a Rusher waits until 45% (the archetype's healBelow);
+	-- a bot dealt no archetype falls back to the loot section's stock-based threshold (BotService.Loot.healBelow).
+	local healBelow = (bot.archetype and BotService.DialsOf(bot).healBelow) or BotService.Loot.healBelow(bot)
 	if missing <= 0 or humanoid.Health > humanoid.MaxHealth * healBelow then
 		return
 	end
@@ -2833,9 +2832,11 @@ local function lootItems(now)
 		for _, item in ipairs(folder:GetChildren()) do
 			if item:IsA("BasePart") then
 				local name = item.Name
-				local kind = (name == "GroundWeapon" or name == "Chest") and "gear" or (name == "HealPickup" and "heal") or nil
+				local kind = (name == "GroundWeapon" or name == "Chest") and "gear" or (name == "HealPickup" and "heal")
+					or (name == "ItemPickup" and "item") or nil
 				if kind then
-					table.insert(items, { item = item, position = item.Position, kind = kind })
+					-- itemId: a shield or throwable pickup (BotService.Loot.wantsConsumable); nil on guns and chests.
+					table.insert(items, { item = item, position = item.Position, kind = kind, itemId = item:GetAttribute("ItemId") })
 				end
 			end
 		end
@@ -2899,22 +2900,14 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 		return nil
 	end
 	local myRank = bot.weapon and (Rarity.Index[bot.weapon.rarity] or 0) or -1
-	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < 3
+	-- How much to carry is the archetype's call (BotService.Loot.DIALS healStockTarget / shieldStockTarget).
+	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < BotService.Loot.dial(bot, "healStockTarget")
+	local wantShields = (bot.shields.MiniShield + bot.shields.ShieldPotion) < BotService.Loot.dial(bot, "shieldStockTarget")
 	-- While gearing up after a spawn, an unopened chest at the base beats everything else (Oliver,
-	-- 2026-09-23 14:38: "make the bots go after the chests when they spawn").
+	-- 2026-09-23 14:38: "make the bots go after the chests when they spawn"). The base has 14; a squad
+	-- spawning on one pad used to walk at the same nearest one, so the pick spreads them (BotService.Loot.baseChest).
 	if chestsFirst then
-		local chest, chestDistance = nil, 220
-		for _, entry in ipairs(lootItems(now)) do
-			local item = entry.item
-			local position = entry.position
-			if item.Name == "Chest" and item.Parent and not item:GetAttribute("Claimed")
-				and (Vector3.new(position.X, 0, position.Z) - flatBase).Magnitude <= baseRadius then
-				local distance = (position - here).Magnitude
-				if distance < chestDistance and lootAllowed(bot, item, distance, center, circleRadius, now) then
-					chest, chestDistance = item, distance
-				end
-			end
-		end
+		local chest = BotService.Loot.baseChest(bot, here, flatBase, baseRadius, center, circleRadius, now)
 		if chest then
 			return chest
 		end
@@ -2928,7 +2921,8 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 			if distance < bestDistance and item.Parent and not item:GetAttribute("Claimed") then
 				local wanted = false
 				if entry.kind == "heal" then
-					wanted = wantHeals and item:GetAttribute("HealId") ~= nil
+					wanted = (wantHeals and item:GetAttribute("HealId") ~= nil)
+						or (wantShields and entry.itemId ~= nil and WeaponService.Shields[entry.itemId] ~= nil)
 				elseif item.Name == "Chest" then
 					wanted = true
 				else
@@ -2970,11 +2964,8 @@ local function holdLoot(bot, humanoid, root, now)
 	local fromChest = targetName == "Chest"
 
 	local def
-	if targetName == "HealPickup" then
-		local healId, amount = LootService.ClaimHealForBot(item)
-		if healId then
-			giveBotHeal(bot, healId, amount)
-		end
+	if targetName == "HealPickup" or targetName == "ItemPickup" then
+		BotService.Loot.claimConsumable(bot, item)
 	else
 		local claim = fromCrate and SupplyDropService.ClaimForBot or LootService.ClaimForBot
 		def = claim(item)
@@ -3014,21 +3005,11 @@ local function holdLoot(bot, humanoid, root, now)
 		end
 	end
 
-	-- Anything beats nothing; after that, only ever swap up. A bot trading a sniper for a pistol
-	-- would look broken. A projectile gun whose round flies some way the bot's aim can't lead (a disc
-	-- that ricochets, a homing slipper, a lobbed toast) is left for players.
-	local usable = def and not def.staged and not BOT_WEAPON_HOLD[def.id]
-		and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile])
-	if usable and (not bot.weapon or (Rarity.Index[def.rarity] or 0) > (Rarity.Index[bot.weapon.rarity] or 0)) then
-		bot.weapon = def
-		bot.magWeapon = def.id
-		bot.mag = magazineOf(def)
-		bot.reloadUntil = nil
-		if bot.character then
-			bot.character:SetAttribute("Reloading", nil)
-		end
-		giveBotGun(bot.character, def)
-		claimPhysics(bot.character)
+	-- Anything beats nothing; after that the archetype decides (BotService.Loot.takeGun): swap up, keep a second
+	-- gun of another class, or put the junk back on the floor. Never a swap down: a bot trading a
+	-- sniper for a pistol would look broken.
+	if def then
+		BotService.Loot.takeGun(bot, def, root.Position)
 	end
 	return true
 end
@@ -3417,13 +3398,13 @@ local function runForCircle(bot, humanoid, root, now)
 	releaseLoot(bot)
 	bot.memory = nil
 	if not bot.wanderGoal or not insideCircle(bot.wanderGoal, center, circleRadius, 0.85) then
-		bot.wanderGoal = stormGoal(root.Position)
+		bot.wanderGoal = BotService.Loot.rotationGoal(bot, root.Position)
 		bot.wanderTarget = nil
 	end
 	setSprint(bot, true)
 	trySlide(bot, humanoid, now)
 	if not bot.wanderTarget or flatDistance(root.Position, bot.wanderTarget) < 16 then
-		bot.wanderTarget = nextLeg(root.Position, bot.wanderGoal)
+		bot.wanderTarget = BotService.Loot.leg(bot, root.Position, bot.wanderGoal, now, true)
 	end
 	if navigate(bot, humanoid, root, bot.wanderTarget, BotNav.Priority.Urgent, now) == "abandon" then
 		bot.wanderTarget = nil
@@ -4202,9 +4183,9 @@ function Vehicles.startRide(bot, role, seat, purpose, now)
 end
 
 -- The seat this bot on foot should go for now, if any, with its role and reason.
--- How keen this bot is on vehicles, scaling its chance of jumping on a gun (1 = the numbers above).
--- TODO(looting worker): BotService.Loot.vehiclePreference(bot) is not in this file yet; until it
--- lands this is 1 for everyone, and it is picked up as soon as it exists.
+-- How keen this bot is on vehicles, scaling its chance of jumping on a gun (1 = the numbers above):
+-- BotService.Loot.vehiclePreference(bot), the archetype's vehiclePreference dial (BOT LOOTING &
+-- ROTATION), 0.4 for a Marksman up to 1.4 for a Rusher; 1 for a bot with no dials.
 function Vehicles.preference(bot)
 	local loot = BotService.Loot
 	if type(loot) == "table" and type(loot.vehiclePreference) == "function" then
@@ -4459,6 +4440,826 @@ function ARCH.balance(bot, team, mix, teamOf)
 	end
 end
 
+--------------------------------------------------------------------------------
+-- BOT LOOTING & ROTATION (Oliver, 2026-09-24: "different kinds that have different strategies in
+-- fighting and looting etc.")
+--------------------------------------------------------------------------------
+-- Everything here hangs off BotService.Loot (declared under STATS; a field because the main chunk has
+-- no local left to spare): where a bot
+-- lands, what it loots and in what order, what it keeps, when it patches up and how it rotates. The
+-- fighting side (target choice, shooting, cover) is untouched; this only calls into it through the
+-- functions that already exist (giveBotGun, findLoot, tryHeal...).
+--
+-- Which kind a bot is comes from BotService.ArchetypeOf(bot) when the archetype foundation provides
+-- it (a name, or a table with .name/.id and possibly the loot dials below), otherwise from its slot,
+-- so six kinds are always in a lobby. The dials are what the archetype means for looting:
+--   lootGreed              0..1  how long after landing it keeps looting before it goes looking for a fight
+--   preferredWeaponClasses list  weapon classes it prefers, best first (BotService.Loot.CLASS_OF_STYLE)
+--   upgradeThreshold       gain in BotService.Loot.gunValue (rarity + class fit) needed to swap the gun it holds
+--   healStockTarget        heals it tries to carry; also how early it heals (BotService.Loot.healBelow)
+--   shieldStockTarget      shields it tries to carry; also how low it lets its shield run (BotService.Loot.shieldLow)
+--   throwableWanted        picks up frags and smoke
+--   dropHotLanding         0..1  chance to drop on a busy town rather than a quiet edge
+--   rotateEarly            0..1  1 moves the moment a circle is called and sits deep in it; 0 waits and
+--                                holds the edge
+--   vehiclePreference      0..1  read by the BOT VEHICLES section when it wants it (BotService.Loot.vehiclePreference)
+--   chestPriority          0..1  how far it detours for an unopened chest over a floor gun
+--   supplyDropChase        0..1  share of SUPPLY_SEEK_RANGE it will walk for a crate; 0 never
+--
+-- Costs are bounded like the rest of the file: every pick reads the once-a-second loot snapshot
+-- through BotService.SpatialQuery.Loot (the grid cells covering its radius, a shared scratch list that
+-- is read there and then, never kept across another Loot call), the per-tick combatant list, and a
+-- per-match road snapshot of at most BotService.Loot.ROAD_MAX segments; nothing here casts a ray (castRay and its
+-- budget are the fight's and the nav's) or walks workspace inside a think (tools/perf_bot_cost.py passes).
+
+BotService.Loot.NAMES = { "Rusher", "Marksman", "Flanker", "Anchor", "Opportunist", "Survivor" }
+
+BotService.Loot.DIALS = {
+	Rusher = {
+		lootGreed = 0.25, preferredWeaponClasses = { "close", "mid" }, upgradeThreshold = 1,
+		healStockTarget = 2, shieldStockTarget = 1, throwableWanted = true, dropHotLanding = 1,
+		rotateEarly = 0.2, vehiclePreference = 0.7, chestPriority = 0.4, supplyDropChase = 0.6,
+	},
+	Marksman = {
+		lootGreed = 0.7, preferredWeaponClasses = { "long", "mid" }, upgradeThreshold = 1,
+		healStockTarget = 3, shieldStockTarget = 2, throwableWanted = false, dropHotLanding = 0.3,
+		rotateEarly = 0.8, vehiclePreference = 0.2, chestPriority = 0.8, supplyDropChase = 0.5,
+	},
+	Flanker = {
+		lootGreed = 0.5, preferredWeaponClasses = { "mid", "close" }, upgradeThreshold = 1,
+		healStockTarget = 3, shieldStockTarget = 2, throwableWanted = true, dropHotLanding = 0.6,
+		rotateEarly = 0.45, vehiclePreference = 0.5, chestPriority = 0.6, supplyDropChase = 0.7,
+	},
+	Anchor = {
+		lootGreed = 0.8, preferredWeaponClasses = { "mid", "long" }, upgradeThreshold = 1,
+		healStockTarget = 4, shieldStockTarget = 3, throwableWanted = true, dropHotLanding = 0.4,
+		rotateEarly = 0.9, vehiclePreference = 0.3, chestPriority = 0.7, supplyDropChase = 0.2,
+	},
+	Opportunist = {
+		lootGreed = 0.6, preferredWeaponClasses = { "mid", "close" }, upgradeThreshold = 0.5,
+		healStockTarget = 3, shieldStockTarget = 2, throwableWanted = true, dropHotLanding = 0.5,
+		rotateEarly = 0.4, vehiclePreference = 0.6, chestPriority = 0.9, supplyDropChase = 1,
+	},
+	Survivor = {
+		lootGreed = 0.9, preferredWeaponClasses = { "long", "mid" }, upgradeThreshold = 1,
+		healStockTarget = 5, shieldStockTarget = 3, throwableWanted = false, dropHotLanding = 0,
+		rotateEarly = 1, vehiclePreference = 0.5, chestPriority = 0.6, supplyDropChase = 0.1,
+	},
+}
+
+-- A gun's class from its WeaponData style: what range it is for. `heavy` is the launchers and the
+-- cannon, a class of their own that nobody prefers but anyone will carry as a second gun.
+BotService.Loot.CLASS_OF_STYLE = {
+	pistol = "mid", revolver = "mid", rifle = "mid", lmg = "mid", minigun = "mid",
+	smg = "close", shotgun = "close", doublebarrel = "close", blaster = "close",
+	dmr = "long", sniper = "long", crossbow = "long", railgun = "long",
+	launcher = "heavy", cannon = "heavy",
+}
+
+-- Looting phase after landing: 45 s for the greediest-for-a-fight, 130 s for the most patient.
+BotService.Loot.LOOT_PHASE_MIN, BotService.Loot.LOOT_PHASE_SPAN = 45, 85
+BotService.Loot.UPGRADE_RANGE = 90       -- an armed bot detours this far for a better gun while in its looting phase
+BotService.Loot.STOCK_RANGE = 90         -- and this far for heals, shields and throwables it is short of
+BotService.Loot.CONTEST_RADIUS = 30      -- enemies this close to a chest make it contested
+BotService.Loot.SWAP_COOLDOWN = 3        -- seconds between gun swaps, so a bot at a range boundary doesn't juggle
+BotService.Loot.CLOSE_RANGE, BotService.Loot.LONG_RANGE = 28, 120
+BotService.Loot.ROAD_MAX = 240           -- road segments kept per match for BotService.Loot.leg; sampled evenly beyond that
+BotService.Loot.ROAD_SNAP = 60           -- a leg moves to a road this close to it when someone is about
+BotService.Loot.RESTOCK_LULL = 8         -- team modes: seconds out of a fight before a trip home for heals
+BotService.Loot.CONSUMABLE_KINDS = { "heal", "item" } -- snapshot kinds BotService.Loot.bestConsumable reads
+
+-- Per-match state, cleared with the bots.
+BotService.Loot.dropClaims = {}   -- drop spot -> bots that chose it this match
+BotService.Loot.dropHeat = {}     -- drop spot -> chests within reach of it, counted once
+BotService.Loot.roads = nil       -- { positions }, built on first use from workspace.Map.Roads
+BotService.Loot.roadsAt = -math.huge
+
+function BotService.Loot.clear()
+	table.clear(BotService.Loot.dropClaims)
+	table.clear(BotService.Loot.dropHeat)
+	BotService.Loot.roads = nil
+	BotService.Loot.roadsAt = -math.huge
+end
+
+--------------------------------------------------------------------------------
+-- Archetype and dials
+--------------------------------------------------------------------------------
+
+-- The bot's archetype NAME, kept as bot.lootKind (bot.archetype is the BOT ARCHETYPES table and is
+-- never written here). BotService.ArchetypeOf is asked every few seconds (ARCH.balance may reassign);
+-- between asks the last answer stands, so a dial read costs a table lookup. A bot dealt nothing
+-- (a probe's bare record) takes a kind from its slot, so six kinds are always in a lobby.
+function BotService.Loot.archetypeOf(bot, now)
+	now = now or os.clock()
+	if bot.lootKind and now - (bot.lootKindAt or -math.huge) < 5 then
+		return bot.lootKind
+	end
+	bot.lootKindAt = now
+	local hook = BotService.ArchetypeOf
+	if type(hook) == "function" then
+		local ok, result = pcall(hook, bot)
+		if ok then
+			local name = type(result) == "table" and (result.name or result.id) or result
+			if type(name) == "string" and BotService.Loot.DIALS[name] then
+				bot.lootKind = name
+				-- An archetype table that carries loot dials of its own overrides BotService.Loot.DIALS.
+				bot.lootKindDials = type(result) == "table" and result or nil
+				return name
+			end
+		end
+	end
+	if not bot.lootKind then
+		bot.lootKind = BotService.Loot.NAMES[(bot.slot or 0) % #BotService.Loot.NAMES + 1]
+	end
+	return bot.lootKind
+end
+
+function BotService.Loot.dial(bot, key)
+	local name = BotService.Loot.archetypeOf(bot)
+	local own = bot.lootKindDials
+	local value = own and own[key]
+	if value == nil then
+		value = BotService.Loot.DIALS[name][key]
+	end
+	if value == nil then
+		value = BotService.Loot.DIALS.Flanker[key]
+	end
+	return value
+end
+
+-- Read by the BOT VEHICLES section (Vehicles.preference) as a multiplier on its boarding chances:
+-- the dial (0.2 Marksman .. 0.7 Rusher) over 0.5, so a middling kind keeps the section's own numbers,
+-- a Rusher jumps on a gun 1.4x as readily and a Marksman 0.4x.
+function BotService.Loot.vehiclePreference(bot)
+	return BotService.Loot.dial(bot, "vehiclePreference") / 0.5
+end
+
+--------------------------------------------------------------------------------
+-- Heal and shield timing
+--------------------------------------------------------------------------------
+
+-- Health fraction under which the bot patches up in a lull: a Survivor (stock target 5) at 70%, a
+-- Rusher (2) at 55%, MatchConfig.BotHealBelow (0.6) at the middle of the range.
+function BotService.Loot.healBelow(bot)
+	local target = BotService.Loot.dial(bot, "healStockTarget")
+	return math.clamp(MatchConfig.BotHealBelow + (target - 3) * 0.05, 0.4, 0.8)
+end
+
+-- Shield under which a potion goes in: BOT_SHIELD_LOW (50) for a middling stock target, 35 for a
+-- Rusher who would rather keep moving, 65 for an Anchor or Survivor.
+function BotService.Loot.shieldLow(bot)
+	local target = BotService.Loot.dial(bot, "shieldStockTarget")
+	return math.clamp(BOT_SHIELD_LOW + (target - 2) * 15, 20, 80)
+end
+
+--------------------------------------------------------------------------------
+-- Inventory: two guns of different classes, heals, shields, throwables; junk back on the floor
+--------------------------------------------------------------------------------
+
+function BotService.Loot.classOf(def)
+	return def and (BotService.Loot.CLASS_OF_STYLE[def.style] or "mid") or nil
+end
+
+-- Guns a bot can shoot at all (the same rule holdLoot used to apply inline).
+function BotService.Loot.usable(def)
+	return def ~= nil and not def.staged and not BOT_WEAPON_HOLD[def.id]
+		and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile] == true)
+end
+
+-- What a gun is worth to this bot: its rarity tier, plus a class fit (0.6 for the preferred class,
+-- 0.3 for the second). A Rare shotgun (3.6) beats a Rare sniper (3) for a Rusher; an Epic sniper (4)
+-- still beats both, because rarity is real stats and class fit is taste.
+function BotService.Loot.gunValue(bot, def)
+	local value = Rarity.Index[def.rarity] or 0
+	local class = BotService.Loot.classOf(def)
+	local prefer = BotService.Loot.dial(bot, "preferredWeaponClasses")
+	for rank, wanted in ipairs(prefer) do
+		if wanted == class then
+			value += rank == 1 and 0.6 or 0.3
+			break
+		end
+	end
+	return value
+end
+
+-- Hand the bot a gun as its held one. Magazine state follows the gun.
+function BotService.Loot.equip(bot, def, mag)
+	bot.weapon = def
+	bot.magWeapon = def.id
+	bot.mag = mag or magazineOf(def)
+	bot.reloadUntil = nil
+	if bot.character then
+		bot.character:SetAttribute("Reloading", nil)
+		giveBotGun(bot.character, def)
+		claimPhysics(bot.character)
+	end
+end
+
+function BotService.Loot.dropJunk(def, position)
+	if def and position then
+		STATS.lootJunkDropped += 1
+		LootService.DropWeapon(def.id, position)
+	end
+end
+
+-- A gun just claimed. Empty hands take anything usable. Otherwise a gain of `upgradeThreshold` in
+-- gunValue over the held gun swaps it in; the old one is kept as the backup when its class differs
+-- from the new one, and a gun of another class than the held one becomes (or replaces) the backup.
+-- Whatever isn't kept goes back on the floor where the bot stands, so the pickup isn't simply
+-- destroyed: a player following the bot finds what it left. Returns "primary", "backup" or "dropped".
+function BotService.Loot.takeGun(bot, def, position)
+	if not BotService.Loot.usable(def) then
+		BotService.Loot.dropJunk(def, position)
+		return "dropped"
+	end
+	if not bot.weapon then
+		BotService.Loot.equip(bot, def)
+		return "primary"
+	end
+	local threshold = BotService.Loot.dial(bot, "upgradeThreshold")
+	local held = bot.weapon
+	local gain = BotService.Loot.gunValue(bot, def) - BotService.Loot.gunValue(bot, held)
+	local class = BotService.Loot.classOf(def)
+	if gain >= threshold and (Rarity.Index[def.rarity] or 0) >= (Rarity.Index[held.rarity] or 0) then
+		STATS.lootUpgrades += 1
+		local heldMag = bot.mag
+		BotService.Loot.equip(bot, def)
+		if BotService.Loot.classOf(held) ~= class then
+			-- The old held gun becomes the backup; the previous backup, of the new gun's class or not,
+			-- is the one that goes.
+			BotService.Loot.dropJunk(bot.backup, position)
+			bot.backup, bot.backupMag = held, heldMag
+		elseif bot.backup and BotService.Loot.classOf(bot.backup) == class then
+			BotService.Loot.dropJunk(bot.backup, position)
+			bot.backup, bot.backupMag = nil, nil
+			BotService.Loot.dropJunk(held, position)
+		else
+			BotService.Loot.dropJunk(held, position)
+		end
+		return "primary"
+	end
+	if class ~= BotService.Loot.classOf(held) then
+		if not bot.backup then
+			STATS.lootBackups += 1
+			bot.backup, bot.backupMag = def, magazineOf(def)
+			return "backup"
+		end
+		if BotService.Loot.gunValue(bot, def) - BotService.Loot.gunValue(bot, bot.backup) >= threshold then
+			STATS.lootBackups += 1
+			BotService.Loot.dropJunk(bot.backup, position)
+			bot.backup, bot.backupMag = def, magazineOf(def)
+			return "backup"
+		end
+	end
+	BotService.Loot.dropJunk(def, position)
+	return "dropped"
+end
+
+-- Bring the backup out when it suits the range and the held gun doesn't: the held gun can't reach
+-- and the backup can; a long gun in hand with someone inside BotService.Loot.CLOSE_RANGE and a shorter gun on the
+-- back; a short gun in hand at BotService.Loot.LONG_RANGE or more with a long one that reaches. At most one swap per
+-- BotService.Loot.SWAP_COOLDOWN. Returns true when it swapped.
+function BotService.Loot.swapGunFor(bot, distance, now)
+	local held, backup = bot.weapon, bot.backup
+	if not held or not backup or now - (bot.gunSwapAt or 0) < BotService.Loot.SWAP_COOLDOWN then
+		return false
+	end
+	local heldClass, backupClass = BotService.Loot.classOf(held), BotService.Loot.classOf(backup)
+	local want = false
+	if distance > held.range and distance <= backup.range then
+		want = true
+	elseif distance <= BotService.Loot.CLOSE_RANGE and heldClass == "long" and backupClass ~= "long" and distance <= backup.range then
+		want = true
+	elseif distance >= BotService.Loot.LONG_RANGE and backupClass == "long" and heldClass ~= "long" and distance <= backup.range then
+		want = true
+	end
+	if not want then
+		return false
+	end
+	STATS.gunSwaps += 1
+	bot.gunSwapAt = now
+	local heldMag = bot.mag
+	local backupMag = bot.backupMag
+	bot.backup, bot.backupMag = held, heldMag
+	BotService.Loot.equip(bot, backup, backupMag)
+	return true
+end
+
+-- The heals a bot carries, the shields, and the throwables it has stock of.
+function BotService.Loot.healCount(bot)
+	return (bot.heals.Bandage or 0) + (bot.heals.MedKit or 0)
+end
+
+function BotService.Loot.shieldCount(bot)
+	return (bot.shields.MiniShield or 0) + (bot.shields.ShieldPotion or 0)
+end
+
+function BotService.Loot.throwableCount(bot)
+	local total = 0
+	for _, count in pairs(bot.throwables) do
+		total += count
+	end
+	return total
+end
+
+-- Which throwable kind an item id is, or nil.
+function BotService.Loot.throwableKind(itemId)
+	for kind, spec in pairs(THROWABLES) do
+		if spec.itemId == itemId then
+			return kind
+		end
+	end
+	return nil
+end
+
+-- Whether a consumable pickup (a snapshot entry with kind "heal" or "item") is worth a walk: a heal
+-- while under the heal stock target, a shield while under the shield target, a throwable when the
+-- archetype wants them, has none, and ProjectileService exists to throw them.
+function BotService.Loot.wantsConsumable(bot, entry)
+	if entry.kind == "heal" then
+		local itemId = entry.itemId
+		if itemId and WeaponService.Shields[itemId] then
+			return BotService.Loot.shieldCount(bot) < BotService.Loot.dial(bot, "shieldStockTarget")
+		end
+		return BotService.Loot.healCount(bot) < BotService.Loot.dial(bot, "healStockTarget")
+	elseif entry.kind == "item" then
+		local kind = entry.itemId and BotService.Loot.throwableKind(entry.itemId)
+		return kind ~= nil and BotService.Loot.dial(bot, "throwableWanted") == true and BotService.Loot.throwableCount(bot) == 0
+			and projectileApi() ~= nil
+	end
+	return false
+end
+
+-- Take a heal, shield or throwable pickup the bot is standing at. Real heals go through
+-- LootService.ClaimHealForBot as before; shields and throwables are claimed the same way it does it
+-- (Claimed attribute, then destroyed), since LootService has no bot claim for those yet.
+function BotService.Loot.claimConsumable(bot, item)
+	if item:GetAttribute("HealId") then
+		local healId, amount = LootService.ClaimHealForBot(item)
+		if healId then
+			giveBotHeal(bot, healId, amount)
+			return true
+		end
+		return false
+	end
+	if not item.Parent or item:GetAttribute("Claimed") or item:GetAttribute("PlayerHolding") then
+		return false
+	end
+	local itemId = item:GetAttribute("ItemId")
+	local amount = item:GetAttribute("Amount") or 1
+	local kind = itemId and BotService.Loot.throwableKind(itemId)
+	if itemId and WeaponService.Shields[itemId] then
+		giveBotShield(bot, itemId, amount)
+	elseif kind then
+		giveBotThrowable(bot, kind, amount)
+	else
+		return false
+	end
+	STATS.lootStocked += 1
+	item:SetAttribute("Claimed", true)
+	item:Destroy()
+	return true
+end
+
+--------------------------------------------------------------------------------
+-- What to loot next
+--------------------------------------------------------------------------------
+
+-- Still in the looting phase that follows the landing (BotService.Loot.LOOT_PHASE_MIN + lootGreed x SPAN seconds)?
+function BotService.Loot.lootPhase(bot, now)
+	local landed = bot.landedAt
+	return landed ~= nil and now - landed < BotService.Loot.LOOT_PHASE_MIN + BotService.Loot.dial(bot, "lootGreed") * BotService.Loot.LOOT_PHASE_SPAN
+end
+
+-- How often an armed bot looks for loot: every 3 s in its looting phase, the old 5 s afterwards.
+function BotService.Loot.lootInterval(bot, now)
+	return BotService.Loot.lootPhase(bot, now) and 3 or 5
+end
+
+-- A greedy looter (lootGreed >= 0.6) finishes a grab it is within 25 studs of before it hunts a
+-- memory, unless it was hit in the last 3 s.
+function BotService.Loot.finishingGrab(bot, root, now)
+	local item = bot.lootTarget
+	if not item or not item.Parent or BotService.Loot.dial(bot, "lootGreed") < 0.6 then
+		return false
+	end
+	if now - (bot.lastHurtAt or 0) < 3 then
+		return false
+	end
+	return (item.Position - root.Position).Magnitude < 25
+end
+
+-- Living enemies within BotService.Loot.CONTEST_RADIUS of a point, from the per-tick combatant snapshot.
+function BotService.Loot.enemiesNear(bot, point)
+	local count = 0
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
+			and (entry.position - point).Magnitude <= BotService.Loot.CONTEST_RADIUS then
+			count += 1
+		end
+	end
+	return count
+end
+
+-- Whether a pickup is too hot to walk at: enemies already on it, more than the archetype's boldness
+-- (dropHotLanding) will take. A Rusher (1) takes on two; a Survivor (0) skips one.
+function BotService.Loot.contested(bot, position)
+	local enemies = BotService.Loot.enemiesNear(bot, position)
+	if enemies == 0 then
+		return false
+	end
+	local bold = BotService.Loot.dial(bot, "dropHotLanding")
+	if enemies > bold * 2 then
+		STATS.lootContested += 1
+		return true
+	end
+	return false
+end
+
+-- The best gun or chest within `radius`: nearest, with chests pulled closer by chestPriority (a
+-- chest 100 studs off counts as 100 / (0.5 + priority) so an Opportunist walks past a floor gun
+-- for it), skipping contested ones and, unless `any`, guns that wouldn't improve the loadout.
+function BotService.Loot.bestGear(bot, position, radius, any, center, circleRadius, now)
+	local best, bestScore = nil, radius
+	local chestPull = 0.5 + BotService.Loot.dial(bot, "chestPriority")
+	local threshold = BotService.Loot.dial(bot, "upgradeThreshold")
+	local near, nearCount = BotService.SpatialQuery.Loot(position, radius, "gear", now)
+	for index = 1, nearCount do
+		local entry = near[index]
+		local distance = (entry.position - position).Magnitude
+		local item = entry.item
+		local isChest = item.Name == "Chest"
+		local score = isChest and distance / chestPull or distance
+		if score < bestScore and item.Parent and not item:GetAttribute("Claimed") then
+			local wanted = true
+			if not isChest and not any then
+				local id = item:GetAttribute("WeaponId")
+				local def = id and WeaponData.Get(id)
+				wanted = def ~= nil and BotService.Loot.usable(def) and BotService.Loot.wouldKeep(bot, def, threshold)
+			end
+			if wanted and lootAllowed(bot, item, distance, center, circleRadius, now) and not BotService.Loot.contested(bot, entry.position) then
+				best, bestScore = item, score
+			end
+		end
+	end
+	return best
+end
+
+-- Would BotService.Loot.takeGun keep this gun (as the held gun or the backup)?
+function BotService.Loot.wouldKeep(bot, def, threshold)
+	if not bot.weapon then
+		return true
+	end
+	local value = BotService.Loot.gunValue(bot, def)
+	if value - BotService.Loot.gunValue(bot, bot.weapon) >= threshold and (Rarity.Index[def.rarity] or 0) >= (Rarity.Index[bot.weapon.rarity] or 0) then
+		return true
+	end
+	if BotService.Loot.classOf(def) ~= BotService.Loot.classOf(bot.weapon) then
+		return not bot.backup or value - BotService.Loot.gunValue(bot, bot.backup) >= threshold
+	end
+	return false
+end
+
+-- Nearest heal, shield or throwable pickup within `radius` the bot is short of.
+function BotService.Loot.bestConsumable(bot, position, radius, center, circleRadius, now)
+	local best, bestDistance = nil, radius
+	-- Heals and shields are "heal" rows, throwables "item" rows: two cell reads, one after the other
+	-- (the scratch list is reused by the second, so the first is finished before it starts).
+	for _, kind in ipairs(BotService.Loot.CONSUMABLE_KINDS) do
+		local near, nearCount = BotService.SpatialQuery.Loot(position, radius, kind, now)
+		for index = 1, nearCount do
+			local entry = near[index]
+			local distance = (entry.position - position).Magnitude
+			local item = entry.item
+			if distance < bestDistance and item.Parent and not item:GetAttribute("Claimed") and BotService.Loot.wantsConsumable(bot, entry)
+				and lootAllowed(bot, item, distance, center, circleRadius, now) then
+				best, bestDistance = item, distance
+			end
+		end
+	end
+	return best
+end
+
+-- The pickup this bot should go for now, or nil. The order is the old block's, with the archetype
+-- deciding the ranges and what counts as worth it:
+--   1. a landed supply crate, within SUPPLY_SEEK_RANGE x supplyDropChase, unless contested (BR only);
+--   2. under-armed: the best gun or chest in LOOT_SEEK_RANGE (x1.6 while empty-handed);
+--   3. team modes: the home base's stock (FindBaseLoot), and a trip home for heals when short
+--      (BotService.Loot.RESTOCK_LULL out of a fight, within reach);
+--   4. BR, armed: an upgrade within BotService.Loot.UPGRADE_RANGE or a chest, while in the looting phase; afterwards
+--      only a chest within a range set by chestPriority (60..200), the old "armed bot opens chests";
+--   5. heals, shields and throwables up to the stock targets within BotService.Loot.STOCK_RANGE, and a heal within
+--      HEAL_SEEK_RANGE when hurt with none (as before);
+--   6. empty-handed with nothing in range: the nearest gun anywhere (as before);
+--   and, once the storm presses (center set), nothing that lies back toward the storm.
+function BotService.Loot.pickLoot(bot, humanoid, root, underArmed, empty, center, circleRadius, now)
+	local here = root.Position
+	local teamMode = BotService.ModeState(bot) ~= nil
+	local item = nil
+
+	if not teamMode then
+		local chase = BotService.Loot.dial(bot, "supplyDropChase")
+		if chase > 0 then
+			local crate = SupplyDropService.FindNearest(here, SUPPLY_SEEK_RANGE * chase)
+			if crate then
+				if not lootAllowed(bot, crate, (crate.Position - here).Magnitude, center, circleRadius, now) then
+					crate = nil
+				elseif BotService.Loot.contested(bot, crate.Position) then
+					STATS.supplySkipped += 1
+					crate = nil
+				end
+			end
+			item = crate
+		end
+	end
+
+	if not item and underArmed then
+		item = BotService.Loot.bestGear(bot, here, empty and LOOT_SEEK_RANGE * 1.6 or LOOT_SEEK_RANGE, empty, center, circleRadius, now)
+	end
+
+	if not item and teamMode then
+		local modeState = BotService.ModeState(bot)
+		if modeState then
+			item = BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
+			if item and item.Name == "HealPickup" then
+				-- A trip home for heals or shields: only in a lull, and counted.
+				if now - bot.lastCombatAt < BotService.Loot.RESTOCK_LULL then
+					item = nil
+				else
+					STATS.restockTrips += 1
+				end
+			end
+		end
+	end
+
+	if not item and not teamMode and bot.weapon then
+		if BotService.Loot.lootPhase(bot, now) then
+			item = BotService.Loot.bestGear(bot, here, LOOT_SEEK_RANGE, false, center, circleRadius, now)
+		else
+			local chestRange = 60 + 140 * BotService.Loot.dial(bot, "chestPriority")
+			local bestDistance = chestRange
+			local near, nearCount = BotService.SpatialQuery.Loot(here, chestRange, "gear", now)
+			for index = 1, nearCount do
+				local entry = near[index]
+				local chest = entry.item
+				if chest.Name == "Chest" and chest.Parent and not chest:GetAttribute("Claimed") then
+					local distance = (entry.position - here).Magnitude
+					if distance < bestDistance and lootAllowed(bot, chest, distance, center, circleRadius, now)
+						and not BotService.Loot.contested(bot, entry.position) then
+						item, bestDistance = chest, distance
+					end
+				end
+			end
+		end
+	end
+
+	if not item and bot.weapon then
+		item = BotService.Loot.bestConsumable(bot, here, BotService.Loot.STOCK_RANGE, center, circleRadius, now)
+	end
+
+	-- Empty-handed with nothing inside that sweep: walk to the nearest gun ANYWHERE rather than
+	-- wandering. A bot that lands in a corner of a 1280-stud map had nothing within 320 studs and
+	-- milled about picking random wander goals until a fight found it.
+	if not item and empty then
+		item = findLoot(bot, here, math.huge, false, center, circleRadius, now)
+		if item then
+			STATS.lootFarReach += 1
+		end
+	end
+
+	-- Hurt and carrying nothing to fix it: a loose Bandage or Med Kit is worth a detour.
+	if not item and BotService.Loot.healCount(bot) == 0 and humanoid.Health < humanoid.MaxHealth * MatchConfig.BotHealBelow then
+		item = findLoot(bot, here, HEAL_SEEK_RANGE, true, center, circleRadius, now)
+	end
+	-- Pressed by the storm (`center` is set only once pressure has passed this archetype's rotateAt):
+	-- loot only on the way in. A pickup further from the circle's middle than the bot is means
+	-- walking back toward the storm, which is how a bot that was rotating fine ends up dying "while
+	-- looting" (tools/bot_loot_sim.py counted those deaths before this rule).
+	if item and center and flatDistance(item.Position, center) > flatDistance(here, center) - 5 then
+		STATS.lootBehind += 1
+		return nil
+	end
+	return item
+end
+
+--------------------------------------------------------------------------------
+-- Team bases: 14 chests, one squad
+--------------------------------------------------------------------------------
+
+-- An unopened chest at the base for a bot gearing up. Chests nobody living is heading for come
+-- first (nearest of those); only when every chest has a taker does it fall back to the nearest one
+-- another bot is further from than we are (lootAllowed's rule). Twelve bots off one pad used to all
+-- read the same nearest chest.
+function BotService.Loot.baseChest(bot, here, flatBase, baseRadius, center, circleRadius, now)
+	local free, freeDistance = nil, 220
+	local taken, takenDistance = nil, 220
+	local near, nearCount = BotService.SpatialQuery.Loot(here, 220, "gear", now)
+	for index = 1, nearCount do
+		local entry = near[index]
+		local item = entry.item
+		local position = entry.position
+		if item.Name == "Chest" and item.Parent and not item:GetAttribute("Claimed")
+			and (Vector3.new(position.X, 0, position.Z) - flatBase).Magnitude <= baseRadius then
+			local distance = (position - here).Magnitude
+			if (distance < freeDistance or distance < takenDistance) and lootAllowed(bot, item, distance, center, circleRadius, now) then
+				local holder = lootClaims[item]
+				local claimed = holder ~= nil and holder ~= bot and holder.lootTarget == item
+					and holder.humanoid.Health > 0 and holder.character.Parent ~= nil
+				if claimed then
+					if distance < takenDistance then
+						taken, takenDistance = item, distance
+					end
+				elseif distance < freeDistance then
+					free, freeDistance = item, distance
+				end
+			end
+		end
+	end
+	if free then
+		if taken and takenDistance < freeDistance then
+			STATS.baseChestSpread += 1
+		end
+		return free
+	end
+	return taken
+end
+
+--------------------------------------------------------------------------------
+-- The drop: hot town or quiet edge
+--------------------------------------------------------------------------------
+
+-- Unopened chests within 110 studs of a drop spot, counted once per spot per match from the loot
+-- snapshot (LootService.Populate runs before the bots spawn).
+function BotService.Loot.heatOf(spot, now)
+	local heat = BotService.Loot.dropHeat[spot]
+	if heat then
+		return heat
+	end
+	heat = 0
+	local near, nearCount = BotService.SpatialQuery.Loot(Vector3.new(spot.X, spot.Y or 0, spot.Z), 110, "gear", now)
+	for index = 1, nearCount do
+		if near[index].item.Name == "Chest" then
+			heat += 1
+		end
+	end
+	BotService.Loot.dropHeat[spot] = heat
+	return heat
+end
+
+-- Where this bot steers its canopy. Of the five drop spots nearest where it opened (glide reach),
+-- a hot lander takes the one with the most chests, counting bots already headed there against it a
+-- little; a quiet lander takes the one with the fewest chests and the fewest bots. Which it is this
+-- time is a roll against dropHotLanding, so a Flanker (0.6) drops hot three times in five and a
+-- Survivor (0) never. Hot landers come down 14-34 studs off the spot, quiet ones 30-60 out on the edge.
+function BotService.Loot.pickDrop(bot, targets, from)
+	if not targets or #targets == 0 then
+		return nil
+	end
+	local now = os.clock()
+	local ranked = {}
+	for _, spot in ipairs(targets) do
+		local dx, dz = spot.X - from.X, spot.Z - from.Z
+		table.insert(ranked, { spot = spot, distance = math.sqrt(dx * dx + dz * dz) })
+	end
+	table.sort(ranked, function(a, b)
+		return a.distance < b.distance
+	end)
+	local hot = math.random() < BotService.Loot.dial(bot, "dropHotLanding")
+	local pick, pickScore = nil, nil
+	for index = 1, math.min(5, #ranked) do
+		local entry = ranked[index]
+		local heat = BotService.Loot.heatOf(entry.spot, now)
+		local crowd = BotService.Loot.dropClaims[entry.spot] or 0
+		local score
+		if hot then
+			score = heat - crowd * 0.6 - entry.distance / 400
+		else
+			score = -(heat + crowd * 1.5) - entry.distance / 400
+		end
+		if not pick or score > pickScore then
+			pick, pickScore = entry.spot, score
+		end
+	end
+	BotService.Loot.dropClaims[pick] = (BotService.Loot.dropClaims[pick] or 0) + 1
+	if hot then
+		STATS.dropHot += 1
+	else
+		STATS.dropQuiet += 1
+	end
+	bot.dropSpot = pick
+	bot.dropHot = hot
+	local angle = math.random() * math.pi * 2
+	local reach = hot and (14 + math.random() * 20) or (30 + math.random() * 30)
+	return Vector3.new(pick.X + math.cos(angle) * reach, pick.Y or 0, pick.Z + math.sin(angle) * reach)
+end
+
+--------------------------------------------------------------------------------
+-- Zone rotation
+--------------------------------------------------------------------------------
+
+-- Storm pressure at which the bot starts rotating: BotStormRotate (0.6) x (1.1 - 0.9 x rotateEarly),
+-- so a Survivor (1) moves at 0.25 and a Rusher (0.2) at 0.55. Nobody rotates LATER than the old
+-- single dial (the upper clamp is BotStormRotate itself), and BotStormUrgent stays what it is for
+-- everyone: nobody waits until the storm is on them.
+function BotService.Loot.rotateAt(bot)
+	return math.clamp(MatchConfig.BotStormRotate * (1.1 - 0.9 * BotService.Loot.dial(bot, "rotateEarly")), 0.25, MatchConfig.BotStormRotate)
+end
+
+-- Where in the next circle to head: on the bot's own side of it like stormGoal, but early movers
+-- (rotateEarly >= 0.6) go deep, 20-60% of the radius in, where the circle after this one will
+-- still be, and edge holders sit in the outer half, 50-65% of the radius, toward the cover the edge
+-- of a circle passes through. Not further out: updateBot and runForCircle treat a goal past 85% of
+-- the radius as stale and re-pick it (a goal at 90% was re-rolled every think and the bot never
+-- settled on a leg), and at 70-82% tools/bot_loot_sim.py's rotation-only pair spent a quarter more
+-- time outside the circle than the old single goal. No storm: stormGoal's wander.
+function BotService.Loot.rotationGoal(bot, position)
+	local center, radius = safeCircle()
+	if not center then
+		return stormGoal(position)
+	end
+	local fromCenter = flat(position - center)
+	local base = fromCenter.Magnitude > 1 and math.atan2(fromCenter.Z, fromCenter.X) or math.random() * math.pi * 2
+	local angle = base + (math.random() - 0.5) * math.rad(120)
+	local share
+	if BotService.Loot.dial(bot, "rotateEarly") >= 0.6 then
+		share = 0.2 + math.random() * 0.4
+	else
+		share = 0.5 + math.random() * 0.15
+	end
+	local distance = math.max(10, radius * share)
+	return center + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+end
+
+-- The road segments of the map, read once per match from workspace.Map.Roads (the parts
+-- DropMapService.RoadSegments draws), at most BotService.Loot.ROAD_MAX of them, sampled evenly.
+function BotService.Loot.roadPoints(now)
+	if BotService.Loot.roads and now - BotService.Loot.roadsAt < 120 then
+		return BotService.Loot.roads
+	end
+	BotService.Loot.roadsAt = now
+	local points = {}
+	local map = workspace:FindFirstChild("Map")
+	local roads = map and map:FindFirstChild("Roads")
+	if roads then
+		local parts = {}
+		for _, part in ipairs(roads:GetDescendants()) do
+			if part:IsA("BasePart") and part.Size.Y < 3 and (part.Name == "Road" or part.Name == "RoadCurve") then
+				table.insert(parts, part)
+			end
+		end
+		local step = math.max(1, #parts / BotService.Loot.ROAD_MAX)
+		local cursor = 1
+		while cursor <= #parts and #points < BotService.Loot.ROAD_MAX do
+			table.insert(points, parts[math.floor(cursor)].Position)
+			cursor += step
+		end
+	end
+	BotService.Loot.roads = points
+	return points
+end
+
+-- Someone about: hit in the last 10 s, a memory of a target, or a living enemy within 140 studs.
+function BotService.Loot.threatened(bot, position, now)
+	if bot.threat and now - bot.threat.at < 10 then
+		return true
+	end
+	if bot.memory and now < bot.memory.expires then
+		return true
+	end
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
+			and (entry.position - position).Magnitude <= 140 then
+			return true
+		end
+	end
+	return false
+end
+
+-- The next leg toward `goal`: nextLeg's straight line, moved onto a road within BotService.Loot.ROAD_SNAP of it
+-- when someone is about and the road still makes real progress (20 studs nearer the goal than we
+-- are). A bot crossing open ground with an enemy near it is the easy kill; the roads run town to
+-- town past walls, cars and lamps. `urgent` (the storm is on it) takes the straight line regardless.
+function BotService.Loot.leg(bot, from, goal, now, urgent)
+	local point = nextLeg(from, goal)
+	if urgent or not BotService.Loot.threatened(bot, from, now) then
+		return point
+	end
+	local roads = BotService.Loot.roadPoints(now)
+	local best, bestDistance = nil, BotService.Loot.ROAD_SNAP
+	local goalDistance = flatDistance(from, goal) - 20
+	for _, road in ipairs(roads) do
+		local distance = flatDistance(road, point)
+		if distance < bestDistance and flatDistance(road, goal) < goalDistance then
+			best, bestDistance = road, distance
+		end
+	end
+	if best then
+		STATS.roadLegs += 1
+		return Vector3.new(best.X, MapGenerator.GroundHeightAt(best.X, best.Z) + 3, best.Z)
+	end
+	return point
+end
+
 local function updateBot(bot)
 	local humanoid = bot.humanoid
 	if not humanoid or humanoid.Health <= 0 or not bot.character.Parent then
@@ -4558,6 +5359,10 @@ local function updateBot(bot)
 	-- Nothing to shoot with means nothing counts as a target: an unarmed bot falls through to
 	-- looting (or running) instead of squaring up to someone empty-handed.
 	local candidate = bot.weapon and findTarget(bot, root, head, now) or nil
+	-- Two guns: the one that suits this range comes out before the range check below (BotService.Loot.swapGunFor).
+	if candidate then
+		BotService.Loot.swapGunFor(bot, candidate.distance, now)
+	end
 	if candidate and candidate.distance > bot.weapon.range then
 		-- Seen but out of reach: close in on where they are rather than plinking at nothing.
 		remember(bot, candidate.token, candidate.root.Position, root, now)
@@ -4725,8 +5530,11 @@ local function updateBot(bot)
 		remember(bot, threat.token, threat.position, root, now)
 	end
 
+	-- When a bot starts rotating is its archetype's (BotService.Loot.rotateAt): early movers at a third of the
+	-- pressure the rest wait for.
+	local rotateAt = BotService.Loot.rotateAt(bot)
 	local center, circleRadius = nil, nil
-	if pressure >= MatchConfig.BotStormRotate then
+	if pressure >= rotateAt then
 		center, circleRadius = safeCircle()
 	end
 
@@ -4739,7 +5547,8 @@ local function updateBot(bot)
 
 	-- Hunting: go to where the target was last seen, look around, and let it go if nobody's there.
 	local memory = bot.memory
-	if memory and bot.weapon and now < memory.expires and (not center or insideCircle(memory.position, center, circleRadius)) then
+	if memory and bot.weapon and now < memory.expires and (not center or insideCircle(memory.position, center, circleRadius))
+		and not BotService.Loot.finishingGrab(bot, root, now) then
 		bot.branch = "hunt"
 		releaseLoot(bot)
 		setSprint(bot, false)
@@ -4860,56 +5669,13 @@ local function updateBot(bot)
 		end
 	end
 
-	if not bot.lootTarget and now - bot.lootCheckedAt > (empty and 1.5 or 5) then
+	if not bot.lootTarget and now - bot.lootCheckedAt > (empty and 1.5 or BotService.Loot.lootInterval(bot, now)) then
 		bot.lootCheckedAt = now
-		-- A landed supply drop is worth contesting at any armament level; ordinary loot only
-		-- while under-armed.
-		-- Team modes: bots fight, they don't tour the map for crates (#134). Supply drops and armed
-		-- chest runs are Battle Royale only; an under-armed team bot still grabs gear nearby.
-		local teamMode = BotService.ModeState(bot) ~= nil
-		local item = not teamMode and SupplyDropService.FindNearest(root.Position, SUPPLY_SEEK_RANGE) or nil
-		if item and not lootAllowed(bot, item, (item.Position - root.Position).Magnitude, center, circleRadius, now) then
-			item = nil
-		end
-		if not item and underArmed then
-			item = findLoot(bot, root.Position, empty and LOOT_SEEK_RANGE * 1.6 or LOOT_SEEK_RANGE, false, center, circleRadius, now)
-		end
-		-- Team modes: raid the home base's stock first (upgrades, chests, heals).
-		if not item and teamMode then
-			local modeState = BotService.ModeState(bot)
-			if modeState then
-				item = BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
-			end
-		end
-		-- Oliver 15:27: "bots dont open crates or supply drops". An armed bot now also opens the nearest
-		-- unopened chest in range, not just a bot that is short of guns.
-		if not item and not teamMode then
-			local bestDistance = LOOT_SEEK_RANGE
-			for _, entry in ipairs(lootItems(now)) do
-				local chest = entry.item
-				if chest.Name == "Chest" and chest.Parent and not chest:GetAttribute("Claimed") then
-					local distance = (entry.position - root.Position).Magnitude
-					if distance < bestDistance and lootAllowed(bot, chest, distance, center, circleRadius, now) then
-						item, bestDistance = chest, distance
-					end
-				end
-			end
-		end
-		-- Empty-handed with nothing inside that sweep: walk to the nearest gun ANYWHERE rather than
-		-- wandering. A bot that lands in a corner of a 1280-stud map had nothing within 320 studs and
-		-- milled about picking random wander goals until a fight found it; the pickups are already in
-		-- the shared snapshot, so reaching further costs nothing but the walk.
-		if not item and empty then
-			item = findLoot(bot, root.Position, math.huge, false, center, circleRadius, now)
-			if item then
-				STATS.lootFarReach += 1
-			end
-		end
-		-- Hurt and carrying nothing to fix it: a loose Bandage or Med Kit is worth a detour.
-		local carryingHeals = bot.heals.Bandage + bot.heals.MedKit > 0
-		if not item and not carryingHeals and humanoid.Health < humanoid.MaxHealth * MatchConfig.BotHealBelow then
-			item = findLoot(bot, root.Position, HEAL_SEEK_RANGE, true, center, circleRadius, now)
-		end
+		-- What to go for, in the archetype's order: a supply crate, a gun while under-armed, the team
+		-- base's stock, an upgrade or a chest while still in the looting phase after landing, heals,
+		-- shields and throwables up to the archetype's stock targets, then the nearest gun anywhere
+		-- while empty-handed (BOT LOOTING & ROTATION, BotService.Loot.pickLoot).
+		local item = BotService.Loot.pickLoot(bot, humanoid, root, underArmed, empty, center, circleRadius, now)
 		if item then
 			setLootTarget(bot, item)
 		end
@@ -4984,18 +5750,18 @@ local function updateBot(bot)
 	local goalReached = bot.wanderGoal and flatDistance(root.Position, bot.wanderGoal) < 24
 
 	if not objective and (goalStale or goalReached or now - bot.wanderAt > 30) then
-		bot.wanderGoal = stormGoal(root.Position)
+		bot.wanderGoal = BotService.Loot.rotationGoal(bot, root.Position)
 		bot.wanderAt = now
 		bot.wanderTarget = nil
 	end
 
 	if not bot.wanderTarget or flatDistance(root.Position, bot.wanderTarget) < 16 then
-		bot.wanderTarget = nextLeg(root.Position, bot.wanderGoal)
+		bot.wanderTarget = BotService.Loot.leg(bot, root.Position, bot.wanderGoal, now)
 	end
 
 	bot.branch = "wander"
-	setSprint(bot, pressure >= MatchConfig.BotStormRotate)
-	local result = navigate(bot, humanoid, root, bot.wanderTarget, pressure >= MatchConfig.BotStormRotate
+	setSprint(bot, pressure >= rotateAt)
+	local result = navigate(bot, humanoid, root, bot.wanderTarget, pressure >= rotateAt
 		and BotNav.Priority.Urgent or BotNav.Priority.Wander, now)
 	if result == "abandon" or bot.nav.failures >= 2 then
 		-- That way doesn't go anywhere: try another heading.
@@ -5026,9 +5792,16 @@ end
 -- Where a dropping bot steers for: the nearest of the map's towns and landmarks to where it
 -- opened its canopy (the second nearest now and then), somewhere on its outskirts rather than
 -- on the fountain — so fifty bots don't all land in one square.
-local function pickDropTarget(targets, from)
+local function pickDropTarget(targets, from, bot)
 	if not targets or #targets == 0 then
 		return Vector3.new(from.X, 0, from.Z)
+	end
+	-- With a bot to ask, its archetype picks: a busy town or a quiet edge (BotService.Loot.pickDrop).
+	if bot then
+		local chosen = BotService.Loot.pickDrop(bot, targets, from)
+		if chosen then
+			return chosen
+		end
 	end
 	local ranked = {}
 	for _, spot in ipairs(targets) do
@@ -5147,6 +5920,12 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				escapeScanAt = 0,
 				coverBlockedUntil = 0,
 				throwReadyAt = {},
+				-- BOT LOOTING & ROTATION
+				backup = nil, -- second gun, of another class than `weapon` (BotService.Loot.takeGun)
+				backupMag = nil,
+				gunSwapAt = 0,
+				landedAt = os.clock(), -- reset when a dropped-in bot lands
+				lootKind = nil, -- the archetype's name as the loot code last read it (BotService.Loot.archetypeOf)
 				-- Perception
 				target = nil,
 				sight = {},
@@ -5274,9 +6053,11 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 
 			if options.dropIn then
 				bot.dropping = true
-				local target = pickDropTarget(options.dropTargets, character:GetPivot().Position)
+				local target = pickDropTarget(options.dropTargets, character:GetPivot().Position, bot)
 				if not MovementService.BotDrop(character, target, function()
 					bot.dropping = false
+					-- The looting phase (BotService.Loot.lootPhase) runs from the landing.
+					bot.landedAt = os.clock()
 					-- The canopy came off, so the assembly changed; claim it again.
 					claimPhysics(character)
 				end) then
@@ -5441,6 +6222,7 @@ function BotService.Clear()
 	table.clear(teamFocus)
 	BotService.SpatialQuery.Clear()
 	table.clear(riders)
+	BotService.Loot.clear()
 	lootSnapshot.at = -math.huge
 	table.clear(bots)
 end
