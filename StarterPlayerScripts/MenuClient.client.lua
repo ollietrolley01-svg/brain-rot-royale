@@ -28,7 +28,7 @@ local UiKit = require(script.Parent:WaitForChild("UiKit"))
 local UiParts = require(script.Parent:WaitForChild("UiParts"))
 local MergeDialog = require(script.Parent:WaitForChild("MergeDialog"))
 local ProgressionPanel = require(script.Parent:WaitForChild("ProgressionPanel"))
--- #78: which HUD button opens which tabs, each tab's look, row previews and the Kill Animations tab.
+-- #78: which HUD button opens which tabs, each tab's look, row previews and the Death Effects tab.
 local MenuScreens = require(script.Parent:WaitForChild("MenuScreens"))
 
 local UserInputService = game:GetService("UserInputService")
@@ -1655,7 +1655,7 @@ local function renderCosmetics()
 				subtitle = string.format("%s Accessory  •  %s", item.rarity, item.description)
 			else
 				-- A word, not the kind's code id: "Legendary GunSkin" read as an identifier (#86).
-				local KIND_WORDS = { GunSkin = "Gun Skin", KillAnimation = "Kill Animation" }
+				local KIND_WORDS = { GunSkin = "Gun Skin", KillAnimation = "Death Effect" }
 				subtitle = string.format("%s %s  •  %s", item.rarity or "", KIND_WORDS[item.kind] or item.kind, item.description)
 			end
 
@@ -2835,11 +2835,13 @@ local TABS = {
 	{ key = "Crates", label = "Crates", render = renderCrates },
 	{ key = "Style", label = "Style Crates", render = renderStyleCrates },
 	{ key = "Cosmetics", label = "Cosmetics", render = renderCosmetics },
-	-- #24. Drawn from CosmeticData.OfKind("KillAnimation") with this file's own rows, and bought and
-	-- equipped through the same two remotes as every other cosmetic.
-	{ key = "KillAnimations", label = "Kill Animations", render = function()
+	-- #24, Death Effects (kind "KillAnimation"; the key keeps the first name). Drawn from
+	-- CosmeticData.OfKind("KillAnimation") with this file's own rows under a live preview stage, and
+	-- bought and equipped through the same two remotes as every other cosmetic.
+	{ key = "KillAnimations", label = "Death Effects", render = function()
 		MenuScreens.RenderKillAnimations({
 			profile = profile,
+			content = content,
 			makeRow = makeRow,
 			addButton = addButton,
 			emptyMessage = emptyMessage,

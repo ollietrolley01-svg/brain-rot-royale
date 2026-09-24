@@ -1,6 +1,6 @@
 -- The menu's screens (#78): which HUD button opens which tabs, how each tab looks in its screen's
 -- navigation, and the two pieces more than one tab needs -- a preview beside a listed item and the
--- Kill Animations tab (#24).
+-- Death Effects tab (#24; tab key "KillAnimations", after the kind's first name).
 --
 -- Oliver, 2026-09-22 13:59: "no single menu -- separate buttons, each its own page". MenuClient used
 -- to carry this as two loose tables (TAB_GROUP, DESTINATION_LOOK) that had already drifted apart once
@@ -18,6 +18,7 @@ local CosmeticData = require(Shared:WaitForChild("CosmeticData"))
 local ShopRotation = require(Shared:WaitForChild("ShopRotation"))
 local Rarity = require(Shared:WaitForChild("Rarity"))
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
+local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 local create, rounded = UiKit.create, UiKit.rounded
 local C = UiKit.Colors
@@ -42,14 +43,14 @@ MenuScreens.Screens = {
 
 -- How each tab draws in its screen's navigation. Glyphs are ones already drawn by the rail in the
 -- built place: U+2715 came out as a tofu box in a render, so a new glyph is a render risk and the
--- kill animations tab borrows a star rather than bringing in a skull nobody has seen render.
+-- death effects tab borrows a star rather than bringing in a skull nobody has seen render.
 MenuScreens.Look = {
 	Brainrots = { glyph = "★", sub = "Your collection" },
 	Trade = { glyph = "⇄", sub = "Swap with players" },
 	Crates = { glyph = "▣", sub = "Open and buy" },
 	Style = { glyph = "✦", sub = "Cosmetic crates" },
 	Cosmetics = { glyph = "◆", sub = "Skins and auras" },
-	KillAnimations = { glyph = "★", sub = "Finishing moves" },
+	KillAnimations = { glyph = "★", sub = "On your eliminations" },
 	Pass = { glyph = "▲", sub = "Brainrot Pass" },
 	Rank = { glyph = "★", sub = "Rot Rank" },
 	Mastery = { glyph = "◎", sub = "Gun mastery" },
@@ -177,14 +178,18 @@ MenuScreens.CanPreview = canPreview
 --                       64 wide; the harness checks it never meets a button at 296 px.
 MenuScreens.PreviewWide = { anchor = Vector2.new(1, 0.5), position = UDim2.new(1, -118, 0.5, 0), size = UDim2.fromOffset(72, 56) }
 MenuScreens.PreviewStacked = { anchor = Vector2.new(0, 1), position = UDim2.new(0, 14, 1, -9), size = UDim2.fromOffset(64, 44) }
+-- A wide row with TWO buttons (the Death Effects rows: PREVIEW and buy/equip) has a 194 px strip, so
+-- its preview moves 100 px further in: 218 from the right, ending 12 px short of the strip and 16 px
+-- clear of the title's -320 column.
+MenuScreens.PreviewWideTwo = { anchor = Vector2.new(1, 0.5), position = UDim2.new(1, -218, 0.5, 0), size = UDim2.fromOffset(72, 56) }
 
 -- A preview of cosmetic `id` on a row from makeRow (`row` is the row frame, not its button strip).
 -- The real model through CosmeticPreview where one can be built; otherwise a swatch in the item's
 -- colour with its rarity, so a listed item never has an empty hole where every other row has a
--- picture. Returns the holder frame.
-function MenuScreens.RowPreview(row, id, stacked)
+-- picture. `spot` overrides where it goes (one of the Preview* above). Returns the holder frame.
+function MenuScreens.RowPreview(row, id, stacked, spot)
 	local item = CosmeticData.Get(id)
-	local spot = stacked and MenuScreens.PreviewStacked or MenuScreens.PreviewWide
+	spot = spot or (stacked and MenuScreens.PreviewStacked or MenuScreens.PreviewWide)
 	local holder = create("Frame", {
 		Name = "RowPreview",
 		AnchorPoint = spot.anchor,
@@ -225,12 +230,13 @@ function MenuScreens.RowPreview(row, id, stacked)
 end
 
 --------------------------------------------------------------------------------
--- Kill Animations (#24)
+-- Death Effects (#24)
 --------------------------------------------------------------------------------
 
+-- The kind's id is still its first name, so saves and the equip slot never change.
 MenuScreens.KillAnimationKind = "KillAnimation"
 
--- What each kill animation's row offers, worked out apart from drawing so the harness can hold it to
+-- What each death effect's row offers, worked out apart from drawing so the harness can hold it to
 -- the server's own rules (RewardService.BuyCosmetic: owned, crate-only, in stock, affordable, in that
 -- order; EquipCosmetic: owned). `at` is the stock time, for a test.
 --
@@ -287,41 +293,157 @@ function MenuScreens.KillAnimationRows(profile, at)
 	return rows
 end
 
--- Draws the tab through the host's own row pieces, so it looks exactly like the Cosmetics tab beside
--- it. host = { profile, makeRow, addButton, emptyMessage, stockHeader, narrow, buy(id), equip(id),
--- formatNumber }. `buy` and `equip` are the existing BuyCosmetic / EquipCosmetic remotes: a kill
--- animation is a cosmetic like any other, so it needs no remote of its own.
+-- One line saying where a row stands, for the stage: owned and worn, owned, on sale (and the price),
+-- sold out this rotation, or a crate exclusive. `formatNumber` is the host's.
+function MenuScreens.KillAnimationState(entry, formatNumber)
+	local item = entry.item
+	local kind = string.upper((item.rarity or "") .. " death effect")
+	if entry.action == "unequip" then
+		return kind .. "  •  YOURS, EQUIPPED"
+	elseif entry.action == "equip" then
+		return kind .. "  •  YOURS"
+	elseif entry.action == "buy" then
+		return kind .. "  •  " .. formatNumber(item.price) .. " C, IN THE SHOP NOW"
+	elseif entry.action == "outofstock" then
+		return kind .. "  •  " .. formatNumber(item.price) .. " C WHEN IT ROTATES BACK IN"
+	end
+	return kind .. "  •  CRATE EXCLUSIVE: DEATH EFFECT CRATE"
+end
+
+-- The effect on the stage, remembered across re-renders (a purchase re-renders the tab, and the stage
+-- should still be showing what was just bought).
+MenuScreens.StageId = nil
+
+-- The stage card: one effect, big, looping on a stand-in body, with its name, where it stands and its
+-- description. No buttons on it (each row's PREVIEW puts its effect here), so it is never mistaken for
+-- a row. Wide: the picture left, the words right. Narrow: the picture across the top.
+local function stageCard(host, layoutOrder)
+	local narrow = host.narrow
+	local card = create("Frame", {
+		Name = "DeathEffectStage",
+		Size = UDim2.new(1, -8, 0, narrow and 290 or 190),
+		BackgroundColor3 = C.Panel,
+		BorderSizePixel = 0,
+		LayoutOrder = layoutOrder,
+		Parent = host.content,
+	}, { rounded(10) })
+	local view = create("Frame", {
+		Name = "Stage",
+		Position = UDim2.fromOffset(10, 10),
+		Size = narrow and UDim2.new(1, -20, 0, 172) or UDim2.fromOffset(236, 170),
+		BackgroundColor3 = C.PanelAlt,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Parent = card,
+	}, { rounded(8) })
+	local textX = narrow and 10 or 258
+	local textTop = narrow and 190 or 14
+	local function label(y, height, font, size, color, wrapped)
+		return create("TextLabel", {
+			Position = UDim2.fromOffset(textX, textTop + y),
+			Size = UDim2.new(1, -(textX + 10), 0, height),
+			BackgroundTransparency = 1,
+			Font = font,
+			Text = "",
+			TextColor3 = color,
+			TextSize = size,
+			TextWrapped = wrapped == true,
+			TextTruncate = wrapped and Enum.TextTruncate.None or Enum.TextTruncate.AtEnd,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Parent = card,
+		})
+	end
+	local result = {
+		view = view,
+		name = label(0, 26, Enum.Font.FredokaOne, narrow and 20 or 24, C.Text),
+		state = label(narrow and 26 or 32, 18, Enum.Font.GothamBold, 12, C.Accent),
+		description = label(narrow and 46 or 56, narrow and 36 or 66, Enum.Font.Gotham, 13, C.Muted, true),
+		hint = label(narrow and 84 or 146, 14, Enum.Font.GothamBold, 11, C.Muted),
+	}
+	result.hint.Text = "PRESS PREVIEW ON ANY EFFECT TO WATCH IT HERE"
+	return result
+end
+
+local stage
+
+-- Puts `entry` on the stage: the live preview (through CosmeticPreview, looping) and its words.
+-- `withSound` plays the effect's sounds on its first loop, for a PREVIEW press, not for the tab opening.
+local function showOnStage(entry, host, withSound)
+	if not stage or not stage.view.Parent then
+		return
+	end
+	MenuScreens.StageId = entry.id
+	local item = entry.item
+	stage.name.Text = item.name
+	stage.name.TextColor3 = item.rarity and Rarity.Color(item.rarity) or C.Text
+	stage.state.Text = MenuScreens.KillAnimationState(entry, host.formatNumber)
+	stage.description.Text = item.description or ""
+	local options = { stage = true, turn = 0.35, background = C.PanelAlt }
+	if withSound then
+		options.sound = function(cue, jitter)
+			Sfx.Play(cue, jitter)
+		end
+	end
+	if CosmeticPreview then
+		pcall(CosmeticPreview.Fill, stage.view, entry.id, options)
+	end
+	if stage.button and stage.button.Parent then
+		stage.button.Text = "PREVIEW"
+	end
+	stage.button = entry.previewButton
+	if stage.button then
+		stage.button.Text = "REPLAY"
+	end
+end
+
+-- Draws the tab through the host's own row pieces, so its rows look exactly like the Cosmetics tab
+-- beside it, under a stage that plays the chosen effect live. host = { profile, content, makeRow,
+-- addButton, emptyMessage, stockHeader, narrow, buy(id), equip(id), formatNumber }. `buy` and `equip`
+-- are the existing BuyCosmetic / EquipCosmetic remotes: a death effect is a cosmetic like any other,
+-- so it needs no remote of its own.
 function MenuScreens.RenderKillAnimations(host)
-	host.stockHeader(0, "KILL ANIMATIONS  •  what plays on the player you finish")
+	host.stockHeader(0, "DEATH EFFECTS  •  what plays on the players you eliminate")
 	local rows = MenuScreens.KillAnimationRows(host.profile)
 	if #rows == 0 then
-		host.emptyMessage("No kill animations yet. When they arrive they are sold here, and one you own is equipped here too.")
+		stage = nil
+		host.emptyMessage("No death effects yet. When they arrive they are sold here, and one you own is equipped here too.")
 		return 0
 	end
+	stage = host.content and stageCard(host, 1) or nil
+
+	local chosen
 	for order, entry in ipairs(rows) do
 		local item, id = entry.item, entry.id
-		local buttons = host.makeRow(order, item.name, item.rarity and Rarity.Color(item.rarity) or item.color,
-			string.format("%s Kill Animation  •  %s", item.rarity or "", item.description or ""))
-		MenuScreens.RowPreview(buttons.Parent, id, host.narrow)
+		local buttons = host.makeRow(order + 1, item.name, item.rarity and Rarity.Color(item.rarity) or item.color,
+			string.format("%s Death Effect  •  %s", item.rarity or "", item.description or ""))
+		MenuScreens.RowPreview(buttons.Parent, id, host.narrow, (not host.narrow) and MenuScreens.PreviewWideTwo or nil)
+		entry.previewButton = host.addButton(buttons, 1, "PREVIEW", UiKit.Role.Info, function()
+			showOnStage(entry, host, true)
+		end)
 		if entry.action == "buy" then
-			host.addButton(buttons, 1, host.formatNumber(item.price) .. " C", C.Accent, function()
+			host.addButton(buttons, 2, host.formatNumber(item.price) .. " C", C.Accent, function()
 				host.buy(id)
 			end, entry.enabled)
 		elseif entry.action == "equip" then
-			host.addButton(buttons, 1, "EQUIP", C.Green, function()
+			host.addButton(buttons, 2, "EQUIP", C.Green, function()
 				host.equip(id)
 			end)
 		elseif entry.action == "unequip" then
 			-- The server toggles it off when what's equipped is equipped again.
-			host.addButton(buttons, 1, "UNEQUIP", C.Storm, function()
+			host.addButton(buttons, 2, "UNEQUIP", C.Storm, function()
 				host.equip(id)
 			end)
 		elseif entry.action == "outofstock" then
-			host.addButton(buttons, 1, "SOLD OUT", C.PanelAlt, nil, false)
+			host.addButton(buttons, 2, "SOLD OUT", C.PanelAlt, nil, false)
 		else
-			host.addButton(buttons, 1, "CRATES", C.PanelAlt, nil, false)
+			host.addButton(buttons, 2, "CRATES", C.PanelAlt, nil, false)
+		end
+		if id == MenuScreens.StageId or (not chosen and entry.action == "unequip") then
+			chosen = entry
 		end
 	end
+	showOnStage(chosen or rows[1], host, false)
 	return #rows
 end
 

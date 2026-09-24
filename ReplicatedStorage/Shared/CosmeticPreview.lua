@@ -12,6 +12,13 @@
 --   GunSkin    a pistol wearing the skin's colour and material, since a skin recolours any gun
 --   Aura       an orb of the aura's colour with specks drifting round it, because a ViewportFrame
 --              renders neither particles nor lights, and an aura is both
+--   KillAnimation (a death effect) the real effect, LOOPING on a stand-in body: the same design from
+--              Shared/DeathEffectDesigns the game plays, on the same engine (DeathEffectFx) in its
+--              preview mode, where particles become little neon sparks and lights are left to the
+--              flash parts. Model() gives it frozen at its peak; Fill() plays it. A row preview steps
+--              twelve times a second and not at all while scrolled out of sight; the Death Effects
+--              stage (`options.stage`) steps every frame and can play its sounds (`options.sound`) on
+--              the first loop after a PREVIEW press
 --
 -- Two costs are managed here. Designs are built once and cloned after, and a preview does not build
 -- until its frame has been laid out -- at most one build per frame, so opening a page of twenty rows
@@ -138,6 +145,45 @@ local function gunModel(item)
 	return nil
 end
 
+-- Death effects: a pause with the body back on its feet between loops, and how often a row steps.
+local DEATH_REST = 0.7
+local ROW_STEP = 1 / 12
+
+-- A stand-in body with death effect `id` built on it, stepped to `t`. Returns the model (the body and
+-- the effect's folder) and the effect, or nil. `sound` is passed to the effect.
+local function deathScene(id, t, sound)
+	local DeathEffectFx, Designs = soft("DeathEffectFx"), soft("DeathEffectDesigns")
+	local design = Designs and Designs.Get(id)
+	if not (DeathEffectFx and design) then
+		return nil
+	end
+	local model = Instance.new("Model")
+	model.Name = "DeathEffect"
+	local dummy = DeathEffectFx.Dummy()
+	dummy.Parent = model
+	local fx = DeathEffectFx.new({
+		parent = model,
+		origin = DeathEffectFx.DummyRoot,
+		ground = Vector3.zero,
+		life = design.life,
+		body = dummy,
+		ownsBody = true,
+		preview = true,
+		seed = 7,
+		sound = sound,
+	})
+	local ok, err = pcall(function()
+		design.build(fx)
+		fx:step(t or 0)
+	end)
+	if not ok then
+		warn(string.format("[CosmeticPreview] %s failed to build: %s", tostring(id), tostring(err)))
+		model:Destroy()
+		return nil
+	end
+	return model, fx, design
+end
+
 local BUILDERS = {
 	Accessory = function(id, item)
 		local CosmeticBuild = soft("CosmeticBuild")
@@ -162,6 +208,15 @@ local BUILDERS = {
 	end,
 	Aura = function(_, item)
 		return auraModel(item)
+	end,
+	-- Frozen at its peak (the burst): a still of the moment it is sold on.
+	KillAnimation = function(id)
+		local DeathEffectFx, Designs = soft("DeathEffectFx"), soft("DeathEffectDesigns")
+		local design = DeathEffectFx and Designs and Designs.Get(id)
+		if not design then
+			return nil
+		end
+		return (deathScene(id, design.peak))
 	end,
 }
 
@@ -212,6 +267,7 @@ end
 local live = {}
 local byFrame = {}
 local connection
+local swingClock = 0
 
 -- Far enough back that the whole model stays in frame through the turn: the bounding sphere, rather
 -- than the box, because the box's width changes as it rotates and the sphere's does not.
@@ -232,8 +288,101 @@ local function frameCamera(preview)
 	preview.camera.CFrame = preview.base
 end
 
+-- The camera for a death effect: the design's own `view` (a focus and a radius the whole effect fits
+-- in), because the effect's bounding box changes every frame. A row is cropped tighter, so the body
+-- reads at 72 px; the stage shows all of it.
+local function frameDeath(preview)
+	local view = preview.death.design.view or { focus = Vector3.new(0, 3.5, 0), radius = 8 }
+	local aspect = preview.viewport.AbsoluteSize.X / math.max(preview.viewport.AbsoluteSize.Y, 1)
+	local radius = view.radius * (preview.stage and 1 or 0.7)
+	local half = math.tan(math.rad(FIELD_OF_VIEW / 2))
+	local distance = radius / (half * math.min(1, aspect)) * 1.05
+	preview.pivot = view.focus
+	preview.base = CFrame.lookAt(view.focus + Vector3.new(0.45, 0.28, -0.85).Unit * distance, view.focus)
+	preview.camera.CFrame = preview.base
+end
+
+-- (Re)starts a death effect's loop at `t`. The first loop after Fill may carry sound; later ones don't.
+local function startDeath(preview, t)
+	local death = preview.death
+	if death and death.model then
+		death.fx:destroy()
+		death.model:Destroy()
+	end
+	local sound = nil
+	if preview.sound and not preview.soundPlayed then
+		preview.soundPlayed = true
+		local play = preview.sound
+		sound = function(cue, _, jitter)
+			play(cue, jitter)
+		end
+	end
+	local model, fx, design = deathScene(preview.id, t, sound)
+	if not model then
+		preview.death = nil
+		return
+	end
+	model.Parent = preview.viewport
+	preview.model = model
+	preview.death = { model = model, fx = fx, design = design, t = t, acc = 0 }
+end
+
+-- Whether a frame is inside the window of the scrolling list it's in (rows scrolled away don't step).
+local function onScreen(viewport)
+	local list = viewport:FindFirstAncestorWhichIsA("ScrollingFrame")
+	if not list then
+		return true
+	end
+	local a, b = viewport.AbsolutePosition, list.AbsolutePosition
+	local aSize, bSize = viewport.AbsoluteSize, list.AbsoluteSize
+	return a.Y + aSize.Y > b.Y and a.Y < b.Y + bSize.Y and a.X + aSize.X > b.X and a.X < b.X + bSize.X
+end
+
+local function stepDeath(entry, dt)
+	local death = entry.death
+	if not death then
+		return
+	end
+	death.acc += dt
+	if not entry.stage and (death.acc < ROW_STEP or not onScreen(entry.viewport)) then
+		return
+	end
+	death.t += death.acc
+	death.acc = 0
+	local life = death.design.life
+	if death.t >= life + DEATH_REST then
+		startDeath(entry, 0)
+	elseif death.t >= life then
+		if not death.rested then
+			-- The effect is over: take it down, which puts the body back on its feet for the pause.
+			death.rested = true
+			death.fx:destroy()
+		end
+	else
+		local ok, err = pcall(death.fx.step, death.fx, death.t)
+		if not ok then
+			warn(string.format("[CosmeticPreview] %s: %s", tostring(entry.id), tostring(err)))
+			entry.death = nil
+		end
+	end
+end
+
 local function build(preview)
-	local template, item = templateFor(preview.id)
+	local item = CosmeticData.Get(preview.id)
+	if item and item.kind == "KillAnimation" then
+		preview.built = true
+		preview.specks = {}
+		-- A row opens on the effect's peak so a page of them isn't a page of people standing still;
+		-- the stage starts from the top, so the PREVIEW press plays it through.
+		local design = soft("DeathEffectDesigns") and soft("DeathEffectDesigns").Get(preview.id)
+		startDeath(preview, (not preview.stage and design) and design.peak or 0)
+		if preview.death then
+			frameDeath(preview)
+		end
+		return
+	end
+	local template
+	template, item = templateFor(preview.id)
 	preview.built = true
 	if not template then
 		return
@@ -256,6 +405,8 @@ end
 -- Fills `frame` with a preview of the cosmetic `id`. Returns a handle with :Destroy(); the preview
 -- also tears itself down if the frame leaves the tree, so a page that rebuilds its rows leaks nothing.
 -- `options.background` sets the backdrop colour, `options.turn` how far it swings (0 for still).
+-- Death effects only: `options.stage` steps every frame rather than twelve times a second, and
+-- `options.sound(cue, pitchJitter)` plays the first loop's sounds.
 function CosmeticPreview.Fill(frame, id, options)
 	options = options or {}
 	CosmeticPreview.Release(frame)
@@ -284,6 +435,8 @@ function CosmeticPreview.Fill(frame, id, options)
 		camera = camera,
 		turn = options.turn or 0.55,
 		phase = #live * 0.9,
+		stage = options.stage == true,
+		sound = options.sound,
 		base = CFrame.new(),
 		built = false,
 		size = Vector2.new(),
@@ -297,6 +450,10 @@ function CosmeticPreview.Fill(frame, id, options)
 		end
 		if byFrame[self.frame] == self then
 			byFrame[self.frame] = nil
+		end
+		if self.death then
+			self.death.fx:destroy()
+			self.death = nil
 		end
 		if self.viewport then
 			self.viewport:Destroy()
@@ -314,8 +471,10 @@ function CosmeticPreview.Fill(frame, id, options)
 	byFrame[frame] = preview
 
 	if not connection then
-		connection = RunService.Heartbeat:Connect(function()
-			local now = os.clock()
+		connection = RunService.Heartbeat:Connect(function(dt)
+			-- The swing's clock: frame time added up, not os.clock (CPU time in Roblox).
+			swingClock += dt
+			local now = swingClock
 			local builtOne = false
 			for index = #live, 1, -1 do
 				local entry = live[index]
@@ -329,8 +488,13 @@ function CosmeticPreview.Fill(frame, id, options)
 							builtOne = true
 							build(entry)
 						elseif entry.built and (size - entry.size).Magnitude > 0.5 then
-							frameCamera(entry)
+							if entry.death then
+								frameDeath(entry)
+							else
+								frameCamera(entry)
+							end
 						end
+						stepDeath(entry, dt)
 						entry.size = size
 
 						if entry.model then
