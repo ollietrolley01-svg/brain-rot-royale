@@ -268,12 +268,17 @@ local function render(state)
 				caption.TextColor3 = GameModes.TeamColor(leader)
 			end
 		else
-			caption.Text = clock(state.secondsLeft) .. "\nlevel"
+			-- "TIED", not "level", which read as a rank word rather than a draw (#86).
+			caption.Text = clock(state.secondsLeft) .. "\nTIED"
 			caption.TextColor3 = Role.TextMuted
 		end
 	else
-		caption.Text = "FIRST TO " .. target
-		caption.TextColor3 = Role.TextMuted
+		-- The time limit too: the server sends secondsLeft on every push, and without it a TDM match
+		-- simply flipped to MATCH OVER mid-fight and a losing team never knew how long it had (#86).
+		-- Red for the last thirty seconds.
+		local left = state.secondsLeft
+		caption.Text = left and ("FIRST TO " .. target .. "\n" .. clock(left)) or ("FIRST TO " .. target)
+		caption.TextColor3 = (left and left <= 30) and Role.Negative or Role.TextMuted
 	end
 	caption.RichText = false
 	caption.TextWrapped = true

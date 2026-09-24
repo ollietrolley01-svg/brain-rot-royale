@@ -22,6 +22,7 @@ local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 
 local VoteScreen = require(script.Parent:WaitForChild("VoteScreen"))
+local EventBanner = require(script.Parent:WaitForChild("EventBanner"))
 local DropPicker = require(script.Parent:WaitForChild("DropPicker"))
 -- The cursor is claimed, never simply switched on and off: see MenuOpenClaims for the two ways a
 -- bare SetAttribute strands it, both of which Oliver has reported.
@@ -200,6 +201,9 @@ voteChanged.OnClientEvent:Connect(function(state)
 		-- tick(), not os.clock(): os.clock() is process CPU time in Roblox, so a clock that
 		-- spends its time waiting would never reach the deadline.
 		revealUntil = tick() + REVEAL_SECONDS
+		-- The match-event card waits for the reveal panel to go, rather than spend its 3.2 s under
+		-- it (#86; EventBanner.HoldFor).
+		EventBanner.HoldFor(REVEAL_SECONDS)
 		task.delay(REVEAL_SECONDS + 0.05, function()
 			if revealId == state.winner then
 				revealId = nil

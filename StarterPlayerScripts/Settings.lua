@@ -23,7 +23,7 @@ Settings.Actions = {
 	{ id = "Inspect", label = "Inspect weapon", default = "V", group = "Combat" },
 	{ id = "ToggleCamera", label = "Toggle first / third person", default = "T", group = "Combat" },
 	{ id = "Zoom", label = "Zoom the camera out a step (the wheel switches hotbar items)", default = "Z", group = "Combat" },
-	{ id = "MovementItem", label = "Use movement item (keeps your gun out)", default = "X", group = "Combat" },
+	{ id = "MovementItem", label = "Use the first movement item in your bag (keeps your gun out)", default = "X", group = "Combat" },
 	{ id = "Crouch", label = "Crouch — slides if you're sprinting (hold, or a toggle in Gameplay)", default = "C", group = "Combat" },
 	{ id = "Slot1", label = "Slot 1", default = "One", group = "Loadout" },
 	{ id = "Slot2", label = "Slot 2", default = "Two", group = "Loadout" },
