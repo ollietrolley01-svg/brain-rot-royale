@@ -2058,6 +2058,93 @@ VehicleModels.Models.BrrStreetfighter = {
 }
 
 --------------------------------------------------------------------------------
+-- Mounted weapons (Oliver: "vehicles with different guns and explosive weapons on them")
+--------------------------------------------------------------------------------
+-- What each armed model's weapon DOES lives in Shared/VehicleWeaponData; this is only the metal.
+-- Every mount has the same contract, so VehicleWeapons and VehicleWeaponClient never guess:
+--   TurretYaw     pivot (Pivot "TurretYaw") on the chassis; turns about its own Y
+--   TurretPitch   pivot (Pivot "TurretPitch") hung from TurretYaw, straight above it so yawing
+--                 never moves it; tips about its own X, positive is up
+--   TurretMuzzle  invisible marker welded to TurretPitch at the barrel's mouth
+-- Both pivots are built square to the chassis and facing the front (-Z), so a Transform of
+-- CFrame.Angles(0, yaw, 0) and CFrame.Angles(pitch, 0, 0) is the whole of aiming.
+-- Two-wheelers carry none.
+VehicleModels.Mounts = {
+	-- A pintle gun on the hatch roof, clear of the roof panel, behind the driver's head.
+	Rotster = { style = "gun", base = V(0, 6.0, 2.0) },
+	-- A rocket pod on a tall pedestal in the bed, high enough to fire forward over the cab.
+	CrocodiloRanger = { style = "pod", base = V(0, 3.1, 4.9), column = 3.9 },
+	-- A mortar on a plinth at the back of the roof rack, between the last rack bar and the rail ends.
+	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.4 },
+}
+
+local function buildMount(b, mount)
+	local base = mount.base
+	local column = mount.column or 0
+	if column > 0 then
+		if mount.style == "pod" then
+			b:tube("TurretColumn", base, base + V(0, column, 0), 0.5, "trim")
+			b:box("TurretFoot", V(1.6, 0.2, 1.6), base + V(0, 0.1 + 0.02, 0), "trim")
+		else
+			b:box("TurretPlinth", V(1.4, column, 1.2), base + V(0, column / 2, 0), "trim")
+		end
+	end
+	local top = base + V(0, column, 0)
+	local ringDiameter = mount.style == "pod" and 2.0 or 1.6
+	b:cyl("TurretRing", 0.24, ringDiameter, CF(top + V(0, 0.12 + 0.02, 0)) * A(0, 0, 90), "trim")
+
+	local yawAt = top + V(0, 0.28, 0)
+	local pitchAt = yawAt + V(0, ({ gun = 0.6, pod = 0.95, mortar = 0.85 })[mount.style], 0)
+	local yaw = b:pivot("TurretYaw", CF(yawAt), "TurretYaw")
+	local pitch = b:pivot("TurretPitch", CF(pitchAt), "TurretPitch", yaw)
+	local muzzleZ
+
+	b:with(yaw, function()
+		local spread = mount.style == "pod" and 1.8 or 0.8
+		b:box("TurretYoke", V(spread + 0.3, 0.2, 0.9), yawAt + V(0, 0.1, 0), "accent")
+		for _, s in ipairs({ -1, 1 }) do
+			b:box(s < 0 and "TurretCheekL" or "TurretCheekR", V(0.16, pitchAt.Y - yawAt.Y + 0.25, 0.7),
+				V(s * (spread / 2 + 0.08 + 0.02), (yawAt.Y + pitchAt.Y + 0.25) / 2, yawAt.Z), "accent")
+		end
+	end)
+
+	b:with(pitch, function()
+		local at = pitchAt
+		if mount.style == "gun" then
+			b:box("GunReceiver", V(0.5, 0.55, 1.6), at + V(0, 0, 0.2), "trim")
+			b:tube("GunBarrel", at + V(0, 0.05, -0.6), at + V(0, 0.05, -2.8), 0.2, "mesh")
+			b:tube("GunJacket", at + V(0, 0.05, -0.6), at + V(0, 0.05, -1.7), 0.34, "trim")
+			b:tube("GunFlashHider", at + V(0, 0.05, -2.6), at + V(0, 0.05, -3.0), 0.3, "mesh")
+			b:box("GunAmmoBox", V(0.45, 0.5, 0.7), at + V(0.85, -0.05, 0.25), "stripe")
+			b:box("GunShield", V(1.5, 0.9, 0.12), at + V(0, 0.2, -0.75), "accent")
+			muzzleZ = -3.05
+		elseif mount.style == "pod" then
+			b:box("PodBody", V(1.7, 1.1, 1.9), at, "accent")
+			b:box("PodBand", V(1.74, 0.2, 1.4), at + V(0, 0.2, 0.1), "stripe")
+			for row = 0, 1 do
+				for col = 0, 1 do
+					local x, y = (col - 0.5) * 0.8, (row - 0.5) * 0.5
+					-- A dark bore set back inside a mouth that stands proud of the face.
+					b:cylZ(string.format("PodTube%d%d", row, col), 0.2, 0.44, at + V(x, y, -0.95 - 0.1 + 0.02), "trim")
+					b:cylZ(string.format("PodBore%d%d", row, col), 0.1, 0.3, at + V(x, y, -0.95 - 0.07), "mesh")
+				end
+			end
+			muzzleZ = -1.25
+		else
+			b:ball("MortarBreech", 0.8, at + V(0, 0, 0.35), "trim")
+			b:tube("MortarTube", at + V(0, 0, 0.3), at + V(0, 0, -2.0), 0.7, "trim")
+			b:tube("MortarLip", at + V(0, 0, -1.8), at + V(0, 0, -2.1), 0.84, "stripe")
+			b:tube("MortarBore", at + V(0, 0, -1.7), at + V(0, 0, -2.04), 0.5, "mesh")
+			muzzleZ = -2.2
+		end
+	end)
+
+	local muzzle = invisible("TurretMuzzle", CF(pitchAt + V(0, 0, muzzleZ)), b.model)
+	b.anchors[muzzle] = pitch
+	return yaw, pitch, muzzle
+end
+
+--------------------------------------------------------------------------------
 -- Rider poses
 --------------------------------------------------------------------------------
 
@@ -2177,6 +2264,13 @@ function VehicleModels.Build(modelId, rng, opts)
 	local b = newBuilder(model, scheme)
 	local layout = def.build(b)
 	assert(b.chassis, modelId .. " built no Chassis")
+	-- An armed model's weapon mount (see Mounted weapons above); bikes have none.
+	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" then
+		buildMount(b, VehicleModels.Mounts[modelId])
+		model:SetAttribute("Armed", true)
+		-- VehicleWeapons finds empty armed vehicles for bots by this tag.
+		game:GetService("CollectionService"):AddTag(model, "ArmedVehicle")
+	end
 	-- A part under workspace.Map with a breakable name would be shot to pieces (see the header).
 	for _, part in ipairs(model:GetChildren()) do
 		if RESERVED_NAMES[part.Name] then

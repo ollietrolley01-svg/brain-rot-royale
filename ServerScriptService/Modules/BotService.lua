@@ -2352,6 +2352,134 @@ local function isUnderArmed(bot)
 end
 BotService.IsUnderArmed = isUnderArmed
 
+--------------------------------------------------------------------------------
+-- BOT VEHICLES (armed vehicles: VehicleWeapons, Shared/VehicleWeaponData)
+--------------------------------------------------------------------------------
+-- Bots never drove. Now a few may: a bot already in a fight that finds an empty armed vehicle close
+-- by walks to it and gets in, then drives at its target (circling once it is close) and fires the
+-- mount through VehicleWeapons.Fire, the very function a player's trigger reaches, with the same
+-- driver, rate, ammo and team checks. The target is findTarget's, so line of sight is the one
+-- every bot already uses. While a bot drives, updateBot stops at the hook; once it gets out (nobody to
+-- shoot for a while, or the vehicle wrecked) it carries on as a bot on foot. The server steps a
+-- vehicle with no player at the wheel from its seat's ThrottleFloat/SteerFloat (VehicleService.step).
+
+local BOT_DRIVERS_MAX = 3        -- bots behind a wheel at once, across the match
+local BOT_BOARD_SEEK = 45        -- an armed vehicle this close may be taken
+local BOT_BOARD_CHANCE = 0.35    -- chance, every BOT_BOARD_EVERY seconds of a fight, that a bot looks
+local BOT_BOARD_EVERY = 3
+local BOT_BOARD_WALK = 7         -- seconds walking to the vehicle before giving up on it
+local BOT_DRIVE_IDLE = 10        -- seconds with nobody to shoot before getting out
+local BOT_DRIVE_CIRCLE = 45      -- closer than this, circle the target rather than drive at it
+local BOT_STEER_FULL = math.rad(35)
+
+-- Bot record -> true while it drives. STRONG keys; pruned by botDriverCount as bots get out or die.
+local botDrivers = {}
+
+local function botDriverCount()
+	local count = 0
+	for driver in pairs(botDrivers) do
+		local humanoid = driver.humanoid
+		if humanoid and humanoid.Health > 0 and humanoid.SeatPart then
+			count += 1
+		else
+			botDrivers[driver] = nil
+		end
+	end
+	return count
+end
+
+local function leaveVehicle(bot, humanoid, seat)
+	if seat:IsA("VehicleSeat") then
+		seat.ThrottleFloat = 0
+		seat.SteerFloat = 0
+	end
+	humanoid.Sit = false
+	botDrivers[bot] = nil
+end
+
+-- Returns true when this think was spent in (or getting into) an armed vehicle.
+local function botVehicleThink(bot, humanoid, root, head, now)
+	local VehicleWeapons = lazy("VehicleWeapons")
+	if not VehicleWeapons then
+		return false
+	end
+	local seat = humanoid.SeatPart
+	if seat then
+		local vehicle = VehicleWeapons.DrivenBy(bot)
+		if not vehicle or vehicle:GetAttribute("Wrecked") or not vehicle.PrimaryPart then
+			leaveVehicle(bot, humanoid, seat)
+			return false
+		end
+		botDrivers[bot] = true
+		local candidate = findTarget(bot, root, head, now)
+		if candidate then
+			bot.driveSeenAt = now
+			bot.driveGoal = nil
+			VehicleWeapons.Fire(bot, candidate.root.Position)
+		elseif now - (bot.driveSeenAt or now) > BOT_DRIVE_IDLE then
+			leaveVehicle(bot, humanoid, seat)
+			return false
+		end
+		local chassis = vehicle.PrimaryPart
+		local goal = candidate and candidate.root.Position or bot.driveGoal
+		if not goal or flatDistance(goal, chassis.Position) < 20 then
+			goal = stormGoal(chassis.Position)
+			bot.driveGoal = goal
+		end
+		local localGoal = chassis.CFrame:PointToObjectSpace(goal)
+		local distance = math.sqrt(localGoal.X * localGoal.X + localGoal.Z * localGoal.Z)
+		-- Positive is to the left, as the mount's yaw.
+		local heading = math.atan2(-localGoal.X, -localGoal.Z)
+		if candidate and distance < BOT_DRIVE_CIRCLE then
+			-- Keep them off to one side and keep moving: a parked car is the easiest thing to hit.
+			heading -= bot.strafeDir * math.rad(80)
+		end
+		local throttle = distance < 15 and 0.4 or 1
+		local steer = math.clamp(-heading / BOT_STEER_FULL, -1, 1)
+		if math.abs(heading) > math.rad(125) and not candidate then
+			-- Behind: back round rather than drive a wide loop.
+			throttle, steer = -0.6, -steer
+		end
+		seat.ThrottleFloat = throttle
+		seat.SteerFloat = steer
+		return true
+	end
+
+	botDrivers[bot] = nil
+	local boarding = bot.boarding
+	if boarding then
+		if now > boarding.giveUpAt or boarding.seat.Occupant or not boarding.seat:IsDescendantOf(workspace) then
+			bot.boarding = nil
+			return false
+		end
+		if VehicleWeapons.BotBoard(humanoid, boarding.seat) then
+			bot.boarding = nil
+			bot.driveSeenAt = now
+			botDrivers[bot] = true
+			return true
+		end
+		humanoid:MoveTo(boarding.seat.Position)
+		return true
+	end
+
+	-- Only in a fight, only now and then, and only while there's room behind a wheel.
+	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	if not fighting or now < (bot.boardCheckAt or 0) then
+		return false
+	end
+	bot.boardCheckAt = now + BOT_BOARD_EVERY
+	if math.random() > BOT_BOARD_CHANCE or botDriverCount() >= BOT_DRIVERS_MAX then
+		return false
+	end
+	local _, freeSeat = VehicleWeapons.FreeArmedNear(root.Position, BOT_BOARD_SEEK)
+	if not freeSeat then
+		return false
+	end
+	bot.boarding = { seat = freeSeat, giveUpAt = now + BOT_BOARD_WALK }
+	humanoid:MoveTo(freeSeat.Position)
+	return true
+end
+
 local function updateBot(bot)
 	local humanoid = bot.humanoid
 	if not humanoid or humanoid.Health <= 0 or not bot.character.Parent then
@@ -2412,6 +2540,11 @@ local function updateBot(bot)
 		end
 	end
 	bot.lastHealth = humanoid.Health
+
+	-- BOT VEHICLES (section above): at the wheel of an armed vehicle, or walking to one.
+	if botVehicleThink(bot, humanoid, root, head, now) then
+		return
+	end
 
 	-- Slow out-of-combat regen: the fallback for a bot with no heal items left.
 	if humanoid.Health < humanoid.MaxHealth and now - bot.lastCombatAt > MatchConfig.BotRegenDelay then
