@@ -1079,7 +1079,14 @@ local function buildYard(model)
 	-- The front row: three bays side by side, noses to the gate. Lines between, the number at the
 	-- back of each, a wheel stop behind.
 	for _, x in ipairs({ 6.25, 18.75, 31.25, 43.75 }) do
-		groundMark(yard, "BayLine", x, FRONT_Z, 0.3, BAY_HALF_LENGTH * 2, 0, YELLOW_PAINT, MAT.SmoothPlastic, 0)
+		local line = groundMark(yard, "BayLine", x, FRONT_Z, 0.3, BAY_HALF_LENGTH * 2, 0, YELLOW_PAINT, MAT.SmoothPlastic, 0)
+		-- The yard's pivot turns with the compound (critic C8): DefensePlacement refuses a build inside
+		-- `VehicleYard:GetBoundingBox()`, and a Model with no PrimaryPart has its box on the WORLD axes,
+		-- so a compound turned 45 degrees refused a world-aligned square round its yard that took in
+		-- a third of the courtyard and the bunker's pads. A bay line is square to the compound's frame.
+		if not yard.PrimaryPart then
+			yard.PrimaryPart = line
+		end
 	end
 	for number, x in ipairs(FRONT_BAYS) do
 		table.insert(B.bays, { name = "Bay" .. number, at = CFrame.new(x, TILE_TOP, FRONT_Z) })
