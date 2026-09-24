@@ -413,9 +413,11 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
 - `[ ]` **120. Sound design more accurate to real life.** — *audio*
 - `[ ]` **121. Bigger maps on every gamemode.** ⚠ Constrained: Sahur Springs already measures 32,969 parts
   against ~31,600 affordable. Read with #32 and the foliage ceiling. — *map*
-- `[ ]` **122. Weapons with explosive ammo must actually explode what you shoot.** **Parked until you say
-  what you mean by it.** Note for whoever picks it up: `CombatService.fireAbility`'s explosive branch has
-  no production caller, so the first hitscan explosive added would silently get a cruder blast. — *destruction*
+- `[~]` **122. Weapons with explosive ammo must actually explode what you shoot.** Built in 6ef6a52, awaiting a
+  playtest: WeaponData `explosiveAmmo = { damage, radius, wallDamage }` makes a hitscan gun's bullets go off where
+  they stop (a player, a wall, the ground; not the sky), through ProjectileService's blast: falls off to a fifth
+  at the edge, stopped by cover, half to the shooter, holes walls. Only the Golden Sahur Cannon carries it
+  (12 dmg, 5 studs, walls 60; body shot + blast 95.7, still not a one-shot). tools/explosive_ammo_check.py, 21 checks. — *destruction*
 - `[ ]` **123. Sort the guns by tier in the admin menu.** — *menu*
 - `[x]` **124. No kit drops in kit modes; picked-up items still drop, players and bots.** Landed in the
   match-flow set, proven 11/11 with semantic controls failing. — *bug review*
