@@ -3065,6 +3065,9 @@ STYLES.blaster = function(g)
 
 	-- Pump tube and pump.
 	g:cyl("PumpTube", 260, 22, CF(0, -34, -250), F.copper)
+	-- A band ties the tube's front to the barrel, ahead of the pump's forward stop (-285). Held only at
+	-- the receiver it ran 11 mm clear of the barrel out to a free end: the lag-switch SMG's second barrel.
+	g:box("BarrelBand", V(28, 40, 14), CF(0, -20, -355), F.copper)
 	g:group("pump", function()
 		g:rounded("Pump", V(40, 34, 110), CF(0, -36, -230), 12, furniture)
 		g:detail(function()
