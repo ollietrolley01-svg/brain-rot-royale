@@ -408,6 +408,13 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 	-- A game mode can refuse a hit outright (friendly fire, spawn protection). nil by default, so
 	-- the battle royale is untouched; 0 rather than nothing because callers add the result.
 	if CombatService.DamageVeto and CombatService.DamageVeto(attackerToken, victimToken, weaponId) then
+		-- Not silent (#86): a vetoed hit on a team-mate or a freshly spawned enemy used to give no
+		-- marker at all, which read as broken hit registration. It gets the grey "+" the HUD already
+		-- draws for a shot that landed on something it could not hurt (kind "structure"), and no number.
+		if Combatants.IsPlayer(attackerToken) and attackerToken ~= victimToken then
+			local root = Combatants.GetRoot(victimToken)
+			damageDealt:FireClient(attackerToken, 0, false, root and root.Position or nil, false, false, "structure")
+		end
 		return 0
 	end
 
