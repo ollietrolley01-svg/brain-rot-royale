@@ -1,7 +1,8 @@
 -- Vehicles: drivable cars and motorbikes parked along the roads and around the towns.
 --
 --   VehicleService.Create(parent, position, yaw, kind) -> model   kind "car" or "bike"
---     (an optional fifth argument { model = "TralalaGT", scheme = 2 } picks both, for tests)
+--     (an optional fifth argument { model = "TralalaGT", scheme = 2 } picks both, for tests;
+--      { inward = Vector3 } says which way, and how far, level ground lies if the spot is not level)
 --   VehicleService.Start()                                         (once, from Bootstrap)
 --   VehicleService.Count()                                         registered vehicles, for tests
 --   VehicleService.ApplyBlast(centre, radius, damage)              throw vehicles clear of a blast
@@ -374,13 +375,19 @@ local function groundUnder(x, z, aboveY)
 	return hit and hit.Position.Y or nil
 end
 
--- The four corners of a vehicle's footprint, and how far apart the ground under them is.
+-- The corners and edge midpoints of a vehicle's footprint, and how far apart the ground under them is.
+-- The midpoints catch a kerb or a bank edge running under the middle of a long side, which four
+-- corners either side of it read as level.
+local FOOTING_POINTS = {
+	Vector3.new(1, 0, 1), Vector3.new(-1, 0, 1), Vector3.new(1, 0, -1), Vector3.new(-1, 0, -1),
+	Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 0, -1),
+}
 local function footingAt(centre, yaw, size)
 	local frame = CFrame.new(centre) * CFrame.Angles(0, yaw, 0)
-	local halfX, halfZ = size.X / 2, size.Z / 2
+	local half = Vector3.new(size.X / 2, 0, size.Z / 2)
 	local lowest, highest = math.huge, -math.huge
-	for _, corner in ipairs({ Vector3.new(halfX, 0, halfZ), Vector3.new(-halfX, 0, halfZ),
-		Vector3.new(halfX, 0, -halfZ), Vector3.new(-halfX, 0, -halfZ) }) do
+	for _, point in ipairs(FOOTING_POINTS) do
+		local corner = point * half
 		local at = frame:PointToWorldSpace(corner)
 		local y = groundUnder(at.X, at.Z, centre.Y)
 		if not y then
@@ -392,11 +399,26 @@ local function footingAt(centre, yaw, size)
 	return highest - lowest, highest
 end
 
-local function parkOn(parent, position, yaw, size, label)
+-- `inward` (optional) points from the spot towards somewhere known to be level, as far as the
+-- vehicle may go: MapGenerator's verge parking passes the way to its road, whose graded corridor is
+-- flat. A verge spot on the corridor's outer edge is then pulled in a stud or two, which keeps it on
+-- the verge, before the ring below goes looking eight studs away (onto the carriageway, as often as not).
+local function parkOn(parent, position, yaw, size, label, inward)
 	footingParams.FilterDescendantsInstances = { parent }
 	local spread, top = footingAt(position, yaw, size)
 	if spread and spread <= FOOTING_TOLERANCE then
 		return Vector3.new(position.X, top, position.Z), yaw
+	end
+
+	if typeof(inward) == "Vector3" and inward.Magnitude > 0 then
+		local steps = math.ceil(inward.Magnitude / 0.5)
+		for step = 1, steps do
+			local at = position + inward * (step / steps)
+			local otherSpread, otherTop = footingAt(at, yaw, size)
+			if otherSpread and otherSpread <= FOOTING_TOLERANCE and math.abs(otherTop - (top or position.Y)) <= 4 then
+				return Vector3.new(at.X, otherTop, at.Z), yaw
+			end
+		end
 	end
 
 	-- Step aside: a ring of nearby spots, nearest first, taking the first that is level. A candidate
@@ -647,7 +669,19 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 			isBike and "Ride pillion" or "Ride", info.displayName))
 	end
 
-	position, yaw = parkOn(parent, position, yaw, chassis.Size, info.displayName)
+	-- The footing is judged under everything the vehicle stands over, not the chassis collider alone
+	-- (#39). The bumpers, arches and a yaw of a few degrees put a verge car's outer corners past the
+	-- chassis box and past the edge of its road's flat corridor, over the bank, where the four chassis
+	-- corners still read level: measured, 1 of 13 parked vehicles hung 1.48 studs at a corner.
+	local footprint = chassis.Size
+	local okExtents, extents = pcall(function()
+		return model:GetExtentsSize()
+	end)
+	if okExtents and typeof(extents) == "Vector3" then
+		footprint = Vector3.new(math.max(footprint.X, extents.X), footprint.Y, math.max(footprint.Z, extents.Z))
+	end
+	position, yaw = parkOn(parent, position, yaw, footprint, info.displayName,
+		type(options) == "table" and options.inward or nil)
 	model:PivotTo(CFrame.new(position + Vector3.new(0, SPAWN_LIFT, 0)) * CFrame.Angles(0, yaw, 0))
 	local rig = VehicleDynamics.Rig(model)
 	if not rig then

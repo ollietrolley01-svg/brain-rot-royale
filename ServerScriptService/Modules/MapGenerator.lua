@@ -963,8 +963,10 @@ function MapGenerator.Build(mapId)
 					-- Parked pointing along the road, give or take. A vehicle's front is its own -Z, so
 					-- the yaw that puts -Z along the road is atan2 of the negated direction.
 					local yaw = math.atan2(-along.X, -along.Z) + (math.random() - 0.5) * 0.3
+					-- `inward`: the road's flat corridor is 3 studs towards the road if the verge spot is on
+					-- its outer edge (#39), still clear of the carriageway.
 					VehicleService.Create(vehicles, Vector3.new(at.X, MapGenerator.GroundHeightAt(at.X, at.Z), at.Z),
-						yaw, math.random() < 0.38 and "bike" or "car")
+						yaw, math.random() < 0.38 and "bike" or "car", { inward = -side * 3 })
 					parked += 1
 				end
 			end
