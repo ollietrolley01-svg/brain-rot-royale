@@ -628,7 +628,7 @@ local function throwFromPlayer(player, itemId, aimPoint)
 
 	-- Held too long: it goes off in the hand.
 	if spec.cookable and cooked >= spec.fuse - COOK_MARGIN then
-		spawnThrown(player, character, itemId, spec, head.Position, root.AssemblyLinearVelocity, spec.fuse)
+		spawnThrown(player, character, itemId, spec, head.Position, Ballistics.CarrierVelocity(root.AssemblyLinearVelocity), spec.fuse)
 		return true
 	end
 
