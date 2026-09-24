@@ -338,15 +338,27 @@ end
 -- the server's Combatants gives them (players and bots alike), each with its root part. The
 -- shooter is left out, as the server leaves the owner out.
 local clientApi = {}
+-- The characters in the workspace, rescanned at most every 0.1 s and shared by every homing round in
+-- flight: steer asks every frame, and a workspace scan per round per frame grows with the map.
+local bodies, bodiesAt = {}, -math.huge
 function clientApi.Targets(position, range, exceptCharacter)
-	local found = {}
-	for _, model in ipairs(workspace:GetChildren()) do
-		if model:IsA("Model") and model ~= exceptCharacter then
-			local humanoid = model:FindFirstChildOfClass("Humanoid")
-			local root = humanoid and humanoid.Health > 0 and model:FindFirstChild("HumanoidRootPart")
-			if root and (root.Position - position).Magnitude <= range then
-				table.insert(found, { root = root, humanoid = humanoid, character = model })
+	local now = os.clock()
+	if now - bodiesAt > 0.1 then
+		bodiesAt = now
+		table.clear(bodies)
+		for _, model in ipairs(workspace:GetChildren()) do
+			local humanoid = model:IsA("Model") and model:FindFirstChildOfClass("Humanoid")
+			local root = humanoid and model:FindFirstChild("HumanoidRootPart")
+			if root then
+				table.insert(bodies, { root = root, humanoid = humanoid, character = model })
 			end
+		end
+	end
+	local found = {}
+	for _, body in ipairs(bodies) do
+		if body.character ~= exceptCharacter and body.root.Parent and body.humanoid.Health > 0
+			and (body.root.Position - position).Magnitude <= range then
+			table.insert(found, body)
 		end
 	end
 	table.sort(found, function(a, b)

@@ -126,8 +126,13 @@ function PlayerData.SanitizeSettings(raw)
 		if type(source) ~= "table" then
 			return
 		end
-		local count = 0
+		-- Every entry visited counts, accepted or not, so a table of junk keys isn't walked in full.
+		local visited, count = 0, 0
 		for id, value in pairs(source) do
+			visited += 1
+			if visited > SETTINGS_LIMIT * 4 then
+				return
+			end
 			if type(id) == "string" and #id <= 32 and string.match(id, "^%a%w*$") and accept(value) then
 				count += 1
 				if count > SETTINGS_LIMIT then

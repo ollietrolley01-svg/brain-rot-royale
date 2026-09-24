@@ -873,7 +873,9 @@ function MovementService.ClientParkour(player, kind, rise, duration)
 	end
 	local paid = MovementService.SpendStamina(player, cost, kind == "mantle")
 	MovementService.SetParkourPose(character, kind, math.clamp(duration, 0.1, 1.2) + 0.1)
-	if kind == "vault" then
+	-- Only a paid vault breaks glass: the remote is the client's word, so without this a stationary
+	-- client could fire "vault" three times a second to shatter the panes beside it for free.
+	if kind == "vault" and paid then
 		breakVaultGlass(player, character)
 	end
 	return paid

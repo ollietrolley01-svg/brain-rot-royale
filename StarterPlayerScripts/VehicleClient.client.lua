@@ -549,9 +549,12 @@ local function lampsOf(model)
 		end
 	end
 	lamps[model] = found
-	model.AncestryChanged:Connect(function()
+	-- One connection per build, gone with the entry: a vehicle streaming out and back in rebuilds it.
+	local watch
+	watch = model.AncestryChanged:Connect(function()
 		if not model:IsDescendantOf(workspace) then
 			lamps[model] = nil
+			watch:Disconnect()
 		end
 	end)
 	return found

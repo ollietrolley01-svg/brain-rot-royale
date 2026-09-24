@@ -1039,6 +1039,8 @@ function ExplosiveFx.Splat(limb, position, normal, options)
 			table.insert(chips, { part = chip, direction = V(math.cos(angle), math.sin(angle), 0), speed = seed:NextNumber(3, 5) })
 		end
 		splatParticles(position, normal, SHIELD, 5, true)
+		-- Taken once, so the chips ride the limb as it moves (worked out each frame it was just `frame`).
+		local offset = limb.CFrame:ToObjectSpace(frame)
 		local entry = add({
 			life = 0.4,
 			parts = parts,
@@ -1046,7 +1048,7 @@ function ExplosiveFx.Splat(limb, position, normal, options)
 				if not limb.Parent then
 					return
 				end
-				local live = limb.CFrame * limb.CFrame:ToObjectSpace(frame)
+				local live = limb.CFrame * offset
 				for _, chip in ipairs(chips) do
 					chip.part.CFrame = live * CFrame.new(chip.direction * (chip.speed * age)) * ALONG_NORMAL
 					chip.part.Transparency = 0.1 + 0.9 * (age / 0.4) ^ 1.5

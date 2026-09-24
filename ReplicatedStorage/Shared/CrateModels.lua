@@ -175,8 +175,10 @@ function CrateModels.Crate(tier, options)
 	-- the lid as the attribute "Hinge", in the lid's own space, for anything that animates by
 	-- CFrame rather than by pivot.
 	local lid = piece("Lid", V(4.2, 0.4, 3.2), V(0, 3.0, 0), SHELL_DARK, Enum.Material.Metal)
-	lid.PivotOffset = CFrame.new(0, -0.2, 1.6)
-	lid:SetAttribute("Hinge", CFrame.new(0, -0.2, 1.6))
+	-- Scaled like every other offset here, so a scaled crate's lid still swings about its own back edge.
+	local hinge = CFrame.new(0, -0.2 * scale, 1.6 * scale)
+	lid.PivotOffset = hinge
+	lid:SetAttribute("Hinge", hinge)
 	-- What stands on the lid plate (its top is 3.2). Every piece here butts the plate or clears it
 	-- by 0.07 or more; the returned `lidBand` is the tier-coloured neon of whichever lid this is.
 	local lidBand

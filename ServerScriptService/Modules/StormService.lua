@@ -94,13 +94,30 @@ local function broadcast()
 	})
 end
 
+-- Whether the ground under (x, z) is water: a lake or the river (both terrain water).
+local waterParams = RaycastParams.new()
+waterParams.FilterType = Enum.RaycastFilterType.Include
+local function overWater(point)
+	waterParams.FilterDescendantsInstances = { workspace.Terrain }
+	local hit = workspace:Raycast(Vector3.new(point.X, 2000, point.Z), Vector3.new(0, -4000, 0), waterParams)
+	return hit ~= nil and hit.Material == Enum.Material.Water
+end
+
 -- Next circle sits inside the current one, biased toward the middle so the endgame is
--- reachable from anywhere on the ring.
+-- reachable from anywhere on the ring. A centre over a lake or the river is rolled again (a few
+-- tries, then the last roll stands), so the late circles aren't fought swimming.
 local function pickNextCenter(currentCenter, currentRadius, nextRadius)
 	local drift = math.max(0, currentRadius - nextRadius) * 0.55
-	local angle = math.random() * math.pi * 2
-	local distance = math.sqrt(math.random()) * drift
-	return currentCenter + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+	local center = currentCenter
+	for _ = 1, 8 do
+		local angle = math.random() * math.pi * 2
+		local distance = math.sqrt(math.random()) * drift
+		center = currentCenter + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+		if not overWater(center) then
+			break
+		end
+	end
+	return center
 end
 
 function StormService.GetState()
