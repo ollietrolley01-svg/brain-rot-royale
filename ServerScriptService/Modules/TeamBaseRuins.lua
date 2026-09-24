@@ -47,8 +47,10 @@
 -- round with its length on X, doorways at least 4 wide and 7 tall, every chest spot and bay
 -- reachable on foot from every pad (R15: 2 wide, 5.2 tall, steps up to 1.5), each bay level with
 -- nothing queryable over it and a straight, clear drive out through the gate, the destructible
--- rules through DestructibleService's own KeyOf, both bases identical, and the part budget. What
--- it cannot prove is how it looks: tools/team_base_ruins_gallery.lua is the render for that.
+-- rules through DestructibleService's own KeyOf, both bases identical, the part budget, and Build on a
+-- hillside: flush (no plinth), the ground round it graded (1 in 3, the gate ramps 1 in 8), scenery on
+-- moved ground cleared, a road's ground untouched, all decided from the voxels while terrain rays are
+-- stale. What it cannot prove is how it looks: tools/team_base_ruins_gallery.lua is the render for that.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -70,10 +72,44 @@ local KEEP = { Roads = true, River = true, Ziplines = true, TeamBaseVehicles = t
 -- How far past the footprint and margin FlattenPad can move the ground: its graded edge (24 at most)
 -- and the two voxel columns it keeps flat past the margin.
 local FLATTEN_REACH = 24 + 8
--- The ground under a levelled site is sampled on this grid, and anything further than LEVEL_SLACK
--- from the pad height means the pad did not level it all: the compound then goes on a plinth.
-local LEVEL_GRID = 4
+-- The ground under a levelled site, read back from the voxels, must be within LEVEL_SLACK of the pad
+-- height everywhere under the footprint; a site that is not is refused (Build returns nil and
+-- ModeTeams tries the next site). It used to be read by RAYCAST, and that is why the compounds stood
+-- on plinths (Oliver, 2026-09-24: "the team bases are on a platform that's raised up"): a terrain
+-- raycast straight after Terrain:WriteVoxels still hits the ground as it was BEFORE the write.
+-- Measured in Studio on the galleries' map (RotRidge, seed 101): both pads were written (PadAt
+-- 16.54 and 36.06, the voxels flat under the whole footprint) while the rays read 2.75..30.53 and
+-- 29.04..43.47, the untouched slopes (whose middles ARE those pad heights), so both compounds went
+-- up on plinths 28.8 and 15.4 deep over ground that was really flat. Nothing here reads the terrain
+-- by raycast any more: the voxels are the truth (MapTerrain reads them the same way).
 local LEVEL_SLACK = 0.35
+-- THE GROUND ROUND THE COMPOUND. FlattenPad levels the footprint, the margin and two voxel columns
+-- past it (8 studs), then blends back to the natural ground over at most 24 studs whatever the height
+-- difference: on RotRidge's slopes that left a bank of 14 studs in 24, a 30-degree lip all round the
+-- compound, with the vehicle gate opening onto it. So past the pad's flat edge the ground is held to a
+-- grade (GradeSurroundings): never steeper than 1 in GRADE_BANK (33%, an easy walk), and in front of the two
+-- vehicle gates, in a corridor as wide as the gate, 1 in GRADE_GATE (12.5%, a gentle
+-- drive: VehicleDynamics' weakest climber, the rear-driven Sahur Van with traction 1.3, holds about
+-- 33 degrees on grip alone, tools/bot_driving_sim.py drives bots up an 18% hill, and BotNav only
+-- slows for a downhill steeper than 20%). Beside a gate corridor the ground climbs to meet the banks
+-- at 1 in GRADE_BANK, a cutting (or an embankment) with sloped sides. Ground already inside the cone
+-- is not touched. The floor meets the ground at the pad: the paving is 0.3 over it, a step of nothing.
+-- (Banks were 1 in 4 at first: on RotRidge that cut hills down 30 studs and more a hundred studs out.)
+local GRADE_BANK, GRADE_GATE = 3, 8
+-- How far past the pad's flat the ground work reaches (a 17-stud difference is 136 studs of gate ramp at 1
+-- in 8, and 51 of bank at 1 in 3). The ring at that distance is held as it stands, like a road or
+-- anything else the work may not move, so the ground always meets what lies beyond it
+-- (GradeSurroundings); SiteCost charges a site whose gates would need more ramp than this.
+local GRADE_REACH = 136
+-- The pad's flat, as FlattenPad leaves it: the footprint, the margin and two voxel columns (local
+-- half-extents, X and Z).
+local FLAT_X, FLAT_Z = 46 + 4 + 8, 42 + 4 + 8
+-- The two vehicle gates' corridors (local): the main gate's span across X, out through -Z; the east
+-- gate's span along Z, out through +X. Each a little wider than its opening (4.6..43.4 and -12.6..22).
+local GATE_FRONT = { 0, 48 }
+local GATE_EAST = { -18, 26 }
+-- Terrain voxels are 4 studs; MapTerrain draws the surface SurfaceLift over the filled volume.
+local CELL = 4
 
 -- Heights, local: the flattened ground is 0; the paving tiles' top; the bunker and supply floors.
 local TILE_TOP = 0.3
@@ -1550,10 +1586,421 @@ function TeamBaseRuins.ClearSite(site, map)
 	return cleared, kept
 end
 
+--------------------------------------------------------------------------------
+-- The ground, read from the voxels
+--------------------------------------------------------------------------------
+
+-- The terrain over a square of columns round `centre` (half `half` across, world axes), read once
+-- between heights yLow and yHigh: each column's ground (its top solid voxel's fill, drawn
+-- MapTerrain.SurfaceLift over it, exactly as MapTerrain measures every pad) and the material on top.
+-- A column whose ground is above the read is `buried` and one with water over it `wet`: neither is
+-- ever written, since nothing here can see its top. Columns are CELL wide, the terrain's own grid.
+local function readGround(centre, half, yLow, yHigh)
+	local region = Region3.new(Vector3.new(centre.X - half, yLow, centre.Z - half), Vector3.new(centre.X + half, yHigh, centre.Z + half))
+		:ExpandToGrid(CELL)
+	local materials, occupancies = workspace.Terrain:ReadVoxels(region, CELL)
+	local size = region.Size / CELL
+	local grid = {
+		region = region, materials = materials, occupancies = occupancies, origin = region.CFrame.Position - region.Size / 2,
+		nx = math.floor(size.X + 0.5), ny = math.floor(size.Y + 0.5), nz = math.floor(size.Z + 0.5),
+		height = {}, top = {}, buried = {}, wet = {},
+	}
+	local lift = MapTerrain.SurfaceLift or 2
+	for ix = 1, grid.nx do
+		grid.height[ix], grid.top[ix], grid.buried[ix], grid.wet[ix] = {}, {}, {}, {}
+		for iz = 1, grid.nz do
+			for iy = grid.ny, 1, -1 do
+				local occupancy = occupancies[ix][iy][iz]
+				local material = materials[ix][iy][iz]
+				if material == Enum.Material.Water and occupancy > 0 then
+					grid.wet[ix][iz] = true
+				elseif occupancy > 0 and material ~= Enum.Material.Air then
+					if iy == grid.ny and occupancy >= 1 then
+						grid.buried[ix][iz] = true
+					else
+						grid.height[ix][iz] = grid.origin.Y + (iy - 1) * CELL + occupancy * CELL + lift
+						grid.top[ix][iz] = material
+					end
+					break
+				end
+			end
+		end
+	end
+	return grid
+end
+
+-- The world position of a column's centre.
+local function columnAt(grid, ix, iz)
+	return grid.origin.X + (ix - 0.5) * CELL, grid.origin.Z + (iz - 0.5) * CELL
+end
+
+-- The column a world (x, z) falls in, or nil outside the read.
+local function columnOf(grid, x, z)
+	local ix, iz = math.floor((x - grid.origin.X) / CELL) + 1, math.floor((z - grid.origin.Z) / CELL) + 1
+	if ix < 1 or iz < 1 or ix > grid.nx or iz > grid.nz then
+		return nil
+	end
+	return ix, iz
+end
+
+-- Terrain materials whose surface lies exactly where the voxels put it (RoadNetwork.SmoothMaterials,
+-- measured by tools/road_terrain_probe.lua). Rock draws its surface up to 1.1 off its voxels, Slate and
+-- Basalt most of a stud: a ramp or a bank left in one of those is a washboard to drive up, so ground the
+-- grading moves is repainted with the pad's own smooth ground wherever it was rough.
+local SMOOTH = {
+	[Enum.Material.Asphalt] = true, [Enum.Material.Glacier] = true, [Enum.Material.Grass] = true, [Enum.Material.Ground] = true,
+	[Enum.Material.LeafyGrass] = true, [Enum.Material.Limestone] = true, [Enum.Material.Mud] = true, [Enum.Material.Salt] = true,
+	[Enum.Material.Sand] = true, [Enum.Material.Sandstone] = true, [Enum.Material.Snow] = true,
+}
+
+-- A column's ground set to `target`, the same fill FlattenPad writes: full voxels under it, the top
+-- one part-filled, air over it; new ground takes `fill`, and water is never touched. `repaint` paints
+-- the whole column `fill` (its old surface was rough).
+local function setColumn(grid, ix, iz, target, fill, repaint)
+	local lift = MapTerrain.SurfaceLift or 2
+	for iy = 1, grid.ny do
+		local bottom = grid.origin.Y + (iy - 1) * CELL
+		local occupancy = math.clamp((target - lift - bottom) / CELL, 0, 1)
+		local was = grid.materials[ix][iy][iz]
+		if was ~= Enum.Material.Water then
+			grid.occupancies[ix][iy][iz] = occupancy
+			if occupancy <= 0 then
+				grid.materials[ix][iy][iz] = Enum.Material.Air
+			elseif was == Enum.Material.Air or repaint then
+				grid.materials[ix][iy][iz] = fill
+			end
+		end
+	end
+	grid.height[ix][iz] = target
+end
+
+-- The lowest and highest ground under the foundation (the footprint), read from the voxels, and how
+-- far the worst column is from `height`. A column under the footprint with no ground the read can see
+-- (buried, under water, or nothing at all) counts as infinitely far.
+function TeamBaseRuins.GroundUnder(site, height)
+	local frame = flatFrame(site)
+	local reach = math.sqrt((TeamBaseRuins.Footprint.X / 2) ^ 2 + (TeamBaseRuins.Footprint.Z / 2) ^ 2) + CELL
+	local grid = readGround(frame.Position, reach, height - 48, height + 48)
+	local low, high, worst = math.huge, -math.huge, 0
+	for ix = 1, grid.nx do
+		for iz = 1, grid.nz do
+			local x, z = columnAt(grid, ix, iz)
+			local here = frame:PointToObjectSpace(Vector3.new(x, frame.Position.Y, z))
+			if math.abs(here.X) <= TeamBaseRuins.Footprint.X / 2 and math.abs(here.Z) <= TeamBaseRuins.Footprint.Z / 2 then
+				local y = grid.height[ix][iz]
+				if y then
+					low, high = math.min(low, y), math.max(high, y)
+					worst = math.max(worst, math.abs(y - height))
+				else
+					worst = math.huge
+				end
+			end
+		end
+	end
+	if low == math.huge then
+		return nil
+	end
+	return low, high, worst
+end
+
+-- How far the local point (x, z) is from the pad's flat (0 on it): straight out from a side, round from
+-- a corner.
+function TeamBaseRuins.FlatDistance(x, z)
+	local dx, dz = math.max(0, math.abs(x) - FLAT_X), math.max(0, math.abs(z) - FLAT_Z)
+	return math.sqrt(dx * dx + dz * dz)
+end
+TeamBaseRuins.GradeBank, TeamBaseRuins.GradeGate = GRADE_BANK, GRADE_GATE
+TeamBaseRuins.GradeReach = GRADE_REACH
+TeamBaseRuins.GateCorridors = { front = GATE_FRONT, east = GATE_EAST, flat = Vector3.new(FLAT_X, 0, FLAT_Z) }
+
+-- Map things the grading must go round rather than move the ground under: the roads (and everything
+-- else in a KEEP folder), the towns (their streets are non-collidable slabs lying on the ground), and
+-- anything too big to clear. Returns a set of column keys (ix * 65536 + iz), each such thing's plan
+-- and a column round it.
+local function lockedColumns(grid, map, centre, reach)
+	local locked = {}
+	local function lock(part)
+		local cf, size = part.CFrame, part.Size
+		local ex = math.abs(cf.RightVector.X) * size.X / 2 + math.abs(cf.UpVector.X) * size.Y / 2 + math.abs(cf.LookVector.X) * size.Z / 2 + CELL
+		local ez = math.abs(cf.RightVector.Z) * size.X / 2 + math.abs(cf.UpVector.Z) * size.Y / 2 + math.abs(cf.LookVector.Z) * size.Z / 2 + CELL
+		local p = cf.Position
+		for x = p.X - ex, p.X + ex + 0.01, CELL do
+			for z = p.Z - ez, p.Z + ez + 0.01, CELL do
+				local ix, iz = columnOf(grid, x, z)
+				if ix then
+					locked[ix * 65536 + iz] = true
+				end
+			end
+		end
+	end
+	for _, part in ipairs(map:GetDescendants()) do
+		if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") then
+			local p = part.Position
+			local flat = Vector3.new(p.X - centre.X, 0, p.Z - centre.Z).Magnitude
+			if flat - math.max(part.Size.X, part.Size.Z) <= reach then
+				local node, keep, town = part, false, false
+				while node and node ~= map do
+					if node.Parent == map and KEEP[node.Name] then
+						keep = true
+					end
+					if node:GetAttribute("TownName") ~= nil then
+						town = true
+					end
+					node = node.Parent
+				end
+				local item = itemOf(part, map)
+				if keep or town or (item and spanOf(item) > TeamBaseRuins.ClearableSpan) then
+					lock(part)
+				end
+			end
+		end
+	end
+	return locked
+end
+
+-- Whether the local point (x, z) is in a vehicle gate's corridor (in front of the main gate across its
+-- span, or out of the east gate along its span), where the ground may climb only 1 in GRADE_GATE.
+local function inCorridor(x, z)
+	return (z < -FLAT_Z and x >= GATE_FRONT[1] and x <= GATE_FRONT[2]) or (x > FLAT_X and z >= GATE_EAST[1] and z <= GATE_EAST[2])
+end
+
+-- Holds the ground round a compound levelled at `height` to a grade: nowhere may it change faster than 1
+-- in GRADE_BANK (a walk), and in each vehicle gate's corridor 1 in GRADE_GATE (a gentle drive), between
+-- any two FIXED columns -- the pad's flat (at `height`), everything the work may not move (a road's
+-- corridor, another pad, the river, anything locked) and the ring GRADE_REACH past the flat (as it
+-- stands, so the work always meets the ground beyond it). Each free column is held between the lowest and the
+-- highest ground those allow it (a weighted distance to every fixed column, swept across the grid) and
+-- left alone where it already lies between them: flush at the pad, a bank or a ramp where it has to be,
+-- the natural ground where it can. Where two fixed things are too close for their difference (a road
+-- 20 studs from the gate and 12 below it) the ground moves as little as it can between them: the
+-- steepest it ever gets, and the site's cost (SiteCost) steers the compounds off such places. `grid` is a readGround taken
+-- AFTER FlattenPad; it is written back in one go. Returns stats: columns moved, the most any moved, the
+-- largest difference off the pad it left, and the conflicts.
+function TeamBaseRuins.GradeSurroundings(site, height, mapInfo, grid, locked)
+	local frame = flatFrame(site)
+	local roads = mapInfo and mapInfo.roads
+	local river = mapInfo and mapInfo.river
+	local fillMaterial = MapTerrain._padGround or Enum.Material.Ground
+	local nx, nz = grid.nx, grid.nz
+	local huge = math.huge
+	local upper, lower, grade, free, band = {}, {}, {}, {}, {}
+	local function key(ix, iz)
+		return (ix - 1) * nz + iz
+	end
+	for ix = 1, nx do
+		for iz = 1, nz do
+			local k = key(ix, iz)
+			local ground = grid.height[ix][iz]
+			local x, z = columnAt(grid, ix, iz)
+			local here = frame:PointToObjectSpace(Vector3.new(x, frame.Position.Y, z))
+			grade[k] = inCorridor(here.X, here.Z) and 1 / GRADE_GATE or 1 / GRADE_BANK
+			-- A gate corridor and 24 studs either side of it: the ground smoothed to its grade below.
+			band[k] = (here.Z < -FLAT_Z + 8 and here.X >= GATE_FRONT[1] - 24 and here.X <= GATE_FRONT[2] + 24)
+				or (here.X > FLAT_X - 8 and here.Z >= GATE_EAST[1] - 24 and here.Z <= GATE_EAST[2] + 24)
+			upper[k], lower[k] = huge, -huge
+			if ground and not grid.wet[ix][iz] and not grid.buried[ix][iz] then
+				local onPad = math.max(math.abs(here.X) - FLAT_X, math.abs(here.Z) - FLAT_Z) <= 0
+				local edge = ix == 1 or iz == 1 or ix == nx or iz == nz or TeamBaseRuins.FlatDistance(here.X, here.Z) >= GRADE_REACH
+				if onPad then
+					upper[k], lower[k] = height, height
+				elseif edge or (locked and locked[ix * 65536 + iz])
+					or (roads and roads.WithinCorridor and roads:WithinCorridor(x, z)) or MapTerrain.PadAt(x, z)
+					or (river and MapTerrain.InRiver(river, x, z, CELL)) then
+					upper[k], lower[k] = ground, ground
+				else
+					free[k] = true
+				end
+			end
+		end
+	end
+	-- The sweep: each column's bounds from its neighbours', a step costing the grade between them times
+	-- the step's length, forward then back, twice. Straight, diagonal and knight's-move steps (the 5 x 5
+	-- chamfer): with straight and diagonal steps alone, ground running between those directions could
+	-- come out 8% steeper than its grade; with the knight's moves, under 3%.
+	local forward, backward = {}, {}
+	for _, step in ipairs({ { -1, -1 }, { -1, 0 }, { -1, 1 }, { 0, -1 }, { -1, -2 }, { -1, 2 }, { -2, -1 }, { -2, 1 } }) do
+		local length = CELL * math.sqrt(step[1] * step[1] + step[2] * step[2])
+		table.insert(forward, { step[1], step[2], length })
+		table.insert(backward, { -step[1], -step[2], length })
+	end
+	local function sweep(order, steps)
+		local a0, a1, da = 1, nx, 1
+		if order < 0 then
+			a0, a1, da = nx, 1, -1
+		end
+		for ix = a0, a1, da do
+			for iz = (order > 0 and 1 or nz), (order > 0 and nz or 1), order do
+				local k = key(ix, iz)
+				if free[k] then
+					for _, step in ipairs(steps) do
+						local jx, jz = ix + step[1], iz + step[2]
+						if jx >= 1 and jx <= nx and jz >= 1 and jz <= nz then
+							local j = key(jx, jz)
+							local cost = (grade[k] + grade[j]) / 2 * step[3]
+							if upper[j] + cost < upper[k] then
+								upper[k] = upper[j] + cost
+							end
+							if lower[j] - cost > lower[k] then
+								lower[k] = lower[j] - cost
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	for _ = 1, 2 do
+		sweep(1, forward)
+		sweep(-1, backward)
+	end
+	local stats = { moved = 0, most = 0, bank = 0, conflicts = 0 }
+	local T = {}
+	for ix = 1, nx do
+		for iz = 1, nz do
+			local k = key(ix, iz)
+			if free[k] then
+				local ground = grid.height[ix][iz]
+				if lower[k] > upper[k] then
+					-- Two fixed things too close for their difference: the ground moves as little as it can.
+					T[k] = math.clamp(ground, upper[k], lower[k])
+					stats.conflicts += 1
+				else
+					T[k] = math.clamp(ground, lower[k], upper[k])
+				end
+			elseif upper[k] == lower[k] then
+				T[k] = upper[k]
+			end
+		end
+	end
+	-- The gate corridors smoothed to their grade: the bounds above only keep the ground within reach of
+	-- the fixed things, and natural ground left inside them keeps its own bumps (a rock step across the
+	-- way out, 1 in 1.4, measured in Studio). Round each gate every column of the corridor and its band
+	-- is held within its grade of every neighbour (the average of the two columns' grades, as in the
+	-- sweep above), sweeping both ways until it settles: the ramp is a ramp, its sides meet the ground
+	-- beside them at the bank's grade, and ground further off keeps its own shape.
+	for _ = 1, 4 do
+		for _, order in ipairs({ 1, -1 }) do
+			for ix = (order > 0 and 1 or nx), (order > 0 and nx or 1), order do
+				for iz = (order > 0 and 1 or nz), (order > 0 and nz or 1), order do
+					local k = key(ix, iz)
+					if free[k] and band[k] and T[k] then
+						local lo, hi = -huge, huge
+						for dx = -1, 1 do
+							for dz = -1, 1 do
+								local jx, jz = ix + dx, iz + dz
+								if (dx ~= 0 or dz ~= 0) and jx >= 1 and jx <= nx and jz >= 1 and jz <= nz then
+									local j = key(jx, jz)
+									if T[j] then
+										local c = (grade[k] + grade[j]) / 2 * CELL * math.sqrt(dx * dx + dz * dz)
+										hi = math.min(hi, T[j] + c)
+										lo = math.max(lo, T[j] - c)
+									end
+								end
+							end
+						end
+						if lo <= hi then
+							T[k] = math.clamp(T[k], lo, hi)
+						else
+							T[k] = (lo + hi) / 2
+						end
+					end
+				end
+			end
+		end
+	end
+	for ix = 1, nx do
+		for iz = 1, nz do
+			local k = key(ix, iz)
+			if free[k] then
+				local ground = grid.height[ix][iz]
+				local target = T[k]
+				if math.abs(target - ground) > 0.02 then
+					local top = grid.top[ix][iz]
+					local smooth = top ~= nil and SMOOTH[top] == true
+					setColumn(grid, ix, iz, target, smooth and top or fillMaterial, not smooth and math.abs(target - ground) > 0.5)
+					stats.moved += 1
+					stats.most = math.max(stats.most, math.abs(target - ground))
+					stats.bank = math.max(stats.bank, math.abs(target - height))
+				end
+			end
+		end
+	end
+	if stats.moved > 0 then
+		workspace.Terrain:WriteVoxels(grid.region, CELL, grid.materials, grid.occupancies)
+	end
+	return stats
+end
+
+-- After the ground work: map scenery standing where the ground moved (by more than GROUND_MOVED
+-- against `before`, the ground as it was before FlattenPad) is taken away, since it now floats or is
+-- buried. Solid things go whole (ClearSite's items, tag groups whole); non-collidable dressing --
+-- flowers, ferns, grass tufts -- goes a piece at a time, because a foliage patch can be far bigger than
+-- the moved ground. These are what the gallery counted "hovering" round the compounds: 14 of 27 near
+-- one base, every one a Wilds flower or fern, non-queryable, so ClearSite's box query never saw them.
+local GROUND_MOVED = 0.3
+function TeamBaseRuins.ClearMoved(before, after, map, centre, reach)
+	local cleared = 0
+	local seen = {}
+	local function moved(x, z)
+		local ix, iz = columnOf(before, x, z)
+		if not ix then
+			return false
+		end
+		local a, b = before.height[ix][iz], after.height[ix][iz]
+		return a ~= nil and b ~= nil and math.abs(a - b) > GROUND_MOVED
+	end
+	for _, part in ipairs(map:GetDescendants()) do
+		if part:IsA("BasePart") and part.Parent and not seen[part] and not part:GetAttribute("TeamBaseRuin") then
+			local p = part.Position
+			if Vector3.new(p.X - centre.X, 0, p.Z - centre.Z).Magnitude <= reach then
+				local half = part.Size / 2
+				local hit = moved(p.X, p.Z)
+				for _, corner in ipairs({ { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } }) do
+					if hit then
+						break
+					end
+					local c = part.CFrame * Vector3.new(half.X * corner[1] * 0.9, 0, half.Z * corner[2] * 0.9)
+					hit = moved(c.X, c.Z)
+				end
+				if hit then
+					local item = itemOf(part, map)
+					local pieces
+					if not part.CanCollide and not (type(part:GetAttribute("Destructible")) == "string") then
+						pieces = { part }
+					elseif item and spanOf(item) <= TeamBaseRuins.ClearableSpan then
+						pieces = piecesOf(item)
+					end
+					for _, piece in ipairs(pieces or {}) do
+						seen[piece] = true
+						if piece.Parent then
+							piece:Destroy()
+							cleared += 1
+						end
+					end
+				end
+			end
+		end
+	end
+	return cleared
+end
+
+-- How far the ground under world (x, z) was moved by a compound's ground work (its info.graded), or nil
+-- where the work never looked.
+function TeamBaseRuins.MovedAt(graded, x, z)
+	local m = graded and graded.heights
+	if not m then
+		return nil
+	end
+	local ix, iz = math.floor((x - m.origin.X) / CELL) + 1, math.floor((z - m.origin.Z) / CELL) + 1
+	local a, b = m.before[ix] and m.before[ix][iz], m.after[ix] and m.after[ix][iz]
+	return a and b and b - a or nil
+end
+
 -- How good a place `site` is for a compound, lower is better, or nil and why it cannot go there:
 -- on a road's corridor, in the river, over another made pad (FlattenPad would refuse all three), or
--- nowhere with ground. The cost is the ground's rise across the footprint plus a heavy charge for
--- anything built there too big for ClearSite to move.
+-- nowhere with ground. The cost is the ground's rise across the footprint, plus half the rise across
+-- the ground round it out to 32 studs (what the banks and the gate ramps will have to take up), plus
+-- a heavy charge for anything built there too big for ClearSite to move.
 function TeamBaseRuins.SiteCost(site, mapInfo)
 	local frame = flatFrame(site)
 	local roads = mapInfo and mapInfo.roads
@@ -1579,6 +2026,56 @@ function TeamBaseRuins.SiteCost(site, mapInfo)
 		return nil, "nothing"
 	end
 	local cost = high - low
+	local ringLow, ringHigh = MapTerrain.PadCost(frame, TeamBaseRuins.Footprint + Vector3.new(64, 0, 64), { margin = TeamBaseRuins.Margin })
+	if ringLow then
+		cost += math.max(0, (ringHigh - ringLow) - (high - low)) * 0.5
+	end
+	-- The ground each vehicle gate's ramp has to reach, 120 out: past what 1 in GRADE_GATE takes up inside
+	-- the cone's reach, the rest would drop in its fade. Charged heavily, so a gate opens onto a drive.
+	local mid = (low + high) / 2
+	local limit = GRADE_REACH / GRADE_GATE - 4
+	local gates = {
+		{ Vector3.new((GATE_FRONT[1] + GATE_FRONT[2]) / 2, 0, -FLAT_Z), Vector3.new(0, 0, -1) },
+		{ Vector3.new(FLAT_X, 0, (GATE_EAST[1] + GATE_EAST[2]) / 2), Vector3.new(1, 0, 0) },
+	}
+	for _, gate in ipairs(gates) do
+		local _, _, there = MapTerrain.PadCost(frame * CFrame.new(gate[1] + gate[2] * 120), Vector3.new(8, 0, 8), { margin = 0 })
+		if there then
+			cost += math.max(0, math.abs(there - mid) - limit) * 3
+		end
+		-- A road across the way out, nearer than its height can be met at the gate's grade: the ground
+		-- between cannot be graded to it (the road stays as it is), and the ramp would end in a bank.
+		if roads and roads.WithinCorridor then
+			for along = 8, 120, 8 do
+				local p = frame * (gate[1] + gate[2] * along)
+				if roads:WithinCorridor(p.X, p.Z) then
+					local _, _, road = MapTerrain.PadCost(CFrame.new(p.X, 0, p.Z), Vector3.new(4, 0, 4), { margin = 2 })
+					if road and math.abs(road - mid) > along / GRADE_GATE + 1 then
+						cost += 20
+					end
+					break
+				end
+			end
+		end
+	end
+	-- The apron: a road's corridor or another pad the grading must leave as it is, nearer the flat than
+	-- its height can be met at the grade (the ground between would end in a bank against it).
+	for x = -FLAT_X - 48, FLAT_X + 48, 8 do
+		for z = -FLAT_Z - 48, FLAT_Z + 48, 8 do
+			local d = TeamBaseRuins.FlatDistance(x, z)
+			if d > 0 then
+				local p = frame * Vector3.new(x, 0, z)
+				local fixed = (roads and roads.WithinCorridor and roads:WithinCorridor(p.X, p.Z)) or MapTerrain.PadAt(p.X, p.Z)
+				if fixed then
+					local _, _, there = MapTerrain.PadCost(CFrame.new(p.X, 0, p.Z), Vector3.new(4, 0, 4), { margin = 2 })
+					local grade = inCorridor(x, z) and 1 / GRADE_GATE or 1 / GRADE_BANK
+					if there and math.abs(there - mid) > d * grade + 1 then
+						cost += 4
+					end
+				end
+			end
+		end
+	end
 	local map = mapInfo and mapInfo.map
 	if map then
 		local params = OverlapParams.new()
@@ -1593,46 +2090,17 @@ function TeamBaseRuins.SiteCost(site, mapInfo)
 				cost += spanOf(item) > TeamBaseRuins.ClearableSpan and 60 or 1
 			end
 		end
-	end
-	return cost
-end
-
--- Builds the compound for one team: clears the site, levels the ground under it (MapTerrain's
--- FlattenPad, the same pad every building stands on), lays it out at the height the pad actually
--- came out at, puts it in the map and runs the z-fight pass. Where the ground cannot be levelled
--- (a road or another pad in the way), it stands on a concrete plinth down to the lowest ground
--- under it instead, so it is never left floating.
--- The terrain's surface under (x, z), or nil.
-local groundParams = RaycastParams.new()
-groundParams.FilterType = Enum.RaycastFilterType.Include
-groundParams.IgnoreWater = true
-local function terrainAt(x, z, from)
-	groundParams.FilterDescendantsInstances = { workspace.Terrain }
-	local hit = workspace:Raycast(Vector3.new(x, from + 60, z), Vector3.new(0, -240, 0), groundParams)
-	return hit and hit.Position.Y or nil
-end
-
--- The lowest and highest terrain under the foundation (the footprint), sampled on LEVEL_GRID in the
--- site's frame, and how far the worst sample is from `height`. The margin round it only carries
--- rubble, which settleOutside puts on whatever ground is really there.
-function TeamBaseRuins.GroundUnder(site, height)
-	local halfX = TeamBaseRuins.Footprint.X / 2
-	local halfZ = TeamBaseRuins.Footprint.Z / 2
-	local low, high, worst = math.huge, -math.huge, 0
-	for x = -halfX, halfX + 0.01, LEVEL_GRID do
-		for z = -halfZ, halfZ + 0.01, LEVEL_GRID do
-			local p = site * Vector3.new(x, 0, z)
-			local y = terrainAt(p.X, p.Z, height)
-			if y then
-				low, high = math.min(low, y), math.max(high, y)
-				worst = math.max(worst, math.abs(y - height))
+		-- Something too big to clear in the ring the ground work reaches (a landmark's platform): the
+		-- ground round it is held as it stands, and the banks meet it at a grade.
+		for _, part in ipairs(workspace:GetPartBoundsInBox(frame * CFrame.new(0, 100, 0), size + Vector3.new(96, 0, 96), params)) do
+			local item = itemOf(part, map)
+			if item and not seen[item] then
+				seen[item] = true
+				cost += spanOf(item) > TeamBaseRuins.ClearableSpan and 12 or 0
 			end
 		end
 	end
-	if low == math.huge then
-		return nil
-	end
-	return low, high, worst
+	return cost
 end
 
 -- Every spot (pads, chests, loot, bays) put on the surface really under it: a ray down from 4 studs up
@@ -1650,80 +2118,48 @@ function TeamBaseRuins.SnapSpots(model, list)
 	end
 end
 
--- Rubble lying outside the foundation stands on the ground itself: each chunk is moved to the ground
--- really under it (the plinth where there is one, else the terrain), keeping how deep it was sunk.
-local function settleOutside(model, frame, plinth)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = plinth and { workspace.Terrain, plinth } or { workspace.Terrain }
-	params.IgnoreWater = true
-	local moved = 0
-	for _, part in ipairs(model:GetDescendants()) do
-		if part:IsA("BasePart") and part.Name == "Rubble" then
-			local here = frame:Inverse() * part.Position
-			if math.abs(here.X) > 46 or math.abs(here.Z) > 42 then
-				local ground = frame * Vector3.new(here.X, 0, here.Z)
-				local hit = workspace:Raycast(ground + Vector3.new(0, 30, 0), Vector3.new(0, -90, 0), params)
-				if hit and math.abs(hit.Position.Y - ground.Y) > 0.01 then
-					part.CFrame = part.CFrame + Vector3.new(0, hit.Position.Y - ground.Y, 0)
-					moved += 1
-				end
-			end
-		end
-	end
-	return moved
-end
-
--- Builds the compound for one team: clears the site (and the ring round it the ground work reaches),
--- levels the ground with MapTerrain's FlattenPad, the same pad every building stands on, then MEASURES
--- the ground under the whole footprint: a pad that was refused (a road or another pad in the way) or
--- that did not level all of it puts the compound on a concrete plinth from the highest ground down to
--- the lowest, so nothing is ever left floating or buried. Lays it out at that height, puts it in the
--- map, runs the z-fight pass, settles the rubble outside onto the real ground and snaps every spot to
--- the real floor under it.
+-- Builds the compound for one team, FLUSH with the ground (Oliver, 2026-09-24: "the team bases are on
+-- a platform that's raised up and needs a ramp for the players and vehicles, or it needs to be made
+-- more flush to the ground"):
+--   1. clears the site (and the ring round it the ground work reaches) of scenery and loot;
+--   2. reads the ground round it from the voxels, levels the footprint with MapTerrain's FlattenPad
+--      (the same pad every building stands on) and checks, from the voxels, that it came out level;
+--   3. holds the ground round it to a grade (GradeSurroundings): banks at 1 in 3, ramps out of the
+--      two vehicle gates at 1 in 8, nothing changed where the ground already lies within that;
+--   4. takes away the scenery left standing where the ground moved (ClearMoved);
+--   5. lays the compound out at the pad's height, puts it in the map, runs the z-fight pass and snaps
+--      every spot to the real floor under it.
+-- Returns the compound, or nil and why when the site cannot be levelled (a road or another pad in the
+-- way, ground it cannot see): ModeTeams then tries its next site, and never builds a compound standing
+-- proud of the ground. (The concrete plinth that used to stand in for a levelled site is gone: every
+-- one of them was a raycast reading ground the pad had already levelled; see LEVEL_SLACK.)
 function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	local map = (mapInfo and mapInfo.map) or workspace:FindFirstChild("Map") or workspace
 	local site, yaw = flatFrame(baseCFrame)
 	TeamBaseRuins.ClearSite(site, map)
 
+	local reach = math.sqrt(FLAT_X * FLAT_X + FLAT_Z * FLAT_Z) + GRADE_REACH + CELL * 2
+	local _, _, around = MapTerrain.PadCost(site, TeamBaseRuins.Footprint, { margin = TeamBaseRuins.Margin })
+	around = around or site.Position.Y
+	local before = readGround(site.Position, reach, around - 72, around + 72)
 	local height, why = MapTerrain.FlattenPad(site, TeamBaseRuins.Footprint, { height = "mid", margin = TeamBaseRuins.Margin })
-	local low, high, worst = TeamBaseRuins.GroundUnder(site, height or site.Position.Y)
-	local plinthBottom = nil
-	if not height or (worst and worst > LEVEL_SLACK) then
-		local padLow, padHigh = MapTerrain.PadCost(site, TeamBaseRuins.Footprint, { margin = TeamBaseRuins.Margin })
-		low = math.min(low or math.huge, padLow or math.huge)
-		high = math.max(high or -math.huge, padHigh or -math.huge)
-		if high == -math.huge then
-			high = site.Position.Y
-		end
-		if low == math.huge then
-			low = high
-		end
-		plinthBottom = low
-		warn(string.format("TeamBaseRuins: ground not level (%s); on a plinth from %.1f to %.1f",
-			height and string.format("off by %.2f", worst) or tostring(why), low, high))
-		height = high
+	if not height then
+		return nil, "ground not levelled: " .. tostring(why)
 	end
+	local low, high, worst = TeamBaseRuins.GroundUnder(site, height)
+	if not low or worst > LEVEL_SLACK then
+		return nil, string.format("ground not level under the footprint (%s)", low and string.format("off by %.2f", worst) or "unseen")
+	end
+	local after = readGround(site.Position, reach, around - 72, around + 72)
+	local locked = lockedColumns(after, map, site.Position, reach)
+	local graded = TeamBaseRuins.GradeSurroundings(site, height, mapInfo, after, locked)
+	graded.cleared = TeamBaseRuins.ClearMoved(before, after, map, site.Position, reach)
+	-- How far the ground moved, column by column, for the gallery's probe (heights only: small).
+	graded.heights = { origin = before.origin, before = before.height, after = after.height }
+
 	local position = site.Position
 	local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)
 	local model, info = TeamBaseRuins.Layout(frame, teamColor, seed)
-	local plinth = nil
-	if plinthBottom and height - plinthBottom > 0.05 then
-		-- The plinth's top is the ground the layout was drawn on (local 0), out to the edge of the
-		-- margin, so the rubble at the breaches lies on it; its foot is a stud under the lowest ground.
-		local halfX = TeamBaseRuins.Footprint.X / 2 + TeamBaseRuins.Margin
-		local halfZ = TeamBaseRuins.Footprint.Z / 2 + TeamBaseRuins.Margin
-		local depth = height - plinthBottom + 1
-		plinth = Instance.new("Part")
-		plinth.Name = "Foundation"
-		plinth.Anchored = true
-		plinth.Size = Vector3.new(halfX * 2, depth, halfZ * 2)
-		plinth.CFrame = frame * CFrame.new(0, -depth / 2, 0)
-		plinth.Color = CONCRETE_DARK
-		plinth.Material = MAT.Concrete
-		plinth:SetAttribute("Destructible", false)
-		plinth.Parent = model
-	end
 	for _, part in ipairs(model:GetDescendants()) do
 		if part:IsA("BasePart") then
 			part:SetAttribute("TeamBaseRuin", true)
@@ -1731,7 +2167,6 @@ function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	end
 	model.Parent = map
 	ZFight.Fix({ model })
-	settleOutside(model, frame, plinth)
 	for _, key in ipairs({ "pads", "chestSpots", "lootSpots", "vehicleBays" }) do
 		TeamBaseRuins.SnapSpots(model, info[key])
 	end
@@ -1739,6 +2174,7 @@ function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	info.model = model
 	info.height = height
 	info.frame = frame
+	info.graded = graded
 	return info
 end
 

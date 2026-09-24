@@ -386,7 +386,7 @@ PLANTS = [
     # Teardown's own ClearRuins (the battleground's teardown now sits between it and StopBaseVehicles).
     ("compounds left standing", ("\tModeTeams.ClearBattleground()\n\tModeTeams.ClearRuins()\n\tif ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then",
                                  "\tModeTeams.ClearBattleground()\n\tif ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then")),
-    ("the rolled axis, road or not", ("\t\taxis, fraction = ModeTeams.PickBaseAxis(axis, mapInfo)", "\t\tlocal _ = 0")),
+    ("the rolled axis, road or not", ("\t\tlocal ranked = ModeTeams.RankBaseAxes(axis, mapInfo)", "\t\tlocal ranked = {}")),
     ("busy pad reused", ("\t\t\tif not occupiedAt(other, except) then\n\t\t\t\treturn other", "\t\t\tif false then\n\t\t\t\treturn other")),
 ]
 

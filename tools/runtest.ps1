@@ -1472,6 +1472,24 @@ function Start-StudioPlace($placePath) {
 	Start-Process $placePath
 	return "(file association)"
 }
+# Studio autosaves an open place every few minutes into %LOCALAPPDATA%\Roblox\RobloxStudio\AutoSaves as
+# <PlaceName>_AutoRecovery_N.rbxl. This harness ends its own window with Stop-Process, so any run long enough
+# to autosave leaves one behind, and from then on EVERY launch of the same place name opens with an "Auto
+# Recovery File Found" dialog drawn over the middle of the viewport -- in the middle of every screenshot
+# (measured 2026-09-24: a 9-minute gun gallery left BRR_Gallery_AutoRecovery_32.rbxl and the next five
+# galleries all photographed the dialog; 43 such files had piled up). The dialog is not the "Auto-Recovery"
+# window closed below, so it was never dismissed. These files are copies of this harness's own throwaway
+# place, never anyone's work, so they are moved aside (not deleted) before launching, while the lock is held.
+$autoSaveDir = Join-Path $env:LOCALAPPDATA "Roblox\RobloxStudio\AutoSaves"
+$staleSaves = @(Get-ChildItem $autoSaveDir -Filter "BRR_RunTest_AutoRecovery_*" -File -ErrorAction SilentlyContinue)
+if ($staleSaves.Count -gt 0) {
+	$quarantine = Join-Path $env:TEMP "BRR_harness_autosaves"
+	New-Item -ItemType Directory -Force $quarantine | Out-Null
+	foreach ($save in $staleSaves) {
+		Move-Item -LiteralPath $save.FullName -Destination (Join-Path $quarantine ((Get-Date -Format "yyyyMMdd_HHmmss") + "_" + $save.Name)) -Force
+	}
+	"moved $($staleSaves.Count) stale BRR_RunTest autosave(s) to $quarantine (they raise an Auto Recovery dialog over the viewport)"
+}
 $since = Get-Date
 $studioExe = Start-StudioPlace $place
 # Wait up to -WaitSeconds, but no longer than needed: five sessions share the Studio lock, so a run

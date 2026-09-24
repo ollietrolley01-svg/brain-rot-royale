@@ -12,7 +12,7 @@
 --     GamepassConfig.Passes below, using its `name` and `description`, and upload any square image.
 --     After creating it, open the pass, choose Sales, switch "Item for Sale" on and set the price to
 --     `suggestedPrice`. The pass's ID is the number in its URL: paste it over that entry's `id = 0`.
---       Iron Sahur 50 R$, Rot Runner 50 R$, 2x SahurCoins 350 R$, Brainrot Pass Premium 450 R$,
+--       Iron Sahur 300 R$, Rot Runner 300 R$, 2x SahurCoins 350 R$, Brainrot Pass Premium 450 R$,
 --       2x Crate Luck 350 R$.
 --  3. DEVELOPER PRODUCTS: Monetization -> Developer Products -> Create a Developer Product. Make one
 --     product for every entry in GamepassConfig.Products (bundles, boosts, crates, coin packs, and
@@ -33,17 +33,19 @@ local GamepassConfig = {}
 -- everyone gets a taste.
 GamepassConfig.Passes = {
 	ExtraHealth = {
-		id = 0,
+		id = 1995380456,
 		name = "Iron Sahur",
 		description = "+50 max health in every match, permanently.",
-		suggestedPrice = 50,
+		-- 300 R$: every permanent pass is at least 300 (Oliver, 2026-09-24).
+		suggestedPrice = 300,
 		order = 1,
 	},
 	ExtraSpeed = {
-		id = 0,
+		id = 1994036507,
 		name = "Rot Runner",
 		description = "+4 walkspeed in every match, permanently.",
-		suggestedPrice = 50,
+		-- 300 R$: every permanent pass is at least 300 (Oliver, 2026-09-24).
+		suggestedPrice = 300,
 		order = 2,
 	},
 	-- Doubles every coin EARNED by playing, through Monetization.EarnCoins: placements, kills,
@@ -56,7 +58,7 @@ GamepassConfig.Passes = {
 	-- Common Crate returns 794 coins on average for 500). tools/verify.py checks that no crate is
 	-- profitable that way, so turning `doublesSelling` on without re-pricing crates fails the build.
 	CoinBoost = {
-		id = 0,
+		id = 1993988489,
 		name = "2x SahurCoins",
 		description = "Doubles every SahurCoin you earn by playing: matches, kills, bounties, quests, achievements, the Brainrot Pass, the Daily Spin and set bonuses.",
 		suggestedPrice = 350,
@@ -67,7 +69,7 @@ GamepassConfig.Passes = {
 	-- Every crate you open rolls twice and keeps the rarer result (CrateData.EffectiveOdds). Owners
 	-- see the boosted odds on every crate card, because the cards and the roll use the same function.
 	CrateLuck = {
-		id = 0,
+		id = 1994690460,
 		name = "2x Crate Luck",
 		description = "Every crate you open rolls twice and keeps the rarer result. Crate cards show your boosted odds.",
 		suggestedPrice = 350,
@@ -75,7 +77,7 @@ GamepassConfig.Passes = {
 		order = 5,
 	},
 	BrainrotPassPremium = {
-		id = 0,
+		id = 1994252489,
 		name = "Brainrot Pass Premium",
 		description = "Unlocks the premium reward track on the Brainrot Pass.",
 		-- 450 R$ (Oliver, 2026-09-18). The premium track runs the length of a season, so it's priced
@@ -94,7 +96,7 @@ GamepassConfig.Passes = {
 -- of the Robux Shop, in `featured` order, with `badge` and `worth` shown on it.
 GamepassConfig.Products = {
 	StarterBundle = {
-		id = 0,
+		id = 3714557565,
 		name = "Starter Bundle",
 		description = "One time only. Everything you need to get your collection going.",
 		featured = 1,
@@ -122,7 +124,7 @@ GamepassConfig.Products = {
 		},
 	},
 	ProBundle = {
-		id = 0,
+		id = 3714557634,
 		name = "Pro Bundle",
 		description = "The big one: a Super Crate, 2 Mythic Crates, 2 Legendary Crates, 50K coins, Pro boosts and two Pro exclusives.",
 		featured = 2,
@@ -155,7 +157,7 @@ GamepassConfig.Products = {
 		},
 	},
 	BoostHealthOnce = {
-		id = 0,
+		id = 3714557823,
 		name = "One-Match Iron Sahur",
 		description = "+50 max health for your next match only.",
 		grant = { kind = "Consumable", consumable = "Health", amount = 1 },
@@ -166,7 +168,7 @@ GamepassConfig.Products = {
 		order = 1,
 	},
 	BoostSpeedOnce = {
-		id = 0,
+		id = 3714557909,
 		name = "One-Match Rot Runner",
 		description = "+4 walkspeed for your next match only.",
 		grant = { kind = "Consumable", consumable = "Speed", amount = 1 },
@@ -175,7 +177,7 @@ GamepassConfig.Products = {
 		order = 2,
 	},
 	CrateSuper = {
-		id = 0,
+		id = 3714558011,
 		name = "Super Crate",
 		description = "The best crate in the game: a Mythic or Secret brainrot every time, plus a 60% chance of a 50K-250K coin jackpot.",
 		grant = { kind = "Crate", crate = "Super" },
@@ -188,7 +190,7 @@ GamepassConfig.Products = {
 		order = 9,
 	},
 	CrateCommon = {
-		id = 0,
+		id = 3714558251,
 		name = "Common Crate",
 		description = "One Common loot crate.",
 		grant = { kind = "Crate", crate = "Common" },
@@ -196,7 +198,7 @@ GamepassConfig.Products = {
 		order = 10,
 	},
 	CrateUncommon = {
-		id = 0,
+		id = 3714558357,
 		name = "Uncommon Crate",
 		description = "One Uncommon loot crate.",
 		grant = { kind = "Crate", crate = "Uncommon" },
@@ -204,7 +206,7 @@ GamepassConfig.Products = {
 		order = 11,
 	},
 	CrateRare = {
-		id = 0,
+		id = 3714558505,
 		name = "Rare Crate",
 		description = "One Rare loot crate.",
 		grant = { kind = "Crate", crate = "Rare" },
@@ -212,7 +214,7 @@ GamepassConfig.Products = {
 		order = 12,
 	},
 	CrateEpic = {
-		id = 0,
+		id = 3714558626,
 		name = "Epic Crate",
 		description = "One Epic loot crate.",
 		grant = { kind = "Crate", crate = "Epic" },
@@ -220,7 +222,7 @@ GamepassConfig.Products = {
 		order = 13,
 	},
 	CrateMythic = {
-		id = 0,
+		id = 3714558717,
 		name = "Mythic Crate",
 		description = "One Mythic loot crate: Legendary or better every time.",
 		grant = { kind = "Crate", crate = "Mythic" },
@@ -228,7 +230,7 @@ GamepassConfig.Products = {
 		order = 14,
 	},
 	CrateLegendary = {
-		id = 0,
+		id = 3714558898,
 		name = "Legendary Crate",
 		-- It used to say "Best odds you can also buy with coins", beside a Mythic Crate that is coin-buyable
 		-- and better (#86).
@@ -246,7 +248,7 @@ GamepassConfig.Products = {
 	-- whichever way the crate was bought. Beginner's Luck never applies: CrateData.BeginnerBoosted only
 	-- returns true for a brainrot crate, and widening it to a crate anyone paid for would be deceptive.
 	CrateStyle = {
-		id = 0,
+		id = 3714558949,
 		name = "Style Crate",
 		description = "One Style Crate: any cosmetic — accessory, gun skin, aura or parachute.",
 		grant = { kind = "Crate", crate = "Style" },
@@ -254,7 +256,7 @@ GamepassConfig.Products = {
 		order = 15,
 	},
 	CrateDeluxeStyle = {
-		id = 0,
+		id = 3714558950,
 		name = "Deluxe Style Crate",
 		description = "One Deluxe Style Crate: any cosmetic, weighted to the good end.",
 		grant = { kind = "Crate", crate = "DeluxeStyle" },
@@ -262,7 +264,7 @@ GamepassConfig.Products = {
 		order = 16,
 	},
 	CratePrestigeStyle = {
-		id = 0,
+		id = 3714558952,
 		name = "Prestige Style Crate",
 		description = "One Prestige Style Crate: no Commons at all, and the best cosmetics in the game.",
 		grant = { kind = "Crate", crate = "PrestigeStyle" },
@@ -270,7 +272,7 @@ GamepassConfig.Products = {
 		order = 17,
 	},
 	Coins10k = {
-		id = 0,
+		id = 3714558954,
 		name = "10,000 SahurCoins",
 		description = "Instant coin top-up.",
 		grant = { kind = "Coins", amount = 10000 },
@@ -278,7 +280,7 @@ GamepassConfig.Products = {
 		order = 20,
 	},
 	Coins50k = {
-		id = 0,
+		id = 3714558956,
 		name = "50,000 SahurCoins",
 		description = "Instant coin top-up.",
 		grant = { kind = "Coins", amount = 50000 },
@@ -297,7 +299,8 @@ GamepassConfig.BrainrotPrices = {
 }
 -- Paste each rarity's developer product ID here (step 3 of the setup at the top of this file).
 GamepassConfig.BrainrotProductIds = {
-	Secret = 0, Mythic = 0, Legendary = 0, Epic = 0, Rare = 0, Uncommon = 0, Common = 0,
+	Secret = 3714558957, Mythic = 3714558959, Legendary = 3714558960, Epic = 3714558963,
+	Rare = 3714558966, Uncommon = 3714558969, Common = 3714558974,
 }
 for rarity, price in pairs(GamepassConfig.BrainrotPrices) do
 	GamepassConfig.Products["Brainrot" .. rarity] = {
