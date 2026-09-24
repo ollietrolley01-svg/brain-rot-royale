@@ -43,6 +43,7 @@ local CompanionAnimations = require(Shared:WaitForChild("CompanionAnimations"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
 local Rarity = require(Shared:WaitForChild("Rarity"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 
 local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
@@ -625,10 +626,33 @@ local function slowTarget(token, factor, duration)
 	end
 end
 
+-- One use of a move takes at most BrainrotData.MaxUseDamage[rarity] off any one target, its hits and
+-- the DoT it starts added together (Oliver: "make the companions other than Secret ones not one-shot").
+-- The budget rides the use's `report`, which every hit of the use already shares. The cap is in
+-- health as the victim loses it, so it is counted after CombatService.DealDamage's
+-- CombatDamageScale: an amount handed to DealDamage (or to a DoT, which ticks through it) costs
+-- `amount * scale` of the budget. A Secret has no cap and no budget.
+local function useReport(entry)
+	return { positions = {}, cap = BrainrotData.MaxUseDamage[entry.def.rarity], spent = {} }
+end
+
+-- The most of `amount` (a DealDamage amount, before the scale) the use may still put on `token`, and
+-- books it against the budget. `amount` unchanged with no budget; 0 once the target's share is spent.
+local function withinUse(report, token, amount)
+	if not report or not report.cap then
+		return amount
+	end
+	local scale = MatchConfig.CombatDamageScale or 1
+	local left = math.max(0, report.cap - (report.spent[token] or 0))
+	amount = math.min(amount, left / scale)
+	report.spent[token] = (report.spent[token] or 0) + amount * scale
+	return amount
+end
+
 -- What a move's style adds once a hit has landed `dealt` on `token` (BrainrotData.AbilityStyles):
 -- a slow, a DoT, or a heal for the owner. Only ever after real damage, so a teammate the mode protects
 -- (dealt 0) is never slowed or poisoned by a move that did not hurt them.
-local function applyStyle(player, entry, token, dealt, tag)
+local function applyStyle(player, entry, token, dealt, tag, report)
 	local stats = entry.stats
 	if stats.slow and stats.slowTime and Combatants.IsAlive(token) then
 		slowTarget(token, stats.slow, stats.slowTime)
@@ -636,8 +660,12 @@ local function applyStyle(player, entry, token, dealt, tag)
 	-- Rides CompanionBoons' venom ticker: one slot per victim, refreshed rather than stacked, and a
 	-- kill by the tick is credited to the owner as this brainrot. A venom-boon brainrot never carries a
 	-- DoT style (the check refuses it), so the two never fight over the slot.
+	-- The DoT is inside the use's cap: whatever of the budget the hit left is all it may add.
 	if stats.dot and stats.dotTime and Combatants.IsAlive(token) then
-		CompanionBoons.StartVenom(player, token, { damage = dealt * stats.dot, duration = stats.dotTime }, tag)
+		local damage = withinUse(report, token, dealt * stats.dot)
+		if damage > 0 then
+			CompanionBoons.StartVenom(player, token, { damage = damage, duration = stats.dotTime }, tag)
+		end
 	end
 	if stats.leech then
 		local character = Combatants.GetCharacter(player)
@@ -651,6 +679,10 @@ end
 -- `report` (optional) collects where damage landed, for one CompanionHit broadcast per attack.
 local function hit(player, token, amount, tag, report)
 	if not Combatants.IsAlive(token) then
+		return
+	end
+	amount = withinUse(report, token, amount)
+	if amount <= 0 then
 		return
 	end
 	local dealt = CombatService.DealDamage(player, token, amount, tag)
@@ -677,11 +709,15 @@ local function hit(player, token, amount, tag, report)
 	-- Venom rides the hit rather than replacing it: the bite still does its damage, and the poison is
 	-- what the boon adds. Refreshes on a second bite (CompanionBoons), it does not stack. Only on a hit
 	-- that hurt: it used to start on a teammate the mode had just refused to damage.
+	-- Inside the use's cap too, as the style's DoT is.
 	local venom = CompanionBoons.VenomOf(entry.def)
 	if venom then
-		CompanionBoons.StartVenom(player, token, venom, "Companion:" .. entry.def.name)
+		local damage = withinUse(report, token, venom.damage)
+		if damage > 0 then
+			CompanionBoons.StartVenom(player, token, { damage = damage, duration = venom.duration }, "Companion:" .. entry.def.name)
+		end
 	end
-	applyStyle(player, entry, token, dealt, tag)
+	applyStyle(player, entry, token, dealt, tag, report)
 end
 
 -- Where a splash is cast from: half a stud back toward where the move came from. A glob that
@@ -882,7 +918,7 @@ local function attack(player, entry, token, targetRoot)
 	-- or strikes at once, and only needs the windup.
 	local to = kind == "Lob" and lead(targetRoot, WINDUP + LOB_TIME, LOB_MAX_LEAD) or lead(targetRoot)
 	local payload = basePayload(player, entry, to)
-	local report = { positions = {} }
+	local report = useReport(entry)
 
 	-- The damage is scheduled first and the broadcast goes last in every branch, so a send that
 	-- throws can never cost the hit (see broadcast).
@@ -965,7 +1001,7 @@ local function attackPoint(player, entry, to)
 	local payload = basePayload(player, entry, to)
 	local from = payload.from
 	payload.travel = travelTime(kind, from, to)
-	local report = { positions = {} }
+	local report = useReport(entry)
 
 	if kind == "Shockwave" then
 		task.delay(WINDUP, function()
@@ -1142,7 +1178,10 @@ local function blastFor(player, entry, position)
 		normal = Vector3.yAxis,
 		kind = "grenade",
 		radius = radius,
-		damage = entry.stats.damage * BrainrotData.BlastPower,
+		-- One DealDamage per victim, never more than this at the centre, so capping the amount caps the
+		-- use (MaxUseDamage); "blast" stands for every victim. It also trims what the blast does to
+		-- structures, vehicles and companions.
+		damage = withinUse(useReport(entry), "blast", entry.stats.damage * BrainrotData.BlastPower),
 		weaponId = "Companion:" .. entry.def.name,
 	})
 	return true
