@@ -24,7 +24,9 @@ local ModeKingOfTheHill = {}
 local LETTERS = { "A", "B" }
 local NEUTRAL = Color3.fromRGB(230, 230, 230)
 local CONTESTED = Color3.fromRGB(255, 214, 80)
-local BEAM_HEIGHT = 160
+-- Tall enough to stand over any hill or tower from across the map, like the supply-drop beacon (900):
+-- at 160 a drop read as more important than the thing the mode is about. Height costs no screen.
+local BEAM_HEIGHT = 600
 local STEP = 0.07
 -- The two objectives are at least this far apart, so holding both means holding ground.
 local SITE_GAP = 220
@@ -165,7 +167,8 @@ local function buildObjective(index, position)
 	gui.Name = "ObjectiveMarker"
 	gui.AlwaysOnTop = false
 	gui.Size = UDim2.fromOffset(30, 30)
-	gui.MaxDistance = 260
+	-- Past SITE_GAP, so from one objective the other one's letter shows too.
+	gui.MaxDistance = 420
 	gui.LightInfluence = 0
 	gui.Parent = anchor
 	local label = Instance.new("TextLabel")

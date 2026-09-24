@@ -2750,7 +2750,12 @@ local function updateCompass(root)
 		local x = folder and folder:GetAttribute("HillX")
 		local z = folder and folder:GetAttribute("HillZ")
 		if x and z then
-			placeCompassMarker(compassMarker(key, letter, C.Accent, "zone"), bearingTo(here, Vector3.new(x, 0, z)), heading)
+			-- In the owner's colour (the pillar ModeKingOfTheHill paints) and with how far off it is, so the
+			-- strip says which one to go for, not only where they are.
+			local pillar = folder:FindFirstChild("HillPillar")
+			local target = Vector3.new(x, here.Y, z)
+			local text = string.format("%s %dm", letter, math.floor((target - here).Magnitude / 3.57 + 0.5))
+			placeCompassMarker(compassMarker(key, text, pillar and pillar.Color or C.Accent, "zone"), bearingTo(here, target), heading)
 		elseif compassMarkers[key] then
 			compassMarkers[key].frame.Visible = false
 		end
