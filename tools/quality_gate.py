@@ -57,7 +57,9 @@ TIMEOUTS = {
     "team_base_ruins_check.py": 1200,
     "vehicle_models_axis_check.py": 1200,
     "gun_tube_check.py": 1200,
-    "fps_arms_check.py": 1200,
+    # --plant reruns the whole arsenal once per plant: 1183 s alone on a quiet machine after gun rework
+    # batch 3 (65 guns), 1058 s before it.
+    "fps_arms_check.py": 2400,
     "hud_layout_check.py": 1200,
     "vehicle_stability_sim.py": 900,
     "parked_car_check.py": 900,
