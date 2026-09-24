@@ -1138,7 +1138,6 @@ def timed_harness(ability):
         for i = 2, #queue do if queue[i].at < queue[best].at then best = i end end
         local job = table.remove(queue, best)
         if job.at > now then now = job.at end"""),
-        ("table.insert(log.deals, { who = token.Name, amount = amount })", "table.insert(log.deals, { who = token.Name, amount = amount, t = now })"),
         ("if name == \"CompanionAttack\" then table.insert(log.attacks, payload)", "if name == \"CompanionAttack\" then payload.__sent = now; table.insert(log.attacks, payload)"),
         ("elseif name == \"CompanionHit\" then table.insert(log.hits, payload) end", "elseif name == \"CompanionHit\" then payload.__sent = now; table.insert(log.hits, payload) end"),
         ("mods.CompanionAnimations = { Windup = 0.3 }", "mods.CompanionAnimations = { Windup = %WINDUP% }\nmods.ProjectileService = { Explode = function(o) table.insert(log.blasts, { t = now, position = o.position }) end }\nmods.PracticeDummy = { BodyOf = function() return nil end, Hit = function() return 0, false, false end }"),
@@ -1149,6 +1148,12 @@ def timed_harness(ability):
         if old not in h:
             raise SystemExit("companion_fx_check: companion_ability_check's harness changed; cannot find: " + old[:60])
         h = h.replace(old, new)
+    # Stamp each dealt hit with the clock, whatever else that harness records in it (its fields
+    # change with the damage rules: the one-shot cap added `absorbed`). Only the table's closing
+    # brace is matched, so a change inside the record cannot break this.
+    h, stamped = re.subn(r"(table\.insert\(log\.deals, \{[^\n]*?)\s*\}\)", r"\1, t = now })", h)
+    if stamped != 1:
+        raise SystemExit(f"companion_fx_check: expected one log.deals insert in companion_ability_check's harness, found {stamped}")
     return h.replace("%WINDUP%", repr(WINDUP))
 
 
