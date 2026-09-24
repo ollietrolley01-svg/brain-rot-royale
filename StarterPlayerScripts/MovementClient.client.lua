@@ -716,6 +716,34 @@ local function stepMove()
 	end
 end
 
+-- THE RUN-UP (#132 "vaulting still hard"). A vault needs VaultMinSpeed toward the obstacle, and the
+-- speed used to be read on the frame jump was pressed. Run at a window and press jump as you reach it --
+-- the natural moment -- and the wall has already stopped the body: 0 studs/s, no vault, and the climb
+-- that is tried instead is refused because the pane fills the space over the sill. So the speed a vault
+-- is judged by is the best of the last RUN_UP_WINDOW seconds toward where you're going, the speed you
+-- ARRIVED with. It can't make a standing body vault: 0.3 s after stopping, the run-up is gone.
+local RUN_UP_WINDOW = 0.3
+local runUp = {}
+
+local function noteRunUp(now)
+	table.insert(runUp, { at = now, velocity = flat(root.AssemblyLinearVelocity) })
+	while runUp[1] and now - runUp[1].at > RUN_UP_WINDOW do
+		table.remove(runUp, 1)
+	end
+end
+
+-- Pure, for tools/remote_pose_vault_check.py: the best speed toward `direction` among samples
+-- no older than `window`.
+local function arrivalSpeed(samples, direction, now, window)
+	local best = 0
+	for _, sample in ipairs(samples) do
+		if now - sample.at <= window then
+			best = math.max(best, sample.velocity:Dot(direction))
+		end
+	end
+	return best
+end
+
 -- Looks for a climb or vault while jump is held (or was just pressed), and starts one.
 local function tryParkour(now)
 	if active or now < recoveryUntil or not inMatch() or not alive() or gliding() or humanoid.Sit then
@@ -738,7 +766,7 @@ local function tryParkour(now)
 	local recentlyGrounded = grounded or now - groundedAt < 0.35
 	local plan = Parkour.Find(character, direction, {
 		groundY = lastGroundY,
-		speed = speed,
+		speed = math.max(speed, arrivalSpeed(runUp, direction, now, RUN_UP_WINDOW)),
 		grounded = grounded,
 		allowVault = recentlyGrounded,
 		exhausted = MovementState.exhausted and not MovementState.rush,
@@ -1022,7 +1050,10 @@ RunService.Heartbeat:Connect(function(delta)
 	end
 
 	stepMove()
-	if not active then
+	if active then
+		table.clear(runUp)
+	else
+		noteRunUp(now)
 		stepSlide(dt)
 		if not tryParkour(now) then
 			tryDoubleJump(now)
