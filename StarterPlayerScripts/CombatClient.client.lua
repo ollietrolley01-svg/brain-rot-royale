@@ -434,6 +434,51 @@ end
 
 local spectateLabel = nil
 
+-- The hands the player is using now, for the spectate line (#86, the player's-eye review). It used to
+-- name keyboard keys to everyone: a phone player was told to press E, which does not exist on a
+-- phone, and a pad had no NEXT at all. Same test as KeyHintClient's.
+local function spectateInputKind()
+	local last = UserInputService:GetLastInputType()
+	if last == Enum.UserInputType.Touch then
+		return "touch"
+	elseif string.find(last.Name, "Gamepad", 1, true) then
+		return "gamepad"
+	end
+	return UserInputService.KeyboardEnabled and "keyboard" or "touch"
+end
+
+local function spectateText(name)
+	local kind = spectateInputKind()
+	local nextKey, leaveKey
+	if kind == "touch" then
+		if name then
+			return string.format("Spectating %s   •   tap NEXT or LEAVE", name)
+		end
+		return "No one left to watch   •   tap LEAVE for the lobby"
+	elseif kind == "gamepad" then
+		nextKey = Settings.GamepadLabel("SpectateNext") or "?"
+		leaveKey = Settings.GamepadLabel("SpectateLeave") or "?"
+	else
+		nextKey, leaveKey = Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave")
+	end
+	if name then
+		return string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, nextKey, leaveKey)
+	end
+	return string.format("No one left to watch   •   [%s] back to the lobby", leaveKey)
+end
+
+local spectateName = nil
+local function refreshSpectateText()
+	if spectateLabel then
+		spectateLabel.Text = spectateText(spectateName)
+	end
+end
+UserInputService.LastInputTypeChanged:Connect(refreshSpectateText)
+
+-- Forward-declared: the phone buttons below fire these, and they are defined further down.
+local cycleSpectate
+local leaveSpectate
+
 local function setSpectating(value)
 	spectating = value
 
@@ -476,45 +521,80 @@ local function setSpectating(value)
 	corner.CornerRadius = UDim.new(0, 10)
 	corner.Parent = spectateLabel
 
-	local name = applySpectateTarget()
-	spectateLabel.Text = name
-		and string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave"))
-		or string.format("No one left to watch   •   [%s] back to the lobby", Settings.KeyLabel("SpectateLeave"))
+	-- NEXT and LEAVE for a touch screen: plain TextButtons on this gui, not ContextActionService touch
+	-- buttons -- the match already binds about seven of those (FIRE, AIM, RUN, RELOAD, PET, CROUCH,
+	-- MOVE), which is CAS's cap, and these must show while every one of those is idle. 44 px tall,
+	-- UiKit.Touch, above the label. They go with the gui when spectating ends.
+	if UserInputService.TouchEnabled then
+		local function touchButton(text, xOffset, onTap)
+			local button = Instance.new("TextButton")
+			button.Name = "Spectate" .. text
+			button.AnchorPoint = Vector2.new(0.5, 1)
+			button.Position = UDim2.new(0.5, xOffset, 1, -80)
+			button.Size = UDim2.fromOffset(120, 44)
+			button.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
+			button.BackgroundTransparency = 0.15
+			button.BorderSizePixel = 0
+			button.Font = Enum.Font.GothamBold
+			button.TextColor3 = Color3.fromRGB(240, 242, 248)
+			button.TextSize = 16
+			button.Text = text
+			button.Parent = gui
+			local round = Instance.new("UICorner")
+			round.CornerRadius = UDim.new(0, 10)
+			round.Parent = button
+			button.Activated:Connect(onTap)
+		end
+		touchButton("NEXT", -66, function()
+			cycleSpectate(1)
+		end)
+		touchButton("LEAVE", 66, function()
+			leaveSpectate()
+		end)
+	end
+
+	spectateName = applySpectateTarget()
+	refreshSpectateText()
 end
 
-local function cycleSpectate(step)
+function cycleSpectate(step)
 	if not spectating then
 		return
 	end
 	spectateIndex += step
-	local name = applySpectateTarget()
-	if spectateLabel then
-		spectateLabel.Text = name
-			and string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave"))
-			or string.format("No one left to watch   •   [%s] back to the lobby", Settings.KeyLabel("SpectateLeave"))
-	end
+	spectateName = applySpectateTarget()
+	refreshSpectateText()
 end
 
 spectateRemote.OnClientEvent:Connect(setSpectating)
 
+-- ButtonR1 on a pad: it is NextSlot's too, but NextSlot does nothing while spectating (inCombat() is
+-- false), and both return Pass, so neither steals the press from the other.
 Settings.Bind("BRR_SpectateNext", "SpectateNext", function(_, inputState)
 	if inputState == Enum.UserInputState.Begin and spectating then
 		cycleSpectate(1)
 	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.ButtonR1)
 
 -- #102: the way OUT. The server owns the decision (MatchService.LeaveSpectate refuses anyone who is
 -- not spectating, and the remote is rate-limited) and answers with Spectate(false) BEFORE the new body,
 -- so the camera is handed back first; nothing is torn down here on the press.
 local leaveSpectateRemote = Remotes.Event("LeaveSpectate")
-Settings.Bind("BRR_SpectateLeave", "SpectateLeave", function(_, inputState)
-	if inputState == Enum.UserInputState.Begin and spectating then
+function leaveSpectate()
+	if spectating then
 		Sfx.Play("UiClick", 0.08)
 		leaveSpectateRemote:FireServer()
 	end
+end
+-- ButtonB on a pad. MenuShell also closes an open menu on B, so a press with the menu up is left to
+-- the menu rather than also throwing the player back to the lobby.
+Settings.Bind("BRR_SpectateLeave", "SpectateLeave", function(_, inputState)
+	if inputState == Enum.UserInputState.Begin and not player:GetAttribute("MenuOpen") then
+		leaveSpectate()
+	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.ButtonB)
 
 -- Follow someone else automatically when the current subject dies.
 task.spawn(function()
