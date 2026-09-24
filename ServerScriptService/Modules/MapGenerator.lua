@@ -368,6 +368,11 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 
 			if rectFree(space, claimCenter.X, claimCenter.Z, yaw, claimX, claimZ, street.entry) then
 				space:AddRect(claimCenter.X, claimCenter.Z, claimX, claimZ, yaw)
+				-- And the path from its door to the pavement, however deep the front garden (a town kind
+				-- may set its houses 16 back): a themed prop stood on that path, square in front of a
+				-- front door (tools/foundation_check.py: a "wall stare" NPC 3.5 studs off a doorstep).
+				local doorstep = lot - sideVector * (plan.depth / 2)
+				space:AddStrip(doorstep, doorstep - sideVector * (setback + 0.5), MapBuildings.DoorWidth / 2 + 1)
 				-- Dead flat at 0 under the building, its doorstep and its back yard (the crates stand up to
 				-- depth/2 + dock + 9.7 behind the lot centre). The relief only fades to exactly 0 within
 				-- spread + 40 of the square, and a town's outer lots -- more of them now that some kinds set

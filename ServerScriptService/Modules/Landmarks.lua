@@ -656,8 +656,9 @@ local function flight67(model, origin, ctx)
 	-- A furrow where it came down.
 	decor(piece(model, Vector3.new(40, 0.35, 8), origin * CFrame.new(-26, 0.16, 4) * CFrame.Angles(0, math.rad(-8), 0), Color3.fromRGB(70, 60, 50), Enum.Material.Ground))
 
-	-- Nose section, half buried and tipped.
-	local nose = origin * CFrame.new(20, 4.5, 0) * CFrame.Angles(0, 0, math.rad(6)) * CFrame.Angles(0, math.rad(-8), 0)
+	-- Nose section, half buried and tipped nose-down, so the cone digs into the ground. (Tipped the
+	-- other way it lifted the cone a stud clear of the grass: tools/foundation_check.py.)
+	local nose = origin * CFrame.new(20, 4.5, 0) * CFrame.Angles(0, 0, math.rad(-6)) * CFrame.Angles(0, math.rad(-8), 0)
 	piece(model, Vector3.new(22, 11, 11), nose * CFrame.Angles(0, 0, 0), hull, Enum.Material.Metal, Enum.PartType.Cylinder)
 	piece(model, Vector3.new(10, 10, 10), nose * CFrame.new(14, 0, 0), hull, Enum.Material.Metal, Enum.PartType.Ball)
 	decor(piece(model, Vector3.new(4, 3, 8), nose * CFrame.new(11, 3.2, 0), Color3.fromRGB(60, 90, 120), Enum.Material.Glass))
@@ -2660,6 +2661,20 @@ function Landmarks.Place(parent, preset, radius, centers, keepOut, groundHeightA
 			local origin = CFrame.new(spot) * CFrame.Angles(0, rng:NextNumber() * math.pi * 2, 0)
 			local ok, err = pcall(landmark.build, model, origin, ctx)
 			if ok then
+				-- Whatever of it reaches past the flat pad (a fence post on the first terrace, a pole, a deck
+				-- corner, the ruins' stair down its own stairwell) is carried down to the ground under it
+				-- rather than left hanging over it (MapTerrain.Underpin; tools/foundation_check.py). A piece
+				-- that stands on its own feet is underpinned foot by foot, from each foot's own floor.
+				if landmark.level == false then
+					for _, foot in ipairs(model:GetChildren()) do
+						local footBase = foot:IsA("Model") and foot:GetAttribute("FootingBase")
+						if type(footBase) == "number" then
+							MapTerrain.Underpin(foot, footBase)
+						end
+					end
+				else
+					MapTerrain.Underpin(model, spot.Y)
+				end
 				-- For the minimap: attributes replicate even while the landmark is streamed out.
 				model:SetAttribute("LandmarkCenter", spot)
 				model:SetAttribute("LandmarkName", landmark.name)

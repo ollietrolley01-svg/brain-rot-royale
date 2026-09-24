@@ -1960,17 +1960,36 @@ function MapWilds.Build(map, ctx)
 	----------------------------------------------------------------------------
 
 	local SAMPLES = { { 0, 0 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+	-- What the opening looks out on: across it and out to DOOR_REACH, the ground may climb no more than
+	-- DOOR_RISE over the floor, nor fall more than DOOR_DROP within four studs of it. A lean-to opening
+	-- onto a bank, a cabin door onto a two-stud rise, a slate shelter over a three-stud drop: a door
+	-- into a hill or off a ledge (Oliver, 2026-09-24; tools/foundation_check.py).
+	local DOOR_RISE, DOOR_DROP, DOOR_REACH = 1.5, 2.5, 5
 	-- Where the shelters and the stands of trees went: the grass goes round them.
 	local shelterSpots, woodsSpots = {}, {}
 
 	-- Tries to put shelter `kind` at (x, z) facing `yaw` (its opening down local -Z). Returns true
-	-- when built.
+	-- when built. With no `yaw` given, a random one, turned a quarter at a time until the opening
+	-- looks out on open ground; a caller's yaw (a bus stop facing its road) is kept or the spot goes.
+	local tryShelter
 	local function placeShelter(kind, x, z, yaw, ignore)
+		if yaw then
+			return tryShelter(kind, x, z, yaw, ignore)
+		end
+		local first = rand(0, math.pi * 2)
+		for turn = 0, 3 do
+			if tryShelter(kind, x, z, first + turn * math.pi / 2, ignore) then
+				return true
+			end
+		end
+		return false
+	end
+
+	tryShelter = function(kind, x, z, yaw, ignore)
 		local spec = SHELTERS[kind]
 		if not spec then
 			return false
 		end
-		yaw = yaw or rand(0, math.pi * 2)
 		-- The footprint's own centre can sit off the build origin (a fire pit out front).
 		local frame = CFrame.new(x, 0, z) * CFrame.Angles(0, yaw, 0)
 		local centre = frame * CFrame.new(0, 0, spec.offsetZ or 0)
@@ -2004,6 +2023,16 @@ function MapWilds.Build(map, ctx)
 		-- posts reach down by however far it falls). Things that can't follow a slope never stretch.
 		if high - low > spec.flat * (spec.rigid and 1 or (profile.flatScale or 1)) then
 			return false
+		end
+		-- The way out: across the opening, out to DOOR_REACH, never into a bank, over a drop or water.
+		for _, across in ipairs({ -0.4, 0, 0.4 }) do
+			for out = 1, DOOR_REACH do
+				local w = centre * CFrame.new(across * spec.halfX, 0, -spec.halfZ - out)
+				local y = sample(w.X, w.Z)
+				if not y or y > high + DOOR_RISE or (out <= 4 and y < high - DOOR_DROP) then
+					return false
+				end
+			end
 		end
 		space:AddRect(centre.X, centre.Z, spec.halfX + 2, spec.halfZ + 2, yaw)
 		local m = named(kind)

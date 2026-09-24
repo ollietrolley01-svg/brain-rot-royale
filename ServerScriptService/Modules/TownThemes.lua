@@ -4195,6 +4195,36 @@ local function rectFree(space, center, yaw, halfX, halfZ)
 	return true
 end
 
+-- The way in: a set piece opens onto its street (or the square), and nothing solid of the town's --
+-- a lamp post, a bench, a bin -- may stand square in front of it between its front edge and the kerb
+-- (tools/foundation_check.py found a street lot whose entrance a bench blocked two studs out). The
+-- town's street furniture is read from the town itself, as the streets are.
+local ENTRANCE_HALF = 3
+
+local function furnitureOf(town)
+	local pieces = {}
+	for _, child in ipairs(town:GetChildren()) do
+		if child:IsA("BasePart") and child.CanCollide and child.Size.Y > 1.5 then
+			table.insert(pieces, child)
+		end
+	end
+	return pieces
+end
+
+local function entranceClear(ctx, at, front, halfDepth, reach)
+	local side = Vector3.new(-front.Z, 0, front.X)
+	local door = at + front * halfDepth
+	for _, piece in ipairs(ctx.furniture or {}) do
+		local offset = Vector3.new(piece.Position.X - door.X, 0, piece.Position.Z - door.Z)
+		local grow = math.max(piece.Size.X, piece.Size.Z) / 2
+		local along = offset:Dot(front)
+		if along >= -grow and along <= reach + grow and math.abs(offset:Dot(side)) <= ENTRANCE_HALF + grow then
+			return false
+		end
+	end
+	return true
+end
+
 local SAMPLES = {
 	{ 0, 0 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
 	{ 0.5, 0.5 }, { -0.5, 0.5 }, { 0.5, -0.5 }, { -0.5, -0.5 },
@@ -4451,7 +4481,8 @@ local function findSite(ctx, width, depth, material)
 		end
 		diag.candidates += 1
 		local yaw = yawFacing(candidate.front)
-		if rectFree(ctx.space, candidate.at, yaw, halfX, halfZ) then
+		local reach = candidate.street and (VERGE + 1.5 + SIDEWALK) or 6
+		if rectFree(ctx.space, candidate.at, yaw, halfX, halfZ) and entranceClear(ctx, candidate.at, candidate.front, depth / 2, reach) then
 			local low, high = groundRange(ctx.groundAt, candidate.at, yaw, halfX, halfZ)
 			if low and high - low <= math.max(flatEnough, padding and candidate.padTolerance or 0) then
 				low, high = groundRangeFine(ctx.groundAt, candidate.at, yaw, halfX, halfZ)
@@ -4724,6 +4755,7 @@ local function themeTown(town, theme, space, groundAt, preset, rng)
 		level = level,
 		spread = spread,
 		streets = streetsOf(town),
+		furniture = furnitureOf(town),
 		space = space,
 		groundAt = groundAt,
 		rng = rng,

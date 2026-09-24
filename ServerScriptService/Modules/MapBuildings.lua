@@ -1174,6 +1174,8 @@ local function buildCrate(parent, position)
 end
 
 MapBuildings.RollPlan = rollPlan
+-- How wide a front door is, for anything keeping the way to it clear (MapGenerator claims the path).
+MapBuildings.DoorWidth = DOOR_WIDTH
 MapBuildings.BuildBuilding = buildBuilding
 MapBuildings.BuildCrate = buildCrate
 MapBuildings.Footprint = footprint
