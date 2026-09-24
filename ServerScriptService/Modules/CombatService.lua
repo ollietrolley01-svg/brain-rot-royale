@@ -969,8 +969,13 @@ function CombatService.HandleDeath(victimToken)
 
 	-- The raw id too: companion hits record "Companion:<name>", which isn't a weapon.
 	local def = weaponId and WeaponData.Get(weaponId) or nil
+	-- The body's effect is cosmetic and runs first; a fault in it must not stop the elimination below
+	-- (the death drop, the kill feed, the placement), which is everything the death actually does.
 	if CombatService.OnDeathFx then
-		CombatService.OnDeathFx(victimToken, killerToken, def)
+		local ok, err = pcall(CombatService.OnDeathFx, victimToken, killerToken, def)
+		if not ok then
+			warn("[CombatService] death effect failed: " .. tostring(err))
+		end
 	end
 	if CombatService.OnElimination then
 		CombatService.OnElimination(victimToken, killerToken, def, weaponId)

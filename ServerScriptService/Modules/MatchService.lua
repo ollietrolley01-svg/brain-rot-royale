@@ -1202,29 +1202,57 @@ local function finishMatch()
 	end)
 end
 
+-- Where a body's drop goes: its HumanoidRootPart, or failing that wherever the body is. Only the root
+-- was asked before, and a death without one (a body that fell out of the world, a rig whose root came
+-- away) quietly dropped nothing at all.
+local function deathSpot(token)
+	local root = Combatants.GetRoot(token)
+	if root then
+		return root.Position
+	end
+	local character = Combatants.GetCharacter(token)
+	if character and character.Parent then
+		local ok, pivot = pcall(character.GetPivot, character)
+		if ok then
+			return pivot.Position
+		end
+	end
+	return nil
+end
+
+-- One piece of a death drop. Each goes down on its own, so a fault building one pickup costs that
+-- pickup only, not the rest of the body's gear, and never the elimination that called it (dropLoot
+-- runs first in eliminate(): a throw here used to lose the kill feed, the placement and the alive
+-- count along with the drop).
+local function dropSafely(drop, ...)
+	local ok, err = pcall(drop, ...)
+	if not ok then
+		warn("[MatchService] death drop failed: " .. tostring(err))
+	end
+end
+
 -- Put the victim's gear back on the map so a kill is worth pushing for.
 local function dropLoot(token)
-	local root = Combatants.GetRoot(token)
-	if not root then
+	local position = deathSpot(token)
+	if not position then
 		return
 	end
-	local position = root.Position
 
 	if Combatants.IsBot(token) then
 		if token.weapon then
-			LootService.DropWeapon(token.weapon.id, position)
+			dropSafely(LootService.DropWeapon, token.weapon.id, position)
 		end
 		-- Bots loot heals and shields now, so killing one pays out the same as killing a player.
 		local heals = token.heals
 		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
-			LootService.DropHeal(position)
+			dropSafely(LootService.DropHeal, position)
 		end
 		local shields = token.shields
 		if shields and (shields.MiniShield or 0) + (shields.ShieldPotion or 0) > 0 then
-			LootService.DropItem((shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
+			dropSafely(LootService.DropItem, (shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
 		end
 		if (token.defenses or 0) > 0 then
-			LootService.DropItem("RotBarricade", position, token.defenses)
+			dropSafely(LootService.DropItem, "RotBarricade", position, token.defenses)
 		end
 		return
 	end
@@ -1237,7 +1265,7 @@ local function dropLoot(token)
 	-- Everything they carried hits the floor: each gun with the ammo its owner had left (so a
 	-- death isn't an ammo refill), each item stack as one pickup.
 	for _, slot in pairs(loadout.slots) do
-		LootService.DropSlot(slot, position)
+		dropSafely(LootService.DropSlot, slot, position)
 	end
 end
 
@@ -1282,25 +1310,24 @@ end
 -- with it. Bots track a magazine but no reserve, so a dropped bot gun comes down full, the way the
 -- battle royale's do. Coins, XP and mastery are untouched: this is loot, not the reward economy.
 local function dropPickedUp(token)
-	local root = Combatants.GetRoot(token)
-	if not root then
+	local position = deathSpot(token)
+	if not position then
 		return
 	end
-	local position = root.Position
 	if Combatants.IsBot(token) then
 		if token.weapon and token.weapon.id and token.weapon.id ~= token.issuedWeaponId then
-			LootService.DropWeapon(token.weapon.id, position)
+			dropSafely(LootService.DropWeapon, token.weapon.id, position)
 		end
 		local heals = token.heals
 		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
-			LootService.DropHeal(position)
+			dropSafely(LootService.DropHeal, position)
 		end
 		local shields = token.shields
 		if shields and (shields.MiniShield or 0) + (shields.ShieldPotion or 0) > 0 then
-			LootService.DropItem((shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
+			dropSafely(LootService.DropItem, (shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
 		end
 		if (token.defenses or 0) > 0 then
-			LootService.DropItem("RotBarricade", position, token.defenses)
+			dropSafely(LootService.DropItem, "RotBarricade", position, token.defenses)
 		end
 		return
 	end
@@ -1310,7 +1337,7 @@ local function dropPickedUp(token)
 	end
 	for _, slot in pairs(loadout.slots) do
 		if not slot.issued then
-			LootService.DropSlot(slot, position)
+			dropSafely(LootService.DropSlot, slot, position)
 		end
 	end
 end
