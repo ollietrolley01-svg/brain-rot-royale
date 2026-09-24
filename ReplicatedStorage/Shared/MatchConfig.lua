@@ -313,6 +313,19 @@ MatchConfig.BotStormUrgent = 0.9
 -- Bots empty magazines and reload with the gun's own magSize and reloadTime, like players.
 MatchConfig.BotReload = true
 
+-- Bots at the wheel (BotService's BOT VEHICLES, BotNav's DRIVING). Oliver, 2026-09-24: "make the bots
+-- shoot the vehicle guns and drive the cars". A bot takes any vehicle for a trip longer than
+-- BotDriveMinTrip when one stands within BotBoardReach (the goal must not be behind it); in a fight it
+-- may jump on an armed vehicle's gun. At most this many bots drive at once: BotDriversMax across a
+-- battle royale, BotDriversPerTeam for each side of a team mode. A bot at the wheel of an armed vehicle
+-- waits for someone on the gun (Oliver: "wait till it's manned") for up to BotGunnerWait seconds, then
+-- gives the vehicle up.
+MatchConfig.BotDriversMax = 6
+MatchConfig.BotDriversPerTeam = 4
+MatchConfig.BotDriveMinTrip = 220
+MatchConfig.BotBoardReach = 60
+MatchConfig.BotGunnerWait = 25
+
 MatchConfig.CoinsPerBotKill = 40
 MatchConfig.XpPerBotKill = 32
 

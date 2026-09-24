@@ -94,6 +94,16 @@ BotService.Tick = 0
 -- answer is kept per bot for the tick (cleared when BotService.Tick moves on). shootAt still asks
 -- at the trigger, through this same cache, so a side swap mid-match is seen by the next slice.
 local function hostile(bot, token)
+	-- Riding together is a truce: nobody sharing a bot's vehicle is its target (BOT VEHICLES).
+	local ride = bot.ride
+	if ride and ride.model then
+		local character = Combatants.GetCharacter(token)
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		if seat and seat.Parent == ride.model then
+			return false
+		end
+	end
 	local hook = BotService.IsHostile
 	if not hook then
 		return true
@@ -935,9 +945,24 @@ do
 		end
 		return workspace:Raycast(origin, direction, params), true
 	end
+	-- A spatial query that is not a ray (a driving bot's block sweeps, BotNav.DriveSense), counted
+	-- against the same cap and share. True if granted.
+	function budget.Spend(priority)
+		priority = priority or "navigation"
+		if spent >= budget.FrameCap * (budget.Share[priority] or budget.Share.navigation) then
+			STATS.raysDenied += 1
+			return false
+		end
+		spent += 1
+		STATS.rays += 1
+		STATS.raysNavigation += priority == "navigation" and 1 or 0
+		return true
+	end
 	castRay = budget.Cast
 	-- BotNav casts through the same budget (it loads before this module, so it is handed the function).
 	BotNav.CastRay = castRay
+	BotNav.CastSpend = budget.Spend
+	BotNav.CastRemaining = budget.Remaining
 
 	-- The sight-line params (hasLineOfSight). Terrain water is not cover: a raycast hits it unless
 	-- told not to, so a bot would refuse to shoot across a river at a target a player could hit — the
@@ -3496,136 +3521,858 @@ end
 BotService.IsUnderArmed = isUnderArmed
 
 --------------------------------------------------------------------------------
--- BOT VEHICLES (armed vehicles: VehicleWeapons, Shared/VehicleWeaponData)
+-- BOT VEHICLES (driving: BotNav's DRIVING section; mounted guns: VehicleWeapons, Shared/VehicleWeaponData)
 --------------------------------------------------------------------------------
--- Bots never drove. Now a few may: a bot already in a fight that finds an empty armed vehicle close
--- by walks to it and gets in, then drives at its target (circling once it is close) and fires the
--- mount through VehicleWeapons.Fire, the very function a player's trigger reaches, with the same
--- driver, rate, ammo and team checks. The target is findTarget's, so line of sight is the one
--- every bot already uses. While a bot drives, updateBot stops at the hook; once it gets out (nobody to
--- shoot for a while, or the vehicle wrecked) it carries on as a bot on foot. The server steps a
--- vehicle with no player at the wheel from its seat's ThrottleFloat/SteerFloat (VehicleService.step).
+-- Oliver, 2026-09-24: "make the bots shoot the vehicle guns and drive the cars, with quality vehicle
+-- behaviour. And when a player wants to get in, the bot gets out and is replaced by the player." Then:
+-- "make the bots not drive away if they have a gun on their car, wait till it's manned".
+--
+-- A bot gets into a vehicle for one of four reasons, looked at every VEHICLE.CHECK_EVERY seconds
+-- while it is on foot (Vehicles.considerVehicle):
+--   gunner     an armed vehicle close by has someone waiting at the wheel for a gunner (a teammate, or
+--              in the battle royale another bot): it gets on the gun
+--   fight      in a fight, an armed vehicle within VEHICLE.FIGHT_SEEK: the gun if it is free, else the
+--              wheel (VEHICLE.FIGHT_CHANCE a look, so not every bot in every fight)
+--   ride       a team mode: a teammate bot has just taken a vehicle for a trip and a seat is free
+--   trip       where it is going (the storm's circle, its objective, the enemy's base, loot) is
+--              further than MatchConfig.BotDriveMinTrip and a free vehicle stands within BotBoardReach,
+--              not behind it; one without a gun first (a gun needs a gunner)
+-- At most MatchConfig.BotDriversMax bots drive at once in a battle royale, BotDriversPerTeam a side
+-- in a team mode.
+--
+-- At the wheel, BotNav's DRIVING section does the driving: routes along the roads when that is
+-- quicker (BotService.SetRoads hands it the map's RoadNetwork), a base vehicle out of the yard along
+-- its bay's drive-out lane, stops for teammates, goes round what is in the way, backs out when stuck
+-- and gives up when it can't, never into water or off a drop, and keeps to the storm's circle or the
+-- team arena (every road node it takes is inside it). The decisions are made on the bot's own sliced
+-- think (Vehicles.driverThink, which calls BotNav.DriveSense: at most BotNav.DriveCastsPerSense spatial queries,
+-- 4, per driving bot per think); the throttle and steer are turned every frame by the servo below,
+-- which is arithmetic only (BotNav.DriveControl, no queries), for the handful of bots at a wheel.
+-- An armed vehicle with nobody on its gun is not driven anywhere (Oliver: "wait till it's manned"):
+-- the bot holds it, works the gun itself only once attacked, and gives it up after BotGunnerWait.
+-- With a gunner, the bot at the wheel circles the target at the gun's range and the gunner fires.
+--
+-- On the gun, every shot goes through VehicleWeapons.Fire, the very function a player's trigger
+-- reaches, with the same seat, rate, ammo and team checks. Where the bot aims comes from the same aim
+-- dials as a bot on foot (Vehicles.vehicleHitChance, which is shootAt's chance line for line, and
+-- tools/bot_driving_combat.py fails if the two ever differ) with the mount's own spread allowed for,
+-- and a miss aimed clear of the target. It fires in bursts, lets the belt cool rather than run it dry,
+-- holds fire outside the mount's arc, and a round is led by most of the target's run.
+--
+-- A player who wants a bot's seat triggers its prompt ("Take over", see VehicleService's TAKING OVER):
+-- VehicleService asks BotService.YieldSeat, which applies BotService.TakeoverAllowed (a teammate always
+-- may; with no teams, anyone the bot is not fighting) and gets the bot out, stopping the car first
+-- from the wheel. The bot goes back to what it does on foot.
 
--- Oliver 2026-09-24: "make sure the bots get in the cars and use the guns". Bots used to look only
--- mid-fight, a third of the time, within 45 studs, and got out after 10 s with nobody to shoot, so
--- a bot at a gun was a rare sight. Now roaming bots take an armed vehicle too, from further off, and
--- keep driving toward the storm's safe ground between fights.
-local BOT_DRIVERS_MAX = 5        -- bots behind a wheel at once, across the match
-local BOT_BOARD_SEEK = 90        -- an armed vehicle this close may be taken
-local BOT_BOARD_CHANCE = 0.7     -- chance, every BOT_BOARD_EVERY seconds of a fight, that a bot looks
-local BOT_BOARD_ROAM_CHANCE = 0.4 -- the same for a bot on the move with nobody to fight
-local BOT_BOARD_EVERY = 3
-local BOT_BOARD_WALK = 12        -- seconds walking to the vehicle before giving up on it
-local BOT_DRIVE_IDLE = 30        -- seconds with nobody to shoot before getting out
-local BOT_DRIVE_CIRCLE = 45      -- closer than this, circle the target rather than drive at it
-local BOT_STEER_FULL = math.rad(35)
+local RunService = game:GetService("RunService")
 
--- Bot record -> true while it drives. STRONG keys; pruned by botDriverCount as bots get out or die.
-local botDrivers = {}
+-- One table for the section's numbers and one for its functions: BotService's main chunk is near
+-- Luau's 200-local limit, and this section would otherwise add fifty.
+local VEHICLE = {}
+local Vehicles = {}
 
-local function botDriverCount()
+VEHICLE.CHECK_EVERY = 2.5     -- a bot on foot looks for a vehicle this often (seconds)
+-- Oliver 2026-09-24: "make sure the bots get in the cars and use the guns" (main's 3b593e6 took these
+-- from 45 studs / 0.35 / fights only / 10 s idle to the numbers below, and let roaming bots on a gun).
+VEHICLE.FIGHT_SEEK = 90       -- an armed vehicle this close may be jumped on (in a fight, or roaming)
+VEHICLE.FIGHT_CHANCE = 0.7    -- chance, each look in a fight, that a bot goes for one
+VEHICLE.ROAM_GUN_CHANCE = 0.4 -- the same for a bot with nobody to fight: it mans a free gun
+VEHICLE.WALK = 12             -- seconds walking to a vehicle before giving up on it
+VEHICLE.RIDE_REACH = 30       -- a teammate's (or waiting bot's) vehicle this close may be ridden or gunned
+VEHICLE.IDLE = 30             -- seconds on a gun nobody drives, with nothing to shoot, before getting down
+VEHICLE.REBOARD = 20          -- seconds before a bot that got out (or was asked out) takes one again
+VEHICLE.FOE_MEMORY = 8        -- seconds someone a bot shot at, or was shot by, counts as its fight
+VEHICLE.RETREAT_HEALTH = 0.35 -- share of a vehicle's health under which its bot drives away from a fight
+VEHICLE.BAIL_HEALTH = 0.15    -- ...and under which it gets out before the vehicle is wrecked
+VEHICLE.GUARD_RANGE = 70      -- people on foot this close are handed to BotNav to stop for
+VEHICLE.ARRIVE = 30           -- studs short of the goal a trip ends (it parks and gets out)
+VEHICLE.OFFER = 4             -- seconds a team driver waits at the start for a teammate walking over
+VEHICLE.BASE_LANE = 40        -- studs straight out along a parked base vehicle's nose: the yard's way out
+VEHICLE.BODY_RADIUS = 0.75    -- half a body's width, for the share of a mount's spread it catches (tools/bot_driving_combat.py DIAL)
+VEHICLE.GUN_RANGE = { hitscan = 70, rocket = 80, grenade = 200 } -- where a driver keeps a target
+VEHICLE.TAKEOVER_STOP = 1.5   -- seconds the wheel is held stopped for a takeover before the bot gets out
+
+for _, key in ipairs({ "vehicleBoards", "vehicleShots", "vehicleAimedHits", "vehicleTakeovers", "vehicleExits",
+	"vehicleWaits" }) do
+	STATS[key] = STATS[key] or 0
+end
+
+-- Bot record -> its ride while it is in a vehicle. STRONG keys; dropped when it gets out, and
+-- pruned when its humanoid is gone.
+local riders = {}
+-- The map's RoadNetwork (RoadNetwork.Plan's result), handed over when a map is built. Kept across
+-- Clear: the next map's replaces it.
+Vehicles.roads = nil
+
+function BotService.SetRoads(network)
+	Vehicles.roads = network
+end
+
+function Vehicles.teamsActive()
+	local teams = lazy("ModeTeams")
+	return teams ~= nil and teams.IsActive ~= nil and teams.IsActive()
+end
+
+function Vehicles.teamOf(token)
+	local teams = lazy("ModeTeams")
+	if teams and teams.IsActive and teams.IsActive() and teams.TeamOf then
+		return teams.TeamOf(token)
+	end
+	return nil
+end
+
+-- Who this bot is fighting: whoever it has had in its sights, or been shot by, in the last
+-- VEHICLE.FOE_MEMORY seconds. Published on its character as BotFoes (",userId,userId,") so a
+-- player's VehicleClient hides a takeover prompt the server would refuse.
+function Vehicles.refreshFoes(bot, now)
+	local foes = bot.vehicleFoes
+	if not foes then
+		foes = {}
+		bot.vehicleFoes = foes
+	end
+	if bot.target then
+		foes[bot.target] = now
+	end
+	if bot.threat and bot.threat.token and now - bot.threat.at < VEHICLE.FOE_MEMORY then
+		foes[bot.threat.token] = math.max(foes[bot.threat.token] or 0, bot.threat.at)
+	end
+	local ids = {}
+	for token, at in pairs(foes) do
+		if now - at > VEHICLE.FOE_MEMORY then
+			foes[token] = nil
+		elseif Combatants.IsPlayer(token) then
+			table.insert(ids, tostring(token.UserId))
+		end
+	end
+	table.sort(ids)
+	local published = #ids > 0 and ("," .. table.concat(ids, ",") .. ",") or nil
+	if bot.character and bot.character:GetAttribute("BotFoes") ~= published then
+		bot.character:SetAttribute("BotFoes", published)
+	end
+end
+
+-- Whether `player` may take this bot's seat: a teammate always; with no teams, anyone it is not
+-- fighting. VehicleClient's mayTakeOver is the same rule, read from what the server publishes.
+function BotService.TakeoverAllowed(bot, player)
+	if Vehicles.teamsActive() then
+		local mine, theirs = Vehicles.teamOf(bot), Vehicles.teamOf(player)
+		return mine ~= nil and mine == theirs
+	end
+	Vehicles.refreshFoes(bot, os.clock())
+	return bot.vehicleFoes[player] == nil
+end
+
+-- Gets out. The seat's own exit puts the bot down beside the vehicle (VehicleService.onSeatChanged).
+function Vehicles.leaveRide(bot, reason, cooldown)
+	local ride = riders[bot] or bot.ride
+	riders[bot] = nil
+	bot.ride = nil
+	bot.boarding = nil
+	if ride and ride.seat and ride.seat:IsA("VehicleSeat") then
+		ride.seat.ThrottleFloat = 0
+		ride.seat.SteerFloat = 0
+		ride.seat:SetAttribute("Handbrake", nil)
+	end
+	if bot.character then
+		bot.character:SetAttribute("BotFoes", nil)
+	end
+	local humanoid = bot.humanoid
+	if humanoid and humanoid.SeatPart then
+		humanoid.Sit = false
+	end
+	bot.noVehicleUntil = os.clock() + (cooldown or VEHICLE.REBOARD)
+	bot.lastVehicleExit = reason
+	STATS.vehicleExits += 1
+	if bot.nav then
+		BotNav.Drop(bot)
+	end
+end
+
+-- VehicleService.BotYield: a player asks for `seat`, which this bot holds. False leaves the bot where
+-- it is. True means it is getting out: straight away from the gun or a passenger seat, from the wheel
+-- once the servo has brought the car to a stop (VEHICLE.TAKEOVER_STOP at most).
+function BotService.YieldSeat(bot, player, seat)
+	local ride = riders[bot]
+	if not ride or ride.seat ~= seat or not BotService.TakeoverAllowed(bot, player) then
+		return false
+	end
+	STATS.vehicleTakeovers += 1
+	if ride.role == "driver" then
+		ride.yieldTo = { player = player, at = os.clock() }
+	else
+		Vehicles.leaveRide(bot, "takeover")
+	end
+	return true
+end
+
+-- A driver asked out: the car held on the brake until it has all but stopped, then out.
+function Vehicles.yieldServo(bot, ride, now)
+	local yieldTo = ride.yieldTo
+	if not yieldTo then
+		return false
+	end
+	ride.drive.hold = true
+	local speed = ride.drive.chassis.AssemblyLinearVelocity.Magnitude
+	if speed < 4 or now - yieldTo.at > VEHICLE.TAKEOVER_STOP then
+		Vehicles.leaveRide(bot, "takeover")
+		return true
+	end
+	return false
+end
+
+-- The shot's chance, from the same dials as shootAt's (these lines are shootAt's, and
+-- tools/bot_driving_combat.py fails if the two ever give different numbers): accuracy by distance, aim
+-- settling on a target, a fast target harder to hit. Then what is particular to a mounted gun: firing
+-- from a moving vehicle is harder, and a bullet aimed at a body still scatters by the mount's spread
+-- (VehicleWeapons.Fire), so the roll is divided by the share of that cone a body covers, and what
+-- lands is the dial rather than the dial times the cone.
+function Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)
+	local chance = accuracyAt(distance)
+	local settle = math.clamp((now - AIM_SETTLE_DELAY - (ride.fight.acquiredAt or now)) / 1.5, 0, 1)
+	chance *= 0.9 + 0.15 * settle
+	local velocity = targetRoot.AssemblyLinearVelocity
+	if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > 18 or math.abs(velocity.Y) > 8 then
+		chance *= 0.85
+	end
+	local chassis = ride.model.PrimaryPart
+	if chassis and chassis.AssemblyLinearVelocity.Magnitude > 30 then
+		chance *= 0.85
+	end
+	if spec.kind ~= "round" and (spec.spread or 0) > 0 then
+		-- The spread puts a bullet at a distance from the aim that is even across the cone's radius
+		-- `cone` (VehicleWeapons' spread), in any direction. A body `w` wide either side catches every
+		-- one inside `w`, and further out those whose sideways part is under `w`:
+		-- share = (w + 2/pi * integral from w to cone of asin(w / r) dr) / cone.
+		local cone = distance * math.tan(math.rad(spec.spread))
+		local w = VEHICLE.BODY_RADIUS
+		if cone > w then
+			local integral = cone * math.asin(w / cone) + w * math.log(cone + math.sqrt(cone * cone - w * w))
+				- (w * math.pi / 2 + w * math.log(w))
+			chance = math.min(1, chance / ((w + integral * 2 / math.pi) / cone))
+		end
+	end
+	return chance
+end
+
+-- One pull of the mounted gun's trigger, called every frame while `ride.trigger` is set: bursts at
+-- the gun's rate with rests between, the belt left to cool back up rather than fired dry, nothing
+-- outside the mount's arc or into a round's own blast.
+function Vehicles.vehicleTrigger(bot, ride, now)
+	local fight = ride.fight
+	if not fight or not fight.root.Parent or now < (ride.nextShotAt or 0) then
+		return
+	end
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local vehicle = VehicleWeapons and VehicleWeapons.DrivenBy(bot)
+	if not vehicle then
+		return
+	end
+	local ammo, spec = VehicleWeapons.AmmoOf(vehicle)
+	if not ammo then
+		return
+	end
+	if ride.cooling then
+		if ammo < spec.magazine * 0.6 then
+			return
+		end
+		ride.cooling = false
+	end
+	if ammo < 1 or (spec.magazine >= 10 and ammo < spec.magazine * 0.15) then
+		ride.cooling = true
+		return
+	end
+	if (ride.burstLeft or 0) <= 0 then
+		local rounds = spec.kind == "round"
+		ride.burstLeft = rounds and math.random(1, 2) or math.random(6, 10)
+		ride.nextShotAt = now + (rounds and 1.0 + math.random() * 0.8 or MatchConfig.BotBurstRest + math.random() * 0.35)
+		return
+	end
+	local targetRoot = fight.root
+	local distance = (targetRoot.Position - vehicle.PrimaryPart.Position).Magnitude
+	if not VehicleWeapons.InArc(vehicle, targetRoot.Position) then
+		return
+	end
+	if spec.kind == "round" and distance < (spec.splashRadius or 12) + 6 then
+		return
+	end
+	local hit = math.random() < Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)
+	local aim = VehicleWeapons.BotAimPoint(vehicle, targetRoot.Position, targetRoot.AssemblyLinearVelocity, hit)
+	ride.nextShotAt = now + 1 / spec.fireRate
+	local ok, why = VehicleWeapons.Fire(bot, aim)
+	if ok then
+		ride.burstLeft -= 1
+		STATS.vehicleShots += 1
+		if hit then
+			STATS.vehicleAimedHits += 1
+		end
+	elseif why == "ammo" then
+		ride.cooling = true
+	end
+end
+BotService.VehicleTrigger = Vehicles.vehicleTrigger
+
+-- Every frame, for the bots in a vehicle: the wheel (BotNav.DriveControl, arithmetic only) and the
+-- gun's trigger. Started the first time a bot gets in.
+Vehicles.servo = nil
+
+function Vehicles.driverServo(bot, ride, dt, now)
+	if Vehicles.yieldServo(bot, ride, now) then
+		return
+	end
+	local seat = ride.seat
+	local throttle, steer, handbrake = BotNav.DriveControl(ride.drive, dt, now)
+	seat.ThrottleFloat = throttle
+	seat.SteerFloat = steer
+	if (seat:GetAttribute("Handbrake") == true) ~= handbrake then
+		seat:SetAttribute("Handbrake", handbrake or nil)
+	end
+end
+
+function Vehicles.ensureServo()
+	local VehicleService = lazy("VehicleService")
+	if VehicleService and VehicleService.BotYield ~= BotService.YieldSeat then
+		VehicleService.BotYield = BotService.YieldSeat
+	end
+	if Vehicles.servo then
+		return
+	end
+	Vehicles.servo = RunService.Heartbeat:Connect(function(dt)
+		local now = os.clock()
+		for bot, ride in pairs(riders) do
+			local humanoid = bot.humanoid
+			if humanoid and humanoid.Health > 0 and humanoid.SeatPart == ride.seat then
+				if ride.role == "driver" and ride.drive then
+					Vehicles.driverServo(bot, ride, dt, now)
+				end
+				if riders[bot] and ride.trigger then
+					Vehicles.vehicleTrigger(bot, ride, now)
+				end
+			end
+		end
+	end)
+end
+
+function Vehicles.driverCount(team)
 	local count = 0
-	for driver in pairs(botDrivers) do
-		local humanoid = driver.humanoid
-		if humanoid and humanoid.Health > 0 and humanoid.SeatPart then
+	for other, ride in pairs(riders) do
+		local humanoid = other.humanoid
+		if not humanoid or humanoid.Health <= 0 or not humanoid.SeatPart then
+			riders[other] = nil
+		elseif ride.role == "driver" and (team == nil or Vehicles.teamOf(other) == team) then
 			count += 1
-		else
-			botDrivers[driver] = nil
 		end
 	end
 	return count
 end
 
-local function leaveVehicle(bot, humanoid, seat)
-	if seat:IsA("VehicleSeat") then
-		seat.ThrottleFloat = 0
-		seat.SteerFloat = 0
-	end
-	humanoid.Sit = false
-	botDrivers[bot] = nil
+function Vehicles.driverRoom(bot)
+	local team = Vehicles.teamOf(bot)
+	local cap = team and (MatchConfig.BotDriversPerTeam or 4) or (MatchConfig.BotDriversMax or 6)
+	return Vehicles.driverCount(team) < cap
 end
 
--- Returns true when this think was spent in (or getting into) an armed vehicle.
-local function botVehicleThink(bot, humanoid, root, head, now)
-	local VehicleWeapons = lazy("VehicleWeapons")
-	if not VehicleWeapons then
-		return false
+-- Where a bot wants to go, if anywhere, and how close counts as there: its team objective in a team
+-- mode; in the battle royale where the storm is going (once it presses), else the loot it is after,
+-- else its wander goal.
+function Vehicles.travelGoal(bot, root, now)
+	local state = BotService.ModeState(bot)
+	if state then
+		local objective, kind = modeObjective(bot, root, state, now)
+		if objective then
+			return objective, (kind == "hold" or kind == "contest") and 40 or VEHICLE.ARRIVE
+		end
+		return nil
 	end
-	local seat = humanoid.SeatPart
-	if seat then
-		local vehicle = VehicleWeapons.DrivenBy(bot)
-		if not vehicle or vehicle:GetAttribute("Wrecked") or not vehicle.PrimaryPart then
-			leaveVehicle(bot, humanoid, seat)
-			return false
+	local center, radius = safeCircle()
+	if center and (StormService.IsOutside(root.Position) or stormPressure(root.Position) >= MatchConfig.BotStormRotate) then
+		if not bot.wanderGoal or not insideCircle(bot.wanderGoal, center, radius, 0.85) then
+			bot.wanderGoal = stormGoal(root.Position)
+			bot.wanderAt = now
 		end
-		botDrivers[bot] = true
-		local candidate = findTarget(bot, root, head, now)
-		if candidate then
-			bot.driveSeenAt = now
-			bot.driveGoal = nil
-			VehicleWeapons.Fire(bot, candidate.root.Position)
-		elseif now - (bot.driveSeenAt or now) > BOT_DRIVE_IDLE then
-			leaveVehicle(bot, humanoid, seat)
-			return false
+		return bot.wanderGoal, VEHICLE.ARRIVE
+	end
+	if bot.lootTarget and bot.lootTarget.Parent then
+		return bot.lootTarget.Position, 40
+	end
+	return bot.wanderGoal, VEHICLE.ARRIVE
+end
+
+-- Where a route must stay: the circle the storm is heading for, or a team mode's arena.
+function Vehicles.driveBounds()
+	local teams = lazy("ModeTeams")
+	if teams and teams.IsActive and teams.IsActive() and teams.Arena then
+		local centre, radius = teams.Arena()
+		if centre and radius and radius > 0 then
+			return { center = centre, radius = radius - 40 }
 		end
-		local chassis = vehicle.PrimaryPart
-		local goal = candidate and candidate.root.Position or bot.driveGoal
-		if not goal or flatDistance(goal, chassis.Position) < 20 then
-			goal = stormGoal(chassis.Position)
-			bot.driveGoal = goal
+	end
+	local center, radius = safeCircle()
+	if center then
+		return { center = center, radius = radius * 0.92 }
+	end
+	return nil
+end
+
+-- People on foot near the car, for BotNav to stop for (teammates) or go round (anyone it isn't
+-- fighting). Read from the tick's combatant grid (combatantsNear), not queried.
+function Vehicles.guardsNear(bot, position)
+	local list = {}
+	local team = Vehicles.teamOf(bot)
+	local near, count = combatantsNear(position, VEHICLE.GUARD_RANGE)
+	for index = 1, count do
+		local entry = near[index]
+		if entry.token ~= bot and entry.humanoid.Health > 0 and not entry.humanoid.SeatPart then
+			local mate = team ~= nil and Vehicles.teamOf(entry.token) == team
+			if mate or not (bot.vehicleFoes and bot.vehicleFoes[entry.token]) then
+				table.insert(list, { root = entry.root, hard = mate })
+			end
 		end
-		local localGoal = chassis.CFrame:PointToObjectSpace(goal)
-		local distance = math.sqrt(localGoal.X * localGoal.X + localGoal.Z * localGoal.Z)
-		-- Positive is to the left, as the mount's yaw.
-		local heading = math.atan2(-localGoal.X, -localGoal.Z)
-		if candidate and distance < BOT_DRIVE_CIRCLE then
-			-- Keep them off to one side and keep moving: a parked car is the easiest thing to hit.
-			heading -= bot.strafeDir * math.rad(80)
+	end
+	return list
+end
+
+-- The sweeps must see past everyone sitting in the car, not stop at the gunner's head.
+function Vehicles.riderFilter(ride)
+	local list = { ride.model }
+	for _, child in ipairs(ride.model:GetChildren()) do
+		if child:IsA("Seat") or child:IsA("VehicleSeat") then
+			local occupant = child.Occupant
+			if occupant and occupant.Parent then
+				table.insert(list, occupant.Parent)
+			end
 		end
-		local throttle = distance < 15 and 0.4 or 1
-		local steer = math.clamp(-heading / BOT_STEER_FULL, -1, 1)
-		if math.abs(heading) > math.rad(125) and not candidate then
-			-- Behind: back round rather than drive a wide loop.
-			throttle, steer = -0.6, -steer
+	end
+	ride.drive.params.FilterDescendantsInstances = list
+	ride.drive.probeParams.FilterDescendantsInstances = list
+end
+
+function Vehicles.noteFight(bot, ride, candidate, now)
+	if not ride.fight or ride.fight.token ~= candidate.token then
+		ride.fight = { token = candidate.token, root = candidate.root, acquiredAt = now }
+	else
+		ride.fight.root = candidate.root
+	end
+	bot.target = candidate.token
+	bot.lastCombatAt = now
+	ride.lastTargetAt = now
+	reportSighting(bot, candidate.root.Position, now)
+end
+
+-- Where the wheel takes an armed vehicle with a gunner in a fight: round the target at the gun's
+-- range, a little ahead of where it is on that circle, so the car keeps moving (a parked car is the
+-- easiest thing to hit) and the target stays out to the side, inside every mount's arc. Badly
+-- damaged, away from it.
+function Vehicles.combatGoal(ride, candidate, health, now)
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local _, spec = VehicleWeapons.AmmoOf(ride.model)
+	local want = spec and (spec.kind == "hitscan" and VEHICLE.GUN_RANGE.hitscan
+		or VEHICLE.GUN_RANGE[spec.projectile] or VEHICLE.GUN_RANGE.rocket) or VEHICLE.GUN_RANGE.hitscan
+	local chassis = ride.drive.chassis
+	local target = flat(candidate.root.Position)
+	local away = flat(chassis.Position) - target
+	if away.Magnitude < 1 then
+		away = -flat(chassis.CFrame.LookVector)
+	end
+	away = away.Unit
+	if health < VEHICLE.RETREAT_HEALTH then
+		return target + away * 220, { arrive = 25, maxSpeed = nil, loiter = false }
+	end
+	if not ride.orbit or now > (ride.orbitFlipAt or 0) then
+		ride.orbit = ride.orbit and -ride.orbit or (math.random() < 0.5 and 1 or -1)
+		ride.orbitFlipAt = now + 12 + math.random() * 8
+	end
+	local turn = ride.orbit * math.rad(35)
+	local c, s = math.cos(turn), math.sin(turn)
+	local around = Vector3.new(away.X * c - away.Z * s, 0, away.Z * c + away.X * s)
+	return target + around * want, { arrive = 8, maxSpeed = 40, loiter = true }
+end
+
+-- At the wheel. Returns nothing; gets out itself when the drive is over.
+function Vehicles.driverThink(bot, root, head, ride, now)
+	local VehicleService = lazy("VehicleService")
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local model = ride.model
+	local drive = ride.drive
+	local maxHealth = model:GetAttribute("VehicleMaxHealth") or 1
+	local health = (model:GetAttribute("VehicleHealth") or maxHealth) / math.max(1, maxHealth)
+	if model:GetAttribute("Wrecked") or health < VEHICLE.BAIL_HEALTH then
+		Vehicles.leaveRide(bot, "wrecked")
+		return
+	end
+	if ride.yieldTo then
+		return
+	end
+	Vehicles.riderFilter(ride)
+	Vehicles.refreshFoes(bot, now)
+	drive.guard = Vehicles.guardsNear(bot, drive.chassis.Position)
+	-- The vehicles about, so BotNav only pulls out to overtake into a clear lane (read from
+	-- VehicleService's list, not a spatial query).
+	local traffic = {}
+	if VehicleService and VehicleService.VehiclesNear then
+		for _, near in ipairs(VehicleService.VehiclesNear(drive.chassis.Position, 160)) do
+			local chassis = near.entry.rig and near.entry.rig.chassis
+			if chassis and chassis ~= drive.chassis then
+				table.insert(traffic, chassis)
+			end
 		end
-		seat.ThrottleFloat = throttle
-		seat.SteerFloat = steer
-		return true
+	end
+	drive.traffic = traffic
+
+	local seats = VehicleService and VehicleService.SeatsOf(model)
+	local gunnerSeat = seats and seats.gunner or (VehicleWeapons and VehicleWeapons.GunnerSeatOf(model))
+	local candidate = findTarget(bot, root, head, now)
+	if candidate then
+		Vehicles.noteFight(bot, ride, candidate, now)
+	else
+		ride.fight = nil
+	end
+	ride.trigger = false
+
+	-- An armed vehicle is not driven anywhere with nobody on its gun: held where it is, the gun worked
+	-- from the wheel only once something shoots at it, given up after BotGunnerWait.
+	if gunnerSeat and not gunnerSeat.Occupant then
+		if not ride.waitSince then
+			ride.waitSince = now
+			STATS.vehicleWaits += 1
+		end
+		drive.hold = true
+		local attacked = bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW
+		ride.trigger = attacked and candidate ~= nil
+		if now - ride.waitSince > (MatchConfig.BotGunnerWait or 25) and not attacked then
+			Vehicles.leaveRide(bot, "no gunner")
+		end
+		return
+	end
+	ride.waitSince = nil
+	drive.hold = false
+	-- A team driver off on a trip waits a moment for a teammate walking over to ride along.
+	if ride.offerUntil and now < ride.offerUntil and ride.riderComing then
+		drive.hold = true
+		return
 	end
 
-	botDrivers[bot] = nil
+	local goal, options
+	if candidate and gunnerSeat then
+		goal, options = Vehicles.combatGoal(ride, candidate, health, now)
+	elseif candidate and not gunnerSeat and candidate.distance < 45
+		and drive.chassis.AssemblyLinearVelocity.Magnitude < 8 then
+		-- No gun, someone close, and not going anywhere: better on foot.
+		Vehicles.leaveRide(bot, "fight", 6)
+		return
+	else
+		local arrive
+		goal, arrive = Vehicles.travelGoal(bot, root, now)
+		if not goal then
+			Vehicles.leaveRide(bot, "nowhere", 8)
+			return
+		end
+		options = { arrive = arrive }
+	end
+	goal = flat(goal)
+	local moved = ride.goal and flatDistance(ride.goal, goal) or math.huge
+	if ride.replan or moved > (options.loiter and 12 or 40) or ride.goalLoiter ~= (options.loiter == true) then
+		options.roads = Vehicles.roads
+		options.bounds = Vehicles.driveBounds()
+		options.preferRoads = ride.preferRoads
+		options.via = ride.lane and { ride.lane } or nil
+		BotNav.DriveTo(drive, goal, options)
+		ride.goal = goal
+		ride.goalLoiter = options.loiter == true
+		ride.replan = false
+		ride.lane = nil
+	end
+
+	local status = BotNav.DriveSense(drive, now)
+	bot.branch = "drive"
+	if status == "arrived" then
+		Vehicles.leaveRide(bot, "arrived", 8)
+	elseif status == "hazard" then
+		-- Water or a drop in the way of the straight line: the roads, once; then on foot.
+		if Vehicles.roads and not ride.preferRoads then
+			ride.preferRoads = true
+			ride.replan = true
+		else
+			Vehicles.leaveRide(bot, "hazard")
+		end
+	elseif status == "stuck" or status == "lost" or status == "flipped" then
+		Vehicles.leaveRide(bot, status)
+	end
+end
+
+-- On the gun: find a target and hold the trigger (the servo fires). Nothing to shoot for a while
+-- with nobody at the wheel, get down.
+function Vehicles.gunnerThink(bot, root, head, ride, now)
+	local model = ride.model
+	local maxHealth = model:GetAttribute("VehicleMaxHealth") or 1
+	local health = (model:GetAttribute("VehicleHealth") or maxHealth) / math.max(1, maxHealth)
+	if model:GetAttribute("Wrecked") or health < VEHICLE.BAIL_HEALTH then
+		Vehicles.leaveRide(bot, "wrecked")
+		return
+	end
+	Vehicles.refreshFoes(bot, now)
+	local candidate = findTarget(bot, root, head, now)
+	if candidate then
+		Vehicles.noteFight(bot, ride, candidate, now)
+		ride.trigger = true
+		local VehicleWeapons = lazy("VehicleWeapons")
+		if VehicleWeapons and VehicleWeapons.Aim then
+			VehicleWeapons.Aim(bot, candidate.root.Position)
+		end
+	else
+		ride.fight = nil
+		ride.trigger = false
+		local driverSeat = model:FindFirstChild("DriverSeat")
+		if not (driverSeat and driverSeat.Occupant) and now - (ride.lastTargetAt or now) > VEHICLE.IDLE then
+			Vehicles.leaveRide(bot, "idle", 8)
+		end
+	end
+	bot.branch = "gunner"
+end
+
+-- A passenger (team modes): its own gun out of the window, as a player passenger may. No launchers
+-- (a round's flight only leaves out the bot, not the car it is sitting in). Out when the driver is.
+function Vehicles.passengerThink(bot, root, head, ride, now)
+	local model = ride.model
+	local driverSeat = model:FindFirstChild("DriverSeat")
+	if model:GetAttribute("Wrecked") or not (driverSeat and driverSeat.Occupant) then
+		Vehicles.leaveRide(bot, "driver gone", 6)
+		return
+	end
+	finishReload(bot, now)
+	local candidate = bot.weapon and not bot.weapon.projectile and findTarget(bot, root, head, now) or nil
+	if candidate and candidate.distance <= bot.weapon.range then
+		if bot.target ~= candidate.token then
+			bot.acquiredAt = now
+		end
+		bot.target = candidate.token
+		bot.lastCombatAt = now
+		shootAt(bot, candidate.token, candidate.root, candidate.distance, head)
+	else
+		bot.target = nil
+	end
+	bot.branch = "passenger"
+end
+
+-- Sat down: the ride starts. A driver gets a BotNav drive; a base vehicle still in its bay is driven
+-- out along the bay's nose first (TeamBaseRuins' yard: every bay faces its way out through a gate).
+function Vehicles.startRide(bot, role, seat, purpose, now)
+	local model = seat.Parent
+	local ride = { role = role, model = model, seat = seat, purpose = purpose, boardedAt = now, lastTargetAt = now,
+		burstLeft = 0, nextShotAt = 0 }
+	if role == "driver" then
+		local VehicleService = lazy("VehicleService")
+		local entry = VehicleService and VehicleService.Get(model)
+		local rig = entry and entry.rig
+		if not rig or not rig.handling or not rig.wheels or #rig.wheels == 0 then
+			return nil
+		end
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = { model }
+		params.IgnoreWater = true
+		local probe = RaycastParams.new()
+		probe.FilterType = Enum.RaycastFilterType.Exclude
+		probe.FilterDescendantsInstances = { model }
+		probe.IgnoreWater = false
+		local chassis = rig.chassis
+		-- Ride height, once at boarding; refused by the budget, the usual 2.5 stands.
+		local below = castRay(chassis.Position, Vector3.new(0, -20, 0), params, "navigation")
+		ride.drive = BotNav.NewDrive(chassis, rig.handling, {
+			wheelbase = rig.wheelbase, params = params, probeParams = probe,
+			rideHeight = below and chassis.Position.Y - below.Position.Y or 2.5,
+		})
+		local teams = lazy("ModeTeams")
+		local folder = teams and teams.BaseVehicleFolder and teams.BaseVehicleFolder()
+		if folder and model:IsDescendantOf(folder) and chassis.AssemblyLinearVelocity.Magnitude < 1 then
+			local look = flat(chassis.CFrame.LookVector)
+			if look.Magnitude > 0.1 then
+				ride.lane = flat(chassis.Position) + look.Unit * VEHICLE.BASE_LANE
+			end
+		end
+		if purpose == "trip" and Vehicles.teamsActive() then
+			ride.offerUntil = now + VEHICLE.OFFER
+		end
+	end
+	riders[bot] = ride
+	bot.ride = ride
+	bot.boarding = nil
+	STATS.vehicleBoards += 1
+	Vehicles.ensureServo()
+	return ride
+end
+
+-- The seat this bot on foot should go for now, if any, with its role and reason.
+-- How keen this bot is on vehicles, scaling its chance of jumping on a gun (1 = the numbers above).
+-- TODO(looting worker): BotService.Loot.vehiclePreference(bot) is not in this file yet; until it
+-- lands this is 1 for everyone, and it is picked up as soon as it exists.
+function Vehicles.preference(bot)
+	local loot = BotService.Loot
+	if type(loot) == "table" and type(loot.vehiclePreference) == "function" then
+		local ok, value = pcall(loot.vehiclePreference, bot)
+		if ok and type(value) == "number" then
+			return math.max(0, value)
+		end
+	end
+	return 1
+end
+
+function Vehicles.pickSeat(bot, root, now)
+	local VehicleService = lazy("VehicleService")
+	if not VehicleService or not VehicleService.VehiclesNear then
+		return nil
+	end
+	local team = Vehicles.teamOf(bot)
+	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	local reach = math.max(MatchConfig.BotBoardReach or 60, VEHICLE.FIGHT_SEEK, VEHICLE.RIDE_REACH)
+	local near = VehicleService.VehiclesNear(root.Position, reach)
+	if #near == 0 then
+		return nil
+	end
+
+	-- Someone waiting at the wheel for a gunner, or a teammate setting off with a seat free.
+	for _, found in ipairs(near) do
+		if found.distance <= VEHICLE.RIDE_REACH then
+			local seats = VehicleService.SeatsOf(found.model)
+			local driver = seats and seats.driver.Occupant
+			local holder = driver and driver.Parent and Combatants.FromCharacter(driver.Parent)
+			local friendly = holder ~= nil and ((team ~= nil and Vehicles.teamOf(holder) == team)
+				or (team == nil and Combatants.IsBot(holder) and riders[holder] ~= nil))
+			if friendly then
+				local ride = riders[holder]
+				if seats.gunner and not seats.gunner.Occupant then
+					return seats.gunner, "gunner", "gunner"
+				end
+				if team ~= nil and ride and ride.offerUntil and now < ride.offerUntil and not fighting then
+					for _, passenger in ipairs(seats.passengers) do
+						if not passenger.Occupant then
+							ride.riderComing = true
+							return passenger, "passenger", "ride"
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if fighting then
+		if math.random() > VEHICLE.FIGHT_CHANCE * Vehicles.preference(bot) then
+			return nil
+		end
+		for _, found in ipairs(near) do
+			local seats = VehicleService.SeatsOf(found.model)
+			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner then
+				if not seats.gunner.Occupant then
+					return seats.gunner, "gunner", "fight"
+				end
+				if not seats.driver.Occupant and Vehicles.driverRoom(bot) then
+					return seats.driver, "driver", "fight"
+				end
+			end
+		end
+		return nil
+	end
+
+	if bot.gearUntil and now < bot.gearUntil then
+		return nil
+	end
+	-- Roaming past a free gun: now and then a bot mans it, and watches from it (VEHICLE.IDLE) for
+	-- someone to shoot or someone to drive it.
+	if math.random() < VEHICLE.ROAM_GUN_CHANCE * Vehicles.preference(bot) then
+		for _, found in ipairs(near) do
+			local seats = VehicleService.SeatsOf(found.model)
+			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner and not seats.gunner.Occupant then
+				return seats.gunner, "gunner", "fight"
+			end
+		end
+	end
+
+	-- A trip: somewhere far, a free wheel close by and not back the way it came. One with an unmanned
+	-- gun last, since that gun needs a gunner before it goes anywhere.
+	local goal = Vehicles.travelGoal(bot, root, now)
+	if not goal or flatDistance(goal, root.Position) < (MatchConfig.BotDriveMinTrip or 220) or not Vehicles.driverRoom(bot) then
+		return nil
+	end
+	local best, bestScore = nil, math.huge
+	for _, found in ipairs(near) do
+		local seats = VehicleService.SeatsOf(found.model)
+		if seats and not seats.driver.Occupant and found.distance <= (MatchConfig.BotBoardReach or 60) then
+			local position = found.model:GetPivot().Position
+			if flatDistance(position, goal) < flatDistance(root.Position, goal) + 20 then
+				local score = found.distance + ((seats.gunner and not seats.gunner.Occupant) and 50 or 0)
+				if score < bestScore then
+					best, bestScore = seats.driver, score
+				end
+			end
+		end
+	end
+	if best then
+		return best, "driver", "trip"
+	end
+	return nil
+end
+
+-- On foot: walking to a seat already, or looking for one. True while this think went on that.
+function Vehicles.considerVehicle(bot, humanoid, root, now)
 	local boarding = bot.boarding
 	if boarding then
-		if now > boarding.giveUpAt or boarding.seat.Occupant or not boarding.seat:IsDescendantOf(workspace) then
+		local seat = boarding.seat
+		if now > boarding.giveUpAt or seat.Occupant or not seat:IsDescendantOf(workspace)
+			or (boarding.role == "driver" and not Vehicles.driverRoom(bot)) then
 			bot.boarding = nil
+			bot.noVehicleUntil = now + VEHICLE.CHECK_EVERY * 2
 			return false
 		end
-		if VehicleWeapons.BotBoard(humanoid, boarding.seat) then
-			bot.boarding = nil
-			bot.driveSeenAt = now
-			botDrivers[bot] = true
-			return true
+		local VehicleService = lazy("VehicleService")
+		if VehicleService and VehicleService.BotSit(humanoid, seat) then
+			if Vehicles.startRide(bot, boarding.role, seat, boarding.purpose, now) then
+				return true
+			end
+			Vehicles.leaveRide(bot, "unrideable")
+			return false
 		end
-		humanoid:MoveTo(boarding.seat.Position)
+		if navigate(bot, humanoid, root, seat.Position, BotNav.Priority.Loot, now) == "abandon" then
+			bot.boarding = nil
+		end
 		return true
 	end
-
-	-- Now and then, likelier in a fight, and only while there's room behind a wheel.
-	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
-	if now < (bot.boardCheckAt or 0) then
+	if bot.dropping or now < (bot.noVehicleUntil or 0) or now < (bot.vehicleCheckAt or 0) then
 		return false
 	end
-	bot.boardCheckAt = now + BOT_BOARD_EVERY
-	if math.random() > (fighting and BOT_BOARD_CHANCE or BOT_BOARD_ROAM_CHANCE) or botDriverCount() >= BOT_DRIVERS_MAX then
+	bot.vehicleCheckAt = now + VEHICLE.CHECK_EVERY
+	local seat, role, purpose = Vehicles.pickSeat(bot, root, now)
+	if not seat then
 		return false
 	end
-	local _, freeSeat = VehicleWeapons.FreeArmedNear(root.Position, BOT_BOARD_SEEK)
-	if not freeSeat then
-		return false
-	end
-	bot.boarding = { seat = freeSeat, giveUpAt = now + BOT_BOARD_WALK }
-	humanoid:MoveTo(freeSeat.Position)
+	bot.boarding = { seat = seat, role = role, purpose = purpose, giveUpAt = now + VEHICLE.WALK }
+	navigate(bot, humanoid, root, seat.Position, BotNav.Priority.Loot, now)
 	return true
+end
+
+-- Returns true when this think was spent in a vehicle, or on the way to one.
+function Vehicles.botVehicleThink(bot, humanoid, root, head, now)
+	local ride = bot.ride
+	if ride then
+		if humanoid.SeatPart ~= ride.seat or not ride.model.Parent then
+			-- Out some other way (thrown clear of a wreck, a blast, jumped): back on foot.
+			Vehicles.leaveRide(bot, "unseated", 6)
+			return false
+		end
+		stopFacing(bot, humanoid)
+		if ride.role == "driver" then
+			Vehicles.driverThink(bot, root, head, ride, now)
+		elseif ride.role == "gunner" then
+			Vehicles.gunnerThink(bot, root, head, ride, now)
+		else
+			Vehicles.passengerThink(bot, root, head, ride, now)
+		end
+		return true
+	end
+	if humanoid.SeatPart then
+		-- Sat in something this section didn't put it in: stand up.
+		humanoid.Sit = false
+		return false
+	end
+	return Vehicles.considerVehicle(bot, humanoid, root, now)
 end
 
 --------------------------------------------------------------------------------
@@ -3773,8 +4520,8 @@ local function updateBot(bot)
 	end
 	bot.lastHealth = humanoid.Health
 
-	-- BOT VEHICLES (section above): at the wheel of an armed vehicle, or walking to one.
-	if botVehicleThink(bot, humanoid, root, head, now) then
+	-- BOT VEHICLES (section above): in a vehicle (at the wheel, on the gun, riding), or walking to one.
+	if Vehicles.botVehicleThink(bot, humanoid, root, head, now) then
 		return
 	end
 
@@ -4693,7 +5440,7 @@ function BotService.Clear()
 	table.clear(teamSightings)
 	table.clear(teamFocus)
 	BotService.SpatialQuery.Clear()
-	table.clear(botDrivers)
+	table.clear(riders)
 	lootSnapshot.at = -math.huge
 	table.clear(bots)
 end

@@ -6,14 +6,25 @@
 --   VehicleWeapons.Fire(token, aimPoint)  -> ok, reason   a player's remote or a bot calls this
 --   VehicleWeapons.Aim(token, aimPoint)   -> ok           swing the turret without firing
 --   VehicleWeapons.DrivenBy(token)        -> vehicle, spec, character, humanoid   or nil
+--                                           (the vehicle whose gun `token` works; see WHO WORKS THE GUN)
+--   VehicleWeapons.GunnerSeatOf(vehicle)  -> seat or nil   the gun's own seat
 --   VehicleWeapons.ClampAim(spec, direction) -> yaw, pitch (radians, mount space, within limits)
 --   VehicleWeapons.FreeArmedNear(position, radius) -> vehicle, seat   an empty armed vehicle (bots)
 --   VehicleWeapons.BotBoard(humanoid, seat)   -> ok        sit a bot in a driving seat
+--   VehicleWeapons.AmmoOf(vehicle)        -> rounds, spec  what the mount holds right now
+--   VehicleWeapons.InArc(vehicle, point)  -> bool          `point` is inside the mount's arc
+--   VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit) -> aimPoint   (bots)
 --
 -- `token` is a combatant (a Player or a bot record, see Combatants): players and bots go through
 -- exactly the same checks.
 --
--- WHAT THE SERVER HOLDS A SHOT TO. The firer must be alive and sitting in the driving seat of an
+-- WHO WORKS THE GUN. An armed vehicle has a seat of its own at the mount (VehicleModels' `gunner`
+-- frame: a Seat named GunnerSeat with a true Gunner attribute, as VehicleWeaponClient reads it).
+-- Whoever sits there works the gun. While nobody does, the driver can still fire it, as before the
+-- gun had a seat, so someone alone in the car is not left unarmed (Oliver, 2026-09-24). A passenger,
+-- someone on the roof, or a stale SeatPart gets nothing.
+--
+-- WHAT THE SERVER HOLDS A SHOT TO. The firer must be alive and working the gun (above) of an
 -- armed, unwrecked vehicle, in a match (CombatService enabled, so never in the lobby). The mount's
 -- fire rate is CombatService's own shot budget (ShotCredit/SpendShot), its magazine runs down one a
 -- shot and comes back at `recharge` a second once it has been left alone for `rechargeDelay`. The
@@ -81,20 +92,39 @@ local function mountOf(vehicle)
 	return nil
 end
 
--- The armed vehicle `token` is driving, or nil. The driving seat is the VehicleSeat, and its
--- Occupant must be this very humanoid: a passenger, someone standing on the roof, or a stale
--- SeatPart all get nothing.
+-- The gun's own seat on `vehicle`, or nil: a Seat named GunnerSeat, or any Seat with a true Gunner
+-- attribute (VehicleWeaponClient's gunnerSeatOf reads the same two things).
+function VehicleWeapons.GunnerSeatOf(vehicle)
+	for _, child in ipairs(vehicle:GetChildren()) do
+		if child:IsA("Seat") and (child.Name == "GunnerSeat" or child:GetAttribute("Gunner") == true) then
+			return child
+		end
+	end
+	return nil
+end
+
+-- The armed vehicle whose gun `token` works, or nil (see WHO WORKS THE GUN). The seat's Occupant
+-- must be this very humanoid, so a stale SeatPart gets nothing. The name is kept from when only the
+-- driver could fire.
 function VehicleWeapons.DrivenBy(token)
 	local character = token ~= nil and Combatants.GetCharacter(token) or nil
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local seat = humanoid and humanoid.SeatPart
-	if not seat or not seat:IsA("VehicleSeat") or seat.Occupant ~= humanoid then
+	if not seat or seat.Occupant ~= humanoid then
 		return nil
 	end
 	local vehicle = seat.Parent
 	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
 	if not spec or not mountOf(vehicle) then
 		return nil
+	end
+	local gunner = VehicleWeapons.GunnerSeatOf(vehicle)
+	if seat ~= gunner then
+		-- Not the gun's seat: only the driver, and only while nobody is on the gun.
+		local manned = gunner ~= nil and gunner.Occupant ~= nil
+		if not seat:IsA("VehicleSeat") or manned then
+			return nil
+		end
 	end
 	return vehicle, spec, character, humanoid
 end
@@ -387,7 +417,8 @@ end
 -- Bots (BotService's BOT VEHICLES section drives the decisions)
 --------------------------------------------------------------------------------
 
--- The nearest armed, unwrecked, upright vehicle within `radius` whose driving seat is empty.
+-- The nearest armed, unwrecked, upright vehicle within `radius` whose driving seat is empty. (Kept for
+-- anything that still asks; BotService's BOT VEHICLES picks seats through VehicleService now.)
 function VehicleWeapons.FreeArmedNear(position, radius)
 	local best, bestSeat, bestDistance = nil, nil, radius
 	for _, vehicle in ipairs(CollectionService:GetTagged(VehicleWeapons.Tag)) do
@@ -418,6 +449,119 @@ function VehicleWeapons.BotBoard(humanoid, seat)
 	end
 	seat:Sit(humanoid)
 	return true
+end
+
+-- The rounds `vehicle`'s mount holds right now (recharge counted), and its spec; nil for an unarmed one.
+function VehicleWeapons.AmmoOf(vehicle)
+	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
+	if not spec then
+		return nil
+	end
+	local state = stateFor(vehicle, spec)
+	return VehicleWeaponData.AmmoAt(spec, state.ammo, state.firedAt, VehicleWeapons.Now()), spec
+end
+
+-- The launch angle (radians up) that brings a lobbed round from `origin` down on `point`: the lower
+-- of the two that the mount's pitch can reach, or nil when neither can (too near for the mortar's
+-- lowest barrel, or past its reach).
+local function lobAngle(spec, round, origin, point)
+	local g = workspace.Gravity * (round.gravityScale or 1)
+	local v = round.speed
+	local x = Vector3.new(point.X - origin.X, 0, point.Z - origin.Z).Magnitude
+	local y = point.Y - origin.Y
+	local root = v ^ 4 - g * (g * x * x + 2 * y * v * v)
+	if x < 1 or root < 0 then
+		return nil
+	end
+	local low = math.atan2(v * v - math.sqrt(root), g * x)
+	local high = math.atan2(v * v + math.sqrt(root), g * x)
+	if low >= math.rad(spec.pitchMin) and low <= math.rad(spec.pitchMax) then
+		return low
+	end
+	if high >= math.rad(spec.pitchMin) and high <= math.rad(spec.pitchMax) then
+		return high
+	end
+	return nil
+end
+
+-- Whether a shot at `point` can be made inside the mount's arc (its yaw limit, and its pitch limits
+-- for the line or, for a lobbed round, the arc): a bot holds fire rather than send rounds off at the
+-- clamped edge.
+function VehicleWeapons.InArc(vehicle, point)
+	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
+	local yawPart, pitchPart = mountOf(vehicle)
+	if not spec or not yawPart then
+		return false
+	end
+	local toAim = yawPart.CFrame:VectorToObjectSpace(point - pitchPart.Position)
+	if toAim.Magnitude < 1 then
+		return false
+	end
+	local yaw = math.atan2(-toAim.X, -toAim.Z)
+	if math.abs(yaw) > math.rad(spec.yawLimit) + 1e-3 then
+		return false
+	end
+	if spec.kind == "round" and spec.projectile == "grenade" then
+		local round = Ballistics.Rounds[spec.projectile]
+		return round ~= nil and round.speed ~= nil and lobAngle(spec, round, pitchPart.Position, point) ~= nil
+	end
+	local pitch = math.atan2(toAim.Y, math.sqrt(toAim.X * toAim.X + toAim.Z * toAim.Z))
+	return pitch >= math.rad(spec.pitchMin) - 0.02 and pitch <= math.rad(spec.pitchMax) + 0.02
+end
+
+-- How much of a moving target's run a bot leads a round by: most of the way, not all of it. A bot
+-- that led perfectly would put every rocket on a running player; a real gunner doesn't.
+local BOT_LEAD = 0.7
+-- A body's root stands about this far above its feet: where a lobbed round is brought down.
+local LOB_DROP = 2.5
+
+-- Where a bot aims a shot from `vehicle` at a target standing at `targetPosition`, moving at
+-- `targetVelocity`. `hit` is the bot's roll (BotService decides it, from the same aim dials as a bot
+-- on foot): true aims at the target, false aims clear of it, a bullet to one side, a round a blast's
+-- width and more away so its splash does not turn every miss into a hit. A round is led by BOT_LEAD
+-- of the target's run over its flight, and a lobbed one (the mortar) aimed so its arc comes down
+-- where it should, not where the barrel points. The mount's own spread and clamp still apply in Fire.
+function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit)
+	local spec = VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
+	local _, pitchPart = mountOf(vehicle)
+	if not spec or not pitchPart then
+		return targetPosition
+	end
+	local origin = pitchPart.Position
+	local round = spec.kind == "round" and Ballistics.Rounds[spec.projectile] or nil
+	local point = targetPosition
+	if round and Ballistics.RoundTimeFor then
+		local flight = Ballistics.RoundTimeFor(round, (targetPosition - origin).Magnitude)
+		point += (targetVelocity or Vector3.zero) * flight * BOT_LEAD
+	end
+	if not hit then
+		local off = round and (spec.splashRadius or 12) + 6 + math.random() * 6 or 5 + math.random() * 7
+		if round and spec.projectile == "grenade" then
+			-- A lob comes down somewhere else: anywhere round the target.
+			local angle = math.random() * math.pi * 2
+			point += Vector3.new(math.cos(angle) * off, 0, math.sin(angle) * off)
+		else
+			-- A straight shot goes past to one side (or over): off along the line it would still pass
+			-- through the target on its way.
+			local line = Vector3.new(point.X - origin.X, 0, point.Z - origin.Z)
+			local side = line.Magnitude > 0.1 and Vector3.new(-line.Z, 0, line.X).Unit or Vector3.new(1, 0, 0)
+			point += side * (math.random() < 0.5 and -off or off) + Vector3.new(0, math.random(-1, 3), 0)
+		end
+	end
+	if round and spec.projectile == "grenade" then
+		-- A lob: along the launch angle that brings the round down at `point`'s feet (a round coming down
+		-- at a shallow angle onto a body's middle would carry on past it to the ground behind).
+		point -= Vector3.new(0, LOB_DROP, 0)
+		local angle = round.speed and lobAngle(spec, round, origin, point)
+		if angle then
+			local across = Vector3.new(point.X - origin.X, 0, point.Z - origin.Z).Unit
+			return origin + (across * math.cos(angle) + Vector3.new(0, math.sin(angle), 0)) * 100
+		end
+	elseif round and Ballistics.LeadAim then
+		-- A rocket's drop, taken out the way the hand launcher's aim takes it out (its lead is above).
+		return Ballistics.LeadAim(round, origin, point, Vector3.zero, workspace.Gravity)
+	end
+	return point
 end
 
 --------------------------------------------------------------------------------

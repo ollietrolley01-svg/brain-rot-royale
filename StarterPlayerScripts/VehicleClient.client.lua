@@ -721,3 +721,93 @@ RunService.Stepped:Connect(function(_, dt)
 		end
 	end
 end)
+
+--------------------------------------------------------------------------------
+-- Taking a bot's seat over (VehicleService's TAKING OVER)
+--------------------------------------------------------------------------------
+-- The server keeps a bot's driving and gun seats' prompts up ("Take over") for anyone who may have
+-- the seat; this hides them from anyone who may not, by the same rules the server holds the request
+-- to (BotService.TakeoverAllowed): with teams, a teammate of the bot always may and nobody else; with
+-- no teams, anyone the bot is not fighting (its character's BotFoes, ",userId,userId,"). The server
+-- decides either way; this only keeps a prompt that would be refused off the screen.
+--
+-- Hidden by shrinking its reach to nothing, locally: the server never changes a vehicle prompt's
+-- MaxActivationDistance after making it, so nothing it replicates undoes this, and Enabled (which the
+-- server does set) is left alone. A prompt hidden here is looked at again every TAKEOVER_RECHECK
+-- seconds and given its reach back once the rules allow it (the bot got out, the fight is over).
+
+local ProximityPromptService = game:GetService("ProximityPromptService")
+
+local TAKEOVER_RECHECK = 0.3
+
+-- Whether this player may take `seat` (a DriverSeat or GunnerSeat) from whoever holds it. A free seat
+-- is the ordinary prompt, and a player's seat never shows one.
+local function mayTakeOver(seat, character, userId)
+	local occupant = seat.Occupant
+	local holder = occupant and occupant.Parent
+	if not holder then
+		return true
+	end
+	if Players:GetPlayerFromCharacter(holder) then
+		return false
+	end
+	local mine = character and character:GetAttribute("Team")
+	local theirs = holder:GetAttribute("Team")
+	if mine ~= nil or theirs ~= nil then
+		return mine ~= nil and mine == theirs
+	end
+	local foes = holder:GetAttribute("BotFoes")
+	return not (type(foes) == "string" and string.find(foes, "," .. tostring(userId) .. ",", 1, true) ~= nil)
+end
+
+-- The seat a vehicle prompt is for, or nil for any other prompt.
+local function takeoverSeat(prompt)
+	local seatName = (prompt.Name == "DrivePrompt" and "DriverSeat") or (prompt.Name == "GunnerPrompt" and "GunnerSeat") or nil
+	local attachment = seatName and prompt.Parent
+	local chassis = attachment and attachment.Parent
+	local model = chassis and chassis.Parent
+	return model and model:FindFirstChild(seatName) or nil
+end
+
+local hiddenReach = {} -- prompt -> the reach it had; STRONG keys, dropped when checked and gone
+
+local function judgePrompt(prompt)
+	local seat = takeoverSeat(prompt)
+	if not seat then
+		return
+	end
+	local allowed = mayTakeOver(seat, player.Character, player.UserId)
+	if allowed and hiddenReach[prompt] then
+		prompt.MaxActivationDistance = hiddenReach[prompt]
+		hiddenReach[prompt] = nil
+	elseif not allowed and not hiddenReach[prompt] then
+		hiddenReach[prompt] = prompt.MaxActivationDistance
+		prompt.MaxActivationDistance = 0
+	end
+end
+
+-- Prompts on screen now: a seat can change hands while its prompt is up (a bot gets in beside you).
+local shownNow = {} -- prompt -> true; STRONG keys, dropped on PromptHidden
+
+ProximityPromptService.PromptShown:Connect(function(prompt)
+	shownNow[prompt] = true
+	judgePrompt(prompt)
+end)
+ProximityPromptService.PromptHidden:Connect(function(prompt)
+	shownNow[prompt] = nil
+end)
+task.spawn(function()
+	while true do
+		task.wait(TAKEOVER_RECHECK)
+		for _, list in ipairs({ hiddenReach, shownNow }) do
+			for prompt in pairs(list) do
+				if prompt.Parent then
+					judgePrompt(prompt)
+				else
+					hiddenReach[prompt] = nil
+					shownNow[prompt] = nil
+				end
+			end
+		end
+	end
+end)

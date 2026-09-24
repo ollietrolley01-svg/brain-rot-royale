@@ -1649,6 +1649,10 @@ local function startMatch()
 	MapGenerator.ApplyLightingOverride(event.lighting)
 	LootService.Populate(mapInfo)
 	BotService.Clear()
+	-- The map's RoadNetwork, so bot drivers route along the roads (BotService.SetRoads).
+	if BotService.SetRoads then
+		BotService.SetRoads(mapInfo and mapInfo.roads)
+	end
 
 	participants = {}
 	alive = {}

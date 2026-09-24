@@ -22,7 +22,7 @@
 --                    Slider      slides along its own Y (a fork's lower legs)
 --                    Swing       swings about its own X (a swingarm)
 --                    SteerWheel  turns about its own Z by Ratio times the steering angle
---   info.seats     driver and passenger seat frames, model space
+--   info.seats     driver and passenger seat frames, model space (and `gunner`, an armed model's gun seat)
 --   info.exits     where an occupant is put down, model space, tried in order
 --   info.pose      how a rider sits (read by VehicleClient to pose them)
 -- Nothing is named Wall, Floor, Roof, Gable, Parapet, Stair, Crate, Table, Shelf or WindowGlass:
@@ -2154,6 +2154,19 @@ VehicleModels.Mounts = {
 	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.9 },
 }
 
+-- Each armed model's gun seat, model space (Oliver, 2026-09-24: "make the bots not drive away if they
+-- have a gun on their car, wait till it's manned"). VehicleService makes it a Seat named GunnerSeat
+-- with a true Gunner attribute, and whoever sits there works the gun (VehicleWeapons; VehicleWeaponClient
+-- reads the same name and attribute). Behind the mount, facing the front, so a rider there is at the
+-- gun: in the Rotster's hatch under its roof gun, on the Ranger's bed floor behind the roll bar (the
+-- clear stretch z 3.3 to 6.5), on the van's roof behind the mortar's plinth. A seat is an invisible,
+-- non-colliding part welded to the chassis; nothing about the metal changes.
+VehicleModels.GunnerSeats = {
+	Rotster = CF(0, 4.1, 3.3),
+	CrocodiloRanger = CF(0, 3.3, 5.2),
+	SahurVan = CF(0, 7.9, 6.5),
+}
+
 local function buildMount(b, mount)
 	local base = mount.base
 	local column = mount.column or 0
@@ -2352,6 +2365,15 @@ function VehicleModels.Build(modelId, rng, opts)
 	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" and not opts.unarmed then
 		buildMount(b, VehicleModels.Mounts[modelId])
 		model:SetAttribute("Armed", true)
+		-- The gun's own seat, alongside the driver's and the passengers'.
+		local gunner = VehicleModels.GunnerSeats[modelId]
+		if gunner and layout.seats then
+			local seats = { gunner = gunner }
+			for key, value in pairs(layout.seats) do
+				seats[key] = value
+			end
+			layout.seats = seats
+		end
 		-- VehicleWeapons finds empty armed vehicles for bots by this tag.
 		game:GetService("CollectionService"):AddTag(model, "ArmedVehicle")
 	end

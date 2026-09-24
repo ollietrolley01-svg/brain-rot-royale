@@ -9,6 +9,10 @@
 --   VehicleService.ApplyBlast(centre, radius, damage)              throw vehicles clear of a blast
 --   VehicleService.Get(model)                                      the service's entry for a model
 --   VehicleService.FootingAt(parent, centre, yaw, size)            parkOn's level test, asked in advance
+--   VehicleService.VehiclesNear(position, radius)                  { { model, entry, distance } } a bot may get into
+--   VehicleService.SeatsOf(model)                                  { driver, gunner, passengers }
+--   VehicleService.BotSit(humanoid, seat)                          sit a bot, with a player's checks
+--   VehicleService.BotYield                                        set by BotService (TAKING OVER below)
 --
 -- Bodies come from Shared/VehicleModels and handling from Shared/VehicleDynamics; this file owns
 -- everything around them: seats and prompts, who simulates the physics, keeping drivers honest,
@@ -24,10 +28,18 @@
 -- player-driven vehicle: sustained speed well past the model's top speed, or a jump further than it
 -- could have travelled, takes the physics back and puts the vehicle where it last was sane.
 --
--- RIDERS. Sitting is by prompt (Drive, Ride), never by walking into a seat. A rider's parts go
--- massless while seated so they can't tip the vehicle, and the Player carries InVehicle (and
--- VehicleRole "Driver" or "Passenger") so the combat camera stands down. Jump gets you out, put
--- down at the first clear spot beside the vehicle.
+-- RIDERS. Sitting is by prompt (Drive, Ride, Man the gun), never by walking into a seat. A rider's
+-- parts go massless while seated so they can't tip the vehicle, and the Player carries InVehicle (and
+-- VehicleRole "Driver", "Gunner" or "Passenger") so the combat camera stands down. Jump gets you
+-- out, put down at the first clear spot beside the vehicle. An armed vehicle has a seat at its gun
+-- (GunnerSeat, VehicleWeapons says who fires).
+--
+-- TAKING OVER. A bot at the wheel (or on the gun) does not lock a player out of the vehicle: that
+-- seat's prompt stays up while a bot holds it, reading "Take over", and triggering it asks
+-- VehicleService.BotYield (BotService's rules: a teammate always may, and with no teams, anyone the
+-- bot is not fighting). If it may, the bot stops the car, gets out beside it, and the player is sat in
+-- the seat it left. VehicleClient hides the prompt from anyone the same rules refuse; the server
+-- decides either way.
 --
 -- RNG. Create makes exactly one call to the global math.random, as it always has (it used to pick a
 -- paint colour). That roll seeds a local Random which picks the model, paint and everything else,
@@ -228,6 +240,16 @@ local function findExit(entry, character, preferSide)
 	return CFrame.lookAt(at, at + flat)
 end
 
+-- Whether `seat` is the driving seat or the gun's seat, held by a bot (not a player).
+local function botHeld(entry, seat)
+	if seat ~= entry.seat and seat ~= entry.gunnerSeat then
+		return false
+	end
+	local occupant = seat.Occupant
+	local character = occupant and occupant.Parent
+	return character ~= nil and Players:GetPlayerFromCharacter(character) == nil and Combatants.FromCharacter(character) ~= nil
+end
+
 local function onSeatChanged(entry, seat)
 	local previous = entry.occupants[seat]
 	local current = seat.Occupant
@@ -287,7 +309,7 @@ local function onSeatChanged(entry, seat)
 		entry.riders[seat] = { character = character, player = player }
 		if player then
 			player:SetAttribute("InVehicle", true)
-			player:SetAttribute("VehicleRole", seat == entry.seat and "Driver" or "Passenger")
+			player:SetAttribute("VehicleRole", seat == entry.seat and "Driver" or (seat == entry.gunnerSeat and "Gunner" or "Passenger"))
 		end
 		-- A rider who dies would otherwise stay welded in.
 		entry.deaths[seat] = current.Died:Connect(function()
@@ -308,24 +330,70 @@ local function onSeatChanged(entry, seat)
 	-- event later -- caught by vehicle_health_probe.lua's check named
 	-- "the drive prompt is disabled once wrecked" (verbatim, so a grep for the check name finds
 	-- both the proof and the guard it proves).
+	-- A bot's driving or gun seat keeps its prompt, as "Take over" (TAKING OVER in the header).
 	if not entry.wrecked then
 		for promptSeat, prompt in pairs(entry.prompts) do
-			prompt.Enabled = promptSeat.Occupant == nil
+			local held = botHeld(entry, promptSeat)
+			prompt.Enabled = promptSeat.Occupant == nil or held
+			prompt.ActionText = held and "Take over" or entry.promptText[promptSeat] or prompt.ActionText
 		end
 	end
+end
+
+-- A player asking for a seat a bot holds. BotService's VehicleService.BotYield(bot, player, seat,
+-- model) says whether this player may have it and, if so, gets the bot out (stopping the car first
+-- from the driving seat); this waits for the seat to come free. While it waits the seat is spoken for
+-- (entry.takeover), so no other bot sits in it first. True once the seat is free for the player.
+local TAKEOVER_WAIT = 3
+local function takeOver(entry, player, seat)
+	if not botHeld(entry, seat) or entry.takeover then
+		return false
+	end
+	local occupant = seat.Occupant
+	local token = Combatants.FromCharacter(occupant.Parent)
+	local yield = VehicleService.BotYield
+	if type(yield) ~= "function" then
+		return false
+	end
+	entry.takeover = { player = player, seat = seat }
+	local ok, allowed = pcall(yield, token, player, seat, entry.model)
+	if not ok then
+		warn("VehicleService: BotYield failed: " .. tostring(allowed))
+	end
+	if not ok or not allowed then
+		entry.takeover = nil
+		return false
+	end
+	local deadline = tick() + TAKEOVER_WAIT
+	while seat.Occupant == occupant and tick() < deadline do
+		task.wait(0.05)
+	end
+	return seat.Occupant == nil
 end
 
 local function trySit(entry, player, seat)
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or humanoid.Health <= 0 or not root or seat.Occupant then
+	if not humanoid or humanoid.Health <= 0 or not root then
 		return
 	end
 	if (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 6 then
 		return
 	end
 	if entry.rig.chassis.CFrame.UpVector.Y < 0.4 then
+		return
+	end
+	-- Someone in it: only a bot, only in the seats it can be asked out of (TAKING OVER).
+	if seat.Occupant then
+		local freed = takeOver(entry, player, seat)
+		entry.takeover = nil
+		-- The car was brought to a stop for this, so a little more reach than the prompt's.
+		if not freed or humanoid.Health <= 0 or not root.Parent
+			or (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 12 then
+			return
+		end
+	elseif entry.takeover and entry.takeover.seat == seat and entry.takeover.player ~= player then
 		return
 	end
 	-- Moving seats within the same vehicle: get up first. Seated anywhere else: no.
@@ -352,6 +420,55 @@ local function trySit(entry, player, seat)
 		end
 	end
 	seat:Sit(humanoid)
+end
+
+-- Sits a bot's humanoid in `seat` with the checks trySit makes for a player: alive, near it, the
+-- vehicle upright and not wrecked, the seat empty and not spoken for by a player taking it over.
+function VehicleService.BotSit(humanoid, seat)
+	local model = seat and seat.Parent
+	local entry = model and byModel[model]
+	local character = humanoid and humanoid.Parent
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not entry or not root or humanoid.Health <= 0 or humanoid.SeatPart or seat.Occupant then
+		return false
+	end
+	if entry.wrecked or entry.takeover or entry.rig.chassis.CFrame.UpVector.Y < 0.4 then
+		return false
+	end
+	if (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 2 then
+		return false
+	end
+	seat:Sit(humanoid)
+	return true
+end
+
+-- The seats of a vehicle this service made: { driver, gunner (or nil), passengers = { ... } }.
+function VehicleService.SeatsOf(model)
+	local entry = byModel[model]
+	if not entry then
+		return nil
+	end
+	return { driver = entry.seat, gunner = entry.gunnerSeat, passengers = entry.passengers }
+end
+
+-- Vehicles a bot could get into near `position`: in the world, not wrecked, on their wheels, not
+-- being taken over. Nearest first: { { model, entry, distance }, ... }.
+function VehicleService.VehiclesNear(position, radius)
+	local found = {}
+	for _, entry in ipairs(active) do
+		local chassis = entry.rig and entry.rig.chassis
+		if chassis and chassis.Parent and not entry.wrecked and not entry.takeover and entry.seat
+			and entry.model:IsDescendantOf(workspace) and chassis.CFrame.UpVector.Y > 0.4 then
+			local distance = (chassis.Position - position).Magnitude
+			if distance <= radius then
+				table.insert(found, { model = entry.model, entry = entry, distance = distance })
+			end
+		end
+	end
+	table.sort(found, function(a, b)
+		return a.distance < b.distance
+	end)
+	return found
 end
 
 --------------------------------------------------------------------------------
@@ -678,6 +795,13 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	for index, frame in ipairs(info.seats.passengers or {}) do
 		table.insert(passengers, makeSeat("Seat", "PassengerSeat" .. index, model, chassis, frame, isBike))
 	end
+	-- An armed vehicle's gun seat (VehicleModels' `gunner` frame), named and marked as VehicleWeapons
+	-- and VehicleWeaponClient look for it.
+	local gunnerSeat = nil
+	if info.seats.gunner then
+		gunnerSeat = makeSeat("Seat", "GunnerSeat", model, chassis, info.seats.gunner, isBike)
+		gunnerSeat:SetAttribute("Gunner", true)
+	end
 
 	-- Prompts stand beside each seat's door (on a bike, beside the saddle), in chassis space.
 	local halfWidth = chassis.Size.X / 2
@@ -692,6 +816,9 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		table.insert(ridePrompts, makePrompt(chassis, "RidePrompt" .. index, promptSpot(passenger.CFrame, isBike and 1 or nil),
 			isBike and "Ride pillion" or "Ride", info.displayName))
 	end
+	-- The gun seat's prompt stands behind the tail, clear of the doors' prompts either side.
+	local gunnerPrompt = gunnerSeat and makePrompt(chassis, "GunnerPrompt", Vector3.new(0, 0.2, chassis.Size.Z / 2 + 1.4),
+		"Man the gun", info.displayName) or nil
 
 	-- The footing is judged under everything the vehicle stands over, not the chassis collider alone
 	-- (#39). The bumpers, arches and a yaw of a few degrees put a verge car's outer corners past the
@@ -734,6 +861,10 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		rig = rig,
 		seat = seat,
 		passengers = passengers,
+		gunnerSeat = gunnerSeat,
+		-- A player taking a bot's seat over (TAKING OVER): { player, seat } while it happens.
+		takeover = nil,
+		promptText = {},
 		occupants = {},
 		riders = {},
 		-- This one IS state, not a cache: while it holds a humanoid, that humanoid is moving between
@@ -782,6 +913,12 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	for index, prompt in ipairs(ridePrompts) do
 		entry.prompts[passengers[index]] = prompt
 	end
+	if gunnerSeat then
+		entry.prompts[gunnerSeat] = gunnerPrompt
+	end
+	for promptSeat, prompt in pairs(entry.prompts) do
+		entry.promptText[promptSeat] = prompt.ActionText
+	end
 	drivePrompt.Triggered:Connect(function(player)
 		trySit(entry, player, seat)
 	end)
@@ -790,7 +927,16 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 			trySit(entry, player, passengers[index])
 		end)
 	end
-	for _, s in ipairs({ seat, table.unpack(passengers) }) do
+	if gunnerSeat then
+		gunnerPrompt.Triggered:Connect(function(player)
+			trySit(entry, player, gunnerSeat)
+		end)
+	end
+	local allSeats = { seat, table.unpack(passengers) }
+	if gunnerSeat then
+		table.insert(allSeats, gunnerSeat)
+	end
+	for _, s in ipairs(allSeats) do
 		s:GetPropertyChangedSignal("Occupant"):Connect(function()
 			onSeatChanged(entry, s)
 		end)
