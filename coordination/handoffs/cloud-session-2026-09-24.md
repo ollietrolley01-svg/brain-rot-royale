@@ -1,3 +1,5 @@
+STATUS: IN PROGRESS (cloud session still landing work; wait for ALL DONE)
+
 # Handoff: cloud session (Oliver's "do the tasks" run), 2026-09-24
 
 Written by the cloud Claude session for a Claude tab on Oliver's PC. Read this, then `git fetch` and
