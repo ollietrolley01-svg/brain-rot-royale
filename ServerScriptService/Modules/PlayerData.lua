@@ -53,7 +53,9 @@ local function defaultData()
 		Cosmetics = { owned = {}, gunSkin = nil, aura = nil, accessory = nil, parachute = nil, killAnimation = nil },
 		Pass = { xp = 0, claimedFree = {}, claimedPremium = {} },
 		Daily = { lastClaimDay = 0, streak = 0 },
-		Stats = { wins = 0, kills = 0, matches = 0 },
+		-- `climbs` (lifetime Cloud Climb clears) was added 2026-09-24, so the first-clear coins are paid
+		-- once per profile rather than once per server visited; older saves have none and start at 0.
+		Stats = { wins = 0, kills = 0, matches = 0, climbs = 0 },
 		-- Team-mode record (lifetime team wins, matches, current win streak): team rewards v2.
 		TeamRewards = { wins = 0, matches = 0, streak = 0 },
 		-- One-match boosts: Health/Speed from the shop and the Starter Bundle, the Pro pair

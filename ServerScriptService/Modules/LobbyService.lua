@@ -66,6 +66,14 @@ local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
 local LobbyService = {}
 
+-- THE CLOCK EVERY COOLDOWN AND TIMER IN THIS FILE RUNS ON. tick(), never os.clock(): os.clock() is
+-- process CPU time in Roblox, which runs slow against the wall while the server waits, so the pad
+-- and ball cooldowns, the goal window, the wheel's spin and the Cloud Climb's clock all stretched
+-- under load. Same clock as PlayerData's wallNow and RateLimit.Now.
+local function wallNow()
+	return tick()
+end
+
 -- Set by Bootstrap.
 LobbyService.OnReadyPad = function() end
 -- (player, seconds, firstClear, isRecord): announce and reward a Cloud Climb clear.
@@ -600,7 +608,7 @@ local function buildReadyPad(lobby, center)
 		if not player then
 			return
 		end
-		local now = os.clock()
+		local now = wallNow()
 		if readyPadLastTouch[player] and now - readyPadLastTouch[player] < PAD_COOLDOWN then
 			return
 		end
@@ -1837,10 +1845,10 @@ local function buildDailySpin(lobby, base)
 		local total = math.pi * 2 * 3 + ((target - restAngle) % (math.pi * 2))
 		local from = restAngle
 		restAngle = (restAngle + total) % (math.pi * 2)
-		local started = os.clock()
+		local started = wallNow()
 		local connection
 		connection = RunService.Heartbeat:Connect(function()
-			local t = math.min(1, (os.clock() - started) / SPIN_TIME)
+			local t = math.min(1, (wallNow() - started) / SPIN_TIME)
 			local eased = 1 - (1 - t) ^ 3
 			if wheel.Parent then
 				wheel:PivotTo(hub * CFrame.Angles(0, 0, -(from + total * eased)))
@@ -2381,7 +2389,7 @@ local function buildPlayBalls(lobby, base)
 			if not root or not player then
 				return
 			end
-			local now = os.clock()
+			local now = wallNow()
 			if now - entry.lastKick < KICK_COOLDOWN then
 				return
 			end
@@ -2481,7 +2489,7 @@ local function buildPitch(lobby, base)
 			return
 		end
 		entry.scored = true
-		local now = os.clock()
+		local now = wallNow()
 		local scorer = entry.lastKicker
 		if scorer and (not scorer.Parent or now - entry.lastKick > KICK_MEMORY) then
 			scorer = nil
@@ -2540,8 +2548,57 @@ end
 -- it to reach the lantern mustn't throw that away. The lantern can start you over instead.
 --------------------------------------------------------------------------------
 
--- player -> { started = os.clock() when the run began, checkpoint = number, spot = CFrame }
+-- player -> { started = wallNow() when the run began, checkpoint = number, spot = CFrame }
 local climbRuns = {}
+
+-- What makes a clear count. The summit used to pay any run that existed: touch the start root,
+-- teleport to the disc, and that was a server record and 250 SahurCoins. A clear now needs every
+-- checkpoint, in order, and no stretch of the climb done faster than a body can move.
+--
+-- The floor on each is the straight-line distance through every jump's easiest crossing
+-- (CloudClimbCourse.jumps, tools/climb_design.py) from the first fork's takeoff, where a run can
+-- start, at CLIMB_TOP_SPEED: sprinting with the Rot Runner pass and a 1.5x speed boost, faster than
+-- anyone moves in the lobby. The real route winds along the limbs and waits on deadwood and rotors,
+-- so an honest climb is far over it. tools/climb_rules_check.py runs this block.
+local CLIMB_TOP_SPEED = (MatchConfig.BaseWalkSpeed + 4) * MatchConfig.SprintMultiplier * 1.5
+
+-- Element name -> the fewest seconds from a run's start to landing on it.
+local function climbFloors(course)
+	local floors, travelled, last = {}, 0, nil
+	for index, jump in ipairs(course.jumps) do
+		if index >= 2 then
+			local from, to = jump.from, jump.to
+			if last then
+				travelled += math.sqrt((from[1] - last[1]) ^ 2 + (from[3] - last[3]) ^ 2)
+			end
+			travelled += math.sqrt((to[1] - from[1]) ^ 2 + (to[3] - from[3]) ^ 2)
+			last = to
+			local landing = string.match(jump.name, "%-> (.+)$")
+			if landing then
+				floors[landing] = travelled / CLIMB_TOP_SPEED
+			end
+		end
+	end
+	return floors
+end
+
+-- Whether touching checkpoint `number` counts: only the next one, and not sooner than it can be
+-- climbed to.
+local function climbCheckpointCounts(run, number, floor, now)
+	return number == (run.checkpoint or 0) + 1 and now - run.started >= (floor or 0)
+end
+
+-- The seconds a summit touch clears in, or nil and why it doesn't count.
+local function climbSummitVerdict(run, checkpoints, floor, now)
+	local seconds = now - run.started
+	if (run.checkpoint or 0) < checkpoints then
+		return nil, "every checkpoint"
+	end
+	if seconds < (floor or 0) then
+		return nil, "the climb itself"
+	end
+	return seconds
+end
 
 -- A match ends a climb run: without this, a run started before the match was still live after it,
 -- so the lantern sent you to the old checkpoint and the summit paid a clear (first-clear coins and
@@ -2549,7 +2606,6 @@ local climbRuns = {}
 function LobbyService.ClearClimb(player)
 	climbRuns[player] = nil
 end
-local obbyClearedUserIds = {}
 local obbyBest = nil
 local obbyBestLabel = nil
 
@@ -2993,6 +3049,7 @@ local function buildCloudClimb(lobby, base)
 	local random = Random.new(2609)
 	local lanternColors = { GOLD, PINK, SAP }
 	local lanterns = 0
+	local floors = climbFloors(course)
 	local checkpoints, firstCheckpoint = 0, nil
 	for _, element in ipairs(course.elements) do
 		if element.checkpoint then
@@ -3008,7 +3065,7 @@ local function buildCloudClimb(lobby, base)
 		if run and (run.checkpoint or not restart) then
 			return
 		end
-		climbRuns[player] = { started = os.clock() }
+		climbRuns[player] = { started = wallNow() }
 	end
 
 	for index, element in ipairs(course.elements) do
@@ -3134,7 +3191,7 @@ local function buildCloudClimb(lobby, base)
 				piece.Touched:Connect(function(hit)
 					local player = livingPlayerFromHit(hit)
 					local run = player and climbRuns[player]
-					if not run or (run.checkpoint or 0) >= number then
+					if not run or not climbCheckpointCounts(run, number, floors[element.name], wallNow()) then
 						return
 					end
 					run.checkpoint, run.spot = number, spot
@@ -3354,14 +3411,23 @@ local function buildCloudClimb(lobby, base)
 			return
 		end
 		climbRuns[player] = nil
-		local seconds = os.clock() - run.started
+		local seconds, missing = climbSummitVerdict(run, checkpoints, floors.Summit, wallNow())
+		if not seconds then
+			StateSync.Notify(player, string.format("That run skipped %s, so it doesn't count. Step onto the start root to climb again.", missing), true)
+			return
+		end
 		local isRecord = obbyBest == nil or seconds < obbyBest.seconds
 		if isRecord then
 			obbyBest = { name = player.DisplayName, seconds = seconds }
 			renderObbyBest()
 		end
-		local firstClear = not obbyClearedUserIds[player.UserId]
-		obbyClearedUserIds[player.UserId] = true
+		-- First clear of the PROFILE: counting per server let the 250 coins be collected again on
+		-- every server a player visited. A profile still loading pays nothing now and counts nothing.
+		local data = PlayerData.Get(player)
+		local firstClear = data ~= nil and data.Stats.climbs == 0
+		if data then
+			data.Stats.climbs += 1
+		end
 		playgroundFx:FireAllClients({ kind = "summit", position = padPosition, color = GOLD })
 		LobbyService.OnObbyComplete(player, seconds, firstClear, isRecord)
 	end)
