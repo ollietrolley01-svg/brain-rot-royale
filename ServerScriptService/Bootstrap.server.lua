@@ -437,7 +437,7 @@ end
 LobbyService.OnReadyPad = function(player)
 	MatchService.SetReady(player, true)
 end
--- Cloud Climb obby: the time every clear, and 250 SahurCoins the first clear per server.
+-- Cloud Climb obby: the time every clear, and 250 SahurCoins the first clear per profile.
 LobbyService.OnObbyComplete = function(player, seconds, firstClear, isRecord)
 	-- The clear is announced whatever happens, and the coins are their own line. It used to hand the
 	-- whole sentence to AwardBonusCoins as the bracketed "reason", which read as
