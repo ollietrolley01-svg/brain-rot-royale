@@ -443,9 +443,12 @@ function RewardService.CountOf(data, name)
 	return count
 end
 
--- Set by Bootstrap to TradeService.InSession. Merging is refused while a trade is open: the
--- trade re-checks ownership when it executes, so nothing could be duplicated, but merging away
--- copies you'd offered would quietly turn a trade you were about to confirm into a cancellation.
+-- Set by Bootstrap to TradeService.InSession. Merging and selling are refused while a trade is
+-- open: the trade re-checks ownership when it executes, so nothing could be duplicated, but taking
+-- away copies you'd offered would quietly turn a trade you were about to confirm into a
+-- cancellation. Selling mid-trade was also how a merged brainrot's last copy got traded away (the
+-- spare sold after the offer), leaving its stars on a profile with no copy to carry them.
+local TRADING_MESSAGE = "Finish or cancel your trade first."
 RewardService.IsTrading = function()
 	return false
 end
@@ -548,6 +551,9 @@ function RewardService.SellBrainrot(player, name)
 	if not data then
 		return false, "Profile still loading."
 	end
+	if RewardService.IsTrading(player) then
+		return false, TRADING_MESSAGE
+	end
 
 	local def = BrainrotData.Get(name)
 	if not def then
@@ -559,7 +565,7 @@ function RewardService.SellBrainrot(player, name)
 		return false, "You don't own that."
 	end
 	-- Stars would survive the sale, but nothing to equip them on would, and SELL 1 has no
-	-- confirmation step. Trading the last copy away is still allowed: that takes two confirms.
+	-- confirmation step. TradeService refuses the last copy for the same reason.
 	if (data.Stars[name] or 0) > 0 and RewardService.CountOf(data, name) <= 1 then
 		return false, string.format("%s is merged (%s) — you can't sell your last copy.", name, BrainrotData.StarText(data.Stars[name]))
 	end
@@ -577,6 +583,9 @@ function RewardService.SellAllOfRarity(player, rarity)
 	local data = PlayerData.Get(player)
 	if not data then
 		return false, "Profile still loading."
+	end
+	if RewardService.IsTrading(player) then
+		return false, TRADING_MESSAGE
 	end
 
 	-- One copy of every merged brainrot stays behind, for the same reason SELL 1 won't take it.
@@ -613,6 +622,9 @@ function RewardService.SellDuplicates(player)
 	local data = PlayerData.Get(player)
 	if not data then
 		return false, "Profile still loading."
+	end
+	if RewardService.IsTrading(player) then
+		return false, TRADING_MESSAGE
 	end
 
 	local seen, kept, total, sold = {}, {}, 0, 0

@@ -59,6 +59,22 @@ local function canFulfil(data, offer)
 	return true
 end
 
+-- Stars stay with the profile, not the copy (BrainrotData: they can't be moved to another
+-- account). Trading your last copy away therefore left the stars behind, and every later copy of
+-- that species (from a crate, Robux or a trade) arrived at full stars for free, over and over.
+-- Spares are tradable; the last copy of a merged one isn't, as with selling. Returns the first
+-- merged name `offer` would take the last copy of, and its stars.
+local function strandsStars(data, offer)
+	local owned = counts(data.Brainrots)
+	for name, offered in pairs(counts(offer)) do
+		local stars = data.Stars and data.Stars[name] or 0
+		if stars > 0 and (owned[name] or 0) - offered < 1 then
+			return name, stars
+		end
+	end
+	return nil
+end
+
 local function describe(list)
 	local entries = {}
 	for _, name in ipairs(list) do
@@ -205,13 +221,9 @@ function TradeService.Offer(player, name, add)
 			return false, "You don't have another one of those."
 		end
 
-		-- Stars stay with the profile, not the copy (BrainrotData: they can't be moved to another
-		-- account). Trading your last copy away therefore left the stars behind, and every later copy
-		-- of that species — from a crate, Robux or a trade — arrived at full stars for free, over and
-		-- over. Spares are tradable; the last copy of a merged one isn't, as with selling.
-		local stars = data.Stars and data.Stars[name] or 0
-		if stars > 0 and (counts(data.Brainrots)[name] or 0) - (counts(candidate)[name] or 0) < 1 then
-			return false, string.format("%s is merged (%s) — you can't trade away your last copy.", name, BrainrotData.StarText(stars))
+		local merged, stars = strandsStars(data, candidate)
+		if merged then
+			return false, string.format("%s is merged (%s) — you can't trade away your last copy.", merged, BrainrotData.StarText(stars))
 		end
 
 		table.insert(offer, name)
@@ -254,6 +266,17 @@ local function execute(session)
 	if not canFulfil(dataA, offerA) or not canFulfil(dataB, offerB) then
 		closeSession(session, "Trade cancelled — someone no longer owns what they offered.")
 		return
+	end
+
+	-- Offer checked the last-copy rule against the collection as it was then. Copies can leave
+	-- between the offer and the confirm, so it is checked again against what is actually here.
+	for _, side in ipairs({ { session.a, dataA, offerA }, { session.b, dataB, offerB } }) do
+		local merged, stars = strandsStars(side[2], side[3])
+		if merged then
+			closeSession(session, string.format("Trade cancelled — %s's %s is merged (%s) and that was their last copy.",
+				side[1].DisplayName, merged, BrainrotData.StarText(stars)))
+			return
+		end
 	end
 
 	-- A profile that can't be written must not trade. The brainrots would move in memory and then die
