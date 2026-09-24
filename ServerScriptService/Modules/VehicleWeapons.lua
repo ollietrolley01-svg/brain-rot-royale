@@ -29,8 +29,8 @@
 --
 -- NOT HITTING YOURSELF. A bullet's trace excludes the vehicle and everyone sitting in it. A round
 -- excludes them from its flight too: ProjectileService's round filter only knows the owner's
--- character, so while this module launches, each round kind's onLaunch (the Ballistics registry's
--- own hook) adds the vehicle and its riders to the new round's filter. A blast you set off against a
+-- character, so each round this module launches carries the riders on its def, and each round
+-- kind's onLaunch (the Ballistics registry's own hook) adds them to the new round's filter. A blast you set off against a
 -- wall at your bumper still reaches you at the launchers' half strength; that is the launchers' rule.
 
 local Players = game:GetService("Players")
@@ -66,9 +66,6 @@ local BOARD_DISTANCE = 12
 -- Mount state per vehicle model: STRONG keys, dropped when the model leaves the game (a weak key
 -- would drop a live vehicle's magazine; see COORDINATION's weak-table lesson).
 local states = {}
-
--- The riders of the vehicle whose round is being launched right now, for the round guard below.
-local launchingFilter = nil
 
 --------------------------------------------------------------------------------
 -- Who is driving what
@@ -299,9 +296,14 @@ local function launchRound(token, vehicle, origin, direction, spec)
 	if not CombatService.LaunchProjectile then
 		return false
 	end
-	launchingFilter = riders(vehicle)
-	local ok, err = pcall(CombatService.LaunchProjectile, token, roundDef(spec), origin, direction)
-	launchingFilter = nil
+	-- A per-launch copy of the cached def carries this vehicle's riders to the round guard below
+	-- (ProjectileService keeps it as entry.def), so no module-level state spans the call.
+	local def = {}
+	for key, value in pairs(roundDef(spec)) do
+		def[key] = value
+	end
+	def.vehicleFilter = riders(vehicle)
+	local ok, err = pcall(CombatService.LaunchProjectile, token, def, origin, direction)
 	if not ok then
 		warn("[VehicleWeapons] launch failed: " .. tostring(err))
 	end
@@ -431,8 +433,9 @@ local function guardRound(kind)
 	end
 	local inner = spec.onLaunch
 	spec.onLaunch = function(entry, api)
-		if launchingFilter and entry.filter and entry.params then
-			for _, instance in ipairs(launchingFilter) do
+		local vehicleFilter = entry.def and entry.def.vehicleFilter
+		if vehicleFilter and entry.filter and entry.params then
+			for _, instance in ipairs(vehicleFilter) do
 				table.insert(entry.filter, instance)
 			end
 			entry.params.FilterDescendantsInstances = entry.filter

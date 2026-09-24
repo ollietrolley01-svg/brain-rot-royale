@@ -194,8 +194,8 @@ function CombatService.BroadcastShot(shooter, origin, endPoints, rarity)
   table.insert(LOG, { what = "shot", shooter = shooter, origin = origin, endPoints = endPoints })
 end
 function CombatService.LaunchProjectile(owner, def, origin, direction)
-  -- ProjectileService.launchRound's shape: a filter of the owner's character, then the kind's onLaunch.
-  local entry = { owner = owner, filter = { owner.Character }, params = {} }
+  -- ProjectileService.launchRound's shape: a filter of the owner's character, the def kept on the entry, then the kind's onLaunch.
+  local entry = { owner = owner, def = def, filter = { owner.Character }, params = {} }
   entry.params.FilterDescendantsInstances = entry.filter
   local spec = MODULES.Ballistics.Rounds[def.projectile]
   if spec.onLaunch then spec.onLaunch(entry, {}) end
