@@ -15,6 +15,7 @@ local WeaponData = require(Shared:WaitForChild("WeaponData"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
+local TeamBaseRuins = require(script.Parent:WaitForChild("TeamBaseRuins"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
 local ModeTeams = {}
@@ -88,6 +89,9 @@ local arenaRadius = 0
 local pads = { {}, {} }
 -- Each team's base point (the centre its pads were looked for around), for the base loot.
 local bases = {}
+-- Each team's compound in a team match (TeamBaseRuins.Build's result), or nothing when it was not
+-- built and the pads are the open-ground ones.
+local ruins = {}
 
 -- token -> 1 or 2
 local teamOf = {}
@@ -217,13 +221,44 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	-- Two bases on opposite sides of the centre, on an axis rolled per match so the same map does
 	-- not always play along the same street.
 	local axis = math.random() * math.pi * 2
+	local fraction = BASE_FRACTION
+	ModeTeams.MapRiver = mapInfo and mapInfo.river
+
+	-- In a team match each base is a ruined compound (TeamBaseRuins; Oliver 2026-09-24: "so that all
+	-- the item chests and cars aren't just sitting in random fields"), both built from one seed so
+	-- they are the same compound turned to face the middle. The axis may be turned to find ground the
+	-- compounds can stand on. If either cannot be built, neither is: one side in a fort and the other
+	-- in a field is not a fair start, so both fall back to the open-ground pads.
+	local withRuins = TeamBaseRuins ~= nil and currentMode ~= nil and currentMode.teams == true
+		and mapInfo ~= nil and mapInfo.map ~= nil
+	if withRuins then
+		axis, fraction = ModeTeams.PickBaseAxis(axis, mapInfo)
+	end
+	local ruinSeed = withRuins and math.random(1, 2147483646) or nil
 	for team = 1, GameModes.TeamCount do
 		local heading = axis + (team - 1) * math.pi
-		local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * BASE_FRACTION)
-		pads[team] = ModeTeams.BuildPads(base, mapInfo)
-		bases[team] = base
+		bases[team] = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
+		if withRuins then
+			ModeTeams.BuildRuin(team, bases[team], mapInfo, ruinSeed)
+		end
 	end
-	ModeTeams.MapRiver = mapInfo and mapInfo.river
+	if withRuins and not (ruins[1] and ruins[2]) then
+		ModeTeams.ClearRuins()
+	end
+	for team = 1, GameModes.TeamCount do
+		local ruin = ruins[team]
+		if ruin then
+			pads[team] = {}
+			for _, pad in ipairs(ruin.pads) do
+				table.insert(pads[team], pad.Position)
+			end
+		else
+			pads[team] = ModeTeams.BuildPads(bases[team], mapInfo)
+		end
+	end
+	if ruins[1] and ruins[2] then
+		ModeTeams.BaseVehicleBays = ModeTeams.RuinBays
+	end
 
 	-- After the pads (it keeps clear of them) and before GameMode seeds the base loot, which then
 	-- keeps clear of the vehicles through RefusePad's blocked test. A failure here costs the base its
@@ -303,17 +338,142 @@ function ModeTeams.BaseOf(team)
 	return active and bases[team] or nil
 end
 
+--------------------------------------------------------------------------------
+-- The compounds (TeamBaseRuins)
+--------------------------------------------------------------------------------
+
+-- Other axes tried when the rolled one puts a compound on a road, in the river or over a town (8
+-- more, every 22.5 degrees, since the two bases are opposite), at the usual distance and a little
+-- nearer the middle. The rolled axis wins any tie, so the base still moves about from match to match.
+local RUIN_AXES = 8
+local RUIN_FRACTIONS = { BASE_FRACTION, 0.64 }
+-- A chest or pickup lying within this of a compound's spot means the spot is taken.
+local RUIN_SPOT_TAKEN = 3
+-- GameMode asks for chests with this gap (and nothing else with it). Read as "chest" only when the
+-- caller does not name the kind; see BaseLootSpots.
+local RUIN_CHEST_GAP = 14
+
+-- The flat frame a compound is built in at `base`: on the ground, facing the arena centre.
+local function ruinFrame(base)
+	local ground = terrainAt(base.X, base.Z) or 0
+	local at = Vector3.new(base.X, ground, base.Z)
+	return CFrame.lookAt(at, Vector3.new(arenaCentre.X, ground, arenaCentre.Z))
+end
+
+-- The axis (and distance from the centre, as a fraction of the arena's radius) whose two sites suit
+-- a compound best, starting from the rolled `axis`. Returns the rolled axis unchanged when no pair
+-- of sites is usable at all; Build then stands the compounds on plinths.
+function ModeTeams.PickBaseAxis(axis, mapInfo)
+	local best, bestFraction, bestCost = axis, BASE_FRACTION, math.huge
+	for step = 0, RUIN_AXES - 1 do
+		local candidate = axis + step * math.pi / RUIN_AXES
+		for _, fraction in ipairs(RUIN_FRACTIONS) do
+			local total = step * 0.01 + (fraction == BASE_FRACTION and 0 or 0.5)
+			for team = 1, GameModes.TeamCount do
+				local heading = candidate + (team - 1) * math.pi
+				local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
+				local cost = TeamBaseRuins.SiteCost(ruinFrame(base), mapInfo)
+				total = cost and total + cost or math.huge
+			end
+			if total < bestCost then
+				best, bestFraction, bestCost = candidate, fraction, total
+			end
+		end
+		-- Flat, clear ground on the rolled axis (or near it) is as good as it gets.
+		if bestCost < 4 then
+			break
+		end
+	end
+	return best, bestFraction
+end
+
+-- Builds `team`'s compound at `base`. Returns it, or nil (warned) when it could not be built.
+function ModeTeams.BuildRuin(team, base, mapInfo, seed)
+	local ok, ruin = pcall(TeamBaseRuins.Build, ruinFrame(base), GameModes.TeamColor(team), mapInfo, seed)
+	if not ok or type(ruin) ~= "table" or #ruin.pads == 0 then
+		warn("ModeTeams: team " .. team .. "'s base was not built: " .. tostring(ok and "no pads" or ruin))
+		if ok and type(ruin) == "table" and ruin.model then
+			ruin.model:Destroy()
+		end
+		return nil
+	end
+	ruin.model.Name = "TeamBase" .. team
+	ruins[team] = ruin
+	return ruin
+end
+
+-- Takes both compounds down (a match ending, or one side failing to build).
+function ModeTeams.ClearRuins()
+	for team, ruin in pairs(ruins) do
+		if ruin.model then
+			ruin.model:Destroy()
+		end
+		ruins[team] = nil
+	end
+end
+
+-- The team's compound (model, pads, chestSpots, vehicleBays, lootSpots), or nil.
+function ModeTeams.BaseRuin(team)
+	return ruins[team]
+end
+
+-- ModeTeams.BaseVehicleBays while the compounds stand: each compound's named bays.
+function ModeTeams.RuinBays(team)
+	local ruin = ruins[team]
+	return ruin and ruin.vehicleBays or {}
+end
+
+-- The first `count` of `list` (CFrames) with no chest or pickup already lying on them, as positions.
+local function freeRuinSpots(list, count)
+	local loot = workspace:FindFirstChild("Loot")
+	local out = {}
+	for _, spot in ipairs(list) do
+		if #out >= count then
+			break
+		end
+		local at = spot.Position
+		local taken = false
+		if loot then
+			for _, item in ipairs(loot:GetChildren()) do
+				if item:IsA("BasePart") and Vector3.new(item.Position.X - at.X, 0, item.Position.Z - at.Z).Magnitude < RUIN_SPOT_TAKEN then
+					taken = true
+					break
+				end
+			end
+		end
+		if not taken then
+			table.insert(out, at)
+		end
+	end
+	return out
+end
+
 -- Where the base loot goes (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Up to
 -- `count` open-ground spots between `inner` and `outer` studs from the team's base, each passing the
 -- same checks a spawn pad does (inside the arena, real ground, not in the river, nothing built on it)
 -- and kept `gap` studs apart so pickups never sit in one another.
-function ModeTeams.BaseLootSpots(team, count, inner, outer, gap)
+--
+-- With a compound standing, its own spots come first: chests ("chest" as `kind`) go ONLY in its named
+-- chest spots, never out in the field, and other pickups fill its loot spots before the ground round
+-- it. GameMode does not pass `kind` yet; until it does, the chest call is known by its gap
+-- (RUIN_CHEST_GAP), which is the only one that asks for 14.
+function ModeTeams.BaseLootSpots(team, count, inner, outer, gap, kind)
 	local base = bases[team]
 	if not active or not base then
 		return {}
 	end
 	inner, outer, gap = inner or 12, outer or 80, gap or 6
 	local spots = {}
+	local ruin = ruins[team]
+	if ruin then
+		if kind == nil and gap >= RUIN_CHEST_GAP then
+			kind = "chest"
+		end
+		spots = freeRuinSpots(kind == "chest" and ruin.chestSpots or ruin.lootSpots, count)
+		if kind == "chest" then
+			return spots
+		end
+	end
 	for _ = 1, count * 10 do
 		if #spots >= count then
 			break
@@ -348,6 +508,10 @@ end
 
 function ModeTeams.Teardown()
 	ModeTeams.StopBaseVehicles()
+	ModeTeams.ClearRuins()
+	if ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then
+		ModeTeams.BaseVehicleBays = nil
+	end
 	active = false
 	mode = nil
 	table.clear(bases)
@@ -1000,9 +1164,23 @@ local function occupiedAt(point, except)
 	return false
 end
 
-function ModeTeams.ClearSpotNear(pad, except)
+-- `others` (optional) are the team's other pads, tried nearest first before the rings. In a compound
+-- the pads stand 9 to 14 apart under one roof, so the ring search from a busy pad would put the body
+-- out in the courtyard, or outside the walls, while a free pad stood a few steps away.
+function ModeTeams.ClearSpotNear(pad, except, others)
 	if not occupiedAt(pad, except) then
 		return pad
+	end
+	if others then
+		local sorted = table.clone(others)
+		table.sort(sorted, function(a, b)
+			return (a - pad).Magnitude < (b - pad).Magnitude
+		end)
+		for _, other in ipairs(sorted) do
+			if not occupiedAt(other, except) then
+				return other
+			end
+		end
 	end
 	for ring = 1, 3 do
 		local reach = ring * SPAWN_CLEARANCE * 1.4
@@ -1146,7 +1324,7 @@ function ModeTeams.PlaceAt(token, character, extra, allowRefused)
 		return false
 	end
 
-	pad = ModeTeams.ClearSpotNear(pad, character)
+	pad = ModeTeams.ClearSpotNear(pad, character, ruins[team] and pads[team] or nil)
 	local position = pad + Vector3.new(0, 4, 0)
 	character:PivotTo(CFrame.lookAt(position, Vector3.new(arenaCentre.X, position.Y, arenaCentre.Z)))
 	character:SetAttribute("Team", team)
