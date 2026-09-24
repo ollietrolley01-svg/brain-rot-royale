@@ -87,6 +87,29 @@ local function rect(x, y, w, h)
 	return { x = x, y = y, w = w, h = h, x1 = x + w, y1 = y + h }
 end
 
+-- The driving HUD, laid out inside a region: VehicleClient's speed panel (250x78 as drawn on a desktop)
+-- and VehicleWeaponClient's gun panel (150x78) side by side, or the gun panel under the speed panel when
+-- that lets both be bigger; the damage line (260x20) above them and the controls hint (300x18, which the
+-- touch wording needs) below. `vehicleScale` is the panels' scale. On a desktop screen those pieces sit
+-- above the hotbar at their own literals; on a touch screen those literals put them over the crosshair
+-- (844x390) and across the hotbar (upright) (#80, tools/hud_layout_check.py).
+local function vehicleRects(out, x, y, w, h)
+	local beside = math.min(w / 408, (h - 4) / 116)
+	local stacked = math.min(w / 250, (h - 6) / 194)
+	local k = math.min(math.max(beside, stacked), 1)
+	local kw, kh = math.min(k, w / 260), math.min(k, w / 300)
+	out.vehicleScale = k
+	out.vehicleWarning = rect(x, y, 260 * kw, 20 * kw)
+	local panelY = out.vehicleWarning.y1 + 2
+	out.vehicle = rect(x, panelY, 250 * k, 78 * k)
+	if beside >= stacked then
+		out.vehicleGun = rect(x + 258 * k, panelY, 150 * k, 78 * k)
+	else
+		out.vehicleGun = rect(x, out.vehicle.y1 + 2, 150 * k, 78 * k)
+	end
+	out.vehicleHint = rect(x, math.max(out.vehicle.y1, out.vehicleGun.y1) + 2, 300 * kh, 18 * kh)
+end
+
 -- Portrait is not the landscape layout turned on its side. Roblox owns the lower half of a portrait
 -- screen -- the thumbstick's zone is the left 40% below a third of the way down, and the fire buttons
 -- climb the right side from the jump button -- so there is no band between them for a hotbar, and
@@ -183,6 +206,13 @@ local function portraitRects(W, H)
 	local readoutW = math.clamp(clusterLeft - 6 - 16, 96, 138)
 	out.health = rect(16, healthY, readoutW, 30)
 	out.stamina = rect(16, healthY - 4 - 14, readoutW, 14)
+	-- Driving: the left-hand block between the use prompt (and the hotbar row, when it is there) and the
+	-- health readout, left of the buttons. The stamina bar that sits in it is hidden in a vehicle.
+	local driveTop = out.useBar.y1 + 6
+	if out.hotbar then
+		driveTop = math.max(driveTop, out.inventory.y1 + 6)
+	end
+	vehicleRects(out, 16, driveTop, clusterLeft - 6 - 16, math.max(out.health.y - 6 - driveTop, 40))
 	-- The companion-buffs panel (BoonHud): down the left edge under the pet tile, narrow enough to stay
 	-- left of the crosshair's box, and no lower than the toast. A readout, so the thumbstick's zone is
 	-- allowed; BoonHud scales it down to fit the height when there are many buffs.
@@ -364,6 +394,10 @@ function PhoneLayout.Rects(viewport)
 	-- is allowed; BoonHud scales it down to fit the height when there are many buffs.
 	local boonsX, boonsY = out.petIcon.x1 + 6, statusY + statusH + 6
 	out.boons = rect(boonsX, boonsY, math.min(152 * k, out.health.x - 6 - boonsX), math.max(out.stick.y - 6 - boonsY, 40))
+	-- Driving: the block right of the pet tile, from under the coin chip and companion strip down to the
+	-- thumbstick's rest, left of the health row. The buffs panel that shares it hides in a vehicle
+	-- (BoonHud), which is why the block can be this big.
+	vehicleRects(out, boonsX, boonsY, out.health.x - 6 - boonsX, math.max(out.stick.y - 6 - boonsY, 40))
 
 	out.inset = GuiService:GetGuiInset().Y
 	return out

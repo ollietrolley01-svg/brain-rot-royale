@@ -41,7 +41,7 @@ except ImportError:
 
 SCRIPTS = ["HudClient.client.lua", "ModeScoreHud.client.lua", "BoonHud.client.lua",
            "VehicleWeaponClient.client.lua", "GunfireCueClient.client.lua",
-           # Not #80's to edit, but its panel is what the vehicle gun's panel sits beside: run for measuring.
+           # The driving HUD: its speed panel, hint and damage line, placed by PhoneLayout on a touch screen.
            "VehicleClient.client.lua"]
 MODULES = ["PhoneLayout", "UiKit", "StaminaBar", "CompanionAbilityIcon", "EventBanner"]
 
@@ -82,30 +82,19 @@ KNOWN_OPEN = {
         "sits beside the crosshair and the buttons start under it. The toast is up for about 3 s.",
 }
 
-# The driving HUD on a touch screen: VehicleClient.client.lua (not #80's file) draws its panel, hint and
-# health warning at their desktop literals on every screen, over the crosshair on a landscape phone and
-# across the hotbar upright. The vehicle gun's panel follows that panel (VehicleWeaponClient), so its
-# overlaps there are the same defect. Open until VehicleClient gets a phone placement (proposed in the
-# #80 report); reported every run, not failed. On a desktop window, the one open pair is a toast arriving
-# while driving: the toast and the vehicle panel share the band above the hotbar (the toast's old spot,
-# lower down, sat inside the hotbar on any window under ~1870 wide), and the toast is up for about 3 s.
-def driving_open(tag, touch, scene, a, b):
-    if scene != "driving":
-        return None
-    vehicle = [e for e in (a, b) if e["gui"] in ("VehicleHud", "VehicleWeaponHud")]
-    if not vehicle:
-        return None
-    if touch:
-        return "VehicleClient's desktop spots on a touch screen"
-    other = b if vehicle[0] is a else a
-    return "a toast over the vehicle panel while driving" if other["var"] == "toast" else None
-
-
 # Pairs allowed to overlap: intentional stacking, each with the reason. Keys are frozensets of variable
 # names (or "Gui:Name" for elements another script names).
 ALLOWED = {
     frozenset(["crosshair", "hitmarker"]): "the hitmarker is drawn on the crosshair when a shot lands",
 }
+
+
+BRAINROT_STUB = """
+local B = {}
+function B.Get(name) return { name = name, move = 'Slap', rarity = 'Common', color = Color3.new(1, 1, 1) } end
+function B.Stats() return { damage = 30, cooldown = 8, health = 120 } end
+return setmetatable(B, { __index = function() return function() return nil end end })
+"""
 
 
 def luau_to_lua(source):
@@ -139,6 +128,9 @@ class World:
         self.W.setup(w, h, touch, not touch)
         for name, text in sources.items():
             self.W.sources[name.replace(".lua", "")] = luau_to_lua(text)
+        # A stand-in for ReplicatedStorage's BrainrotData, so the companion tile gets real numbers and its
+        # stats line is drawn (the check asserts it is hidden on a touch screen).
+        self.W.sources["BrainrotData"] = BRAINROT_STUB
         for m in MODULES:
             self.W.addModule(m)
         if force:
@@ -250,7 +242,6 @@ def check(root, sources, dump=False, quiet=False):
     examined_elements = 0
 
     seen_open = set()
-    driving_seen = []
     for size, (scene, mode, driving) in [(sz, sc) for sz in SIZES for sc in SCENARIOS]:
         tag, w, h, touch = size
         world = World(root, size, sources)
@@ -283,11 +274,33 @@ def check(root, sources, dump=False, quiet=False):
                 if (tag, key) in KNOWN_OPEN:
                     seen_open.add((tag, key))
                     continue
-                why = driving_open(tag, touch, scene, a, b)
-                if why:
-                    driving_seen.append(f"[{tag}] {label(a)} / {label(b)} {ov[0]:.0f}x{ov[1]:.0f}px: {why}")
-                    continue
                 problems.append(f"[{tag}, {scene}] overlap {ov[0]:.0f}x{ov[1]:.0f}px: {label(a)} {a['rect']}  /  {label(b)} {b['rect']}")
+
+        # The companion tile's stats line grows leftward from the tile; from the phone slot at the left
+        # edge it would run off the screen, so on a touch screen it must be hidden (SetCompact).
+        readout = world.run("""
+            for _, inst in ipairs(W.created) do
+                if inst.Name == 'Readout' and inst.Parent then
+                    return inst.Visible
+                end
+            end
+            return 'none'
+        """)
+        if readout == "none":
+            problems.append(f"[{tag}, {scene}] the companion tile's stats line was never made: the check is not exercising it")
+        elif touch and readout:
+            problems.append(f"[{tag}, {scene}] the companion tile's stats line is shown from the phone slot, off the left edge")
+        elif not touch and not readout:
+            problems.append(f"[{tag}, {scene}] the companion tile's stats line is hidden on a desktop screen")
+        if scene == "driving":
+            guis = {e["gui"] for e in drawn}
+            for need in ("VehicleHud", "VehicleWeaponHud"):
+                if need not in guis:
+                    problems.append(f"[{tag}] driving: nothing of {need} is drawn, so its overlaps are not being measured")
+            for e in drawn:
+                x, y, ew, eh = e["rect"]
+                if x < -0.5 or y < -0.5 or x + ew > w + 0.5 or y + eh > h + 0.5:
+                    problems.append(f"[{tag}] driving: {label(e)} {e['rect']} is partly off the screen")
 
         upright = touch and h > w
         if upright and scene == "battle royale":
@@ -326,11 +339,6 @@ def check(root, sources, dump=False, quiet=False):
         elif not quiet:
             print(f"OPEN (known, not fixed) [{tag}] {' / '.join(sorted(key))}: {why}")
 
-    if not quiet and driving_seen:
-        print(f"OPEN (known, not fixed) driving HUD: {len(driving_seen)} pairs")
-        for line in driving_seen:
-            print("    ", line)
-
     # 4. static: writers of droppable pieces go through the gate
     hud = sources["HudClient.client.lua"]
     start = hud.index("-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)")
@@ -359,6 +367,11 @@ PLANTS = [
      "StaminaBar.lua", "local spots = phoneSpots(viewport)", "local spots = nil"),
     ("the layout forgetting what a dropped piece's code last asked for",
      "HudClient.client.lua", "piece.gui.Visible = hudLayout.wanted[piece.gui] == true", "piece.gui.Visible = false"),
+    ("the driving HUD keeping its desktop spots on a touch screen",
+     "VehicleClient.client.lua", "local spots = PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport) or nil",
+     "local spots = nil"),
+    ("the ability tile's stats line ignoring compact mode",
+     "CompanionAbilityIcon.lua", "self.readout.Visible = not self.compact", "self.readout.Visible = true"),
     ("an element parked on the minimap",
      "HudClient.client.lua", "-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)",
      "create('Frame', { Size = UDim2.fromOffset(60, 60), Position = UDim2.new(1, -120, 0, 140), AnchorPoint = Vector2.new(0, 0), Parent = screenGui })\n"

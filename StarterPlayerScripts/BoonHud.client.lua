@@ -106,10 +106,21 @@ local function fit()
 end
 
 local shownKey = nil
+-- In a vehicle on a touch screen the panel steps aside: PhoneLayout's driving block (VehicleClient's
+-- speed panel and the gun panel) takes the same corner of the screen, and nobody reads their buffs while
+-- driving. On a desktop screen the two are far apart and the panel stays.
+local function drivingOnPhone()
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	return home.phone and seat ~= nil and seat:IsA("VehicleSeat")
+end
+
 local function render()
 	local text = player:GetAttribute("CompanionBoons")
 	local name = player:GetAttribute("CompanionBoonName")
-	if type(text) ~= "string" or text == "" then
+	fit()
+	if type(text) ~= "string" or text == "" or drivingOnPhone() then
 		panel.Visible = false
 		shownKey = nil
 		return
@@ -157,10 +168,22 @@ local function render()
 end
 
 player:GetAttributeChangedSignal("CompanionBoons"):Connect(render)
+local function watchSeat(character)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if humanoid then
+		humanoid:GetPropertyChangedSignal("SeatPart"):Connect(render)
+	end
+end
+player.CharacterAdded:Connect(watchSeat)
+if player.Character then
+	task.spawn(watchSeat, player.Character)
+end
 player:GetAttributeChangedSignal("CompanionBoonName"):Connect(render)
 
 local camera = workspace.CurrentCamera
 if camera then
-	camera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+	-- The whole render, not just fit: turning the phone can move the panel into (or out of) the corner
+	-- the driving block takes.
+	camera:GetPropertyChangedSignal("ViewportSize"):Connect(render)
 end
 render()

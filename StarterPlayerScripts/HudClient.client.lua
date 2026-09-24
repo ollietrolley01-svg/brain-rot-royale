@@ -2875,6 +2875,15 @@ local function showToast(message, isError)
 
 	toast.Text = message
 	toast.TextColor3 = isError and C.Red or C.Text
+	-- In a vehicle on a desktop screen the driving HUD fills the band the toast normally uses (the speed
+	-- panel 178-256 up, its hint to 280, the damage line to 304: VehicleClient), so the toast goes above
+	-- it (#80). A phone places the toast itself, top-anchored (the phone layout block), and is left alone.
+	if toast.AnchorPoint.Y == 1 then
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		local driving = seat ~= nil and seat:IsA("VehicleSeat")
+		toast.Position = UDim2.new(0.5, 0, 1, driving and -(304 + 8) or -(16 + 150 + 8))
+	end
 	TweenService:Create(toast, TweenInfo.new(0.15), { BackgroundTransparency = 0.15, TextTransparency = 0 }):Play()
 
 	task.delay(2.6, function()

@@ -234,30 +234,52 @@ end)
 -- Loop
 --------------------------------------------------------------------------------
 
--- Beside the vehicle panel wherever it actually is, not where the desktop literals above assume it is
--- (#80). VehicleClient draws its panel as the one Frame in its ScreenGui; reading its drawn box means this
--- follows it if it is ever moved or scaled for a phone, where the literals put this panel 88 px off the
--- right edge of an upright screen. Right of it at its scale, bottoms level; on its left instead if the
--- right side would leave the screen; above it, centred, when neither side has room (an upright phone).
--- Only written when it changes.
-local function followVehiclePanel()
+-- On a touch screen, PhoneLayout's slot for it (`Rects().vehicleGun`, in the driving block beside or
+-- under VehicleClient's speed panel). Worked out when the screen changes, not every frame; nil on a
+-- desktop screen or if PhoneLayout is missing.
+local phoneGunSpot = nil
+do
+	local ok, PhoneLayout = pcall(require, script.Parent:WaitForChild("PhoneLayout", 5))
+	local function refit()
+		local viewport = camera.ViewportSize
+		phoneGunSpot = ok and type(PhoneLayout) == "table" and PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport).vehicleGun or nil
+	end
+	refit()
+	camera:GetPropertyChangedSignal("ViewportSize"):Connect(refit)
+	game:GetService("UserInputService"):GetPropertyChangedSignal("KeyboardEnabled"):Connect(refit)
+end
+
+-- Otherwise beside the vehicle panel wherever it actually is, not where the desktop literals above
+-- assume it is (#80). VehicleClient draws its panel as the one Frame in its ScreenGui. Right of it at its
+-- scale, bottoms level; on its left instead if the right side would leave the screen; above it, centred,
+-- when neither side has room. Only written when it changes.
+local function besideVehiclePanel()
 	local vehicleHud = player.PlayerGui:FindFirstChild("VehicleHud")
 	local other = vehicleHud and vehicleHud:FindFirstChildOfClass("Frame")
 	if not other or other.AbsoluteSize.X <= 0 then
-		return
+		return nil
 	end
 	local k = other.AbsoluteSize.X / 250
 	local origin = gui.AbsolutePosition
 	local x, bottom = other.AbsolutePosition.X - origin.X, other.AbsolutePosition.Y - origin.Y + other.AbsoluteSize.Y
 	local right = x + other.AbsoluteSize.X + 8 * k
-	local anchor, position
 	if right + 150 * k <= camera.ViewportSize.X - 8 then
-		anchor, position = Vector2.new(0, 1), UDim2.fromOffset(right, bottom)
+		return k, Vector2.new(0, 1), UDim2.fromOffset(right, bottom)
 	elseif x - 8 * k - 150 * k >= 8 then
-		anchor, position = Vector2.new(1, 1), UDim2.fromOffset(x - 8 * k, bottom)
+		return k, Vector2.new(1, 1), UDim2.fromOffset(x - 8 * k, bottom)
+	end
+	return k, Vector2.new(0.5, 1), UDim2.fromOffset(x + other.AbsoluteSize.X / 2, bottom - other.AbsoluteSize.Y - 8 * k)
+end
+
+local function followVehiclePanel()
+	local k, anchor, position
+	if phoneGunSpot then
+		k, anchor, position = phoneGunSpot.w / 150, Vector2.new(0, 0), UDim2.fromOffset(phoneGunSpot.x, phoneGunSpot.y)
 	else
-		anchor = Vector2.new(0.5, 1)
-		position = UDim2.fromOffset(x + other.AbsoluteSize.X / 2, bottom - other.AbsoluteSize.Y - 8 * k)
+		k, anchor, position = besideVehiclePanel()
+		if not k then
+			return
+		end
 	end
 	if panelScale.Scale ~= k then
 		panelScale.Scale = k

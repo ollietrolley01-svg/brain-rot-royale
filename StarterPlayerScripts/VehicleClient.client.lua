@@ -229,6 +229,57 @@ healthWarning.Text = ""
 healthWarning.Visible = false
 healthWarning.Parent = gui
 
+-- On a touch screen PhoneLayout owns the HUD, and has a block for the driving HUD (`Rects().vehicle`,
+-- `vehicleHint`, `vehicleWarning`; the gun panel beside it is VehicleWeaponClient's). The literals above
+-- are the desktop spots, above the hotbar: on an 844x390 phone they put this panel over the crosshair
+-- and the hint across the top of the screen, and upright they ran the hint across the hotbar row (#80,
+-- measured by tools/hud_layout_check.py). Everything goes back to the literals on a desktop screen.
+-- Under pcall: if PhoneLayout fails to load, the desktop spots stand.
+do
+	local ok, err = pcall(function()
+		local PhoneLayout = require(script.Parent:WaitForChild("PhoneLayout"))
+		local pieces = {
+			{ gui = panel, key = "vehicle", natural = Vector2.new(250, 78) },
+			{ gui = hint, key = "vehicleHint", natural = Vector2.new(300, 18) },
+			{ gui = healthWarning, key = "vehicleWarning", natural = Vector2.new(260, 20) },
+		}
+		for _, piece in ipairs(pieces) do
+			piece.anchor, piece.position, piece.size = piece.gui.AnchorPoint, piece.gui.Position, piece.gui.Size
+			piece.scale = Instance.new("UIScale")
+			piece.scale.Parent = piece.gui
+		end
+		local function place()
+			local viewport = camera.ViewportSize
+			local spots = PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport) or nil
+			for _, piece in ipairs(pieces) do
+				local spot = spots and spots[piece.key]
+				if spot then
+					-- Drawn at its natural size and scaled to the slot. The hint's natural box is the 300 its
+					-- touch wording needs, not its 420-wide desktop box; the text lines up on the block's
+					-- left edge like the panels under it.
+					piece.gui.Size = UDim2.fromOffset(piece.natural.X, piece.natural.Y)
+					if piece.gui:IsA("TextLabel") then
+						piece.gui.TextXAlignment = Enum.TextXAlignment.Left
+					end
+					PhoneLayout.Place(piece.gui, spot, piece.natural, piece.scale, 0, true)
+				else
+					piece.gui.AnchorPoint, piece.gui.Position, piece.gui.Size = piece.anchor, piece.position, piece.size
+					if piece.gui:IsA("TextLabel") then
+						piece.gui.TextXAlignment = Enum.TextXAlignment.Center
+					end
+					piece.scale.Scale = 1
+				end
+			end
+		end
+		place()
+		camera:GetPropertyChangedSignal("ViewportSize"):Connect(place)
+		UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(place)
+	end)
+	if not ok then
+		warn("[VehicleClient] the phone layout didn't load; the driving HUD keeps its desktop spots: " .. tostring(err))
+	end
+end
+
 local function updateHealthWarning(model)
 	if model:GetAttribute("Wrecked") then
 		healthWarning.Visible = true
