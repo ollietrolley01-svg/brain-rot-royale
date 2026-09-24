@@ -187,6 +187,8 @@ MODULES.Combatants = {
 CombatService = { HeadshotScale = 1 }
 LOG = {}
 function CombatService.IsEnabled() return ENABLED end
+-- The real one rewinds for lag (LagCompensation, #97); the mock traces the present, which is what a bot or a 0-ping shot gets.
+function CombatService.Raycast(token, origin, vector, params) return workspace:Raycast(origin, vector, params) end
 function CombatService.DealDamage(a, v, amount, weaponId, headshot)
   table.insert(LOG, { what = "damage", attacker = a, victim = v, amount = amount, weaponId = weaponId }); return amount
 end
