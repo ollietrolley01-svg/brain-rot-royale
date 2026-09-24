@@ -6213,6 +6213,10 @@ function BotService.Start()
 			if not running or generation ~= loopGeneration then
 				break
 			end
+			-- CPU COST, measured on purpose: `started`, `began`, `took` and `spent` below are os.clock()
+			-- readings of how much processor a think slice and each bot's think take (STATS, the probes'
+			-- budget numbers), which is the legitimate use of os.clock. The clock-ratchet counts these two
+			-- lines as wall-clock sites; they are exempt, not a deadline. `startedWall` is the wall figure.
 			local started = os.clock()
 			local startedWall = tick()
 			BotNav.Pump()

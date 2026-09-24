@@ -118,7 +118,8 @@ damageDealt.OnClientEvent:Connect(function(_, wasKill, position, _, headshot, ki
 	if not wasKill or kind == "structure" then
 		return
 	end
-	local now = os.clock()
+	-- Wall time: os.clock is CPU time in Roblox and stretches the chain window under load.
+	local now = tick()
 	chain = (now - lastKillAt <= CHAIN_WINDOW) and chain + 1 or 1
 	lastKillAt = now
 	token += 1

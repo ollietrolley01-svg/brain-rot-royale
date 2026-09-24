@@ -316,7 +316,8 @@ local lastReadyToggle = {}
 -- Can be toggled at any time; it decides who joins the *next* match, never the one in progress.
 -- Throttled, because every change is broadcast to the whole server.
 function MatchService.SetReady(player, value)
-	local now = os.clock()
+	-- Wall time: only this throttle reads it, and os.clock is CPU time in Roblox.
+	local now = tick()
 	if lastReadyToggle[player.UserId] and now - lastReadyToggle[player.UserId] < 0.3 then
 		return
 	end
@@ -1859,11 +1860,11 @@ local function startMatch()
 			-- OnPlayerRemoving, so failSpawn no-ops for them.
 			local character = player.Character
 			if not character then
-				local deadline = os.clock() + 10
+				local deadline = tick() + 10 -- wall time, not os.clock (CPU time in Roblox)
 				repeat
 					task.wait(0.1)
 					character = player.Character
-				until character or os.clock() > deadline or not player.Parent
+				until character or tick() > deadline or not player.Parent
 			end
 
 			local humanoid = character and character:WaitForChild("Humanoid", 10)

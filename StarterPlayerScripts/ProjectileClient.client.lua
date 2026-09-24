@@ -573,7 +573,8 @@ local function onDetonate(info)
 	end
 	if strength > 0.35 then
 		flashStrength = math.max(flashStrength, (strength - 0.35) / 0.65 * 0.55)
-		flashUntil = os.clock() + 0.3
+		-- Wall time (and below where it fades), not os.clock: CPU time in Roblox.
+		flashUntil = tick() + 0.3
 	end
 end
 
@@ -1144,8 +1145,9 @@ local function stepScreen(dt)
 	screen.blur.Enabled = inside > 0.01
 
 	-- The blast flash.
-	if os.clock() < flashUntil then
-		screen.flash.BackgroundTransparency = 1 - flashStrength * ((flashUntil - os.clock()) / 0.3)
+	local flashNow = tick()
+	if flashNow < flashUntil then
+		screen.flash.BackgroundTransparency = 1 - flashStrength * ((flashUntil - flashNow) / 0.3)
 	else
 		screen.flash.BackgroundTransparency = 1
 		flashStrength = 0

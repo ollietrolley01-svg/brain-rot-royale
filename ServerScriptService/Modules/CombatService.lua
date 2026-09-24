@@ -500,7 +500,8 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 			recent[victimToken] = list
 		end
 		table.insert(list, {
-			at = os.clock(),
+			-- The recap's own clock (CombatService.Clock, server game time), read back only by sendRecap.
+			at = CombatService.Clock(),
 			name = attackerToken and Combatants.GetName(attackerToken) or nil,
 			weaponId = weaponId,
 			amount = dealt,
@@ -1108,7 +1109,7 @@ function CombatService.RecordEnvironmentDamage(victimToken, amount, source)
 		list = {}
 		recent[victimToken] = list
 	end
-	table.insert(list, { at = os.clock(), name = source, amount = amount, environment = true })
+	table.insert(list, { at = CombatService.Clock(), name = source, amount = amount, environment = true })
 	if #list > RECAP_HITS then
 		table.remove(list, 1)
 	end
@@ -1120,7 +1121,7 @@ local function sendRecap(victimToken, killerToken, weaponId)
 	if not (Combatants.IsPlayer(victimToken) and victimToken.Parent) then
 		return
 	end
-	local now = os.clock()
+	local now = CombatService.Clock()
 	local total, bySource, last = 0, {}, nil
 	for _, hit in ipairs(recent[victimToken] or {}) do
 		if now - hit.at <= RECAP_WINDOW then
