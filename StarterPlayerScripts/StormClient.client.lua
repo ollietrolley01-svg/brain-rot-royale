@@ -163,6 +163,17 @@ local function outsideNow()
 	return flat.Magnitude > target.radius
 end
 
+-- The storm's bite (#86 M19). StormService hurts everyone outside once a second, silently: the only
+-- sound was the groan on the way out, so a player looting outside the wall heard nothing while their
+-- health went. Each tick that takes health while you are outside plays a quiet, higher StormEnter --
+-- the same voice, so it reads as the storm, at a third of its volume so it nags rather than alarms.
+-- Judged on the 0.4 s poll below from the health actually lost, so it only sounds when damage lands.
+local TICK_GAIN, TICK_PITCH, TICK_GAP = 0.3, 1.25, 0.8
+local lastHealth, lastTickAt = nil, -math.huge
+local function stormTickDue(outside, health, before, now, lastAt)
+	return outside and before ~= nil and health > 0 and health < before - 0.5 and now - lastAt >= TICK_GAP
+end
+
 stormChanged.OnClientEvent:Connect(function(info)
 	if not info or info.status == "Idle" or not info.radius or info.radius < 2 then
 		target = nil
@@ -201,10 +212,20 @@ RunService.RenderStepped:Connect(function(delta)
 		swirlClock = 0
 		gateSwirls(false)
 		local outside = outsideNow()
-		if outside ~= wasOutside then
+		local crossed = outside ~= wasOutside
+		if crossed then
 			wasOutside = outside
 			Sfx.Play(outside and "StormEnter" or "StormLeave")
 		end
+		local character = Players.LocalPlayer and Players.LocalPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local health = humanoid and humanoid.Health or nil
+		-- `time()` is game time; os.clock is CPU time in Roblox and runs slow under load.
+		if health and not crossed and stormTickDue(outside, health, lastHealth, time(), lastTickAt) then
+			lastTickAt = time()
+			Sfx.Play("StormEnter", 0.05, TICK_PITCH, TICK_GAIN)
+		end
+		lastHealth = health
 	end
 
 	-- The band pulses while the circle is closing.
