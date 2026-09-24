@@ -123,7 +123,7 @@ def main():
     for f in fails:
         print("  FAIL", f)
     planted = [
-        ("W", (), [("wood = { shape = \"splinter\"", "wood = { shape = \"chunk\"")]),
+        ("W", (), [("WoodPlanks = { shape = \"splinter\"", "WoodPlanks = { shape = \"chunk\"")]),
         ("T", [("\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n",
                 "\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n\t\t\tmember.Transparency = math.max(member.Transparency, 0.12)\n")], ()),
     ]

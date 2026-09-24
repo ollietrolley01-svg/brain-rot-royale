@@ -1,6 +1,8 @@
 -- Riding a zipline (server: ZiplineService). The server has checked we're at the top and tells
 -- us the line; from there our own character is moved along it, hanging under the rope, facing
--- the way it's going, until the bottom — or until we jump off.
+-- the way it's going, until the bottom — or until we jump off, or the line SNAPS (Oliver 2026-09-24:
+-- ziplines break like everything else; DestructibleService takes the whole line down when any of it
+-- is shot out): then we drop from where we are, carrying on a little the way we were going.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -48,6 +50,8 @@ ride.OnClientEvent:Connect(function(data)
 		length = math.max(1, (data.to - data.from).Magnitude),
 		speed = tonumber(data.speed) or 50,
 		hang = tonumber(data.hang) or 4.4,
+		-- The line itself, when the server says which: gone from under us means it snapped.
+		line = typeof(data.line) == "Instance" and data.line or nil,
 		t = 0,
 		humanoid = humanoid,
 		root = root,
@@ -64,6 +68,11 @@ RunService.Heartbeat:Connect(function(dt)
 	end
 	if not current.root.Parent or current.humanoid.Health <= 0 then
 		stopRide(false)
+		return
+	end
+	if current.line and not current.line:IsDescendantOf(workspace) then
+		-- The line snapped: let go, falling.
+		stopRide(true)
 		return
 	end
 	current.t = math.min(1, current.t + dt * current.speed / current.length)

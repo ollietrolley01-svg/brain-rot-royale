@@ -5,10 +5,12 @@ MapDecor.lua) under lupa with small Roblox mocks, builds cars inside a town insi
 and checks the invariants the fix rests on:
 
   A  every solid part of a parked car resolves to a damageable entry, and all to the SAME one
-     (the car), so shooting the cabin or a wheel wears the car down
+     (the car), so shooting the cabin or a wheel wears the car down; and the pool's health is the
+     car's own DestructibleHealth (240), not the size-and-material rule an untagged thing gets
   B  enough damage breaks the car: every piece of it is gone and it resolves to nothing after
-  C  scope: a generic "Part" beside it in the town (a bench) is still scenery, and a car model
-     outside workspace.Map (lobby, deployables) is never damageable
+  C  scope: a generic anchored "Part" beside it in the town (a bench) breaks as a pool of its own
+     since everything became destructible (opt-out, 2026-09-24) -- never folded into the car's
+     pool -- and a car model outside workspace.Map (lobby, deployables) is never damageable
   D  one blast covering the whole car hurts it once, not once per part
 
 Then it plants three faults in DestructibleService's source, one per invariant it must refuse
@@ -68,7 +70,14 @@ function V:Max(o) return Vector3.new(math.max(self.X, o.X), math.max(self.Y, o.Y
 CFrame = {}
 local C = {}
 C.__index = C
--- Positions only: rotation is irrelevant to what this check measures.
+-- Positions only: rotation is irrelevant to what this check measures (every frame is unturned).
+C.RightVector, C.UpVector, C.LookVector = nil, nil, nil
+C.__index = function(c, k)
+  if k == "RightVector" then return Vector3.new(1, 0, 0) end
+  if k == "UpVector" then return Vector3.new(0, 1, 0) end
+  if k == "LookVector" then return Vector3.new(0, 0, -1) end
+  return C[k]
+end
 C.__mul = function(a, b) return CFrame.new(a.Position + b.Position) end
 C.__add = function(a, v) return CFrame.new(a.Position + v) end
 function CFrame.new(x, y, z)
@@ -93,6 +102,8 @@ typeof = function(v)
 end
 -- defer really defers: it queues, as Roblox runs it after the current thread yields.
 deferred = {}
+tick = function() return os.clock() end
+time = tick
 task = { spawn = function(fn, ...) fn(...) end, defer = function(fn) table.insert(deferred, fn) end, delay = function() end }
 NumberSequence = { new = function() return {} end }
 ColorSequence = NumberSequence
@@ -164,7 +175,8 @@ OverlapParams = { new = function() return {} end }
 RaycastParams = { new = function() return {} end }
 
 local fired = {}
-local services = { Debris = { AddItem = function() end }, ReplicatedStorage = Instance.new("Folder") }
+local services = { Debris = { AddItem = function() end }, ReplicatedStorage = Instance.new("Folder"),
+  RunService = { Heartbeat = signal() }, Players = { GetPlayers = function() return {} end } }
 game = { GetService = function(_, name) return services[name] end }
 local combat = { ConfirmHit = function() end }
 local remotes = { Event = function() return { FireAllClients = function(_, b) table.insert(fired, b) end } end }
@@ -228,6 +240,21 @@ def run(destructible_src, mapdecor_src):
         local dealt = service.Damage(wheel, 30, nil, nil)
         if dealt ~= 30 then fail("A", "a wheel hit dealt " .. tostring(dealt)) end
       end
+      -- Its health is the car's own number: a second car takes 239 and stands, then 1 more and goes.
+      if #fails == 0 then
+        local before3 = snapshot(town)
+        parkedCar(town, Vector3.new(400, 0, 0), 0)
+        local third = {}
+        for _, p in ipairs(carParts(town, before3)) do if p.CanCollide then table.insert(third, p) end end
+        local model3 = third[1].Parent
+        local want = model3:GetAttribute("DestructibleHealth")
+        service.Damage(third[1], want - 1, nil, nil)
+        if model3.Parent == nil then fail("A", "a car broke under " .. tostring(want - 1) .. " of its " .. tostring(want))
+        else
+          service.Damage(third[#third], 1, nil, nil)
+          if model3.Parent ~= nil then fail("A", "a car stood at 0 of its " .. tostring(want)) end
+        end
+      end
 
       -- D: a blast over the whole car hurts it once.
       if #fails == 0 then
@@ -255,9 +282,14 @@ def run(destructible_src, mapdecor_src):
       end
 
       -- C: scope. A bench's generic Part in the town, and a car outside Map.
-      local bench = Instance.new("Part") bench.Parent = town
+      local bench = Instance.new("Part") bench.Anchored = true bench.CFrame = CFrame.new(0, 0, 60) bench.Parent = town
       examined = examined + 1
-      if service.FromPart(bench) ~= nil then fail("C", "a generic Part in town is damageable") end
+      if service.FromPart(bench) ~= bench then fail("C", "a generic anchored Part in town is not breakable (opt-out)") end
+      local car2 = nil
+      for _, d in ipairs(town:GetChildren()) do if d:IsA("Model") and d.Parent then car2 = d break end end
+      if car2 and service.KeyOf(bench) == service.KeyOf(car2:GetDescendants()[1]) then
+        fail("C", "a bench beside a car shares the car's pool")
+      end
       local lobby = Instance.new("Model") lobby.Name = "Lobby" lobby.Parent = workspace
       local b3 = snapshot(lobby)
       parkedCar(lobby, Vector3.new(0, 0, 0), 0)

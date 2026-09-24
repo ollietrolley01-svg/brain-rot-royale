@@ -982,15 +982,10 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 
 		buildFloorWithWell(model, origin, width, depth, baseY, preset.floorMaterial, wallColor,
 			canClimb and floor > 0, facade.trim, floor == floors - 1)
-		if floor == 0 then
-			-- The ground-floor slab never breaks (DestructibleService): it is what everyone inside
-			-- stands on, and there is only footing under it. Upper floors still break per part.
-			for _, child in ipairs(model:GetChildren()) do
-				if child.Name == "Floor" and math.abs(child.Position.Y - baseY) < 0.01 then
-					child:SetAttribute("Destructible", false)
-				end
-			end
-		end
+		-- The ground-floor slab breaks like every other floor (Oliver 2026-09-24: "the ground breaks
+		-- too"). Nothing can fall through it: it lies on the pad MapTerrain.FlattenPad levelled for the
+		-- building, and craters never dig under anything built or deeper than DestructibleService's dig
+		-- floor. To the support pass it is ground while it lies on that pad (it stands on terrain).
 
 		-- The front and back walls run the full width; the side walls fit between them, so no two
 		-- walls share a corner (their tops would lie in one plane and flicker).
