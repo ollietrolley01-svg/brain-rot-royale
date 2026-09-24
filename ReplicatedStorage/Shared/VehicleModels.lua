@@ -2265,7 +2265,8 @@ function VehicleModels.Build(modelId, rng, opts)
 	local layout = def.build(b)
 	assert(b.chassis, modelId .. " built no Chassis")
 	-- An armed model's weapon mount (see Mounted weapons above); bikes have none.
-	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" then
+	-- opts.unarmed leaves the mount off: BuildStatic's parked cars are scenery, not something to man.
+	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" and not opts.unarmed then
 		buildMount(b, VehicleModels.Mounts[modelId])
 		model:SetAttribute("Armed", true)
 		-- VehicleWeapons finds empty armed vehicles for bots by this tag.
@@ -2341,6 +2342,84 @@ function VehicleModels.Build(modelId, rng, opts)
 		pose = layout.pose,
 		zfight = zfight,
 	}
+end
+
+--------------------------------------------------------------------------------
+-- Static builds: the same designs as map scenery (#16 / #94)
+--------------------------------------------------------------------------------
+
+-- A static car is the real design, built by Build above, with the cost cut down to what reads from
+-- the street: a parked car is looked at from ten studs off, not sat in. Left out:
+--   * every joint and weld, and the invisible hubs and pivots they hung from (nothing moves)
+--   * all of each wheel but its tyre, rim lip and centre disc (a wheel is sixteen to forty parts,
+--     most of them wall, barrel, spokes and nuts that only show on a wheel you can turn)
+--   * the wheel-arch lips (a ring of ten or twelve trim segments per arch; the arch panels, which
+--     are the body round the wheel, all stay, so no hole opens in the side)
+--   * the steering wheel's rim segments and the gauges, which are inside behind glass
+-- The Chassis and Hull_* colliders stay: they are what you take cover behind and what a shot hits.
+local STATIC_DROP = { "^SteeringWheel", "^Lip[FR][LR]", "^Gauge" }
+local STATIC_WHEEL_KEEP = { Tyre = true, Lip = true, Disc = true }
+
+local function staticKeeps(part, hubs)
+	if part.Name == "Chassis" or string.sub(part.Name, 1, 5) == "Hull_" then
+		return true
+	end
+	if part.Transparency >= 1 then
+		return false
+	end
+	local hub, piece = string.match(part.Name, "^(Wheel_%a+)_(.+)$")
+	if hub and hubs[hub] then
+		return STATIC_WHEEL_KEEP[piece] == true
+	end
+	for _, pattern in ipairs(STATIC_DROP) do
+		if string.find(part.Name, pattern) then
+			return false
+		end
+	end
+	return true
+end
+
+-- Builds `modelId` as an anchored, jointless, seatless prop standing at `cframe` (the ground under
+-- the middle of the wheelbase, nose along its LookVector) and returns it with Build's info. It
+-- carries none of the attributes or tags that make a model a vehicle (VehicleModel, Lamp, Radius,
+-- ArmedVehicle), so VehicleClient never rigs it and bots never try to man it.
+function VehicleModels.BuildStatic(modelId, rng, cframe, opts)
+	opts = opts or {}
+	local model, info = VehicleModels.Build(modelId, rng, { scheme = opts.scheme, unarmed = true })
+	local hubs = {}
+	for _, hub in ipairs(info.wheels) do
+		hubs[hub.Name] = true
+	end
+	for _, child in ipairs(model:GetChildren()) do
+		if child:IsA("BasePart") and not staticKeeps(child, hubs) then
+			child:Destroy()
+		end
+	end
+	local parts = 0
+	for _, part in ipairs(model:GetChildren()) do
+		if part:IsA("BasePart") then
+			parts += 1
+			-- Welds and joints live under the part they hold; anchored, the part needs neither. (Only
+			-- those: a number plate's SurfaceGui lives there too.)
+			for _, joint in ipairs(part:GetChildren()) do
+				if joint:IsA("JointInstance") or joint:IsA("WeldConstraint") then
+					joint:Destroy()
+				end
+			end
+			part.Anchored = true
+			part.CanTouch = false
+			for key in pairs(part:GetAttributes()) do
+				part:SetAttribute(key, nil)
+			end
+		end
+	end
+	for key in pairs(model:GetAttributes()) do
+		model:SetAttribute(key, nil)
+	end
+	model.Name = "StaticVehicle"
+	model:PivotTo(cframe)
+	info.parts = parts
+	return model, info
 end
 
 return VehicleModels

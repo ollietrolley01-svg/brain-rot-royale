@@ -182,7 +182,9 @@ def slice_mapdecor(text):
     head = text[text.index('local currentName = "Part"'):text.index("local function pick")]
     head += text[text.index("local function pick"):text.index("-- Road and street surfaces")]
     car = text[text.index("local CAR_COLORS"):text.index("local function townSign")]
-    return head + car + "\nreturn parkedCar\n"
+    # MapDecor's table and VehicleModels sit above the slice. parkedCar is called with no design
+    # here, so it builds the plain car; the real designs are tools/parked_car_check.py's (#16 / #94).
+    return "local MapDecor = {}\nlocal VehicleModels = nil\n" + head + car + "\nreturn parkedCar\n"
 
 
 def run(destructible_src, mapdecor_src):

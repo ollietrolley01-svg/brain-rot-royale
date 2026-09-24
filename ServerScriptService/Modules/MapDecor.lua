@@ -14,6 +14,7 @@ local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BrainrotModels = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("BrainrotModels"))
+local VehicleModels = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleModels"))
 
 local MapDecor = {}
 
@@ -266,17 +267,10 @@ local CAR_COLORS = {
 	Color3.fromRGB(240, 130, 190),
 }
 
--- Solid, waist-high and about the length of a sprint stride: proper cover in the street.
-local function parkedCar(parent, position, yaw)
-	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
-	local paint = pick(CAR_COLORS)
-	-- One Model, one health pool (DestructibleService reads the attribute): shot apart as a car, #51.
-	local car = Instance.new("Model")
-	car.Name = "ParkedCar"
-	car:SetAttribute("DestructibleHealth", 240)
-	car.Parent = parent
-	parent = car
-
+-- The plain car: a body, a glass cabin, four wheels and four lamps, eleven parts. Solid, waist-high
+-- and about the length of a sprint stride: proper cover in the street. Kept for the kerbside cars
+-- past a town's DETAILED_CARS_PER_TOWN, where the part budget can't pay for another real design.
+local function boxCar(parent, cf, paint)
 	makePart(parent, Vector3.new(6.4, 2.6, 12.6), cf * CFrame.new(0, 2.1, 0), paint, Enum.Material.SmoothPlastic)
 	local cabin = makePart(parent, Vector3.new(5.8, 2.3, 6.6), cf * CFrame.new(0, 4.55, 0.8),
 		Color3.fromRGB(40, 56, 72), Enum.Material.Glass)
@@ -297,6 +291,76 @@ local function parkedCar(parent, position, yaw)
 			Color3.fromRGB(220, 40, 40), Enum.Material.Neon))
 	end
 end
+
+-- How many of a town's kerbside cars are real designs; the rest are the plain car. A design built
+-- static is 200 to 290 parts against the plain car's 11 (tools/parked_car_check.py prints them),
+-- and the biggest map is already past its part budget (#121), so this is the knob: each step up
+-- costs roughly 225 parts a town, 900 to 1,600 a map.
+local DETAILED_CARS_PER_TOWN = 1
+
+-- Length (along the nose) and width over everything, mirrors included, about the point the car is
+-- placed by (the middle of the wheelbase, which is not the middle of a van: its body runs a stud
+-- further back than forward, so it counts as twice its longer end). The plain car's is fixed; a
+-- real design's is measured once per server off a static build.
+local PLAIN_FOOTPRINT = { length = 12.9, width = 7.3 }
+local footprints = {}
+
+local function footprintOf(modelId)
+	if not footprints[modelId] then
+		local probe = VehicleModels.BuildStatic(modelId, Random.new(1), CFrame.new())
+		local box, size = probe:GetBoundingBox()
+		probe:Destroy()
+		footprints[modelId] = {
+			length = 2 * (math.abs(box.Position.Z) + size.Z / 2),
+			width = 2 * (math.abs(box.Position.X) + size.X / 2),
+		}
+	end
+	return footprints[modelId]
+end
+
+-- What the next kerbside car will be, before a spot is looked for, so the spot fits it: `id` and
+-- `rng` for a real design (nil for the plain car), and the claim it needs. The claim is two circles
+-- `reach` either side of the centre, `radius` wide, which fits a car's long shape far better than
+-- one big circle; the plain car's is the 3.6 / 3.2 it always had, a longer or wider design's grows.
+-- A real design takes exactly one global roll here (its seed); the plain car takes its one (the
+-- paint) in parkedCar. Either way the decor built after it lands where it always did.
+local function parkedCarDesign(detailed)
+	local design = { footprint = PLAIN_FOOTPRINT }
+	if detailed then
+		design.rng = Random.new(math.random(1, 2 ^ 30))
+		design.id = VehicleModels.Pick("car", design.rng)
+		design.footprint = footprintOf(design.id)
+	end
+	design.halfWidth = design.footprint.width / 2
+	design.radius, design.reach = 3.6, 3.2
+	if design.id then
+		design.radius = math.max(3.6, design.halfWidth)
+		design.reach = math.max(3.2, design.footprint.length / 2 - design.radius)
+	end
+	return design
+end
+
+-- A parked car at the kerb (#16 / #94). A real design is built through VehicleModels.BuildStatic:
+-- anchored, no seat, no joints, no scripts, nothing that makes it a vehicle, and cut to what reads
+-- from the street. Otherwise the plain car above.
+local function parkedCar(parent, position, yaw, design)
+	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
+	local car
+	if design and design.id then
+		car = VehicleModels.BuildStatic(design.id, design.rng, cf)
+	else
+		car = Instance.new("Model")
+		boxCar(car, cf, pick(CAR_COLORS))
+	end
+	-- One Model, one health pool (DestructibleService reads the attribute): shot apart as a car, #51.
+	car.Name = "ParkedCar"
+	car:SetAttribute("DestructibleHealth", 240)
+	car.Parent = parent
+	return car
+end
+-- The harnesses (tools/parked_car_check.py) build one on its own.
+MapDecor.ParkedCarDesign = parkedCarDesign
+MapDecor.ParkedCar = parkedCar
 
 local function townSign(parent, position, facing, name)
 	local look = CFrame.lookAt(position, position + facing)
@@ -1207,19 +1271,27 @@ function MapDecor.Town(town, center, preset, spread, streets, townName, groundHe
 		bin(town, position)
 	end)
 
-	-- Cars parked along the edge of the street, facing the way traffic would go. Checked as two
-	-- circles along the car's length, which fits its long shape far better than one big circle.
+	-- Cars parked along the edge of the street, facing the way traffic would go. The first few are
+	-- real designs (DETAILED_CARS_PER_TOWN). Each is chosen before its spot is looked for, so the
+	-- claim fits it, and it stands as far in from the asphalt's edge as its own width needs: the
+	-- outer side 0.25 past the edge, where the plain car's wheels always were.
+	local detailedLeft = DETAILED_CARS_PER_TOWN
 	for _ = 1, #streets > 0 and count("cars", 4) or 0 do
+		local design = parkedCarDesign(detailedLeft > 0)
+		local radius, reach = design.radius, design.reach
 		for _ = 1, 16 do
-			local flat, direction, side, entry, surface = besideStreet(-5.9)
+			local flat, direction, side, entry, surface = besideStreet(-(design.halfWidth + 2.25))
 			if flat then
-				local front, back = flat + direction * 3.2, flat - direction * 3.2
-				if space:IsFree(front.X, front.Z, 3.6, entry) and space:IsFree(back.X, back.Z, 3.6, entry) then
-					space:AddCircle(front.X, front.Z, 3.6)
-					space:AddCircle(back.X, back.Z, 3.6)
+				local front, back = flat + direction * reach, flat - direction * reach
+				if space:IsFree(front.X, front.Z, radius, entry) and space:IsFree(back.X, back.Z, radius, entry) then
+					space:AddCircle(front.X, front.Z, radius)
+					space:AddCircle(back.X, back.Z, radius)
 					local position = Vector3.new(flat.X, groundHeightAt(flat.X, flat.Z) + surface, flat.Z)
-					parkedCar(town, position, yawFacing(direction))
-					table.insert(spots, position + side * 4.8)
+					parkedCar(town, position, yawFacing(direction), design)
+					if design.id then
+						detailedLeft -= 1
+					end
+					table.insert(spots, position + side * (design.halfWidth + 1.15))
 					break
 				end
 			end

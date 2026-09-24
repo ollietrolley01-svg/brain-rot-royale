@@ -93,7 +93,7 @@ class World:
             local shared = Instance.new("Folder")
             shared.Name = "Shared"
             shared.Parent = game:GetService("ReplicatedStorage")
-            for _, name in ipairs({ "Remotes", "SoundConfig", "BrainrotModels", "BrainrotData", "Rarity", "MatchConfig" }) do
+            for _, name in ipairs({ "Remotes", "SoundConfig", "BrainrotModels", "BrainrotData", "Rarity", "MatchConfig", "VehicleModels" }) do
                 local m = Instance.new("ModuleScript"); m.Name = name; m.Parent = shared
             end
             mock.modulesFolder = Instance.new("Folder")
@@ -109,6 +109,8 @@ class World:
                 return nil
             end }
             mock.modules.BrainrotModels = setmetatable({}, { __index = function() return function() end end })
+            -- MapDecor's parked cars (#16 / #94); nothing here builds one (tools/parked_car_check.py does).
+            mock.modules.VehicleModels = setmetatable({}, { __index = function() return function() end end })
             require = function(inst)
                 local name = type(inst) == "table" and inst.Name or tostring(inst)
                 local found = mock.modules[name]
