@@ -304,6 +304,7 @@ end
 -- hit part to a companion, find a combatant's own companion, and hurt companions.
 CombatService.CompanionFromPart = nil
 CombatService.CompanionOf = nil
+CombatService.CompanionOwner = nil
 CombatService.DamageCompanion = nil
 CombatService.DamageCompanionsInRadius = nil
 
@@ -649,6 +650,16 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		-- Someone else's companion soaks the bullet.
 		local companionModel = CombatService.CompanionFromPart and CombatService.CompanionFromPart(result.Instance)
 		if companionModel then
+			-- A teammate's companion (the mode's friendly-fire veto) lets the shot through, like glass.
+			local companionOwner = CombatService.CompanionOwner and CombatService.CompanionOwner(companionModel)
+			if companionOwner and CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, companionOwner, def.id) then
+				local filter = params.FilterDescendantsInstances
+				table.insert(filter, companionModel)
+				params.FilterDescendantsInstances = filter
+				currentOrigin = result.Position + direction * 0.05
+				stopped = nil
+				continue
+			end
 			CombatService.DamageCompanion(shooterToken, companionModel, def.damage)
 			fireAbility(shooterToken, def, nil, result.Position, def.damage)
 			break

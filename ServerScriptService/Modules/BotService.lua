@@ -564,7 +564,7 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 	-- (CombatService.buildRaycastParams), as does the client's own trace.
 	params.IgnoreWater = true
 	local filter = { botCharacter }
-	for _, name in ipairs({ "Loot", "Effects" }) do
+	for _, name in ipairs({ "Loot", "Effects", "Companions" }) do
 		local instance = workspace:FindFirstChild(name)
 		if instance then
 			table.insert(filter, instance)
@@ -647,7 +647,8 @@ local function coverBetween(bot, head, targetRoot)
 	STATS.coverChecks += 1
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = { bot.character }
+	-- Companions hover beside their owners and take raycasts; they aren't cover.
+	params.FilterDescendantsInstances = { bot.character, workspace:FindFirstChild("Companions") }
 	params.RespectCanCollide = true
 	params.IgnoreWater = true
 	local hit = workspace:Raycast(head.Position, targetRoot.Position - head.Position, params)
@@ -809,7 +810,7 @@ local function exposedTo(bot, root, from)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local filter = { bot.character }
-	for _, name in ipairs({ "Loot", "Effects" }) do
+	for _, name in ipairs({ "Loot", "Effects", "Companions" }) do
 		local instance = workspace:FindFirstChild(name)
 		if instance then
 			table.insert(filter, instance)
@@ -3332,6 +3333,7 @@ function BotService.Clear()
 	table.clear(lootClaims)
 	table.clear(teamSightings)
 	table.clear(combatantList)
+	table.clear(botDrivers)
 	lootSnapshot.at = -math.huge
 	table.clear(bots)
 end
