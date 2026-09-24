@@ -27,6 +27,8 @@ Matches it plays, and what it holds the code to (every one an invariant the code
   streak  the team streak's window, step pay and labels are MatchService's own.
   finish  the kill that reaches the score target (FinishNow, synchronously) is already on the killer's
           ledger when the match hands over to the payout.
+  retire  a dead bot leaves BotService's think list when it is retired, and CombatService's memory once
+          its body is gone.
   bonus   TEAM BONUS across a run of matches: the first win of the day pays once (Epic Crate included) and
           again the next UTC day; consecutive wins pay a growing win streak, capped at maxSteps, ended by a
           loss and by an idle match; the milestone cosmetics unlock at their win counts, once each, never
@@ -226,9 +228,14 @@ mocks.ObjectiveZone = {
 mocks.ZFight = { FixTolerance = 0.01 }
 mocks.BrainrotData = { CollectionBonus = {} }
 mocks.ShopRotation = {}
-mocks.BotService = { Spawn = function() end }
+-- What a retired bot is dropped from: BotService's think list, and (after the death effect) CombatService.
+W.botsForgotten, W.tokensForgotten = {}, {}
+mocks.BotService = { Spawn = function() end, Forget = function(bot) W.botsForgotten[bot] = true; return true end }
 local damageListeners = {}
-mocks.CombatService = { OnDamage = function(fn) table.insert(damageListeners, fn) end }
+mocks.CombatService = {
+	OnDamage = function(fn) table.insert(damageListeners, fn) end,
+	ForgetToken = function(token) W.tokensForgotten[token] = true end,
+}
 function W.damage(attacker, victim, amount)
 	for _, fn in ipairs(damageListeners) do fn(attacker, victim, amount, "Gun", false, false) end
 end
@@ -630,6 +637,21 @@ do
 	check(onLedger ~= nil, "the kill that reached the score target finished the match")
 	check(onLedger == 1, "the winning kill is on the killer's ledger when the match finishes: " .. tostring(onLedger) .. " bot kill(s)")
 end
+
+-- ======================================================================== a retired bot is let go
+-- A dead bot in a respawn mode is retired and replaced by a new one. It has to leave BotService's think list
+-- at once (the list used to grow by one per death, every dead bot thinking all match), and CombatService's
+-- memory of it once its death effect is over -- what BotService.Clear did for it when it stayed listed.
+do
+	local mode = start("TeamDeathmatch")
+	local shooter = W.player("Retirer", 1, vec(0, 0, 0))
+	local bot = killBot(mode, shooter, 2)
+	check(W.botsForgotten[bot] == true, "a retired bot leaves BotService's think list when it is retired")
+	check(W.tokensForgotten[bot] == nil, "...but CombatService still remembers it while its death plays out")
+	W.advance(8)
+	check(W.tokensForgotten[bot] == true, "...and forgets it once the body is gone")
+	mode.StopWorld()
+end
 return out
 """
 
@@ -708,6 +730,10 @@ PLANTS = [
      plant(RS, "local seconds = math.min(n(summary.holdSeconds), rules.hold.capSeconds or math.huge)",
            "local seconds = n(summary.holdSeconds)")),
     ("the winning kill credited after the score that ends the match", credit_after_score()),
+    ("a retired bot left in BotService's think list",
+     plant(GM, "\tBotService.Forget(bot)\n", "")),
+    ("a retired bot never forgotten by CombatService",
+     plant(GM, "\t\tCombatService.ForgetToken(bot)\n", "")),
     ("a defend counted anywhere",
      plant(GM, "\t\tif owner == killerTeam then\n\t\t\tkiller.defends += 1", "\t\tif true then\n\t\t\tkiller.defends += 1")),
 ]

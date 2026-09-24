@@ -6255,6 +6255,31 @@ function BotService.Start()
 	end)
 end
 
+-- A bot retired mid-match (a team mode's dead bot, GameMode.retireBot): out of the think list, its nav,
+-- its ride and its loot claims, as Clear does for every bot at the end. Without this the list only ever
+-- grew -- a respawn mode appends a replacement for every death -- and every dead bot stayed in every
+-- think slice for the rest of the match. The body is the caller's: GameMode leaves it for the death
+-- effect and unregisters it itself.
+function BotService.Forget(bot)
+	local index = table.find(bots, bot)
+	if not index then
+		return false
+	end
+	table.remove(bots, index)
+	if riders[bot] or bot.ride then
+		Vehicles.leaveRide(bot, "retired")
+	end
+	BotNav.Drop(bot)
+	pcall(setSprint, bot, false)
+	pcall(setCrouch, bot, false)
+	for item, holder in pairs(lootClaims) do
+		if holder == bot then
+			lootClaims[item] = nil
+		end
+	end
+	return true
+end
+
 function BotService.Clear()
 	running = false
 	loopGeneration += 1

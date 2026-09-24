@@ -533,8 +533,14 @@ local function retireBot(bot)
 	local character = bot and bot.character
 	host.RemoveCombatant(bot)
 	ModeTeams.Forget(bot)
+	-- Out of BotService's think list now (a replacement is a new bot): BotService.Clear never sees a
+	-- retired bot, so what it would have done at the end of the match happens here and below.
+	BotService.Forget(bot)
 	-- Long enough for the death effect to play out, matching the battle royale's own timing.
 	task.delay(7, function()
+		-- After the death's own credit (kill, assists) has long been paid: what CombatService remembers
+		-- about this token goes, as BotService.Clear does for a bot still in the list.
+		CombatService.ForgetToken(bot)
 		if character and character.Parent then
 			Combatants.Unregister(character)
 			character:Destroy()
