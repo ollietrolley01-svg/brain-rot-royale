@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local GamepassConfig = require(Shared:WaitForChild("GamepassConfig"))
 local ItemData = require(Shared:WaitForChild("ItemData"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
@@ -428,40 +429,26 @@ local grantedBoosts = {}
 
 local function applyBoosts(player, humanoid)
 	local data = PlayerData.Get(player)
-	local bonusHealth, bonusSpeed = 0, 0
 
-	if Monetization.Owns(player, "ExtraHealth") then
-		bonusHealth += 50
-	end
-	if Monetization.Owns(player, "ExtraSpeed") then
-		bonusSpeed += 4
-	end
-
-	-- One-match boosts, the Pro pair first (2x health, 1.5x speed) then the regular ones (1.5x
-	-- health, +4 speed); a pass or a stronger boost already covering the stat leaves the weaker
-	-- one unspent.
-	local speedScale = 1
+	-- The passes, and at most one one-match boost per stat: the bigger of the pass and the boost
+	-- applies, and a boost is spent only when it beats what the player already has, so a pass owner
+	-- still gets the Pro boosts and keeps a regular one that would add nothing (GamepassConfig.PlanBoosts).
+	local plan = GamepassConfig.PlanBoosts({
+		ExtraHealth = Monetization.Owns(player, "ExtraHealth"),
+		ExtraSpeed = Monetization.Owns(player, "ExtraSpeed"),
+	}, data and data.Consumables, MatchConfig.StartHealth, MatchConfig.BaseWalkSpeed)
+	local bonusHealth, bonusSpeed, speedScale = plan.health, plan.speed, plan.scale
 	if data then
-		local consumables = data.Consumables
-		if bonusHealth == 0 and (consumables.HealthPro or 0) > 0 then
-			consumables.HealthPro -= 1
-			bonusHealth += MatchConfig.StartHealth
-		elseif bonusHealth == 0 and consumables.Health > 0 then
-			consumables.Health -= 1
-			bonusHealth += 50
-		end
-		if bonusSpeed == 0 and (consumables.SpeedPro or 0) > 0 then
-			consumables.SpeedPro -= 1
-			speedScale = 1.5
-		elseif bonusSpeed == 0 and consumables.Speed > 0 then
-			consumables.Speed -= 1
-			bonusSpeed += 4
+		for _, name in ipairs(plan.spend) do
+			data.Consumables[name] -= 1
 		end
 		StateSync.Push(player)
 	end
 
 	grantedBoosts[player] = { health = bonusHealth, speed = bonusSpeed, scale = speedScale }
-	humanoid.MaxHealth = MatchConfig.StartHealth + bonusHealth
+	-- Plus whatever a companion's health boon has already put on this body: the companion lands on
+	-- CharacterAdded too, sometimes first, and a plain write here wiped its bonus for the whole life.
+	humanoid.MaxHealth = MatchConfig.StartHealth + bonusHealth + CompanionService.BoonHealth(player, humanoid)
 	humanoid.Health = humanoid.MaxHealth
 
 	-- Remembered so sprinting can scale it without losing the gamepass bonus. A Rot Rush match
@@ -474,10 +461,10 @@ end
 -- player with no record (joined a running respawn mode) gets the gamepass bonuses only.
 local function reapplyBoosts(player, humanoid)
 	local granted = grantedBoosts[player]
-	local bonusHealth = granted and granted.health or (Monetization.Owns(player, "ExtraHealth") and 50 or 0)
-	local bonusSpeed = granted and granted.speed or (Monetization.Owns(player, "ExtraSpeed") and 4 or 0)
+	local bonusHealth = granted and granted.health or (Monetization.Owns(player, "ExtraHealth") and GamepassConfig.PassHealth or 0)
+	local bonusSpeed = granted and granted.speed or (Monetization.Owns(player, "ExtraSpeed") and GamepassConfig.PassSpeed or 0)
 	local speedScale = granted and granted.scale or 1
-	humanoid.MaxHealth = MatchConfig.StartHealth + bonusHealth
+	humanoid.MaxHealth = MatchConfig.StartHealth + bonusHealth + CompanionService.BoonHealth(player, humanoid)
 	humanoid.Health = humanoid.MaxHealth
 	baseSpeeds[player] = (MatchConfig.BaseWalkSpeed + bonusSpeed) * speedScale * (currentEvent and currentEvent.speedMultiplier or 1)
 	humanoid.WalkSpeed = baseSpeeds[player]

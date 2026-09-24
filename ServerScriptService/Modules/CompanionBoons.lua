@@ -60,7 +60,8 @@ local CompanionBoons = {}
 -- rather than added to, and so a reader of MatchService's status table can see where a factor is from.
 local KEY = "CompanionBoon"
 
--- [player] = { def, grantedHealth }
+-- [player] = { def, grantedHealth, humanoid }. `humanoid` is the body the grant went on: a respawn
+-- is a new Humanoid, which never had it, so Clear takes it off the old one and Apply grants afresh.
 local active = {}
 
 local function humanoidOf(player)
@@ -128,18 +129,20 @@ end
 -- Called when a companion is placed for `player`. Safe to call twice: the second call clears the
 -- first, so a respawn cannot stack two health grants.
 function CompanionBoons.Apply(player, def)
-	-- SAME COMPANION, SAME BOON: LEAVE IT ALONE. `CompanionService.Refresh` respawns the companion
-	-- through `spawnFor` for reasons that have nothing to do with the boon -- and `RefreshAll` calls it
-	-- for EVERY player the moment any trade completes. Without this guard each of those would Clear and
-	-- re-Apply: Clear takes MaxHealth down and clamps Health under the lower ceiling, Apply puts the
-	-- ceiling back but must not heal, so a player carrying a health boon would quietly lose that bonus
-	-- every time somebody, anybody, finished a trade.
+	-- SAME COMPANION, SAME BODY, SAME BOON: LEAVE IT ALONE. `CompanionService.Refresh` respawns the
+	-- companion through `spawnFor` for reasons that have nothing to do with the boon (re-equipping it, a
+	-- trade). Clearing and re-applying would take MaxHealth down and clamp Health under the lower
+	-- ceiling, then put the ceiling back without healing (it must not heal), so the player would quietly
+	-- lose the bonus's worth of HP each time. spawnFor's despawn skips Clear when the same companion is
+	-- coming straight back, and this guard is what then leaves the boon alone. A NEW BODY is not the
+	-- same: its Humanoid never had the grant, so it is granted afresh.
 	--
 	-- This runs INSIDE spawnFor, which is before Refresh re-applies the companion's own carried health
 	-- fraction and lastAttackAt -- and it touches the OWNER's humanoid, never the companion entry, so it
 	-- cannot disturb that carry. The toggle exploit that carry closes stays closed.
+	local humanoid = humanoidOf(player)
 	local existing = active[player]
-	if existing and existing.def == def then
+	if existing and existing.def == def and existing.humanoid == humanoid then
 		return
 	end
 
@@ -150,11 +153,9 @@ function CompanionBoons.Apply(player, def)
 		return
 	end
 
-	local state = { def = def, grantedHealth = 0 }
+	local state = { def = def, grantedHealth = 0, humanoid = humanoid }
 	active[player] = state
 	publish(player, def, boon)
-
-	local humanoid = humanoidOf(player)
 
 	if SafeValue.Number(boon.health, 500) and boon.health > 0 and humanoid then
 		-- MaxHealth only. See the exploit note at the top: healing here would make a toggle a free heal.
@@ -180,7 +181,9 @@ function CompanionBoons.Clear(player)
 	active[player] = nil
 	publish(player, nil, nil)
 
-	local humanoid = humanoidOf(player)
+	-- The body the grant went on, not whatever body the player has now: a respawn's fresh Humanoid
+	-- never had it, and taking it off that one cost the new body its health bonus's worth of HP.
+	local humanoid = state.humanoid
 	if humanoid then
 		if state.grantedHealth > 0 then
 			-- Take the ceiling back down first, then bring Health under it. Doing it the other way
@@ -195,6 +198,17 @@ function CompanionBoons.Clear(player)
 
 	local token = player
 	matchService().SetStatusSpeed(token, KEY, 1, 0)
+end
+
+-- The max health the boon has put on `humanoid`, or 0. MatchService's spawn boosts set MaxHealth
+-- outright, and read this so they don't wipe a boon that was applied first (the companion and the
+-- match's own boosts both land on CharacterAdded, in either order).
+function CompanionBoons.GrantedHealth(player, humanoid)
+	local state = active[player]
+	if state and humanoid ~= nil and state.humanoid == humanoid then
+		return state.grantedHealth
+	end
+	return 0
 end
 
 --------------------------------------------------------------------------------

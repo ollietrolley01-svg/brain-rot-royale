@@ -159,6 +159,9 @@ GamepassConfig.Products = {
 		name = "One-Match Iron Sahur",
 		description = "+50 max health for your next match only.",
 		grant = { kind = "Consumable", consumable = "Health", amount = 1 },
+		-- The Iron Sahur pass already gives this much every match, so an owner is never sold one
+		-- (GamepassConfig.Outclassed); PlanBoosts would never spend it for them.
+		outclassedBy = "ExtraHealth",
 		suggestedPrice = 35,
 		order = 1,
 	},
@@ -167,6 +170,7 @@ GamepassConfig.Products = {
 		name = "One-Match Rot Runner",
 		description = "+4 walkspeed for your next match only.",
 		grant = { kind = "Consumable", consumable = "Speed", amount = 1 },
+		outclassedBy = "ExtraSpeed",
 		suggestedPrice = 35,
 		order = 2,
 	},
@@ -352,6 +356,54 @@ function GamepassConfig.DescribeContents(grant, cosmeticName)
 		end
 	end
 	return lines
+end
+
+-- What one match start grants: the passes' bonuses, and at most one one-match boost per stat, spent
+-- only when it BEATS what the player already has. A boost never stacks on a pass (the bigger one
+-- applies), so a pass owner still gets the Pro boosts from the Pro Bundle -- 2x health is more than
+-- the pass's +50, 1.5x speed more than its +4 -- and keeps a regular boost that would add nothing.
+-- Pure, so MatchService.applyBoosts and a check run the same rule.
+--   owns       { ExtraHealth = bool, ExtraSpeed = bool }
+--   stock      the profile's Consumables counts (nothing is taken off here)
+-- Returns { health = bonus max HP, speed = bonus walkspeed, scale = walkspeed factor, spend = { names } }.
+GamepassConfig.PassHealth = 50
+GamepassConfig.PassSpeed = 4
+
+function GamepassConfig.PlanBoosts(owns, stock, startHealth, baseSpeed)
+	stock = stock or {}
+	local plan = { health = 0, speed = 0, scale = 1, spend = {} }
+	if owns.ExtraHealth then
+		plan.health = GamepassConfig.PassHealth
+	end
+	if owns.ExtraSpeed then
+		plan.speed = GamepassConfig.PassSpeed
+	end
+	-- Health: Pro (2x max health, i.e. +startHealth) first, then the regular +50.
+	if (stock.HealthPro or 0) > 0 and startHealth > plan.health then
+		plan.health = startHealth
+		table.insert(plan.spend, "HealthPro")
+	elseif (stock.Health or 0) > 0 and GamepassConfig.PassHealth > plan.health then
+		plan.health = GamepassConfig.PassHealth
+		table.insert(plan.spend, "Health")
+	end
+	-- Speed, compared as the walkspeed each would give: Pro is 1.5x base on its own, the regular +4.
+	local current = baseSpeed + plan.speed
+	if (stock.SpeedPro or 0) > 0 and baseSpeed * 1.5 > current then
+		plan.speed, plan.scale = 0, 1.5
+		table.insert(plan.spend, "SpeedPro")
+	elseif (stock.Speed or 0) > 0 and baseSpeed + GamepassConfig.PassSpeed > current then
+		plan.speed = GamepassConfig.PassSpeed
+		table.insert(plan.spend, "Speed")
+	end
+	return plan
+end
+
+-- A one-match product that can never beat a pass this player owns for good (`owned` and `temp` are
+-- the profile snapshot's ownedPasses and tempPasses). The shop hides it rather than sell something
+-- PlanBoosts would never spend. A pass won for a day on the Daily Spin doesn't count: it runs out.
+function GamepassConfig.Outclassed(product, owned, temp)
+	local pass = product and product.outclassedBy
+	return pass ~= nil and owned ~= nil and owned[pass] == true and not (temp and temp[pass])
 end
 
 function GamepassConfig.GetProductById(productId)

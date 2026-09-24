@@ -152,7 +152,9 @@ end
 -- the player leaves.
 local lastCondition = {}
 
-local function despawn(owner)
+-- `keepBoon`: the same companion is about to be placed again for the same owner (spawnFor), so the
+-- boon is left on and CompanionBoons.Apply's same-companion guard keeps it. Every other way out clears it.
+local function despawn(owner, keepBoon)
 	-- Out of the tables FIRST, then everything that can throw. The boon's Clear reaches into the
 	-- owner's humanoid and MatchService, and it used to run before the entry was removed: a Clear that
 	-- threw inside down() left the companion in the table at 0 health, and a companion in the table
@@ -167,9 +169,11 @@ local function despawn(owner)
 	end
 	-- The boon goes with the companion, always, whatever took it away: unequipped, sold, downed,
 	-- character gone, match over. Every one of those paths reaches here.
-	local ok, err = pcall(CompanionBoons.Clear, owner)
-	if not ok then
-		warn("[CompanionService] boon clear failed: " .. tostring(err))
+	if not keepBoon then
+		local ok, err = pcall(CompanionBoons.Clear, owner)
+		if not ok then
+			warn("[CompanionService] boon clear failed: " .. tostring(err))
+		end
 	end
 	if entry then
 		entry.model:Destroy()
@@ -381,16 +385,20 @@ local function attachModel(owner, character, def, networkOwner)
 end
 
 local function spawnFor(player, character)
-	despawn(player)
-
 	local data = PlayerData.Get(player)
 	local name = data and data.Companion
+	local def = name and BrainrotData.Get(name)
+	local owned = def ~= nil and table.find(data.Brainrots, name) ~= nil
+	-- The same companion straight back keeps its boon: Clear then Apply would cost the owner the boon's
+	-- max health out of their current HP (Apply never heals). A different one, or none, clears it.
+	local current = companions[player]
+	despawn(player, character ~= nil and owned and not fallen[player] and current ~= nil and current.def == def)
+
 	if not character or not name or fallen[player] then
 		return
 	end
 
-	local def = BrainrotData.Get(name)
-	if not def or not table.find(data.Brainrots, name) then
+	if not owned then
 		-- Sold or traded away since it was equipped.
 		data.Companion = nil
 		return
@@ -1314,13 +1322,24 @@ function CompanionService.UpdateStats(player)
 	setHealth(entry, entry.stats.health * fraction)
 end
 
--- Every player's companion re-read, after a trade moved brainrots between collections. Through
--- Refresh, not spawnFor, so it carries health and cooldown for the same reason Refresh does: a trade
--- that completed mid-match would otherwise heal and re-arm every companion on the server at once.
+-- After a trade moved brainrots between collections: the companion that went with it goes home. Only
+-- a player whose companion is out and no longer in their collection is refreshed -- one of the two
+-- traders at most. Refreshing everyone respawned every companion on the server for any trade anywhere,
+-- and each of those Clear/Apply rounds took a health boon's worth of HP off its owner mid-match.
+-- Through Refresh, not spawnFor, so it carries health and cooldown the same way Refresh does.
 function CompanionService.RefreshAll()
 	for _, player in ipairs(Players:GetPlayers()) do
-		CompanionService.Refresh(player)
+		local entry = companions[player]
+		local data = entry and PlayerData.Get(player)
+		if data and not table.find(data.Brainrots, entry.def.name) then
+			CompanionService.Refresh(player)
+		end
 	end
+end
+
+-- The max health a companion's boon has put on `humanoid` (MatchService's spawn boosts add it back).
+function CompanionService.BoonHealth(player, humanoid)
+	return CompanionBoons.GrantedHealth(player, humanoid)
 end
 
 function CompanionService.Start()

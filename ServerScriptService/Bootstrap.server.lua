@@ -1115,7 +1115,8 @@ RewardService.IsTrading = TradeService.InSession
 
 TradeService.OnTradeComplete = function()
 	ShowcaseService.Refresh()
-	-- A traded-away companion has to go home with its new owner's collection.
+	-- A traded-away companion has to go home with its new owner's collection. Only the player whose
+	-- companion left is touched; everyone else's (and its health boon) is left alone.
 	CompanionService.RefreshAll()
 	-- A trade can complete a set for either side.
 	for _, player in ipairs(Players:GetPlayers()) do
