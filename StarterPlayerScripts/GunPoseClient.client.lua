@@ -297,9 +297,11 @@ RunService.Stepped:Connect(function(_, delta)
 				-- A reload owns the left arm, sprinting or not: first person keeps reloading through a run.
 				local shoulder, elbow = reloadArm(character, entry, now)
 				entry.aim += ((character:GetAttribute("Aiming") == true and not entry.reload and 1 or 0) - entry.aim) * aimEase
-				-- The aimed pose, rebuilt when the gun in hand changes.
+				-- The aimed pose: worked out only for a body that is aiming (or easing out of it), and again when
+				-- the gun in hand changes. A body that never aims -- every bot -- never has it built, and its
+				-- GunMount and neck are never written.
 				local pose = entry.aimPose
-				if not pose or pose.gun.Parent ~= character then
+				if entry.aim > 0.001 and (pose == nil or (pose and pose.gun.Parent ~= character)) then
 					pose = aimPoseFor(character, joints) or false
 					entry.aimPose = pose
 				end
@@ -315,8 +317,14 @@ RunService.Stepped:Connect(function(_, delta)
 					leftShoulder = leftShoulder:Lerp(pose.leftShoulder or leftShoulder, aim)
 					leftElbow = leftElbow:Lerp(pose.leftElbow or leftElbow, aim)
 				end
-				if pose then
-					pose.mount.Transform = aim > 0 and CFrame.identity:Lerp(pose.raise, aim) or CFrame.identity
+				-- The gun is raised only while there is some aim to raise it by, and set back to rest exactly
+				-- once when that ends; a body that is not aiming has its GunMount left alone.
+				if pose and aim > 0 then
+					pose.mount.Transform = CFrame.identity:Lerp(pose.raise, aim)
+					entry.raised = true
+				elseif pose and entry.raised then
+					pose.mount.Transform = CFrame.identity
+					entry.raised = false
 				end
 				joints.rightShoulder.Transform = rightShoulder
 				if joints.rightElbow then

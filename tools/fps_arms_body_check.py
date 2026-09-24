@@ -13,6 +13,10 @@ Invariants, on every gun:
   B2  the reload is seen: somewhere in it the left shoulder turns at least 20 degrees from the held pose;
   B3  with no `Reloading` the left arm is the held pose, and after the reload clears it goes back to it;
   B4  `Aiming` cants the head (the Neck turns) and clearing it brings the head back;
+  B7  a body with no state is left to the Animator: holding a gun but not aiming or reloading, only the
+      four held-arm joints are written (the GunMount, head, spine and legs keep exactly what the Animator
+      or the server set); with no gun, not one joint is written. "Bots have no animations" (09-24) was a
+      report of exactly this kind;
   B5  aimed, the gun comes up to the eye line: its sight (KP_Sight) rises at least 0.3 studs and ends
       level with the eyes to 0.1, beside the head's middle to 0.35 (a gun already near the eye rises less) -- moved only by the GunMount joint's
       Transform (client-local), its C0 (the server's mount) never written; and back to rest after;
@@ -125,13 +129,43 @@ function mountState(body)
 	return m.C0, m.Transform
 end
 
+-- What "the Animator" writes on every rig joint before Stepped: a pose no code here would ever write, so
+-- a joint that still holds it after Stepped was provably left alone.
+ANIMATED = CFrame.Angles(0.11, 0.23, 0.31)
 function frame(t)
 	clock = t
-	-- The Animator writes each joint's Transform before Stepped; here it writes the rest pose.
+	-- The Animator writes each rig joint's Transform before Stepped. It never animates the GunMount (no
+	-- track has a key for a gun), so that one keeps whatever was last written to it.
 	for _, d in ipairs(workspace:GetDescendants()) do
-		if d.ClassName == "Motor6D" then d.Transform = CFrame.identity end
+		if d.ClassName == "Motor6D" and d.Name ~= "GunMount" then d.Transform = ANIMATED end
 	end
 	stepped(t, 1 / 60)
+end
+
+-- The joints a body with no state must leave exactly as the Animator set them, and what is wrong.
+function untouched(body, allowArms)
+	local bad = {}
+	for _, d in ipairs(body:GetDescendants()) do
+		if d.ClassName == "Motor6D" then
+			local arm = d.Name == "RightShoulder" or d.Name == "LeftShoulder" or d.Name == "RightElbow" or d.Name == "LeftElbow"
+			if d.Name == "GunMount" then
+				if d.Transform ~= MOUNT_MARK then bad[#bad + 1] = d.Name end
+			elseif not (allowArms and arm) and d.Transform ~= ANIMATED then
+				bad[#bad + 1] = d.Name
+			end
+		end
+	end
+	return table.concat(bad, " ")
+end
+MOUNT_MARK = CFrame.new(0.01, 0.02, 0.03)
+function markMount(body)
+	body.HeldGun.PrimaryPart.GunMount.Transform = MOUNT_MARK
+end
+function clearMount(body)
+	body.HeldGun.PrimaryPart.GunMount.Transform = CFrame.identity
+end
+function unarm(body)
+	body.HeldGun.Parent = nil
 end
 
 function scanOnce() pcall(SCAN) end
@@ -186,6 +220,15 @@ def run(repo, src, only=None):
         body = g.makeBody(model)
         g.scanOnce()
         clip = vm.ClipFor(model, "reload", False, 1)
+        # B7: armed, not aiming, not reloading: only the held arms are written; the gun's mount, the head,
+        # the spine and the legs are exactly what the Animator made them.
+        g.markMount(body)
+        for k in range(5):
+            g.frame(0.2 + k / 60)
+        left = g.untouched(body, True)
+        if left:
+            faults.append("B7 %s: a body holding a gun, doing nothing, had joints written over the Animator: %s" % (gun, left))
+        g.clearMount(body)
         g.frame(0.0)
         held_s, held_e, neck0 = g.joints(body)
         body.SetAttribute(body, "Reloading", SECONDS)
@@ -246,6 +289,14 @@ def run(repo, src, only=None):
             faults.append("B4 %s: the head stayed %.1f degrees turned after aiming stopped" % (gun, g.angle(neck, neck0)))
         if sight0 is not None and g.dist(g.gunPoint(body, "Sight"), sight0) > 0.01:
             faults.append("B5 %s: the gun stayed raised after aiming stopped" % gun)
+        # B7: the same body with its gun put away: nothing of it is written at all.
+        g.unarm(body)
+        g.scanOnce()
+        for k in range(5):
+            g.frame(start + SECONDS + 4 + k / 60)
+        left = g.untouched(body, False)
+        if left:
+            faults.append("B7 %s: an unarmed body, doing nothing, had joints written over the Animator: %s" % (gun, left))
         body.Parent = None
         g.scanOnce()
     return faults, examined, len(ids)
@@ -263,6 +314,12 @@ PLANTS = [
      "raise = CFrame.new(mount.C0:VectorToObjectSpace(raise)),", "raise = CFrame.identity,"),
     ("B6 the arms stay put while the gun goes up", "GunPoseClient",
      "local target = handAt(arm, side[3], side[4]) + raise", "local target = handAt(arm, side[3], side[4])"),
+    # The always-write: the aimed pose built for every armed body and its GunMount set every frame.
+    ("B7 the gun's mount written on every body every frame", "GunPoseClient",
+     ("if entry.aim > 0.001 and (pose == nil or (pose and pose.gun.Parent ~= character)) then", "elseif pose and entry.raised then"),
+     ("if pose == nil or (pose and pose.gun.Parent ~= character) then", "elseif pose then")),
+    ("B7 the head canted with no aim", "GunPoseClient",
+     "if entry.aim > 0.01 and joints.neck then", "if joints.neck then"),
     ("B4 aiming ignored", "GunPoseClient",
      'character:GetAttribute("Aiming") == true', 'character:GetAttribute("Aimed") == true'),
 ]
@@ -275,11 +332,15 @@ def main():
     if "--plant" in sys.argv:
         caught = 0
         for name, target, old, new in PLANTS:
-            if old not in src[target]:
+            olds, news = (old, new) if isinstance(old, tuple) else ((old,), (new,))
+            if any(o not in src[target] for o in olds):
                 print("PLANT %s: the text to break is not in %s any more" % (name, target))
                 continue
             broken = dict(src)
-            broken[target] = src[target].replace(old, new, 1)
+            text = src[target]
+            for o, n in zip(olds, news):
+                text = text.replace(o, n, 1)
+            broken[target] = text
             faults, examined, guns = run(repo, broken, only=["SahurPistol", "CrocodiloRifle", "TralalaShotgun", "SigmaRevolver"])
             hit = [f for f in faults if f.startswith(name.split()[0] + " ")]
             caught += bool(hit)

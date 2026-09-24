@@ -1351,13 +1351,42 @@ function WeaponService.MountGun(character, model, receiver)
 	-- the eye line of a body that is aiming by setting its Transform, which is local to each client --
 	-- the server's gun, and every shot origin, stay where they were. DeathFxService's ragdoll leaves it
 	-- alone (the receiver's parent is the HeldGun, not the character), so the gun stays in hand.
-	local mount = Instance.new("Motor6D")
-	mount.Name = "GunMount"
-	mount.Part0 = torso
-	mount.Part1 = receiver
-	mount.C0 = torso.CFrame:ToObjectSpace(receiver.CFrame)
-	mount.C1 = CFrame.identity
-	mount.Parent = receiver
+	--
+	-- ONLY ON A MOTOR6D RIG. A physics rig (every bot: CreateHumanoidModelFromDescription) is held
+	-- together by AnimationConstraints the Animator drives by torque, and a Motor6D was a second kind of
+	-- rig joint in that rig -- the one change to bots' bodies in the build where Oliver saw bots with no
+	-- animations (09-24). Nothing gained by it there: bots never publish `Aiming`, so nothing would ever
+	-- raise their gun. They get the weld they always had.
+	local motorRig = false
+	for _, child in ipairs(torso:GetChildren()) do
+		if child:IsA("Motor6D") then
+			motorRig = true
+			break
+		end
+	end
+	local lower = character:FindFirstChild("LowerTorso")
+	if not motorRig and lower then
+		for _, child in ipairs(lower:GetChildren()) do
+			if child:IsA("Motor6D") then
+				motorRig = true
+				break
+			end
+		end
+	end
+	if motorRig then
+		local mount = Instance.new("Motor6D")
+		mount.Name = "GunMount"
+		mount.Part0 = torso
+		mount.Part1 = receiver
+		mount.C0 = torso.CFrame:ToObjectSpace(receiver.CFrame)
+		mount.C1 = CFrame.identity
+		mount.Parent = receiver
+	else
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = receiver
+		weld.Part1 = torso
+		weld.Parent = receiver
+	end
 
 	model.Parent = character
 	return true
