@@ -1212,10 +1212,24 @@ task.spawn(function()
 	end
 end)
 
+-- What one body's pose is this frame, written onto its joints. Kept apart from the loop below so the
+-- same frame's pose can be written a second time, in Stepped, for everyone but ourselves (see there).
+local function drawPose(entry, draw)
+	if draw.parkour then
+		Parkour.ApplyPose(entry.joints, entry.kind, entry.weight)
+	elseif draw.crouch then
+		CrouchAnimation.Apply(entry.joints, draw.crouch, draw.crouchWeight, draw.legs)
+	end
+end
+
 -- Bound just AFTER the character update rather than to Stepped, because that is the one place a pose
--- written onto a joint survives the frame: the Animator evaluates every playing animation as part of the
--- character's own render step, and anything written before that is simply overwritten. Poses are drawn
--- per client for every body in sight, so this runs for bots and other players too.
+-- written onto OUR OWN body survives the frame: the Animator evaluates our character's animations as part
+-- of its own render step, and anything written before that is simply overwritten. Other bodies (other
+-- players, every bot) are animated in the engine's animation step instead, which comes after the render
+-- step and before Stepped, so a pose written here is overwritten before it is ever drawn — the reason a
+-- slide made its sound on someone else and never its shape (#89). So their pose is ALSO written in
+-- Stepped, below, from the same frame's numbers. Whichever of the two writes the engine draws, it was
+-- blended from what the Animator had just written, so doing both is never wrong.
 RunService:BindToRenderStep("BRR_MovementPoses", Enum.RenderPriority.Character.Value + 1, function(delta)
 	local dt = math.min(delta, 0.1)
 	local now = os.clock()
@@ -1311,6 +1325,7 @@ RunService:BindToRenderStep("BRR_MovementPoses", Enum.RenderPriority.Character.V
 			end
 
 			local done = entry.weight < 0.02 and not kind and crouchWeight <= 0 and not crouchOn
+			entry.draw = nil
 			if done then
 				releaseJoints(entry.hold)
 				if entry.loudness and entry.steps and entry.steps.Parent then
@@ -1320,8 +1335,9 @@ RunService:BindToRenderStep("BRR_MovementPoses", Enum.RenderPriority.Character.V
 				posing[model] = nil
 			elseif entry.root and entry.root.Parent and (entry.root.Position - focus).Magnitude < POSE_DISTANCE then
 				-- A climb or vault takes the body over from the crouch while it runs.
+				local draw = nil
 				if entry.weight > 0.02 then
-					Parkour.ApplyPose(entry.joints, entry.kind, entry.weight)
+					draw = { parkour = true }
 				elseif crouchOn or crouchWeight > 0.01 then
 					-- `crouchOn` is in that test because the eased weight is still 0 on the first frame of
 					-- a crouch, while the hips are already down: one frame with the legs unfolded is one
@@ -1330,18 +1346,45 @@ RunService:BindToRenderStep("BRR_MovementPoses", Enum.RenderPriority.Character.V
 					-- lerps from whatever the Animator is playing. (Scaling the ANGLES by the weight
 					-- instead would blend from the rig's rest pose, and the legs would snap out of the
 					-- walk the moment a crouch started.)
-					CrouchAnimation.Apply(entry.joints, CrouchAnimation.Pose({
-						phase = entry.phase,
-						walk = CrouchAnimation.Walk(speed, crouchSpeed),
-						segments = entry.segments,
-						depth = depth,
-						stride = stride,
-						clock = now,
-					}), crouchWeight, crouchOn and 1 or 0)
+					draw = {
+						crouch = CrouchAnimation.Pose({
+							phase = entry.phase,
+							walk = CrouchAnimation.Walk(speed, crouchSpeed),
+							segments = entry.segments,
+							depth = depth,
+							stride = stride,
+							clock = now,
+						}),
+						crouchWeight = crouchWeight,
+						legs = crouchOn and 1 or 0,
+					}
+				end
+				if draw then
+					drawPose(entry, draw)
+					if not isSelf then
+						entry.draw = draw
+					end
 				end
 			end
 		elseif not kind and not crouchOn then
 			posing[model] = nil
+		end
+	end
+end)
+
+-- The second write for everyone but ourselves: Stepped runs straight after the engine's animation step,
+-- so the pose lands on top of this frame's walk and run and is what the physics step then places the
+-- limbs from. The same technique GunPoseClient uses for the arms. Only what the render step decided this
+-- frame is drawn; a body that finished, left range or was removed has no `draw` and is left alone.
+RunService.Stepped:Connect(function()
+	for model in pairs(posing) do
+		local entry = posed[model]
+		local draw = entry and entry.draw
+		if draw then
+			entry.draw = nil
+			if model.Parent and model ~= character then
+				drawPose(entry, draw)
+			end
 		end
 	end
 end)

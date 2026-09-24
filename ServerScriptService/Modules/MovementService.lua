@@ -22,7 +22,8 @@
 -- This module also runs ledge climbs and vaults for bots on the server (CanParkour / TryParkour,
 -- through Shared/Parkour, the same rules a player's client uses), takes a player's word that they
 -- climbed or vaulted (ClientParkour: charges stamina, poses them for everyone else), and owns the
--- character attribute `Parkour` ("slide" | "mantle" | "vault") that other clients pose from.
+-- character attribute `Parkour` ("slide" | "mantle" | "vault") that other clients pose from, and
+-- publishes MatchService's sprint as attribute `Sprinting` (SetSprintPose) for the same reason.
 
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
@@ -729,6 +730,74 @@ function MovementService.Clear()
 		folder:Destroy()
 		folder = nil
 	end
+end
+
+--------------------------------------------------------------------------------
+-- Sprinting, for everyone else to see
+--------------------------------------------------------------------------------
+
+-- MatchService owns the sprint (it is a factor in walk speed, and the stamina ledger can take it off),
+-- but until now nothing about it left the server: other clients saw a body running a little faster
+-- and nothing else (#89). applySpeed, which is where every sprint, crouch, slide and exhaustion change
+-- ends up, hands its verdict here, and this publishes it as character attribute `Sprinting` (true or
+-- absent) for GunPoseClient to lower the gun from, the way the first-person gun dips (#13).
+--
+-- The attribute must never outlive the sprint on a body that can't be sprinting: dead, or sat in a seat
+-- (every vehicle seats you). applySpeed returns early for a dead humanoid, so it can't be trusted to clear
+-- it then — the humanoid's own Died and Seated signals do, from the moment the attribute is first set.
+-- Keyed strongly (a weak key would drop a live humanoid) and let go when the humanoid dies or leaves.
+local sprintWatched = {}
+
+-- Pure: whether a body sprinting by MatchService's account should be drawn sprinting.
+function MovementService.SprintPoseWanted(humanoid, sprinting)
+	return sprinting == true and humanoid ~= nil and humanoid.Health > 0 and not humanoid.Sit
+end
+
+local function clearSprintPose(humanoid)
+	local character = humanoid.Parent
+	if character and character:GetAttribute("Sprinting") ~= nil then
+		character:SetAttribute("Sprinting", nil)
+	end
+end
+
+local function unwatchSprint(humanoid)
+	local connections = sprintWatched[humanoid]
+	sprintWatched[humanoid] = nil
+	for _, connection in ipairs(connections or {}) do
+		connection:Disconnect()
+	end
+end
+
+-- Returns whether the body is now drawn sprinting. Writes the attribute only when it changes, since
+-- applySpeed runs on every boost, toggle and exhaustion flip.
+function MovementService.SetSprintPose(humanoid, sprinting)
+	local character = humanoid and humanoid.Parent
+	if not character then
+		return false
+	end
+	local wanted = MovementService.SprintPoseWanted(humanoid, sprinting)
+	if (character:GetAttribute("Sprinting") == true) ~= wanted then
+		character:SetAttribute("Sprinting", wanted or nil)
+	end
+	if wanted and not sprintWatched[humanoid] then
+		sprintWatched[humanoid] = {
+			humanoid.Died:Connect(function()
+				clearSprintPose(humanoid)
+				unwatchSprint(humanoid)
+			end),
+			humanoid.Seated:Connect(function(active)
+				if active then
+					clearSprintPose(humanoid)
+				end
+			end),
+			humanoid.AncestryChanged:Connect(function()
+				if not humanoid:IsDescendantOf(game) then
+					unwatchSprint(humanoid)
+				end
+			end),
+		}
+	end
+	return wanted
 end
 
 --------------------------------------------------------------------------------
