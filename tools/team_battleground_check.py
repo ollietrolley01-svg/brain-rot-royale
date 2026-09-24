@@ -57,6 +57,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import team_base_ruins_check as TBR  # noqa: E402
 from vehicle_models_axis_check import luau_to_lua  # noqa: E402
+# BotNav uses Luau's `continue`; this converter turns it into a goto.
+from car_placement_luau import luau_to_lua as luau_to_lua_continue  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
 
@@ -81,6 +83,18 @@ TOUCH = 0.12
 SEED = 20260924
 
 EXTRA = r"""
+do
+    -- DestructibleService now hooks RunService.Heartbeat and asks Players at load: give every service
+    -- the mock hands out a signal that never fires and an empty player list.
+    local base = game.GetService
+    game.GetService = function(self, name)
+        local service = base(self, name)
+        service.Heartbeat = service.Heartbeat or { Connect = function() return { Disconnect = function() end } end }
+        service.GetPlayers = service.GetPlayers or function() return {} end
+        service.GetPlayerFromCharacter = service.GetPlayerFromCharacter or function() return nil end
+        return service
+    end
+end
 table.clone = function(t) local c = {} for k, v in pairs(t) do c[k] = v end return c end
 do
     -- Clone: the properties and attributes, no children (what ClearSite's street cutting needs).
@@ -97,7 +111,25 @@ do
                 return copy
             end
         end
+        if k == "Destroying" then
+            -- DestructibleService's opt-out caches drop an entry when its instance goes.
+            return { Connect = function() return { Disconnect = function() end } end }
+        end
         return previous(i, k)
+    end
+end
+do
+    -- Vector3:Min/Max (DestructibleService's "is it a small thing" bounds).
+    local meta = getmetatable(Vector3.new(0, 0, 0))
+    local previous = meta.__index
+    local function pick(f)
+        return function(a, b) return Vector3.new(f(a.X, b.X), f(a.Y, b.Y), f(a.Z, b.Z)) end
+    end
+    local extra = { Min = pick(math.min), Max = pick(math.max) }
+    meta.__index = function(v, k)
+        if extra[k] then return extra[k] end
+        if type(previous) == "function" then return previous(v, k) end
+        return previous[k]
     end
 end
 function dumpAll(model)
@@ -1156,6 +1188,7 @@ def check_ziplines(walk, cols, info, log):
     return problems
 
 
+DESTRUCT_WHOLE_LIMIT = 0
 NEVER_TOPS = {"Keep", "Gatehouse", "Pit", "Gantry", "Bridge", "Crane", "SahurColossus", "RotKiosk", "Middle", "Paving"}
 MUST_BREAK = {"Wall", "Sandbag", "Crate", "Container", "Barrier", "Tyre", "Drum", "WreckBody", "StallCounter", "StallPost",
               "SignPost", "RotColaMachine", "BrazierBowl", "Hedgehog"}
@@ -1172,6 +1205,7 @@ def check_destruct(rt, model, parts, log):
     problems = []
     breakable = 0
     must = 0
+    whole = []
     names_never = {"Foundation", "Paving", "GalleryFloor", "KeepStair", "KeepRamp", "KeepBalcony", "ScaffoldDeck", "ScaffoldStair",
                    "PitRim", "BermStep", "RimStair", "GateWalk", "GateTower", "GateStair", "GantryDeck", "GantryStair", "BridgeDeck",
                    "BridgePier", "KeepWall", "Plinth"}
@@ -1188,8 +1222,12 @@ def check_destruct(rt, model, parts, log):
             must += 1
             if not can:
                 problems.append("destruct: %s (%s) does not break" % (part.Name, "/".join(reversed(chain))))
-        if can and (part.Name in names_never or (NEVER_TOPS & set(chain) and not isinstance(part.GetAttribute(part, "Destructible"), str))):
-            problems.append("destruct: %s (%s) breaks, and must not" % (part.Name, "/".join(reversed(chain))))
+        # Oliver 2026-09-24: EVERYTHING breaks but spawns, the lobby, the storm and the map edges, so
+        # the keep, the pit, the gantry, the bridge, every floor and stair break too (DestructibleService
+        # ignores Destructible=false now). A solid piece that cannot is a fault, unless the service
+        # itself calls it ground (a wide thin slab) or it is buried where no one can see it.
+        if not can and part.CanCollide and part.Transparency < 1:
+            whole.append("%s (%s)" % (part.Name, "/".join(reversed(chain))))
     pools = {}
     for p in parts:
         if ":" in p["tag"]:
@@ -1202,7 +1240,10 @@ def check_destruct(rt, model, parts, log):
         parents = {m["path"] for m in members}
         if len(parents) > 1:
             problems.append("destruct: pool %s is split across %s (a pool is one parent's children)" % (tag, sorted(parents)))
-    log("destruct: %d parts examined, %d breakable, %d that must break, %d tagged pools" % (len(live), breakable, must, len(pools)))
+    log("destruct: %d parts examined, %d breakable, %d that must break, %d tagged pools; %d solid pieces kept whole%s"
+        % (len(live), breakable, must, len(pools), len(whole), (" (e.g. %s)" % ", ".join(whole[:4])) if whole else ""))
+    if len(whole) > DESTRUCT_WHOLE_LIMIT:
+        problems.append("destruct: %d solid pieces never break (limit %d), e.g. %s" % (len(whole), DESTRUCT_WHOLE_LIMIT, ", ".join(whole[:6])))
     if must < 100:
         problems.append("destruct: only %d breakable pieces found to check" % must)
     model.Parent = None
@@ -1644,7 +1685,7 @@ def check_botnav(src, parts, info, log, hints=True):
         return sum(1 for b in boxes if abs(b[0][0] - x) < 40 and abs(b[0][2] - z) < 40 and TBR.obb_overlap(b, probe))
 
     lua.globals().botnavWorld(cast, around)
-    botnav = lua.execute(luau_to_lua(src["botnav"]))
+    botnav = lua.execute(luau_to_lua_continue(src["botnav"]))
     cover = [tuple(c) for c in info["cover"]]
     if hints:
         def near(ox, oy, oz, radius):
@@ -1867,17 +1908,13 @@ PLANTS = [
     ("the best loot in the safest spot", "bg",
      [('lootSpot("KeepHall", -15.5, KF, -6.5, "heal")', 'lootSpot("KeepHall", -15.5, KF, -6.5, "weapon", "Legendary")')], ["loot"], "Legendary"),
     ("zipline masts cut down", "bg", [("local ZIP_TOP = GAL + 9.6", "local ZIP_TOP = GAL + 3")], ["ziplines"], "zip"),
-    # (A string tag is what DestructibleService breaks, and it never breaks a part named Paving,
-    # Foundation, Plinth, Deck... whatever it carries: so the plants are on the pieces it does not
-    # protect by name, which only this file's flags keep standing.)
-    ("the keep's ramp tagged to break", "bg",
-     [('CFrame.new(25, GAL / 2, -19.5), STONE, MAT.Cobblestone, { class = "WedgePart", tag = false })',
-       'CFrame.new(25, GAL / 2, -19.5), STONE, MAT.Cobblestone, { class = "WedgePart", tag = "Ramp" })')],
-     ["destruct"], "break"),
-    ("the gallery floor tagged to break", "bg",
-     [('box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, NEVER)',
-       'box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, { tag = "Floor", health = 100 })')],
-     ["destruct"], "break"),
+    # Everything breaks now (DestructibleService is opt-out): the plants give a piece a name the
+    # service keeps whole (a spawn's), which only this check's "kept whole" count sees.
+    ("the keep's ramp kept whole", "bg",
+     [('put(keep, "KeepRamp",', 'put(keep, "SpawnRamp",')], ["destruct"], "never break"),
+    ("the gallery floor kept whole", "bg",
+     [('box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID,', 'box(keep, "StormFloor", -20, 20, GAL - 1, GAL, -20, -VOID,')],
+     ["destruct"], "never break"),
     ("unseeded wear", "bg", [("B.rng = Random.new(seed or 1)", "B.rng = Random.new((seed or 1) + math.random(1, 100000))")], ["seed"], "seed"),
     ("over budget", "bg",
      [('\tlocal middle = folder(root, "Middle", true)\n',
