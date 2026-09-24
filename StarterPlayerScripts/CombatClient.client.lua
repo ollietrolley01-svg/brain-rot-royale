@@ -1506,6 +1506,7 @@ end
 
 -- The gun on your character says how it's dressed (WeaponService marks it), so the one in your hands
 -- wears the same skin.
+local warnedViewmodel = false
 local function buildViewmodel(source, def, key)
 	destroyViewmodel()
 	local skinned = source:GetAttribute("Skinned") == true
@@ -1522,7 +1523,16 @@ local function buildViewmodel(source, def, key)
 		end
 	end
 	-- The gun is held in your own avatar's arms: the HeldGun's parent is your character.
-	local vm = Viewmodel.new(def, { color = color, material = material, skinned = skinned, character = source.Parent, onEvent = onViewmodelEvent })
+	-- One throw in Viewmodel.new cost the whole first-person gun every frame (critic C5): build with the
+	-- avatar's arms, and on failure say why once and fall back to stand-in arms.
+	local ok, vm = pcall(Viewmodel.new, def, { color = color, material = material, skinned = skinned, character = source.Parent, onEvent = onViewmodelEvent })
+	if not ok then
+		if not warnedViewmodel then
+			warnedViewmodel = true
+			warn("[CombatClient] viewmodel with your avatar's arms failed, using stand-in arms: " .. tostring(vm))
+		end
+		vm = Viewmodel.new(def, { color = color, material = material, skinned = skinned, onEvent = onViewmodelEvent })
+	end
 	viewmodel = { vm = vm, source = source, key = key, id = def.id, scopedIn = false }
 	if vm.laserEmitter then
 		viewmodel.laserBeam, viewmodel.laserDot = laserParts(vm.model)

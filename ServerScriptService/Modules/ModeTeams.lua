@@ -577,12 +577,37 @@ bayParams.FilterType = Enum.RaycastFilterType.Exclude
 bayParams.RespectCanCollide = true
 
 -- Anything solid standing in the bay.
+-- Critic C2: GetPartBoundsInBox matches world-aligned bounding boxes, so a wall turned to the
+-- compound's yaw covered bays it never touched. Each hit is confirmed against its real box.
+local function boxesOverlap(a, aSize, b, bSize)
+	local axes = { a.RightVector, a.UpVector, a.LookVector, b.RightVector, b.UpVector, b.LookVector }
+	for i = 1, 3 do
+		for j = 4, 6 do
+			local cross = axes[i]:Cross(axes[j])
+			if cross.Magnitude > 1e-4 then
+				table.insert(axes, cross.Unit)
+			end
+		end
+	end
+	local ha, hb = aSize / 2, bSize / 2
+	local offset = b.Position - a.Position
+	for _, axis in ipairs(axes) do
+		local ra = math.abs(a.RightVector:Dot(axis)) * ha.X + math.abs(a.UpVector:Dot(axis)) * ha.Y + math.abs(a.LookVector:Dot(axis)) * ha.Z
+		local rb = math.abs(b.RightVector:Dot(axis)) * hb.X + math.abs(b.UpVector:Dot(axis)) * hb.Y + math.abs(b.LookVector:Dot(axis)) * hb.Z
+		if math.abs(offset:Dot(axis)) > ra + rb then
+			return false
+		end
+	end
+	return true
+end
+
 local function bayOccupied(bay)
 	bayParams.FilterDescendantsInstances = { workspace.Terrain }
 	local look = bay.LookVector
 	local frame = CFrame.new(bay.Position + Vector3.new(0, 0.6 + BAY_CLEAR.Y / 2, 0)) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0)
 	for _, part in ipairs(workspace:GetPartBoundsInBox(frame, BAY_CLEAR, bayParams)) do
-		if part.CanCollide then
+		-- A ball or cylinder is tested as its box: a little generous, never short.
+		if part.CanCollide and (not part.CFrame or boxesOverlap(frame, BAY_CLEAR, part.CFrame, part.Size)) then
 			return true
 		end
 	end

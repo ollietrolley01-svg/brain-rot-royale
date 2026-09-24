@@ -1132,7 +1132,7 @@ function VehicleService.ParkInTowns(parent, map, wanted, rng, share)
 				local spread, _ = footingAt(bay.cf.Position, yaw, size)
 				if spread and spread <= FOOTING_TOLERANCE then
 					local model = VehicleService.Create(parent, bay.cf.Position, yaw, roll:NextNumber() < 0.3 and "bike" or "car",
-						{ rng = roll })
+						{ rng = roll, exact = true }) -- the bay's footing was just checked (critic C4)
 					if model then
 						centreModel(model, (bay.cf * CFrame.new(0, 0, roll:NextNumber(-BAY_JITTER, BAY_JITTER))).Position)
 						lot.town:SetAttribute("ParkingBayTaken_" .. bay.index, true)
