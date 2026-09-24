@@ -112,17 +112,38 @@ reticleRing.Parent = reticle
 -- Driving and aiming
 --------------------------------------------------------------------------------
 
--- The armed vehicle this player is driving, with its spec, or nil.
+-- The gunner's seat of an armed vehicle, if it has one: a Seat named "GunnerSeat", or any seat with a
+-- true "Gunner" attribute (being added to armed vehicles alongside this).
+local function gunnerSeatOf(vehicle)
+	for _, child in ipairs(vehicle:GetChildren()) do
+		if child:IsA("Seat") and (child.Name == "GunnerSeat" or child:GetAttribute("Gunner") == true) then
+			return child
+		end
+	end
+	return nil
+end
+
+-- The armed vehicle whose gun this player works, with its spec, or nil. That is the driver when the
+-- vehicle has no gunner's seat, and whoever sits in the gunner's seat when it has one (the driver then
+-- only drives). The name is kept from when only the driver could fire.
 local function drivenVehicle()
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local seat = humanoid and humanoid.SeatPart
-	if not seat or not seat:IsA("VehicleSeat") then
+	if not seat then
 		return nil
 	end
 	local vehicle = seat.Parent
 	local spec = vehicle and VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
 	if not spec or not vehicle:FindFirstChild("TurretYaw") then
+		return nil
+	end
+	local gunner = gunnerSeatOf(vehicle)
+	if gunner then
+		if seat ~= gunner then
+			return nil
+		end
+	elseif not seat:IsA("VehicleSeat") then
 		return nil
 	end
 	return vehicle, spec
@@ -166,8 +187,13 @@ local function onFire(_, inputState, inputObject)
 		firing = false
 	end
 	-- The mouse button also belongs to the camera and CombatClient (which passes it on while you
-	-- drive); R1 would otherwise cycle the hotbar under you.
+	-- drive); R1 would otherwise cycle the hotbar under you. A gunner is a passenger to CombatClient,
+	-- which would fire the gun in their hands as well, so a gunner's click stops here.
 	if inputObject and inputObject.KeyCode == Enum.KeyCode.ButtonR1 then
+		return Enum.ContextActionResult.Sink
+	end
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.SeatPart and not humanoid.SeatPart:IsA("VehicleSeat") then
 		return Enum.ContextActionResult.Sink
 	end
 	return Enum.ContextActionResult.Pass
@@ -179,6 +205,10 @@ local function setBound(want)
 		return
 	end
 	bound = want
+	-- Said on the player, locally, for the rest of the HUD: HudClient stands its own crosshair down
+	-- (one crosshair while the vehicle gun is yours, this one) and hides the stamina bar, and BoonHud
+	-- steps out of the phone's driving block, for a gunner as for a driver.
+	player:SetAttribute("VehicleGunActive", want or nil)
 	if want then
 		ContextActionService:BindAction("BRR_VehicleFire", onFire, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR1)
 		ContextActionService:SetTitle("BRR_VehicleFire", "FIRE")
@@ -249,37 +279,16 @@ do
 	game:GetService("UserInputService"):GetPropertyChangedSignal("KeyboardEnabled"):Connect(refit)
 end
 
--- Otherwise beside the vehicle panel wherever it actually is, not where the desktop literals above
--- assume it is (#80). VehicleClient draws its panel as the one Frame in its ScreenGui. Right of it at its
--- scale, bottoms level; on its left instead if the right side would leave the screen; above it, centred,
--- when neither side has room. Only written when it changes.
-local function besideVehiclePanel()
-	local vehicleHud = player.PlayerGui:FindFirstChild("VehicleHud")
-	local other = vehicleHud and vehicleHud:FindFirstChildOfClass("Frame")
-	if not other or other.AbsoluteSize.X <= 0 then
-		return nil
-	end
-	local k = other.AbsoluteSize.X / 250
-	local origin = gui.AbsolutePosition
-	local x, bottom = other.AbsolutePosition.X - origin.X, other.AbsolutePosition.Y - origin.Y + other.AbsoluteSize.Y
-	local right = x + other.AbsoluteSize.X + 8 * k
-	if right + 150 * k <= camera.ViewportSize.X - 8 then
-		return k, Vector2.new(0, 1), UDim2.fromOffset(right, bottom)
-	elseif x - 8 * k - 150 * k >= 8 then
-		return k, Vector2.new(1, 1), UDim2.fromOffset(x - 8 * k, bottom)
-	end
-	return k, Vector2.new(0.5, 1), UDim2.fromOffset(x + other.AbsoluteSize.X / 2, bottom - other.AbsoluteSize.Y - 8 * k)
-end
-
+-- Otherwise the desktop spot, right of VehicleClient's speed panel (250 wide, centred, 178 up) with its
+-- bottom level: the driving block's own numbers, not a measurement of the panel. Measuring it read the
+-- panel's box on the frame driving began, before VehicleClient had enabled or placed its HUD, and a
+-- gunner has no speed panel at all (#80, Oliver: "the guns on the cars HUD is overlapping").
 local function followVehiclePanel()
 	local k, anchor, position
 	if phoneGunSpot then
 		k, anchor, position = phoneGunSpot.w / 150, Vector2.new(0, 0), UDim2.fromOffset(phoneGunSpot.x, phoneGunSpot.y)
 	else
-		k, anchor, position = besideVehiclePanel()
-		if not k then
-			return
-		end
+		k, anchor, position = 1, Vector2.new(0, 1), UDim2.new(0.5, 133, 1, -178)
 	end
 	if panelScale.Scale ~= k then
 		panelScale.Scale = k

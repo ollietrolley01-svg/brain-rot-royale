@@ -87,8 +87,16 @@ SAME_EVERYWHERE = {
 }
 
 # The game states measured at every size.
+# "driving" is the driver of an armed car with no gunner's seat (the driver works the gun); "gunner" is
+# the passenger in the gunner's seat of an armed car (the gun is theirs, the driving HUD is not). Both
+# have a gun in hand, so the HUD's own crosshair would be up if nothing stood it down, and both hear
+# gunfire from eight directions, so the cue chevrons are on the ring.
 SCENARIOS = [("battle royale", "BattleRoyale", False), ("team match", "TeamDeathmatch", False),
-             ("driving", "BattleRoyale", True)]
+             ("driving", "BattleRoyale", "driver"), ("gunner", "BattleRoyale", "gunner")]
+
+# Screens drawn UNDER the HUD on purpose: an overlap with them is allowed only while their DisplayOrder
+# is below the other element's, so the HUD really covers them.
+UNDER_LAYERS = {"GunfireCue": "the gunfire chevrons ring the crosshair beneath every panel"}
 
 # Overlaps measured and NOT fixed, listed so the check stays green on everything else and says so every
 # run. Not an allow-list: each is a defect with the reason it is still open, and the check fails if one
@@ -105,6 +113,11 @@ ALLOWED = {
     frozenset(["crosshair", "hitmarker"]): "the hitmarker is drawn on the crosshair when a shot lands",
 }
 
+
+VEHICLE_MODELS_STUB = """
+return setmetatable({ Models = setmetatable({}, { __index = function() return { displayName = 'Patapim Scrambler' } end }) },
+    { __index = function() return nil end })
+"""
 
 BRAINROT_STUB = """
 local B = {}
@@ -148,6 +161,11 @@ class World:
         # A stand-in for ReplicatedStorage's BrainrotData, so the companion tile gets real numbers and its
         # stats line is drawn (the check asserts it is hidden on a touch screen).
         self.W.sources["BrainrotData"] = BRAINROT_STUB
+        # The real mounted-weapon table (pure data and maths), and a stand-in for VehicleModels with the
+        # longest real vehicle name, so the panels carry the text they carry in the game.
+        self.W.sources["VehicleWeaponData"] = luau_to_lua(open(os.path.join(root, "ReplicatedStorage", "Shared",
+                                                                            "VehicleWeaponData.lua"), encoding="utf-8").read())
+        self.W.sources["VehicleModels"] = VEHICLE_MODELS_STUB
         for name, text in (shared or {}).items():
             self.W.sources[name] = luau_to_lua(text)
         for m in list(MODULES) + list(extra_modules):
@@ -169,14 +187,21 @@ class World:
         self.run("""
             local mode, driving = select(2, ...)
             if driving then
+                -- A Rotster (the roof gun): VehicleWeaponData.ForModel knows it.
                 local car = W.Instance.new('Model')
-                car:SetAttribute('VehicleModel', 'Gunner')
+                car:SetAttribute('VehicleModel', 'Rotster')
                 local seat = W.Instance.new('VehicleSeat')
                 seat.Name = 'DriverSeat'
                 seat.Parent = car
                 local yaw = W.Instance.new('Part')
                 yaw.Name = 'TurretYaw'
                 yaw.Parent = car
+                if driving == 'gunner' then
+                    local gunner = W.Instance.new('Seat')
+                    gunner.Name = 'GunnerSeat'
+                    gunner.Parent = car
+                    seat = gunner
+                end
                 car.Parent = W.workspace
                 W.special(W.character.Humanoid).SeatPart = seat
             end
@@ -187,7 +212,9 @@ class World:
             local state = { state = 'InProgress', mode = mode, mapRadius = 600, aliveCount = 12, playerCount = 12,
                 countdown = 0, minPlayers = 2, mapName = 'Test', teams = mode ~= 'BattleRoyale' }
             W.fire('MatchChanged', state)
-            W.fire('LoadoutChanged', { slots = {}, equipped = 1, ammo = {}, maxHealth = 100, health = 100 })
+            -- A gun in hand, so the HUD's crosshair is wanted.
+            W.fire('LoadoutChanged', { slots = { { kind = 'gun', id = 'Rifle', name = 'Rifle', mag = 12, reserve = 60,
+                rarity = 'Common' } }, equipped = 1, ammo = {}, maxHealth = 100, health = 100 })
             W.fire('StormChanged', { phase = 1, closing = false, secondsLeft = 60, label = 'Storm closes in', radius = 300,
                 center = Vector3.new(0, 0, 0), nextRadius = 200, nextCenter = Vector3.new(0, 0, 0), endsAt = W.now + 60 })
             if mode ~= 'BattleRoyale' then
@@ -204,7 +231,16 @@ class World:
             W.player:SetAttribute('CompanionBoonName', 'Tralalero')
             W.player:SetAttribute('CompanionBoons', 'Faster reload\\nMore ammo')
             W.frame(3)
-        """, mode, driving)
+            if driving then
+                -- Gunfire all round: a chevron at eight points of the ring.
+                local rival = W.Instance.new('Player')
+                for i = 0, 7 do
+                    local a = i * math.pi / 4
+                    W.fire('ShotFired', rival, Vector3.new(math.sin(a) * 60, 5, 10 - math.cos(a) * 60), {}, 'Common')
+                end
+                W.frame(1)
+            end
+        """, mode, driving or False)
 
     def rotate(self, w, h):
         self.run("local w, h = select(2, ...) ; W.setViewport(w, h) ; W.frame(2)", w, h)
@@ -217,8 +253,14 @@ class World:
             r = e.rect
             site = e.site
             var = names.get(site, e.name)
-            out.append({"site": site, "var": var, "gui": e.gui, "name": e.name,
-                        "rect": (round(r.x, 1), round(r.y, 1), round(r.w, 1), round(r.h, 1)), "full": bool(e.full)})
+            parts = []
+            if e.parts is not None:
+                for j in range(1, len(e.parts) + 1):
+                    p = e.parts[j]
+                    parts.append((p.x, p.y, p.w, p.h))
+            out.append({"site": site, "var": var, "gui": e.gui, "name": e.name, "order": e.order or 0,
+                        "rect": (round(r.x, 1), round(r.y, 1), round(r.w, 1), round(r.h, 1)), "full": bool(e.full),
+                        "parts": parts or [(r.x, r.y, r.w, r.h)]})
         return out
 
     def errors(self):
@@ -284,11 +326,22 @@ def check(root, sources, dump=False, quiet=False):
             for j in range(i + 1, len(elems)):
                 a, b = elems[i], elems[j]
                 examined_pairs += 1
-                ov = overlap(a["rect"], b["rect"])
+                ov = None
+                for pa in a["parts"]:
+                    for pb in b["parts"]:
+                        ov = ov or overlap(pa, pb)
                 if not ov:
                     continue
                 key = frozenset([a["var"], b["var"]])
                 if key in ALLOWED:
+                    continue
+                under = [e for e in (a, b) if e["gui"] in UNDER_LAYERS]
+                if len(under) == 1:
+                    other = b if under[0] is a else a
+                    if under[0]["order"] < other["order"] or (under[0]["order"] < 0 and other["order"] >= 0):
+                        continue
+                    problems.append(f"[{tag}, {scene}] {label(under[0])} draws OVER {label(other)}: its ScreenGui's "
+                                    f"DisplayOrder {under[0]['order']} is not below {other['order']}")
                     continue
                 if (tag, key) in KNOWN_OPEN:
                     seen_open.add((tag, key))
@@ -311,15 +364,26 @@ def check(root, sources, dump=False, quiet=False):
             problems.append(f"[{tag}, {scene}] the companion tile's stats line is shown from the phone slot, off the left edge")
         elif not touch and not readout:
             problems.append(f"[{tag}, {scene}] the companion tile's stats line is hidden on a desktop screen")
-        if scene == "driving":
+        if scene in ("driving", "gunner"):
+            # One crosshair: the vehicle gun's own mark, never the hand gun's as well.
+            vars_ = {e["var"] for e in drawn}
+            if "reticle" not in vars_:
+                problems.append(f"[{tag}, {scene}] the vehicle gun's aim mark is not drawn")
+            if "crosshair" in vars_:
+                problems.append(f"[{tag}, {scene}] two crosshairs: the HUD's is drawn as well as the vehicle gun's")
+            if not any(e["gui"] == "GunfireCue" for e in drawn):
+                problems.append(f"[{tag}, {scene}] no gunfire chevron is drawn, so their layering is not being checked")
+        elif "crosshair" not in {e["var"] for e in drawn}:
+            problems.append(f"[{tag}, {scene}] the HUD's crosshair is not drawn with a gun in hand: the one-crosshair check proves nothing")
+        if scene in ("driving", "gunner"):
             guis = {e["gui"] for e in drawn}
-            for need in ("VehicleHud", "VehicleWeaponHud"):
+            for need in (("VehicleHud", "VehicleWeaponHud") if scene == "driving" else ("VehicleWeaponHud",)):
                 if need not in guis:
                     problems.append(f"[{tag}] driving: nothing of {need} is drawn, so its overlaps are not being measured")
             for e in drawn:
                 x, y, ew, eh = e["rect"]
                 if x < -0.5 or y < -0.5 or x + ew > w + 0.5 or y + eh > h + 0.5:
-                    problems.append(f"[{tag}] driving: {label(e)} {e['rect']} is partly off the screen")
+                    problems.append(f"[{tag}] {scene}: {label(e)} {e['rect']} is partly off the screen")
 
         upright = touch and h > w
         if upright and scene == "battle royale":
@@ -673,6 +737,10 @@ def check_player_eye(root, sources, quiet=False):
 
 # Planted faults, each aimed at an invariant the code must keep forever, not at the bug as it was.
 PLANTS = [
+    ("the HUD's crosshair staying up while the vehicle gun is yours",
+     "HudClient.client.lua", 'and not player:GetAttribute("VehicleGunActive")', ""),
+    ("the gunfire chevrons drawn over the HUD",
+     "GunfireCueClient.client.lua", "DisplayOrder = -2,", "DisplayOrder = 6,"),
     ("the effects pill forgetting Bounce Boots",
      "HudClient.client.lua", 'table.insert(out, string.format("BOUNCE BOOTS  %ds", math.ceil(boots - now)))', "local _ = boots"),
     ("the bounty toast asking 'is it me?' by name, not UserId",

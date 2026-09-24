@@ -310,9 +310,14 @@ local crosshair = create("Frame", {
 local crosshairWanted = false
 local function showCrosshair(wanted)
 	crosshairWanted = wanted
-	crosshair.Visible = wanted and not player:GetAttribute("SightsUp")
+	-- One crosshair at a time: while the player works a vehicle's gun, VehicleWeaponClient draws its own
+	-- aim mark and this one stands down (#80: with a gun in hand both were drawn, one over the other).
+	crosshair.Visible = wanted and not player:GetAttribute("SightsUp") and not player:GetAttribute("VehicleGunActive")
 end
 player:GetAttributeChangedSignal("SightsUp"):Connect(function()
+	showCrosshair(crosshairWanted)
+end)
+player:GetAttributeChangedSignal("VehicleGunActive"):Connect(function()
 	showCrosshair(crosshairWanted)
 end)
 
@@ -1130,7 +1135,7 @@ do
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local seat = humanoid and humanoid.SeatPart
 		staminaView.hidden = not MovementState.inMatch or player:GetAttribute("MenuOpen") == true
-			or (seat ~= nil and seat:IsA("VehicleSeat"))
+			or (seat ~= nil and seat:IsA("VehicleSeat")) or player:GetAttribute("VehicleGunActive") == true
 		staminaBar:Update(math.min(dt, 0.1), staminaView)
 	end)
 end
@@ -3021,7 +3026,9 @@ local function showToast(message, isError)
 	if toast.AnchorPoint.Y == 1 then
 		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		local seat = humanoid and humanoid.SeatPart
-		local driving = seat ~= nil and seat:IsA("VehicleSeat")
+		-- A gunner's panel sits in the same band as the driver's (VehicleWeaponClient), so a gunner counts.
+		local driving = seat ~= nil and (seat:IsA("VehicleSeat") or seat.Name == "GunnerSeat" or seat:GetAttribute("Gunner") == true)
+			or player:GetAttribute("VehicleGunActive") == true
 		toast.Position = UDim2.new(0.5, 0, 1, driving and -(304 + 8) or -(16 + 150 + 8))
 	end
 	TweenService:Create(toast, TweenInfo.new(0.15), { BackgroundTransparency = 0.15, TextTransparency = 0 }):Play()

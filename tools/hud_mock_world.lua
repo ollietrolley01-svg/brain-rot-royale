@@ -720,6 +720,100 @@ W.paints = paints
 
 -- Every drawn top-level element of every enabled ScreenGui under PlayerGui (and the children of a
 -- transparent full-screen holder, which is a container rather than an element).
+-- Text: the box a string of this length takes at this size (an average glyph of 0.55 em, which is
+-- Gotham's and a shade under FredokaOne's), placed by the label's alignment. Nil when nothing shows.
+local function union(a, b)
+	if not a then
+		return b
+	end
+	if not b then
+		return a
+	end
+	local x, y = math.min(a.x, b.x), math.min(a.y, b.y)
+	return { x = x, y = y, w = math.max(a.x + a.w, b.x + b.w) - x, h = math.max(a.y + a.h, b.y + b.h) - y, k = a.k }
+end
+W.union = union
+
+function W.textRect(inst, box)
+	local props = rawget(inst, "__props")
+	local text = props.Text
+	if type(text) ~= "string" or text == "" or (props.TextTransparency or 0) >= 1 then
+		return nil
+	end
+	local contained = props.TextScaled == true or props.TextWrapped == true
+		or tostring(props.TextTruncate or ""):find("AtEnd", 1, true) ~= nil
+	if contained then
+		return box
+	end
+	local size = (props.TextSize or 14) * box.k
+	local w = (utf8.len(text) or #text) * size * 0.55
+	local align = tostring(props.TextXAlignment or "")
+	local x
+	if align:find("Left", 1, true) then
+		x = box.x
+	elseif align:find("Right", 1, true) then
+		x = box.x + box.w - w
+	else
+		x = box.x + (box.w - w) / 2
+	end
+	return { x = x, y = box.y + (box.h - size) / 2, w = w, h = size, k = box.k }
+end
+
+-- Every rectangle an element really paints: its box when its background shows, its text where the text
+-- falls, and the same for everything inside it, unless a list or grid places those (their container's
+-- box stands in) or the element clips them. A list, not one union: the ability tile and the line above
+-- it are two separate patches of screen, and the space between them is empty.
+function W.paintedRects(inst, box, out)
+	out = out or {}
+	local class = rawget(inst, "__class")
+	if not GUI_CLASSES[class] or not inst.Visible then
+		return out
+	end
+	if class == "CanvasGroup" and inst.GroupTransparency >= 1 then
+		return out
+	end
+	box = box or W.rectOf(inst)
+	if not box then
+		return out
+	end
+	if inst.BackgroundTransparency < 1 then
+		table.insert(out, box)
+	end
+	if class == "TextLabel" or class == "TextButton" or class == "TextBox" then
+		local t = W.textRect(inst, box)
+		if t then
+			table.insert(out, t)
+		end
+	elseif (class == "ImageLabel" or class == "ImageButton") and inst.Image ~= "" and inst.ImageTransparency < 1 then
+		table.insert(out, box)
+	end
+	local laidOut = inst:FindFirstChildOfClass("UIListLayout") or inst:FindFirstChildOfClass("UIGridLayout")
+	local clips = rawget(inst, "__props").ClipsDescendants == true
+	for _, c in ipairs(rawget(inst, "__children")) do
+		if GUI_CLASSES[rawget(c, "__class")] then
+			local subs = {}
+			if laidOut then
+				if paints(c) then
+					table.insert(subs, box)
+				end
+			else
+				W.paintedRects(c, nil, subs)
+			end
+			for _, sub in ipairs(subs) do
+				if clips then
+					local x, y = math.max(sub.x, box.x), math.max(sub.y, box.y)
+					local x1, y1 = math.min(sub.x + sub.w, box.x + box.w), math.min(sub.y + sub.h, box.y + box.h)
+					sub = (x1 > x and y1 > y) and { x = x, y = y, w = x1 - x, h = y1 - y, k = box.k } or nil
+				end
+				if sub then
+					table.insert(out, sub)
+				end
+			end
+		end
+	end
+	return out
+end
+
 function W.drawn()
 	local out = {}
 	local function consider(inst, gui)
@@ -746,6 +840,22 @@ function W.drawn()
 			local h = (used + math.max(count - 1, 0) * gap) * r.k
 			r = { x = r.x, y = r.y, w = r.w, h = h, k = r.k }
 		end
+		-- What is really drawn reaches past the box: text wider than its label (unless it wraps, scales or
+		-- is cut with "…"), and children placed outside their parent (the Inventory tab over the hotbar,
+		-- the ability tile's stats line). Children of a list or grid are not placed by this model, so
+		-- those containers count as their box. A transparent box counts only as far as what is in it.
+		local parts = { r }
+		if not (inst.BackgroundTransparency >= 1 and inst:FindFirstChildOfClass("UIListLayout")) then
+			parts = W.paintedRects(inst, r)
+			if #parts == 0 then
+				return
+			end
+			local ext = nil
+			for _, part in ipairs(parts) do
+				ext = union(ext, part)
+			end
+			r = { x = ext.x, y = ext.y, w = ext.w, h = ext.h, k = r.k }
+		end
 		local fullScreen = r.w >= vp.X * 0.95 and r.h >= vp.Y * 0.95
 		if fullScreen and inst.BackgroundTransparency >= 1 then
 			for _, c in ipairs(rawget(inst, "__children")) do
@@ -753,7 +863,8 @@ function W.drawn()
 			end
 			return
 		end
-		table.insert(out, { inst = inst, site = rawget(inst, "__site"), name = inst.Name, gui = gui.Name, rect = r, full = fullScreen })
+		table.insert(out, { inst = inst, site = rawget(inst, "__site"), name = inst.Name, gui = gui.Name, rect = r, full = fullScreen,
+			order = rawget(rawget(gui, "__props"), "DisplayOrder") or 0, parts = parts })
 	end
 	for _, gui in ipairs(rawget(W.playerGui, "__children")) do
 		if rawget(gui, "__class") == "ScreenGui" and gui.Enabled then

@@ -97,12 +97,14 @@ end
 function StaminaBar:Place(viewport)
 	local spots = phoneSpots(viewport)
 	if spots and spots.stamina then
-		-- The slot's width, the whole bar scaled to it, standing on the slot's bottom edge: the slot is
-		-- the track's height, and the title and the number above the track rise into the gap over it.
+		-- Hanging from the slot's top edge, as wide as the slot, and no taller than the slot plus the 4 px
+		-- PhoneLayout leaves between it and the health row. Standing on the slot's bottom edge instead, it
+		-- rose 5 px over the slot's top, which is the crosshair's clear line on an 844x390 phone (#80,
+		-- tools/hud_layout_check.py: 2x3 px into the crosshair).
 		local spot = spots.stamina
-		self.Frame.AnchorPoint = Vector2.new(0, 1)
-		self.Frame.Position = UDim2.fromOffset(spot.x, spot.y1)
-		self.scale.Scale = spot.w / (WIDTH + 8)
+		self.Frame.AnchorPoint = Vector2.new(0, 0)
+		self.Frame.Position = UDim2.fromOffset(spot.x, spot.y)
+		self.scale.Scale = math.min(spot.w / (WIDTH + 8), (spot.h + 4) / HEIGHT)
 		return
 	end
 	local anchor, position, scale = StaminaBar.Layout(viewport)

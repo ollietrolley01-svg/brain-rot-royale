@@ -113,7 +113,7 @@ local function drivingOnPhone()
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local seat = humanoid and humanoid.SeatPart
-	return home.phone and seat ~= nil and seat:IsA("VehicleSeat")
+	return home.phone and ((seat ~= nil and seat:IsA("VehicleSeat")) or player:GetAttribute("VehicleGunActive") == true)
 end
 
 local function render()
@@ -168,6 +168,7 @@ local function render()
 end
 
 player:GetAttributeChangedSignal("CompanionBoons"):Connect(render)
+player:GetAttributeChangedSignal("VehicleGunActive"):Connect(render)
 local function watchSeat(character)
 	local humanoid = character:WaitForChild("Humanoid", 10)
 	if humanoid then
