@@ -161,3 +161,90 @@ Line numbers are at branch tip `7e61c81` unless a finding says otherwise.
   before that lands, or the two versions collide in BotService/VehicleService.
 - LootService.lua on the branch is LF, on main CRLF: every line shows as changed in a plain diff (use
   `--ignore-cr-at-eol` to review it). Harmless, but it will make the main merge noisy.
+
+---
+
+## Batch 2 (tools)
+
+- `tools/roblox_api_check.py` + `tools/roblox_api_subset.json`: the source against Roblox's real API dump
+  (Enum items, Instance.new / GetService classes, members of Instance.new locals and UiKit create()
+  tables, restricted-security access). 0 findings on the tree; 6/6 planted faults caught. Settles C5's
+  premise: `MeshPart.MeshId` is Read=None.
+
+## Batch 3 (at branch tip 22baf77 + the critic's commits)
+
+### Verified: the coordinator's fixes for C2, C4, C5 (0e339d8)
+- C2 `ModeTeams.bayOccupied`: exact SAT per hit, as proposed. `tools/critic_bay_aabb_repro.py --exact`
+  0 of 60. Still open, minor: `footprintClear` (ModeTeams.lua, open-ground spots) has the same AABB
+  over-reach; it only rejects candidate spots, so fewer spots are found, never a wrong one.
+- C4 ParkInTowns `exact = true`: right.
+- C5 CombatClient: guarded, falls back to stand-in arms and warns once. Still unguarded, minor:
+  `buildItemView` (`CombatClient.client.lua` ~1759) calls `Viewmodel.Arms.new(model, character)` bare;
+  the same pcall + stand-in fallback (`Viewmodel.Arms.new(model, nil)`) there.
+
+### C8 (major, FIXED) Defense placement refused half of a turned team base
+- `ReplicatedStorage/Shared/DefensePlacement.lua:630-639` (680118e) refuses a build inside
+  `VehicleYard:GetBoundingBox()` + 12. The yard Model had no PrimaryPart, so Roblox returns that box on
+  the WORLD axes; the compound faces the arena centre at any yaw. Measured on the real layout: at 20-60
+  degrees the refused square grew from 43% of the base to 54-59% and covered 13-15 of the 37 pads, chest
+  and loot spots (5 when square).
+- Fix (landed, TeamBaseRuins.buildYard): the yard's PrimaryPart is a bay line, square to the compound.
+  Test `tools/critic_yard_nobuild_repro.py --plant` (6 yaws; plant = no PrimaryPart, caught).
+- For the defense worker (robustness, not required now): read the yard's box through its PrimaryPart
+  explicitly, or tag the yard NoBuild with a part-per-lane, so no model's pivot decides it.
+- Design question for Oliver: even square, the yard + lane margin is 43% of the base where no defense can
+  go up (the courtyard in front of the yard included). If he wants defenders to fortify the base, shrink
+  the refusal to the bays and their drive-out lanes (TeamBaseRuins knows both).
+
+### C9 (minor, ROUTE: foundations/MapDecor owner) A shed on a slope can have its doorway in the hill
+- `ServerScriptService/Modules/MapDecor.lua` `shed` (~1739-1773): the door's top is at the placement
+  point's ground + 7 whatever the slope (base drops by SINK + drop, doorTop rises by the same), and the
+  yaw is random. The door is 6 studs from the centre, so a door facing uphill on a slope of ~18 degrees or
+  more (ground at the door > centre + 1.8) leaves less than an R15's 5.2 studs of opening, and on the
+  steeper sites 22baf77 now keeps (drop up to 17) the doorway is under the terrain: the shed's loot spot
+  (inside, on the ground) cannot be reached. Pre-existing; the foundation check does not measure hut doors
+  (`foundation_measure.lua:387-440` marks sheds noBury and gives them no `door`).
+- Fix: pick the yaw a quarter turn at a time so the door faces the lowest of the four wall midpoints (the
+  same sampling as `drop`), and put the doorway's top at `groundAt(door) + 7` (lintel above it); or skip
+  the site when the ground spread under the walls exceeds ~4 studs (the MapWilds shelters' rule, ddd4ba1).
+  Then give decor:hut a `door = { half = 2.5 }` in foundation_measure so the sill/door rules cover it.
+
+### C10 (polish, ROUTE: defense worker) A thrown structure kit is animated by the server every Heartbeat
+- `ServerScriptService/Modules/DefenseService.lua` `throwStructure` (680118e) PivotTo's an anchored model
+  from the server each Heartbeat. Anchored CFrame changes replicate unsmoothed at the network rate, so
+  every other client sees the kit step along its arc (the old physics throw was interpolated).
+- Fix: fire the arc (from, velocity, flightTime, spin) to clients and let each draw the kit locally
+  (the defense preview already walks the same `DefensePlacement.ArcPoint`); the server keeps only the
+  `task.delay(landTime, ...)` build. Or keep a server kit but TweenService it (still stepped, but one
+  property stream).
+
+### C11 (minor, ROUTE: companion FX) One faulty scheduled beat drops the whole frame's effects
+- `StarterPlayerScripts/CompanionFxClient.client.lua` `step` (~1823-1829): `job.fn(t)` from `pending` is
+  not pcalled (each effect's `update` is). A throw there stops that frame's walk of every live effect,
+  `pruneParticles` and `stepVignette`. Fix: `local ok, err = pcall(job.fn, t) if not ok then
+  warn("[CompanionFx] " .. tostring(err)) end`.
+
+### C12 (minor, ROUTE: loot) The 1 s settle assumes the key is let go within a second
+- `ServerScriptService/Modules/LootService.lua:211-226` (3441c0f). If the mechanism is right (prompts
+  appearing under a held key), a player who keeps E held past 1 s after the 1.2 s crate hold gets the
+  same result the fix is for. Unproven either way offline. Cheaper and exact: re-enable the prompts only
+  once the opener's prompt input ends, i.e. keep DROP_SETTLE but also store the opener on the base
+  (`base:SetAttribute("SettlingFor", player.UserId)`) and have LootService refuse that player's
+  Triggered until a PromptButtonHoldEnded / a new PromptTriggered sequence starts (ProximityPrompt
+  `PromptButtonHoldBegan` on the server fires for zero-hold prompts too). Ask Oliver whether the 1 s
+  build fixed it before doing this.
+
+### C13 (process) BotService local count with both bot branches
+- On the tree: BotService peaks at 191 live locals (tools/local_limit_check.py), 9 under Luau's limit;
+  the bot-driving branch (a75ab68) adds to the same file. Run local_limit_check after that merge.
+
+### Visual notes (polish, for the ruins / Oliver's render pass)
+- Team base ruin (offline sketch, top and quarter views): the spawn bunker's roof is one flat 40 x 34
+  slab with a vent and a hatch, the largest plain surface in the compound and the first thing a spawning
+  player sees from the watchtower or when dropping in. Suggest: roof rubble heaps and a sagging broken
+  corner, a sandbag ring round the hatch, a toppled aerial, two or three puddle/soot decals, and a
+  lip/parapet edge so its silhouette is not a box.
+- Reworked guns (gunfun_lab renders of Sahur Pistol, Crocodilo Rifle, Tralala Shotgun, Lag Switch SMG,
+  Sigma Scout, Aura Scattergun): read as distinct designs; the Crocodilo head reads well from the side.
+  The Sahur Pistol's domed muzzle cap fills the lower third of the ADS picture (below the sight line, so
+  the sight check passes); worth a Studio look at ADS.
