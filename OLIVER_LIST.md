@@ -280,7 +280,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   reads as the leading score and the gap. Render outstanding. — *HUD*
 - `[x]` **55. Improve the reloading sounds.** The 7 closing beats now carry a low layer; opening beats
   stay light; volumes untouched. **In the build — needs your ears.** — *audio*
-- `[ ]` **56. Make the whole map destructible.** Big design job, not started. — *destruction*
+- `[~]` **56. Make the whole map destructible.** Most of the map already breaks (walls, upper floors, roofs, props, trees, rocks, parked cars, terrain craters). 24 Sep: balconies, rails, railings, ridge caps, coping, stair soffits/headers, docks and bumpers now break, and solid pieces fall with the wall/roof/floor holding them instead of floating; town signs, fingerposts and stop signs break. Still fixed: roads, bridges, ground-floor slabs, traffic signals. — *destruction*
 - `[~]` **57. Roadkill with the cars.** Built — damage scales with speed, nothing below walking pace,
   never your own passengers. **IN THE BUILD BUT UNPROVEN.** You re-asked as #110, which means it is
   absent or silent for you — prove it fires before touching it. — *vehicles*
@@ -307,7 +307,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[ ]` **67. Move the companion to the character's left side.** — *companions*
 - `[~]` **68. Free mouse when not holding anything.** Built; checked that no pickup needs a click, so a
   free cursor can't break looting. Interacts with #100 and #112 — prove which writer wins. — *HUD*
-- `[ ]` **69. Sticky bomb remote detonator left in your hand.** — *destruction*
+- `[~]` **69. Sticky bomb remote detonator left in your hand.** Fixed in 842ad50, awaiting a playtest: there is no detonator; the "detonator" was the next Clingy Crumpet of the stack, held timer-up with a lit red button. The button is now dark until a thrown crumpet sticks (ThrowableModels.Arm). The last one thrown clears the slot and the held model (WeaponService.spendAndFinish → RefreshHeldGun → clearHeldGun). — *destruction*
 - `[~]` **70. Bombs leave a floating circle on a destructible floor.** Same cause as #29 and reopened with it. — *destruction*
 - `[ ]` **71. A breaking animation per material instead of fading to clear.** — *destruction*
 - `[ ]` **72. Random floating texts on some gun textures in FPS.** — *guns*
@@ -413,9 +413,11 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
 - `[ ]` **120. Sound design more accurate to real life.** — *audio*
 - `[ ]` **121. Bigger maps on every gamemode.** ⚠ Constrained: Sahur Springs already measures 32,969 parts
   against ~31,600 affordable. Read with #32 and the foliage ceiling. — *map*
-- `[ ]` **122. Weapons with explosive ammo must actually explode what you shoot.** **Parked until you say
-  what you mean by it.** Note for whoever picks it up: `CombatService.fireAbility`'s explosive branch has
-  no production caller, so the first hitscan explosive added would silently get a cruder blast. — *destruction*
+- `[~]` **122. Weapons with explosive ammo must actually explode what you shoot.** Built in 6ef6a52, awaiting a
+  playtest: WeaponData `explosiveAmmo = { damage, radius, wallDamage }` makes a hitscan gun's bullets go off where
+  they stop (a player, a wall, the ground; not the sky), through ProjectileService's blast: falls off to a fifth
+  at the edge, stopped by cover, half to the shooter, holes walls. Only the Golden Sahur Cannon carries it
+  (12 dmg, 5 studs, walls 60; body shot + blast 95.7, still not a one-shot). tools/explosive_ammo_check.py, 21 checks. — *destruction*
 - `[ ]` **123. Sort the guns by tier in the admin menu.** — *menu*
 - `[x]` **124. No kit drops in kit modes; picked-up items still drop, players and bots.** Landed in the
   match-flow set, proven 11/11 with semantic controls failing. — *bug review*

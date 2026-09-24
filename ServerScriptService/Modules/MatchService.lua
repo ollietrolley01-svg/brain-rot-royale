@@ -1163,6 +1163,8 @@ local function finishMatch()
 		-- several thousand parts plus a terrain slab thousands of studs wide, and nothing
 		-- needs it through results, the lobby and the countdown.
 		MapGenerator.Clear()
+		-- The drop-map cache holds the old Map model; let it go with the map.
+		require(script.Parent:WaitForChild("DropMapService")).Clear()
 		mapInfo = nil
 
 		-- Only bring back the people who were in the match. Anyone who stayed in the lobby is
@@ -1687,10 +1689,15 @@ local function startMatch()
 
 	for index, player in ipairs(joining) do
 		task.spawn(function()
+			-- The opening body: state is already InProgress by the time it arrives, and without this mark
+			-- OnCharacterAdded would run the respawn path (place + kit) and PlaceAtStart below would do
+			-- it all again. Cleared once CharacterAdded has had its turn.
+			player:SetAttribute("OpeningSpawn", true)
 			local ok = pcall(function()
 				player:LoadCharacter()
 			end)
 			if not ok then
+				player:SetAttribute("OpeningSpawn", nil)
 				failSpawn(player)
 				return
 			end
@@ -1708,6 +1715,7 @@ local function startMatch()
 			end
 
 			local humanoid = character and character:WaitForChild("Humanoid", 10)
+			player:SetAttribute("OpeningSpawn", nil)
 			if not humanoid then
 				failSpawn(player)
 				return
@@ -1838,7 +1846,7 @@ function MatchService.OnCharacterAdded(player, character)
 		-- LINE a respawned player falls through to the lobby path below and is teleported to Rot
 		-- Island mid-match. Do not remove it while tidying: it is the entire respawn path.
 		-- Only once the match is running: the opening spawn is placed by startMatch's PlaceAtStart.
-		if state == "InProgress" then
+		if state == "InProgress" and not player:GetAttribute("OpeningSpawn") then
 			currentMode.OnRespawn(player, character)
 			-- Everything startMatch gave the opening body, the respawn body gets too - passes and the
 			-- consumable's max-health boost, the movement speed, and the event's start shield, which

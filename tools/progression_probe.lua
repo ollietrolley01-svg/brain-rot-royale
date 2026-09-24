@@ -899,6 +899,10 @@ PlayerData.Save = function()
 	saves += 1
 	return true
 end
+-- Receipts save through SaveAndWait (it waits out an in-flight save); same stub.
+PlayerData.SaveAndWait = function(...)
+	return PlayerData.Save(...)
+end
 local function trade(a, b, offerA, offerB)
 	a.Parent, b.Parent = game, game
 	pcall(TradeService.Request, a, b)

@@ -304,6 +304,7 @@ end
 -- hit part to a companion, find a combatant's own companion, and hurt companions.
 CombatService.CompanionFromPart = nil
 CombatService.CompanionOf = nil
+CombatService.CompanionOwner = nil
 CombatService.DamageCompanion = nil
 CombatService.DamageCompanionsInRadius = nil
 
@@ -441,7 +442,11 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 	end
 
 	local dealt = absorbed + math.min(amount, humanoid.Health)
-	lastAttacker[victimToken] = { token = attackerToken, at = os.clock(), weaponId = weaponId }
+	-- Only another combatant's hit counts as who got you: your own splash, the storm or a fall
+	-- (and a leaver's round, whose owner is gone) must not wipe the credit of whoever shot you.
+	if attackerToken ~= nil and attackerToken ~= victimToken then
+		lastAttacker[victimToken] = { token = attackerToken, at = os.clock(), weaponId = weaponId }
+	end
 
 	local victimRoot = Combatants.GetRoot(victimToken)
 	local hitPosition = victimRoot and victimRoot.Position or nil
@@ -585,7 +590,8 @@ local function fireAbility(shooterToken, def, victimToken, hitPosition, baseDama
 				end
 			end
 		end
-	elseif def.ability == "lifesteal" then
+	elseif def.ability == "lifesteal" and victimToken then
+		-- Only off a combatant: walls, barrels and companions come through here with no victim.
 		local humanoid = Combatants.GetHumanoid(shooterToken)
 		if humanoid and humanoid.Health > 0 then
 			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + baseDamage * (def.lifestealRatio or 0.2))
@@ -652,6 +658,16 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		-- Someone else's companion soaks the bullet.
 		local companionModel = CombatService.CompanionFromPart and CombatService.CompanionFromPart(result.Instance)
 		if companionModel then
+			-- A teammate's companion (the mode's friendly-fire veto) lets the shot through, like glass.
+			local companionOwner = CombatService.CompanionOwner and CombatService.CompanionOwner(companionModel)
+			if companionOwner and CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, companionOwner, def.id) then
+				local filter = params.FilterDescendantsInstances
+				table.insert(filter, companionModel)
+				params.FilterDescendantsInstances = filter
+				currentOrigin = result.Position + direction * 0.05
+				stopped = nil
+				continue
+			end
 			CombatService.DamageCompanion(shooterToken, companionModel, def.damage)
 			fireAbility(shooterToken, def, nil, result.Position, def.damage)
 			break
@@ -814,6 +830,14 @@ function CombatService.Fire(player, aimPoint)
 		return
 	end
 
+	-- Aim checked before the round is spent: an aim point on the head fires nothing, so it costs nothing.
+	local head = character:FindFirstChild("Head")
+	local origin = head and head.Position or character:GetPivot().Position
+	local toTarget = aimPoint - origin
+	if toTarget.Magnitude < 0.5 then
+		return
+	end
+
 	if not WeaponService.ConsumeAmmo(player) then
 		return
 	end
@@ -822,14 +846,6 @@ function CombatService.Fire(player, aimPoint)
 	-- server's clock. Worked out after the budget is settled and from nothing the client sent, so it
 	-- can neither buy a shot nor be forged. A shot slower than the cap is ruled on the present.
 	local rewindTo = LagCompensation.RewindTime(player, LagCompensation.Now())
-
-	local head = character:FindFirstChild("Head")
-	local origin = head and head.Position or character:GetPivot().Position
-
-	local toTarget = aimPoint - origin
-	if toTarget.Magnitude < 0.5 then
-		return
-	end
 	local unit = toTarget.Unit
 
 	CombatService.WatchCrouch(character)

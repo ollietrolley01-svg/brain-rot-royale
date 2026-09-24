@@ -25,8 +25,9 @@ local currentName = "Part"
 -- The thing being built right now, when it can be shot apart (#56): every part it makes is tagged
 -- `Destructible = "Kind:D<n>"`, which makes them one pool for DestructibleService, sized off the
 -- parts themselves. `grouped` wraps a builder so everything it makes is one such thing; a builder
--- called from inside another keeps the outer one's group. Roads, bridges, signs, signals and the
--- square are never wrapped: they are the ground people stand on or steer by.
+-- called from inside another keeps the outer one's group. Roads, bridges, traffic signals and the
+-- square are never wrapped: they are the ground people stand on, or (the signals) TrafficClient
+-- drives their lamps. Town signs, fingerposts and stop signs are, since the whole map breaks (#56).
 local currentGroup = nil
 local groupSerial = 0
 
@@ -373,6 +374,7 @@ local function townSign(parent, position, facing, name)
 		Color3.fromRGB(46, 96, 64), Enum.Material.WoodPlanks)
 	MapDecor.SignText(board, "WELCOME TO\n" .. string.upper(name), Color3.fromRGB(255, 244, 214))
 end
+townSign = grouped("Sign", townSign)
 
 -- A fingerpost with one board per direction, stacked up the post: `boards` is a list of
 -- { direction = flat unit vector, text = name }. Each board sticks out from the post along its
@@ -402,6 +404,7 @@ function MapDecor.Fingerpost(parent, position, boards)
 	end
 	currentName = "Part"
 end
+MapDecor.Fingerpost = grouped("Sign", MapDecor.Fingerpost)
 
 --------------------------------------------------------------------------------
 -- River crossings
@@ -917,6 +920,7 @@ function MapDecor.StopSign(parent, base, facing)
 	local band = octagon(parent, frame * CFrame.new(0, 0, -0.35), 3, 0.12, Color3.fromRGB(196, 28, 32), "StopSign")
 	faceText(band, "STOP", Color3.fromRGB(255, 255, 255), Enum.NormalId.Front, STOP_FONT)
 end
+MapDecor.StopSign = grouped("Sign", MapDecor.StopSign)
 
 -- Lights or stop signs for a junction built by MapDecor.Junction with the same `spec`.
 -- control.kind "signals": a light for every arm, on the far right-hand corner as the traffic

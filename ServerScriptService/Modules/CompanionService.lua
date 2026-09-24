@@ -439,6 +439,10 @@ function CompanionService.FromPart(part)
 	return node
 end
 
+function CompanionService.OwnerOf(model)
+	return owners[model]
+end
+
 function CompanionService.ModelOf(owner)
 	local entry = companions[owner]
 	return entry and entry.model or nil
@@ -453,6 +457,10 @@ function CompanionService.Damage(attackerToken, model, amount)
 		return 0
 	end
 	if owner == attackerToken or not CombatService.IsEnabled() or not CompanionService.IsFighting(owner) then
+		return 0
+	end
+	-- Team modes: a teammate's bullets, blasts and companion splash don't hurt your companion.
+	if attackerToken ~= nil and CombatService.DamageVeto and CombatService.DamageVeto(attackerToken, owner) then
 		return 0
 	end
 
@@ -1249,6 +1257,7 @@ function CompanionService.Start()
 
 	CombatService.CompanionFromPart = CompanionService.FromPart
 	CombatService.CompanionOf = CompanionService.ModelOf
+	CombatService.CompanionOwner = CompanionService.OwnerOf
 	CombatService.DamageCompanion = CompanionService.Damage
 	CombatService.DamageCompanionsInRadius = CompanionService.DamageInRadius
 

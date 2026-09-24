@@ -401,18 +401,18 @@ if not receipt: problems.append("Monetization.HandleReceipt missing")
 else:
     body = receipt.group(1)
     grant_at = body.find("pcall(handler")
-    order_ok = -1 < body.find("alreadyGranted(data, purchaseId)") < grant_at < body.find("recordPurchase(data, purchaseId)") < body.find("PlayerData.Save(player)", grant_at)
+    order_ok = -1 < body.find("alreadyGranted(data, purchaseId)") < grant_at < body.find("recordPurchase(data, purchaseId)") < body.find("PlayerData.SaveAndWait(player)", grant_at)
     if not order_ok: problems.append("HandleReceipt must check PurchaseId, then grant, then record it, then save, in that order")
     # Review 2026-09-17: a receipt is confirmed only after a successful save, including one granted
     # earlier in the session (its save may have failed), and nothing goes into a profile that can't save.
     dup = re.search(r"if alreadyGranted\(data, purchaseId\) then(.*?)\n\tend\n", body, re.S)
-    if not dup or "if not PlayerData.Save(player) and not studioTestGrant then" not in dup.group(1): problems.append("HandleReceipt confirms an already-granted receipt without saving it first")
+    if not dup or "if not PlayerData.SaveAndWait(player) and not studioTestGrant then" not in dup.group(1): problems.append("HandleReceipt confirms an already-granted receipt without saving it first")
     if "PlayerData.CanSave(player)" not in body[:max(0, body.find("alreadyGranted"))]: problems.append("HandleReceipt must refuse (NotProcessedYet) before granting into a profile that can't save")
     if "return (saved or studioTestGrant) and Enum.ProductPurchaseDecision.PurchaseGranted or notYet" not in body: problems.append("HandleReceipt must only return PurchaseGranted after its save succeeded (or a Studio test grant)")
     # The Studio test-grant exception must need BOTH halves, so it can never be true in a live server.
     if "local studioTestGrant = STUDIO_TEST_GRANTS and not PlayerData.HasStore()" not in body: problems.append("Monetization: the Studio test-grant exception must be RunService:IsStudio() AND no DataStore")
     if "local STUDIO_TEST_GRANTS = RunService:IsStudio()" not in monet: problems.append("Monetization: STUDIO_TEST_GRANTS must come from RunService:IsStudio()")
-    if "pcall(result)" not in body[body.find("PlayerData.Save(player)", grant_at):]: problems.append("HandleReceipt must run a handler's announce after recording and saving, in its own pcall")
+    if "pcall(result)" not in body[body.find("PlayerData.SaveAndWait(player)", grant_at):]: problems.append("HandleReceipt must run a handler's announce after recording and saving, in its own pcall")
 # Grant handlers change the profile only; toasts, pushes, reveals and collection checks go in the
 # announce function they return, which runs after the save (an error there must never re-grant).
 for m in re.finditer(r'Monetization\.RegisterGrantHandler\("(\w+)", function\(.*?\n(.*?)\nend\)\n', boot, re.S):

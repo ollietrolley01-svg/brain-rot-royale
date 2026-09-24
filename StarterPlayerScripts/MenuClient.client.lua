@@ -2879,7 +2879,7 @@ local function renderTabStrip()
 			end
 		end
 		return nil
-	end)
+	end, shell.phone)
 	shell:SetTitle(screen and screen.title or "BRAINROT BATTLES")
 	shell:SetDestinations(destinations, activeTab)
 end
@@ -3688,7 +3688,12 @@ shell.onBack = toggleMenu
 -- holding the X up. It is here so the X does exactly what the scrim, Backspace and the MENU pill
 -- do: stop listening, clear the settings notice, close.
 shell.onClose = toggleMenu
-shell:BindBack("BrrMenuBack")
+-- Backspace / pad B go through toggleMenu too, so a key capture in Settings stops listening and a
+-- later key press can't silently rebind an action after the menu closed.
+shell:BindBack("BrrMenuBack", function()
+	toggleMenu()
+	return true
+end)
 
 -- A CONTROLLER COULD NOT OPEN THE MENU AT ALL. This has always been a ContextActionService
 -- binding, which takes gamepad KeyCodes perfectly well (Settings.lua:243 forwards `extras` into
@@ -3725,6 +3730,11 @@ local function openTab(key)
 	activeTab = key
 	shell:Open()
 	renderTab()
+end
+-- The header gear: straight to Settings from any screen (the shell's fallback only finds a Settings
+-- destination on the SETTINGS screen itself, so on the other four the gear did nothing).
+shell.onSettings = function()
+	openTab("Settings")
 end
 
 -- A HUD button: open its group, or close it if that group is what is showing.
@@ -3913,7 +3923,10 @@ Remotes.Event("OpenMenuTab").OnClientEvent:Connect(function(tab)
 				if tab == "Brainrots" then
 					codexMode = true
 				end
-				openTab(tab)
+				-- Walking back through the booth while reading that tab must not close it (openTab toggles).
+				if not (panel.Visible and activeTab == tab) then
+					openTab(tab)
+				end
 				return
 			end
 		end

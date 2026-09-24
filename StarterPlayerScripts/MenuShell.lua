@@ -450,14 +450,18 @@ function MenuShell:Settings()
 	end
 end
 
+-- Closing counts as closed: during the close tween the layer is still visible, and a press then
+-- (M, a HUD button) must reopen the menu rather than be swallowed or close it again.
 function MenuShell:IsOpen()
-	return self.layer.Visible
+	return self.layer.Visible and not self.closing
 end
 
 function MenuShell:Open()
-	if self.layer.Visible then
+	if self.layer.Visible and not self.closing then
 		return
 	end
+	-- Reopened mid-close: the close tween's callback sees `closing` cleared and leaves the layer up.
+	self.closing = false
 	self.layer.Visible = true
 	self.scrimFrame.BackgroundTransparency = 1
 	TweenService:Create(self.scrimFrame, TweenInfo.new(UiKit.Motion.Fade), { BackgroundTransparency = 0.45 }):Play()
@@ -465,11 +469,18 @@ function MenuShell:Open()
 end
 
 function MenuShell:Close()
-	if not self.layer.Visible then
+	if not self.layer.Visible or self.closing then
 		return
 	end
+	self.closing = true
 	TweenService:Create(self.scrimFrame, TweenInfo.new(UiKit.Motion.Press), { BackgroundTransparency = 1 }):Play()
 	UiParts.closePanel(self.panel, self.scale, function()
+		if not self.closing then
+			-- Reopened before the tween ended: closePanel has just hidden the panel, so show it again.
+			self.panel.Visible = true
+			return
+		end
+		self.closing = false
 		self.layer.Visible = false
 		self.panel.Visible = true
 	end, self.fitScale)

@@ -37,6 +37,10 @@ PlayerData.Save = function()
 	saves += 1
 	return saveResult
 end
+-- Receipts save through SaveAndWait (it waits out an in-flight save); same stub.
+PlayerData.SaveAndWait = function(...)
+	return PlayerData.Save(...)
+end
 -- HandleReceipt refuses a profile that can't save (edit mode has no DataStore); this one "can".
 PlayerData.CanSave = function()
 	return true

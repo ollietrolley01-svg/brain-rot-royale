@@ -74,7 +74,10 @@ end
 
 -- The shell's destination list for the screen `tabKey` is on. `labelOf(key)` is the host's own tab
 -- label, so the words stay where the renderers are.
-function MenuScreens.Destinations(tabKey, labelOf)
+-- `otherScreens`: also list every other screen, by its button name, landing on its first tab. A
+-- phone hides the HUD's five screen buttons (the menu opens from one icon), so without these a phone
+-- player could never leave the screen the menu opened on.
+function MenuScreens.Destinations(tabKey, labelOf, otherScreens)
 	local screen = screenOf[tabKey]
 	local destinations = {}
 	if not screen then
@@ -83,6 +86,14 @@ function MenuScreens.Destinations(tabKey, labelOf)
 	for _, key in ipairs(screen.tabs) do
 		local look = MenuScreens.Look[key] or {}
 		table.insert(destinations, { key = key, label = string.upper(labelOf(key) or key), glyph = look.glyph, sub = look.sub })
+	end
+	if otherScreens then
+		for _, other in ipairs(MenuScreens.Screens) do
+			if other ~= screen then
+				local look = MenuScreens.Look[other.tabs[1]] or {}
+				table.insert(destinations, { key = other.tabs[1], label = other.button, glyph = look.glyph, sub = other.title })
+			end
+		end
 	end
 	return destinations, screen
 end

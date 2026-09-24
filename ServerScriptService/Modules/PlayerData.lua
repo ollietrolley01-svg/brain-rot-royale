@@ -559,7 +559,9 @@ function PlayerData.Load(player)
 	-- This session owns the UserId from here on. If the previous session on this server is still
 	-- writing its release, let it finish (it clears state[] when done) rather than pulling its tables
 	-- out from under it; bounded, so a stuck save cannot hold a join forever.
-	owners[player.UserId] = player
+	-- The UserId is only handed over AFTER that wait: writeOnce refuses any write once owners[] names
+	-- someone else, so claiming it first would make the previous session's release fail every retry
+	-- and the new session would load a profile missing everything since the last autosave.
 	local previous = state[player.UserId]
 	if previous and previous.saving then
 		local waitUntil = wallNow() + LOCK_WAIT_SECONDS
@@ -567,6 +569,7 @@ function PlayerData.Load(player)
 			task.wait(0.1)
 		end
 	end
+	owners[player.UserId] = player
 	-- A fresh load starts clean: an earlier attempt for this user id (a failed load, or a lockout that
 	-- asked them to rejoin) must not leave this session marked unsaveable for good.
 	failedLoads[player.UserId] = nil
@@ -762,6 +765,23 @@ local function saveInternal(player, releaseLock)
 end
 
 function PlayerData.Save(player)
+	return saveInternal(player, false)
+end
+
+-- A save whose true means written. PlayerData.Save coalesces into a save already in flight and
+-- answers true at once, which is fine for autosaves but not for a Robux receipt: PurchaseGranted
+-- must only go back once the grant is really in the store. So wait out the running save, then write.
+function PlayerData.SaveAndWait(player)
+	local session = state[player.UserId]
+	if session and session.saving then
+		local deadline = wallNow() + 15
+		while session.saving and wallNow() < deadline do
+			task.wait(0.1)
+		end
+		if session.saving then
+			return false
+		end
+	end
 	return saveInternal(player, false)
 end
 

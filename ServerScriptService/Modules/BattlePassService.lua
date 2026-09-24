@@ -188,7 +188,8 @@ local function applySpinPrize(player, data, segment)
 	elseif segment.kind == "TempPass" then
 		local choices = {}
 		for key in pairs(GamepassConfig.Passes) do
-			if not Monetization.GetPasses(player)[key] and not Monetization.TempRemaining(player, key) then
+			-- Never the Premium pass: a day of it would let CLAIM ALL keep every premium tier for good.
+			if key ~= "BrainrotPassPremium" and not Monetization.GetPasses(player)[key] and not Monetization.TempRemaining(player, key) then
 				table.insert(choices, key)
 			end
 		end
