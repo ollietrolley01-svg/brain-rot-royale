@@ -1195,6 +1195,258 @@ SoundConfig.Sounds = {
 	},
 
 	--------------------------------------------------------------------------------
+	-- Companion abilities (CompanionFxClient; OLIVER_LIST A5 effects pass, 2026-09-24)
+	--
+	-- One cue per move for its strike (and its landing, for the moves that travel), and one per
+	-- ability style, on the beat that style shows: a chill, daze, burn, poison or leech when its hit
+	-- lands (the server only applies a style on a hit that did damage); Quick, Long and Fork on the
+	-- strike; Wide on the landing. CompanionHit above still marks the hit itself. All "world" class
+	-- (SoundConfig.ClassOf) at companion ranges, so a fight's worth of them never carries like a gun.
+	-- Kept to their own section: the death-effect and gun cues are another tab's.
+	--------------------------------------------------------------------------------
+
+	-- The windup: a soft rising charge under the anticipation pose, quiet enough to stack.
+	CompanionFxCharge = {
+		volume = 0.3,
+		pitch = 1,
+		maxDistance = 90,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.8, pitch = 1.7 },
+			{ id = PING, volume = 0.3, pitch = 0.55 },
+		},
+	},
+
+	-- Spit: a wet pop out of the mouth; the splat where it lands.
+	CompanionFxSpit = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 150,
+		category = "Weapons",
+		layers = {
+			{ id = WATER, volume = 0.7, pitch = 2.4 },
+			{ id = SNAP, volume = 0.5, pitch = 1.3 },
+			{ id = JUMP, volume = 0.3, pitch = 1.8 },
+		},
+	},
+
+	CompanionFxSplat = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Weapons",
+		layers = {
+			{ id = WATER, volume = 0.8, pitch = 1.5 },
+			{ id = HIT, volume = 0.5, pitch = 0.9 },
+		},
+	},
+
+	-- Zap: a hard electric crack. Chain: the crack, and a second and third as it jumps.
+	CompanionFxZap = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 170,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.8, pitch = 2 },
+			{ id = PING, volume = 0.6, pitch = 1.6 },
+			{ id = SWITCH3, volume = 0.4, pitch = 0.5 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.5 } } },
+	},
+
+	CompanionFxChain = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 170,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.8, pitch = 2.2 },
+			{ id = SNAP, volume = 0.55, pitch = 1.8, delay = 0.06 },
+			{ id = SNAP, volume = 0.35, pitch = 1.6, delay = 0.12 },
+			{ id = PING, volume = 0.5, pitch = 1.3 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.45 } } },
+	},
+
+	-- Lob: the toss (a throw's whoosh); the splash, wet with a low thump under it.
+	CompanionFxLob = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 150,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.7, pitch = 0.8 },
+			{ id = JUMP, volume = 0.5, pitch = 0.8 },
+		},
+	},
+
+	CompanionFxLobSplash = {
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Weapons",
+		layers = {
+			{ id = WATER, volume = 0.8, pitch = 1.1 },
+			{ id = BOOM2, volume = 0.3, pitch = 2.4 },
+		},
+	},
+
+	-- Bonk: the leap; the slam, a landing thud with a crack of the ground.
+	CompanionFxLeap = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Weapons",
+		layers = {
+			{ id = JUMP, volume = 0.8, pitch = 0.9 },
+			{ id = SLIDER, volume = 0.3, pitch = 1.3 },
+		},
+	},
+
+	CompanionFxSlam = {
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 190,
+		category = "Weapons",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 0.6 },
+			{ id = BOOM3, volume = 0.45, pitch = 1.7 },
+			{ id = COLLIDE, volume = 0.4, pitch = 0.7 },
+		},
+	},
+
+	-- Shockwave: the stomp, a low boom that rolls out with the ring.
+	CompanionFxQuake = {
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 200,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM2, volume = 0.6, pitch = 1.2 },
+			{ id = BASS, volume = 0.7, pitch = 0.6 },
+			{ id = LAND, volume = 0.8, pitch = 0.5 },
+		},
+		effects = { { "EqualizerSoundEffect", { HighGain = -4, MidGain = 0, LowGain = 4 } } },
+	},
+
+	-- A blast brainrot's kick as it lets go (the explosion itself is ProjectileService's cue).
+	CompanionFxBlast = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 160,
+		category = "Weapons",
+		layers = {
+			{ id = BASS, volume = 0.6, pitch = 0.9 },
+			{ id = SNAP, volume = 0.6, pitch = 0.9 },
+		},
+	},
+
+	-- Styles: a chill's icy ring, a daze's cartoon tweet, a burn's crackle, a poison's gloop, a
+	-- leech's slurp and the ding of the heal, a wide wave's rumble, a quick move's flick, a long
+	-- shot's scope glint, a fork's extra crack.
+	CompanionFxChill = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 130,
+		category = "Weapons",
+		layers = {
+			{ id = METAL, volume = 0.5, pitch = 2.2 },
+			{ id = SLIDER, volume = 0.4, pitch = 0.5 },
+		},
+	},
+
+	CompanionFxDaze = {
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 120,
+		category = "Weapons",
+		layers = {
+			{ id = PING, volume = 0.5, pitch = 2 },
+			{ id = PING, volume = 0.35, pitch = 2.5, delay = 0.08 },
+			{ id = BUTTON, volume = 0.3, pitch = 1.4 },
+		},
+	},
+
+	CompanionFxBurn = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 130,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 0.35, pitch = 2 },
+			{ id = SNAP, volume = 0.3, pitch = 2.4, delay = 0.05 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.3 } } },
+	},
+
+	CompanionFxToxic = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 120,
+		category = "Weapons",
+		layers = {
+			{ id = WATER, volume = 0.6, pitch = 0.7 },
+			{ id = UUH, volume = 0.2, pitch = 0.6 },
+		},
+	},
+
+	CompanionFxLeech = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 130,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.5, pitch = 0.6 },
+			{ id = PING, volume = 0.35, pitch = 0.9, delay = 0.3 },
+		},
+	},
+
+	CompanionFxWide = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM2, volume = 0.5, pitch = 0.8 },
+			{ id = BASS, volume = 0.6, pitch = 0.5 },
+		},
+	},
+
+	CompanionFxQuick = {
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 110,
+		category = "Weapons",
+		layers = {
+			{ id = SWITCH, volume = 0.6, pitch = 1.6 },
+			{ id = CLICK, volume = 0.4, pitch = 1.4 },
+		},
+	},
+
+	CompanionFxLong = {
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 150,
+		category = "Weapons",
+		layers = {
+			{ id = PING, volume = 0.5, pitch = 2.2 },
+			{ id = SWITCH3, volume = 0.3, pitch = 1.2 },
+		},
+	},
+
+	CompanionFxFork = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 160,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.6, pitch = 2.6, delay = 0.04 },
+			{ id = PING, volume = 0.4, pitch = 1.9 },
+		},
+	},
+
+	--------------------------------------------------------------------------------
 	-- Death effects, positional at the body (DeathFxService picks one per gun)
 	--------------------------------------------------------------------------------
 

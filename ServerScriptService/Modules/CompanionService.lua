@@ -663,6 +663,10 @@ local function hit(player, token, amount, tag, report)
 		local root = Combatants.GetRoot(token)
 		if root and #report.positions < MAX_HIT_MARKS then
 			table.insert(report.positions, root.Position)
+			-- Who it was, beside where: the client's style cue (a burn, a chill) clings to them for
+			-- the status's length. `false`, never a hole, so the list survives the remote.
+			report.victims = report.victims or {}
+			report.victims[#report.positions] = Combatants.GetCharacter(token) or false
 		end
 		report.killed = report.killed or not Combatants.IsAlive(token)
 	end
@@ -791,12 +795,22 @@ end
 
 local function reportHits(entry, report)
 	if #report.positions > 0 then
+		local owner = owners[entry.model]
+		local stats = entry.stats
 		broadcast(companionHit, {
 			companion = entry.model,
 			positions = report.positions,
 			killed = report.killed == true,
-			color = entry.stats.color,
-			style = entry.stats.style,
+			color = stats.color,
+			style = stats.style,
+			-- For CompanionFxClient: the victims (parallel to `positions`), how long the style's slow
+			-- or DoT really lasts (its cue lasts as long), the rarity that tints it, the owner (their
+			-- own screen pulses) and the owner's root (a Leech's ribbon runs back to it).
+			victims = report.victims,
+			styleTime = stats.slowTime or stats.dotTime,
+			rarity = entry.def.rarity,
+			owner = owner and Combatants.IsPlayer(owner) and owner.UserId or nil,
+			ownerRoot = owner and Combatants.GetRoot(owner) or nil,
 		})
 	end
 end
@@ -850,6 +864,12 @@ local function basePayload(player, entry, to)
 		-- The model to animate, and how long its windup runs before the move connects.
 		companion = entry.model,
 		windup = WINDUP,
+		-- When the damage lands, from the broadcast: the windup, plus the flight for a move that
+		-- travels (set with `travel` below). CompanionFxClient draws the landing on exactly this
+		-- beat, so the picture never runs ahead of or behind the hit.
+		lands = WINDUP,
+		-- Tints the effects (Rarity.Color) and sizes them up a little for rarer brainrots.
+		rarity = entry.def.rarity,
 	}
 end
 
@@ -891,6 +911,7 @@ local function attack(player, entry, token, targetRoot)
 		-- mid-flight still dodges it.
 		local travel = travelTime(kind, from, to)
 		payload.travel = travel
+		payload.lands = WINDUP + travel
 
 		task.delay(WINDUP, function()
 			if not stillOut(player, entry) then
@@ -967,6 +988,7 @@ local function attackPoint(player, entry, to)
 	else
 		-- Spit, Bonk and Lob: a splash where they land, sized for the move.
 		local radius = (kind == "Spit" and SPIT_POINT_RADIUS) or math.max(stats.splash, 1)
+		payload.lands = WINDUP + payload.travel
 		task.delay(WINDUP + payload.travel, function()
 			if CombatService.IsEnabled() and stillOut(player, entry) then
 				splash(player, to, radius, stats.damage, nil, tag, report, from)
@@ -1042,7 +1064,10 @@ local function practice(player, entry, aimPoint)
 		payload.to3 = forks[2] and forks[2].Position or nil
 	end
 
-	local lands = WINDUP + ((kind == "Zap" or kind == "Chain") and 0 or payload.travel)
+	-- A Shockwave stomps on the windup here as it does in a match (it used to wait out a "flight"
+	-- it doesn't have, so the lobby dummies dropped a beat after the stomp).
+	local lands = WINDUP + ((kind == "Zap" or kind == "Chain" or kind == "Shockwave") and 0 or payload.travel)
+	payload.lands = lands
 	task.delay(lands, function()
 		if not stillOut(player, entry) then
 			return
@@ -1145,7 +1170,14 @@ function CompanionService.UseAbility(owner, aimPoint)
 		-- A blast brainrot explodes at the point instead of landing its single hit, so the two never
 		-- both pay: the blast IS the ability, not a bonus on top of it.
 		if blastFor(owner, entry, to) then
-			-- handled
+			-- The explosion is ProjectileService's; this tells clients the creature used its move,
+			-- so it recoils (CompanionFxClient) and its owner's HUD starts the cooldown, as every
+			-- other move's broadcast does. Sent after the blast, so a send that throws costs nothing.
+			local payload = basePayload(owner, entry, to)
+			payload.blast = true
+			payload.windup = 0
+			payload.lands = 0
+			broadcast(companionAttack, payload)
 		elseif token then
 			attack(owner, entry, token, targetRoot)
 		else
