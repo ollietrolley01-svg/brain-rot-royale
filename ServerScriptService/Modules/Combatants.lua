@@ -40,9 +40,13 @@ function Combatants.IsBot(token)
 	return type(token) == "table" and token.isBot == true
 end
 
+-- The name a player sees for a combatant: a player's DisplayName (#86 C7: the kill feed, the bounty line
+-- and the results named people by USERNAME, which most accounts show nobody). HudClient compares these
+-- with player.DisplayName in step (its kill-feed highlight and the "bounty on YOU" toast), so the two
+-- change together. Nothing looks a player up by this string: it is only ever shown.
 function Combatants.GetName(token)
 	if Combatants.IsPlayer(token) then
-		return token.Name
+		return token.DisplayName
 	end
 	if type(token) == "table" then
 		return token.name or "Bot"

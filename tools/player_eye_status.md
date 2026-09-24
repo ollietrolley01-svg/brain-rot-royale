@@ -9,7 +9,7 @@ Sites in files other workers own right now (HudClient, PhoneLayout, MatchConfig,
 
 Logic check: `python tools/player_eye_check.py .` (5 checks on the real modules) and `--plant` (5 planted faults, all caught).
 
-Totals: fixed-now 35 · already-fixed 22 · still-open 18 · needs-Studio 7 = 82 (a row with two halves counts under its first status).
+Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82 (a row with two halves counts under its first status).
 
 ## Blocks play (2)
 
@@ -24,11 +24,11 @@ Totals: fixed-now 35 · already-fixed 22 · still-open 18 · needs-Studio 7 = 82
 |---|---|---|---|
 | C1 | HudClient:83 onboarding sub-line overflows banner | already-fixed | `HudClient.client.lua:90` TextScaled + UITextSizeConstraint(Max 14). |
 | C2 | HudClient:1304 hotbar cell text 6-8 px on phones | needs-Studio | Font sizes under the phone UIScale need a render. Proposal `HudClient.client.lua:1315`: `TextSize = 10,` → `TextScaled = true,` plus child `UITextSizeConstraint { MinTextSize = 12, MaxTextSize = 14 }`; hide `refs.key` when `phone` in setHotbarShape (`:2993`). |
-| C3 | HudClient:2671 toast overflows / 2.6 s | still-open | `HudClient.client.lua:2816` toast label: add `TextWrapped = true, AutomaticSize = Enum.AutomaticSize.Y,` after `TextSize = 15,`. `:2841` `task.delay(2.6, function()` → `task.delay(math.max(2.6, 1.5 + 0.05 * #message), function()`. (This branch's chest/supply toasts are as long as the existing chest toast; this edit covers all of them.) |
+| C3 | HudClient:2671 toast overflows / 2.6 s | fixed-now | `HudClient.client.lua:2896` TextWrapped + AutomaticSize Y; `:2921` shown for `math.max(2.6, 1.5 + 0.05 * #message)` s. (HUD follow-up commit.) |
 | C4 | ModeScoreHud:178 which score is mine | already-fixed | `ModeScoreHud.client.lua:249` "YOUR TEAM · EMBER" / "ENEMY · TEAL" tags, friend/enemy colours. |
 | C5 | PhoneLayout:241 storm line 8 px on phones | needs-Studio | `PhoneLayout.lua:240-241` (owned elsewhere). Proposal: HudClient phone PIECES entry for the storm line with a shorter string ("Zone 2/5 · 45s · 8/s") at natural width 250; needs a phone render. |
-| C6 | CombatService:25 storm finish credited to last shooter | fixed-now | `StormService.lua:25` OnDamage hook (stormHit replaces both TakeDamage sites); `Bootstrap.server.lua:77` wires it to `CombatService.RecordEnvironmentDamage` `CombatService.lua:858`; a storm finish drops the "ELIMINATED BY" headline `:904` and sends `finishedBy`. Self-kill half was already fixed (`killerToken ~= victimToken`). Kill credit unchanged. **HudClient (owned elsewhere)** `:3559` `recapTitle.Text = (info.taken or 0) > 0 and "ELIMINATED" or "THE STORM GOT YOU"` → `recapTitle.Text = (info.finishedBy == "Storm" or (info.taken or 0) == 0) and "THE STORM GOT YOU" or "ELIMINATED"`. |
-| C7 | Combatants:44 usernames, not display names | still-open | Must change in lockstep: `Combatants.lua:45` `return token.Name` → `return token.DisplayName`; `HudClient.client.lua:2799` `entry.killer == player.Name` → `entry.killer == player.DisplayName`; `:2877` `if info.name ~= player.Name then` → `if info.name ~= player.DisplayName then`. Not done: two of the three edits are in HudClient and a half-done change would break the bounty warning again. |
+| C6 | CombatService:25 storm finish credited to last shooter | fixed-now | `StormService.lua:25` OnDamage hook (stormHit replaces both TakeDamage sites); `Bootstrap.server.lua:77` wires it to `CombatService.RecordEnvironmentDamage` `CombatService.lua:858`; a storm finish drops the "ELIMINATED BY" headline `:904` and sends `finishedBy`. Self-kill half was already fixed (`killerToken ~= victimToken`). Kill credit unchanged. **HudClient** `:3644` now titles a storm finish "THE STORM GOT YOU" (`info.finishedBy == "Storm"`), fixed in the HUD follow-up. |
+| C7 | Combatants:44 usernames, not display names | fixed-now | In lockstep: `Combatants.lua:49` returns `token.DisplayName`; `HudClient.client.lua:2846` kill-feed highlight and `:2956` bounty "YOU" toast compare `player.DisplayName`. Nothing looks a player up by that string (companion model name `CompanionService.lua:271` is cosmetic). A namesake would also get the "YOU" toast (noted at `:2951`). |
 | C8 | LootService:88 floor-gun prompt shares X with Reload | fixed-now | `LootService.lua:100` ButtonB (also chests); `SupplyDropService.lua:210`, `VendorService.lua:162`; lantern off ButtonY `LobbyService.lua:3316`. VehicleService prompts not touched (owned elsewhere): same one line `prompt.GamepadKeyCode = Enum.KeyCode.ButtonB` wherever it builds a ProximityPrompt. |
 | C9 | CombatClient:486 phone spectator has no NEXT | fixed-now | NEXT / LEAVE TextButtons on touch `CombatClient.client.lua:548`; line says "tap NEXT or LEAVE" `:450`. |
 | C10 | HudClient:1505 "0 / 0" in white | already-fixed | `HudClient.client.lua:1519` "NO AMMO" in red; empty mag names the reload key. |
@@ -43,7 +43,7 @@ Totals: fixed-now 35 · already-fixed 22 · still-open 18 · needs-Studio 7 = 82
 | C19 | ProjectileClient:679 phone cannot cook | needs-Studio | `ProjectileClient.client.lua:657` startCook exists; routing BRR_Fire's Begin/End on touch into startCook/throw is an input-flow change that needs a device. |
 | C20 | MatchService:1571 drop toast says hold W | fixed-now | `MatchService.lua:1734` "Dropping in over your spot — hold nothing to land there, or steer with WASD" when a spot was picked. |
 | C21 | EventBanner:367 event card hidden under the vote reveal | fixed-now | `EventBanner.lua:46` HoldFor, `:847` Announce defers inside the hold; `VoteDropClient.client.lua:206` holds for REVEAL_SECONDS. Untested on screen (render). |
-| C22 | HudClient:1823 "Zone" jargon, "Storm moves in 0s" when Final | still-open | `HudClient.client.lua:1872-1874` → `if storm.status == "Final" then stormLabel.Text = string.format("Final circle   •   outside: %d dmg/s", storm.damagePerSecond) return end` before the verb line, and `"%s  %ds   •   Zone %d/%d   •   %d dmg/s"` → `"%s  %ds   •   Circle %d of %d   •   outside: %d dmg/s"`. |
+| C22 | HudClient:1823 "Zone" jargon, "Storm moves in 0s" when Final | fixed-now | `HudClient.client.lua:1910` "Final circle • outside: N dmg/s"; otherwise "Circle %d of %d • outside: %d dmg/s". |
 | C23 | HudClient:1824 static arena shows BR storm line | already-fixed | `HudClient.client.lua:1867` `if storm.label then stormLabel.Text = "" return end`. |
 | C24 | CrateData:272 "Unco / Lege", "+ 6% accessory" | fixed-now (names) · already-fixed (suffix) | Full names `CrateData.lua:274`; suffix "up to N% an accessory instead" `:281`. Check "odds" (152 parts; plant = sub(1,4), caught). |
 | C25 | GamepassConfig:127 Pro Bundle worth overstated | already-fixed | `GamepassConfig.lua:133` "Worth 3,200+ R$ • 4x value", counted at shop prices. |
@@ -66,7 +66,7 @@ Totals: fixed-now 35 · already-fixed 22 · still-open 18 · needs-Studio 7 = 82
 | C42 | LobbyService:2204 "chest loot only" points at chests | fixed-now (partly) | `LobbyService.lua:2214` no longer says chests; it says take-and-try (C41's ask) rather than "supply drops": one 0.9-stud line cannot carry both. |
 | C43 | LootService:273 ammo restock invisible | fixed-now | Floor gun `LootService.lua:312`, chest `:531` "+ammo for your guns". Duplicate-gun "Take Ammo" prompt not done (changes pickup rules). |
 | C44 | VendorService:104 refill charged for nothing | already-fixed · fixed-now (wording) | Charge only after GiveAmmo succeeds (`VendorService.lua:113`); GiveAmmo is false when nothing was added (`WeaponService.lua:1753`). Now says "already full" `:107`; prompt "(+60% every gun)" `:160`. |
-| C45 | HudClient:1508 ability shown as raw id | still-open | `HudClient.client.lua:1529` `(slot.ability and ("  •  " .. slot.ability) or "")` → `(slot.ability and ("  •  " .. (ABILITY_WORDS[slot.ability] or slot.ability)) or "")` with `local ABILITY_WORDS = { pierce = "PIERCE: through the first body", chain = "CHAIN: arcs to a second enemy", lifesteal = "LIFESTEAL: heals on hit", explosive = "EXPLOSIVE: splash", goldRush = "GOLD RUSH: kills pay coins" }`. |
+| C45 | HudClient:1508 ability shown as raw id | fixed-now | `HudClient.client.lua:1564` words for all five ids in the arsenal (pierce, chain, lifesteal, explosive, goldRush); unknown ids fall back to the id. |
 | C46 | InventoryPanel:605 no gun stats | needs-Studio | `InventoryPanel.lua:605` sub line is one 16 px row already full ("LEGENDARY • 240 reserve"); a stats strip needs a card re-layout and a render. |
 
 ## Minor (34)
@@ -74,17 +74,17 @@ Totals: fixed-now 35 · already-fixed 22 · still-open 18 · needs-Studio 7 = 82
 | # | Site | Status | Evidence / proposed edit |
 |---|---|---|---|
 | M1 | ControlsHint:98 12 px grey legend | already-fixed | ControlsHint.client.lua removed (#90, commit 4918382). |
-| M2 | HudClient:207 "[F] join next match" on phones | still-open | `HudClient.client.lua:208-210`: `readySub.Text = string.format("%d of %d ready  •  [%s] %s", …)` → when last input is Touch/Gamepad: `string.format("%d of %d ready  •  %s", …, ready and "tap to stay in lobby" or "tap to join next match")`. |
-| M3 | HudClient:885 tips hard-code F, M, T, 1-8, Q | still-open | `HudClient.client.lua:891` "press F to ready up" → "press {Ready} to ready up"; `:897` "Press T to switch" → "Press {ToggleCamera} to switch"; `:893` "keys 1 to 8 (Q cycles)" → "keys {Slot1} to {Slot8} ({NextSlot} cycles)". The existing filler at `:3718-3723` then does the rest. |
+| M2 | HudClient:207 "[F] join next match" on phones | fixed-now | `HudClient.client.lua:229` touch or pad: "tap to join next match" / "tap to stay in lobby", no key. |
+| M3 | HudClient:885 tips hard-code F, M, T, 1-8, Q | fixed-now | `HudClient.client.lua:916-922` {Ready}, {Slot1}/{Slot8}/{NextSlot}, {ToggleCamera}, filled from this player's bindings by the existing filler. |
 | M4 | HudClient:1372 rarity colour-only | already-fixed (floor) · still-open (hotbar) | Floor label/prompt carry the word `LootService.lua:284`. Hotbar `HudClient.client.lua:1383` colour only; proposal: a one-letter tier tag in the cell corner. |
 | M5 | HudClient:1493 "click to use" on a pad | still-open | `HudClient.client.lua:1503` `slot.name .. "  •  click to use"` → `slot.name .. (lastInputIsGamepad and "  •  RT to use" or "  •  click to use")`. |
 | M6 | HudClient:2224 minimap names 9 px, towns vs landmarks by colour | needs-Studio | `HudClient.client.lua:2273`, `:2438` TextSize 9; diamond markers need a render. |
 | M7 | MenuClient:646 filter chips 28 px | needs-Studio | `MenuClient.client.lua:658`; growing to 44 px wraps the row, needs a render. |
-| M8 | HudClient:2653 kill feed row runs off screen | still-open | `HudClient.client.lua:2798` row: add `TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Right,` and put the placement first: `Text = "  " .. (entry.placement and ("#" .. entry.placement .. "  ") or "") .. text .. "  "`. |
+| M8 | HudClient:2653 kill feed row runs off screen | fixed-now | `HudClient.client.lua:2843` TextTruncate AtEnd, right-aligned, placement first. |
 | M9 | LobbyService:554 welcome arch faces the plaza | fixed-now | `LobbyService.lua:559` greeting on Back (+Z), the face seen from the spawn at z 110 (`SpawnOffset :101`). |
 | M10 | LobbyService:2135 [G] with no companion does nothing | fixed-now | `Bootstrap.server.lua:664` throttled "No companion yet" toast when UseAbility fails and no companion is equipped. |
 | M11 | LobbyService:3168 sprint key never named | fixed-now | `LobbyService.lua:3265` KeyHint "Hold [{Sprint}] for the long leaps"; the ControlsHint half is moot (removed). |
-| M12 | HudClient:890 "Stay inside the storm" | still-open | `HudClient.client.lua:896` → `"Stay inside the zone — the purple storm wall hurts. Last one standing wins a Legendary Crate"`. |
+| M12 | HudClient:890 "Stay inside the storm" | fixed-now | `HudClient.client.lua:921` "Stay inside the zone — the purple storm wall hurts. …". |
 | M13 | ItemData:149 three-structure cap unstated | still-open | Text exists as `capRule` `ItemData.lua:253`, but nothing reads it. Proposal: MenuClient/HUD caption appends `item.capRule` wherever the description is shown (none yet, see C14). |
 | M14 | ProjectileService:587 driver's throw refused silently | still-open | Client sinks the click; `HudClient.client.lua:1503` → when `Humanoid.SeatPart` is a VehicleSeat: `slot.name .. "  •  hands on the wheel"`. |
 | M15 | SupplyDropService:251 supplies never announced | fixed-now | Spilled on the ground since #85; toast names every piece `SupplyDropService.lua:268`. |
@@ -113,5 +113,5 @@ Totals: fixed-now 35 · already-fixed 22 · still-open 18 · needs-Studio 7 = 82
 - A pad: die in a match, press RB (next) and B (leave); open the menu with Back, quests with D-pad left; stand by a floor gun and press X (reload only) then B (pick up).
 - A phone: spectate, tap NEXT / LEAVE (buttons sit 80 px above the label).
 - Start a match from the lobby: the MATCH EVENT card should appear after the NEXT MATCH reveal, not under it.
-- Get shot, then die in the storm: recap sources list "Storm"; the headline no longer names the shooter (title reads "ELIMINATED" until C6's HudClient line lands).
+- Get shot, then die in the storm: recap sources list "Storm"; the headline no longer names the shooter and the title reads "THE STORM GOT YOU".
 - Team match: shoot a team-mate (grey + tick), watch the TDM clock under FIRST TO 100.

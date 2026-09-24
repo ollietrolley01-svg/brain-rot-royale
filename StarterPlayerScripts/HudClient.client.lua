@@ -220,9 +220,18 @@ local function updateReadyButton()
 	tickShort.Visible = ready
 	tickLong.Visible = ready
 	readyArrow.Visible = not ready
-	readySub.Text = string.format("%d of %d ready  •  [%s] %s",
-		matchState.readyCount or 0, matchState.playerCount or 0, Settings.KeyLabel("Ready"),
-		ready and "stay in lobby" or "join next match")
+	-- A key only means something on a keyboard (#86 M2): on a touch screen or a pad the pill itself is
+	-- what you press.
+	local lastInput = UserInputService:GetLastInputType()
+	if lastInput == Enum.UserInputType.Touch or string.find(lastInput.Name, "Gamepad", 1, true) then
+		readySub.Text = string.format("%d of %d ready  •  %s",
+			matchState.readyCount or 0, matchState.playerCount or 0,
+			ready and "tap to stay in lobby" or "tap to join next match")
+	else
+		readySub.Text = string.format("%d of %d ready  •  [%s] %s",
+			matchState.readyCount or 0, matchState.playerCount or 0, Settings.KeyLabel("Ready"),
+			ready and "stay in lobby" or "join next match")
+	end
 end
 
 local readyHovered = false
@@ -903,13 +912,14 @@ local companionMoveText = ""
 local profileMatches = nil
 local tipIndex = 0
 local NEW_PLAYER_TIPS = {
-	"Step on the green pad or press F to ready up for the next match",
+	-- Keys as {ActionId}, filled in with this player's own binding when shown (#86 M3).
+	"Step on the green pad or press {Ready} to ready up for the next match",
 	"The buttons on the left: shop, brainrots, progress, Robux and settings",
-	"Loot guns, heals, shields and items — eight slots, keys 1 to 8 (Q cycles)",
+	"Loot guns, heals, shields and items — eight slots, keys {Slot1} to {Slot8} ({NextSlot} cycles)",
 	"Equip a brainrot as your companion and press {Companion} to use its move in a fight",
 	"Try the Cloud Climb up the tree, kick a ball into the goal, spin the daily wheel",
-	"Stay inside the storm. Last one standing wins a Legendary Crate",
-	"Press T to switch to a third-person camera; every key is rebindable in Settings",
+	"Stay inside the zone — the purple storm wall hurts. Last one standing wins a Legendary Crate",
+	"Press {ToggleCamera} to switch to a third-person camera; every key is rebindable in Settings",
 }
 -- When the companion's move is ready again, from the cooldown in its last attack broadcast.
 local abilityReadyAt = 0
@@ -1543,7 +1553,15 @@ local function renderWeapon()
 			ammoText.Text = string.format("%d / %d", slot.mag, slot.reserve)
 			ammoText.TextColor3 = C.Text
 		end
-		weaponName.Text = slot.name .. (slot.ability and ("  •  " .. slot.ability) or "")
+		-- What the gun's perk does, not its internal id (#86 C45).
+		local abilityWords = {
+			pierce = "PIERCE: through the first body",
+			chain = "CHAIN: arcs to a second enemy",
+			lifesteal = "LIFESTEAL: heals on hit",
+			explosive = "EXPLOSIVE: splash",
+			goldRush = "GOLD RUSH: kills pay coins",
+		}
+		weaponName.Text = slot.name .. (slot.ability and ("  •  " .. (abilityWords[slot.ability] or slot.ability)) or "")
 		weaponName.TextColor3 = Rarity.Color(slot.rarity)
 		showCrosshair(true)
 	else
@@ -1886,8 +1904,14 @@ stormChanged.OnClientEvent:Connect(function(storm)
 		return
 	end
 
+	-- The last circle does not move again, so "Storm moves in 0s" was a countdown to nothing (#86 C22);
+	-- and "Zone 2/5" read as jargon: it is which circle of how many.
+	if storm.status == "Final" then
+		stormLabel.Text = string.format("Final circle   •   outside: %d dmg/s", storm.damagePerSecond)
+		return
+	end
 	local verb = storm.status == "Shrinking" and "Storm closing" or "Storm moves in"
-	stormLabel.Text = string.format("%s  %ds   •   Zone %d/%d   •   %d dmg/s",
+	stormLabel.Text = string.format("%s  %ds   •   Circle %d of %d   •   outside: %d dmg/s",
 		verb, storm.secondsLeft, storm.phase, storm.totalPhases, storm.damagePerSecond)
 end)
 
@@ -2813,9 +2837,13 @@ killFeed.OnClientEvent:Connect(function(entry)
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
 		-- Placement is a battle-royale thing; a respawning mode's feed has none, and a nil here
-		-- would throw before the row exists.
-		Text = "  " .. text .. (entry.placement and ("  #" .. entry.placement) or "") .. "  ",
-		TextColor3 = entry.killer == player.Name and C.Accent or C.Text,
+		-- would throw before the row exists. It goes first, and a long row is cut with "…" rather
+		-- than running off the screen's edge (#86 M8).
+		Text = "  " .. (entry.placement and ("#" .. entry.placement .. "  ") or "") .. text .. "  ",
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		-- DisplayName: the server names players by it (Combatants.GetName, #86 C7).
+		TextColor3 = entry.killer == player.DisplayName and C.Accent or C.Text,
 		TextSize = 13,
 		LayoutOrder = feedOrder,
 		Parent = feed,
@@ -2864,6 +2892,9 @@ local toast = create("TextLabel", {
 	TextColor3 = C.Text,
 	TextTransparency = 1,
 	TextSize = 15,
+	-- A long message wraps onto a second line inside the box rather than running out of it (#86 C3).
+	TextWrapped = true,
+	AutomaticSize = Enum.AutomaticSize.Y,
 	Parent = screenGui,
 }, { rounded(8) })
 
@@ -2886,7 +2917,8 @@ local function showToast(message, isError)
 	end
 	TweenService:Create(toast, TweenInfo.new(0.15), { BackgroundTransparency = 0.15, TextTransparency = 0 }):Play()
 
-	task.delay(2.6, function()
+	-- Long enough to read: 2.6 s for a short line, more for a long one (#86 C3).
+	task.delay(math.max(2.6, 1.5 + 0.05 * #tostring(message)), function()
 		if token ~= toastToken then
 			return
 		end
@@ -2917,13 +2949,11 @@ Remotes.Event("Bounty").OnClientEvent:Connect(function(info)
 	end
 	bountyLabel.Text = string.format("BOUNTY  •  %s  (%d kills)  •  %d C", info.name or "?", info.kills or 0, info.reward or 0)
 	hudLayout.show(bountyLabel, matchState.state == "InProgress")
-	-- player.Name, not DisplayName: the server sends Combatants.GetName, which is the USERNAME
-	-- (Combatants.lua:44-45), and most accounts have a DisplayName that differs from it. So this
-	-- compared two different things, and the one toast written for a single person -- "there's a
-	-- bounty on YOU" -- went to everybody EXCEPT its subject, who got the third-person version about
-	-- their own username instead. The kill-feed self-highlight above already compares player.Name.
-	-- A username is unique across Roblox, so it identifies exactly one account.
-	if info.name ~= player.Name then
+	-- DisplayName, because that is what the server sends (Combatants.GetName, changed with this in #86
+	-- C7). Comparing two different kinds of name is how the "bounty on YOU" toast once went to everyone
+	-- except its subject. A DisplayName is not unique: someone sharing yours would get the "YOU" toast
+	-- too, which is the price of showing people the names they chose.
+	if info.name ~= player.DisplayName then
 		showToast(string.format("BOUNTY: %d SahurCoins on %s (%d kills)", info.reward or 0, info.name or "?", info.kills or 0))
 	else
 		showToast(string.format("There's a %d coin bounty on YOU — everyone knows.", info.reward or 0), true)
@@ -3610,7 +3640,8 @@ deathRecap.OnClientEvent:Connect(function(info)
 				info.killerShield and string.format(" + %d shield", info.killerShield) or ""))
 		end
 	else
-		recapTitle.Text = (info.taken or 0) > 0 and "ELIMINATED" or "THE STORM GOT YOU"
+		-- The storm's finishing blow is named as the storm's even after a shooter had hit you (#86 C6).
+		recapTitle.Text = (info.finishedBy == "Storm" or (info.taken or 0) == 0) and "THE STORM GOT YOU" or "ELIMINATED"
 	end
 	if (info.taken or 0) > 0 then
 		local sources = {}
