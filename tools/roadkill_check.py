@@ -96,6 +96,8 @@ MatchConfig = { CombatDamageScale = 1 }
 WeaponService = { AbsorbDamage = function(_, amount) return amount, 0 end }
 QuestService = { Progress = function() end }
 CombatService = { DamageListeners = {} }
+-- The module's own game clock (the death recap's stamps), on the harness's time.
+CombatService.Clock = function() return now end
 CombatService.DamageVeto = function(...) return ModeTeams.DamageVeto(...) end
 local lastAttacker, recent, stats = {}, {}, {}
 local function statsFor(t) stats[t] = stats[t] or { hits = 0, headshots = 0, damageTaken = 0 } return stats[t] end
