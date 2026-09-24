@@ -84,7 +84,15 @@ function LagCompensation.Record(now)
 				history[character] = entry
 			end
 			entry.head = entry.head % LagCompensation.Samples + 1
-			entry.samples[entry.head] = { cframe = root.CFrame, t = now }
+			-- Once the ring is full its entries are written over, not replaced: a fresh table per body
+			-- per Heartbeat was ~3,000 short-lived tables a second with 50 combatants (findings I10).
+			-- Nothing holds a sample past the call that reads it, so reuse is invisible to RootAt.
+			local sample = entry.samples[entry.head]
+			if sample then
+				sample.cframe, sample.t = root.CFrame, now
+			else
+				entry.samples[entry.head] = { cframe = root.CFrame, t = now }
+			end
 		end
 	end
 end
