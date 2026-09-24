@@ -149,13 +149,24 @@ local function clock(seconds)
 end
 
 -- A phone gets the same readout a little smaller, and never wider than the screen it is on. The
--- rest of the phone HUD is PhoneLayout's map; this is one element placing itself inside the same
--- top band.
+-- rest of the phone HUD is PhoneLayout's map; this is one element placing itself inside it.
+--
+-- WHICH HUD is PhoneLayout.Mode's call, not UiKit.form's (#80). The two disagree on purpose (see the
+-- long note in PhoneLayout.lua): a tablet held upright is "large" to UiKit.form and "upright" to the
+-- HUD, so this drew at its DESKTOP spot over the upright HUD; and a small desktop window is "short" to
+-- UiKit.form but keeps the desktop HUD, so this went into a phone slot the desktop HUD doesn't use.
 local function fit()
 	local camera = workspace.CurrentCamera
 	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-	local form = UiKit.form(viewport)
-	if form == "large" then
+	local layout = script.Parent:FindFirstChild("PhoneLayout")
+	local ok, PhoneLayout = pcall(require, layout)
+	local spots = ok and type(PhoneLayout) == "table" and PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport) or nil
+	-- The banner's slot, as on a desktop screen: this is up exactly while HudClient hides the
+	-- players-alive banner (in a team match), so the slot is empty. The storm line's band, which this
+	-- used before, is 18 px tall; the scoreline at 0.8 is 35, and hung over the coin chip and the event
+	-- pill below it.
+	local band = spots and spots.banner
+	if not band then
 		-- Measured against every other HUD cluster at 1920x1080, 1366x768, 1280x720 and 1024x768:
 		-- zero overlaps in the storm readout's slot, which no team mode uses.
 		scale.Scale = 1
@@ -164,20 +175,10 @@ local function fit()
 		-- there and clears the compass below it (it used to overlap the compass at y 100).
 		root.Position = UDim2.new(0.5, 0, 0, 10)
 	else
-		-- On a touch screen the desktop literals are NOT what is drawn — PhoneLayout replaces the
-		-- whole HUD with its own map — so measuring this against them was measuring the wrong thing
-		-- (it reported clashes with a compass that isn't where the model thought). It asks that map
-		-- instead, and takes the storm line's band: the same reasoning as the desktop slot, since a
-		-- team mode has no storm and that band is empty for the whole match.
-		local layout = script.Parent:FindFirstChild("PhoneLayout")
-		local band = layout and require(layout).Rects(viewport).stormLine
-		scale.Scale = 0.8
+		-- Scaled to fit the slot both ways, centred in it.
+		scale.Scale = math.min(band.w / WIDTH, band.h / HEIGHT, 1)
 		root.AnchorPoint = Vector2.new(0.5, 0)
-		if band then
-			root.Position = UDim2.new(0, band.x + band.w / 2, 0, band.y)
-		else
-			root.Position = UDim2.new(0.5, 0, 0, 72)
-		end
+		root.Position = UDim2.new(0, band.x + band.w / 2, 0, band.y)
 	end
 end
 

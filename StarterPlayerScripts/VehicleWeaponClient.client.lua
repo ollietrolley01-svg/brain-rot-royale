@@ -55,6 +55,8 @@ panel.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 panel.BackgroundTransparency = 0.25
 panel.Parent = gui
 Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
 
 local nameLabel = Instance.new("TextLabel")
 nameLabel.BackgroundTransparency = 1
@@ -232,10 +234,47 @@ end)
 -- Loop
 --------------------------------------------------------------------------------
 
+-- Beside the vehicle panel wherever it actually is, not where the desktop literals above assume it is
+-- (#80). VehicleClient draws its panel as the one Frame in its ScreenGui; reading its drawn box means this
+-- follows it if it is ever moved or scaled for a phone, where the literals put this panel 88 px off the
+-- right edge of an upright screen. Right of it at its scale, bottoms level; on its left instead if the
+-- right side would leave the screen; above it, centred, when neither side has room (an upright phone).
+-- Only written when it changes.
+local function followVehiclePanel()
+	local vehicleHud = player.PlayerGui:FindFirstChild("VehicleHud")
+	local other = vehicleHud and vehicleHud:FindFirstChildOfClass("Frame")
+	if not other or other.AbsoluteSize.X <= 0 then
+		return
+	end
+	local k = other.AbsoluteSize.X / 250
+	local origin = gui.AbsolutePosition
+	local x, bottom = other.AbsolutePosition.X - origin.X, other.AbsolutePosition.Y - origin.Y + other.AbsoluteSize.Y
+	local right = x + other.AbsoluteSize.X + 8 * k
+	local anchor, position
+	if right + 150 * k <= camera.ViewportSize.X - 8 then
+		anchor, position = Vector2.new(0, 1), UDim2.fromOffset(right, bottom)
+	elseif x - 8 * k - 150 * k >= 8 then
+		anchor, position = Vector2.new(1, 1), UDim2.fromOffset(x - 8 * k, bottom)
+	else
+		anchor = Vector2.new(0.5, 1)
+		position = UDim2.fromOffset(x + other.AbsoluteSize.X / 2, bottom - other.AbsoluteSize.Y - 8 * k)
+	end
+	if panelScale.Scale ~= k then
+		panelScale.Scale = k
+	end
+	if panel.AnchorPoint ~= anchor or panel.Position ~= position then
+		panel.AnchorPoint = anchor
+		panel.Position = position
+	end
+end
+
 RunService.RenderStepped:Connect(function(dt)
 	local mine, spec = drivenVehicle()
 	setBound(mine ~= nil)
 	gui.Enabled = mine ~= nil
+	if mine then
+		followVehiclePanel()
+	end
 
 	local now = workspace:GetServerTimeNow()
 	if mine then

@@ -56,6 +56,11 @@ local HEALTH_RIGHT = ROW.HealthRight
 local HOTBAR_INSET = ROW.HotbarInset
 local LEFT_STACK_TOP = ROW.LeftStackTop
 local GAP = ROW.Gap
+-- The companion ability tile stands just left of the hotbar (CompanionAbilityIcon.Position: HotbarInset +
+-- Gap in from the right edge, CompanionAbilityIcon.Size = 72 wide), so the row's right-hand obstacle is
+-- the tile, not the hotbar: measured, the bar ran 14 px into it at 1920x1080 (#80). A literal rather than
+-- a require, because that module pulls in the brainrot models.
+local ABILITY_TILE = 72
 
 -- AnchorPoint, Position and UIScale for the bar on a viewport. Bottom-centre when it fits between the
 -- health panel and the hotbar (slid left of centre if it has to be, never touching either); on screens
@@ -67,7 +72,7 @@ function StaminaBar.Layout(viewport)
 	while scale >= 0.72 do
 		local width = (WIDTH + 8) * scale
 		local minCentre = HEALTH_RIGHT + GAP + width / 2
-		local maxCentre = viewport.X - HOTBAR_INSET - GAP - width / 2
+		local maxCentre = viewport.X - HOTBAR_INSET - GAP - ABILITY_TILE - GAP - width / 2
 		if maxCentre >= minCentre then
 			return Vector2.new(0.5, 1), UDim2.new(0, math.floor(math.clamp(viewport.X / 2, minCentre, maxCentre)), 1, -30), scale
 		end
@@ -76,7 +81,30 @@ function StaminaBar.Layout(viewport)
 	return Vector2.new(0, 1), UDim2.new(0, 16, 1, -(LEFT_STACK_TOP + 10)), preferred
 end
 
+-- On a touch screen PhoneLayout owns the HUD, and it has a slot for this bar: `Rects().stamina`, just
+-- above the health readout. The rule above is the DESKTOP one, and on a phone it put the bar at 331 px
+-- wide over the minimap and the buffs panel (844x390) and across the thumbstick's corner upright (#80,
+-- measured by tools/hud_layout_check.py). Nil on a desktop screen, or if PhoneLayout is missing.
+local function phoneSpots(viewport)
+	local module = script.Parent:FindFirstChild("PhoneLayout")
+	local ok, PhoneLayout = pcall(require, module)
+	if ok and type(PhoneLayout) == "table" and PhoneLayout.Active(viewport) then
+		return PhoneLayout.Rects(viewport)
+	end
+	return nil
+end
+
 function StaminaBar:Place(viewport)
+	local spots = phoneSpots(viewport)
+	if spots and spots.stamina then
+		-- The slot's width, the whole bar scaled to it, standing on the slot's bottom edge: the slot is
+		-- the track's height, and the title and the number above the track rise into the gap over it.
+		local spot = spots.stamina
+		self.Frame.AnchorPoint = Vector2.new(0, 1)
+		self.Frame.Position = UDim2.fromOffset(spot.x, spot.y1)
+		self.scale.Scale = spot.w / (WIDTH + 8)
+		return
+	end
 	local anchor, position, scale = StaminaBar.Layout(viewport)
 	self.Frame.AnchorPoint = anchor
 	self.Frame.Position = position

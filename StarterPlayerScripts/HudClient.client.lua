@@ -44,6 +44,21 @@ local create, rounded, padding = UiKit.create, UiKit.rounded, UiKit.padding
 local formatNumber = UiKit.formatNumber
 local C = UiKit.Colors
 
+-- #80: which pieces the phone layout has no room for right now. An upright phone has no compass, kill
+-- feed, bounty or location line or speed pill (PhoneLayout.lua's portraitRects), and the layout hid them
+-- once -- but the compass's own per-frame code, the bounty handler and the speed pill's refresh each
+-- wrote `Visible = true` again the next time they ran, and the pieces came back at their DESKTOP spots
+-- over the portrait HUD. So every piece the layout places says whether it wants to be shown through
+-- `hudLayout.show`, which records the wish and draws the piece only if the layout has a place for it;
+-- when the phone turns and the layout finds room again, it shows whatever was last wished for.
+-- (tools/hud_layout_check.py runs this file and fails on any direct `.Visible =` on one of those pieces.)
+-- One table, not three locals: the main chunk is close to Luau's 200-local limit.
+local hudLayout = { dropped = {}, wanted = {} }
+function hudLayout.show(gui, want)
+	hudLayout.wanted[gui] = want == true
+	gui.Visible = want == true and not hudLayout.dropped[gui]
+end
+
 local screenGui = create("ScreenGui", {
 	Name = "BrrHud",
 	ResetOnSpawn = false,
@@ -995,7 +1010,7 @@ local speedPill = create("TextLabel", {
 
 local function updateCompanionWidget()
 	local show = companionDef ~= nil and loadout ~= nil
-	companionFrame.Visible = show
+	hudLayout.show(companionFrame, show)
 	if not show then
 		return
 	end
@@ -1088,6 +1103,8 @@ do
 	end
 	rescale()
 	camera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
+	-- A tablet gaining or losing a keyboard changes layout (PhoneLayout.Mode), as the phone block does.
+	UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(rescale)
 
 	local staminaView = { value = 100, max = 100 }
 	RunService.RenderStepped:Connect(function(dt)
@@ -1487,14 +1504,14 @@ end)
 local function renderWeapon()
 	if not loadout then
 		weaponFrame.Visible = false
-		healthFrame.Visible = false
+		hudLayout.show(healthFrame, false)
 		showCrosshair(false)
 		updateCompanionWidget()
 		return
 	end
 
 	weaponFrame.Visible = true
-	healthFrame.Visible = true
+	hudLayout.show(healthFrame, true)
 
 	local slot = loadout.equipped and loadout.slots[loadout.equipped]
 	if slot and slot.kind == "item" then
@@ -2163,7 +2180,6 @@ end
 -- End of the drop screen's block; its locals are released here.
 
 -- The bounty on the match's kill leader, under the minimap.
-local bountyRemote = Remotes.Event("Bounty")
 
 local bountyLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0),
@@ -2501,10 +2517,10 @@ end
 
 local function updateCompass(root)
 	if not root or not Settings.Get("Compass") then
-		compass.Visible = false
+		hudLayout.show(compass, false)
 		return
 	end
-	compass.Visible = true
+	hudLayout.show(compass, true)
 	-- Always flush under whatever the top-centre HUD is showing right now (Oliver 17:16): the players-
 	-- alive banner, the storm line under it, or a team mode's score bar -- measured off what is actually
 	-- on screen, so it follows any of them changing size, hiding or scaling. A phone layout places the
@@ -2700,12 +2716,12 @@ end)
 RunService.RenderStepped:Connect(function()
 	local radius = matchState.mapRadius
 	if matchState.state ~= "InProgress" or not radius or radius <= 0 then
-		minimap.Visible = false
-		compass.Visible = false
+		hudLayout.show(minimap, false)
+		hudLayout.show(compass, false)
 		return
 	end
 
-	minimap.Visible = true
+	hudLayout.show(minimap, true)
 	local scale = (MAP_PX / 2) / radius
 
 	local character = player.Character
@@ -2758,9 +2774,12 @@ end)
 -- Kill feed
 --------------------------------------------------------------------------------
 
+-- Under the location line, not beside it (#80): at y 312 the first row (312-336) lay across the bounty
+-- line (304-326) and the location line (332-352), which sit under the minimap. 108 + MAP_PX + 34 + 20 is
+-- the location line's bottom; 6 clear of it.
 local feed = create("Frame", {
 	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -16, 0, 312),
+	Position = UDim2.new(1, -16, 0, 108 + MAP_PX + 34 + 20 + 6),
 	Size = UDim2.new(0, 300, 0, 200),
 	BackgroundTransparency = 1,
 	Parent = screenGui,
@@ -2802,6 +2821,23 @@ killFeed.OnClientEvent:Connect(function(entry)
 		Parent = feed,
 	}, { rounded(6) })
 
+	-- No more rows than the feed's box holds (#80): the rows stack down from its top and each lasts six
+	-- seconds, so a burst of kills ran on past the box into whatever is under it (on a phone the slot is
+	-- two rows tall and the bounty line is right under it). The newest rows show; the phone layout sets
+	-- MaxRows for its slot, and the desktop box holds seven 24-pixel rows with their 4-pixel gaps.
+	local live = {}
+	for _, child in ipairs(feed:GetChildren()) do
+		if child:IsA("TextLabel") then
+			table.insert(live, child)
+		end
+	end
+	table.sort(live, function(a, b)
+		return a.LayoutOrder > b.LayoutOrder
+	end)
+	for index, shown in ipairs(live) do
+		shown.Visible = index <= (feed:GetAttribute("MaxRows") or 7)
+	end
+
 	task.delay(6, function()
 		TweenService:Create(row, TweenInfo.new(0.4), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
 		task.wait(0.4)
@@ -2813,9 +2849,12 @@ end)
 -- Toasts
 --------------------------------------------------------------------------------
 
+-- Bottom centre, clear of the bottom row (#80): its bottom edge 8 above the hotbar's top (16 up, 150
+-- tall). At -120 it sat inside the hotbar on any window narrower than about 1400 (253x36 px at 1366x768),
+-- and across the companion ability tile's readout at 1920x1080.
 local toast = create("TextLabel", {
 	AnchorPoint = Vector2.new(0.5, 1),
-	Position = UDim2.new(0.5, 0, 1, -120),
+	Position = UDim2.new(0.5, 0, 1, -(16 + 150 + 8)),
 	Size = UDim2.new(0, 460, 0, 36),
 	BackgroundColor3 = C.Panel,
 	BackgroundTransparency = 1,
@@ -2856,18 +2895,19 @@ Settings.Changed:Connect(function(id)
 end)
 
 -- Bounties: who's worth extra right now, and who just collected.
-bountyRemote.OnClientEvent:Connect(function(info)
+-- The remote is named here rather than kept in a local: the main chunk is at Luau's 200-local limit.
+Remotes.Event("Bounty").OnClientEvent:Connect(function(info)
 	if type(info) ~= "table" then
-		bountyLabel.Visible = false
+		hudLayout.show(bountyLabel, false)
 		return
 	end
 	if info.claimed then
-		bountyLabel.Visible = false
+		hudLayout.show(bountyLabel, false)
 		showToast(string.format("%s collected the %d coin bounty on %s!", info.by or "Someone", info.reward or 0, info.name or "?"))
 		return
 	end
 	bountyLabel.Text = string.format("BOUNTY  •  %s  (%d kills)  •  %d C", info.name or "?", info.kills or 0, info.reward or 0)
-	bountyLabel.Visible = matchState.state == "InProgress"
+	hudLayout.show(bountyLabel, matchState.state == "InProgress")
 	-- player.Name, not DisplayName: the server sends Combatants.GetName, which is the USERNAME
 	-- (Combatants.lua:44-45), and most accounts have a DisplayName that differs from it. So this
 	-- compared two different things, and the one toast written for a single person -- "there's a
@@ -3163,22 +3203,24 @@ do
 					local spot = phone and spots[piece.key] or nil
 					if phone and spot then
 						PhoneLayout.Place(piece.gui, spots[piece.key], piece.natural, scaleFor(piece.gui), 0, piece.key ~= "killFeed")
-						if piece.dropped then
-							piece.gui.Visible = piece.wasVisible
-							piece.dropped = false
-						end
-					elseif phone then
-						if not piece.dropped then
-							piece.wasVisible, piece.dropped = piece.gui.Visible, true
-						end
-						piece.gui.Visible = false
-					else
+					elseif not phone then
 						piece.gui.AnchorPoint = saved[piece.gui].anchor
 						piece.gui.Position = saved[piece.gui].position
 						scaleFor(piece.gui).Scale = 1
-						if piece.dropped then
-							piece.gui.Visible, piece.dropped = piece.wasVisible, false
+					end
+					-- No place for it in this mode: dropped, and hudLayout.show keeps it hidden whatever its
+					-- own code asks for. Back in a mode with room: shown as its code last asked (or as it
+					-- was, for a piece nothing ever shows or hides, like the kill feed's box).
+					local dropped = phone and not spot
+					if dropped and not hudLayout.dropped[piece.gui] then
+						if hudLayout.wanted[piece.gui] == nil then
+							hudLayout.wanted[piece.gui] = piece.gui.Visible
 						end
+						hudLayout.dropped[piece.gui] = true
+						piece.gui.Visible = false
+					elseif not dropped and hudLayout.dropped[piece.gui] then
+						hudLayout.dropped[piece.gui] = nil
+						piece.gui.Visible = hudLayout.wanted[piece.gui] == true
 					end
 				end
 			end
@@ -3196,6 +3238,9 @@ do
 					end
 				end
 			end
+			-- How many kill rows the feed's slot holds at the scale it was given (a row is 24 plus a 4 gap).
+			local feedSpot = phone and spots.killFeed or nil
+			feed:SetAttribute("MaxRows", feedSpot and math.max(1, math.floor((feedSpot.h / scaleFor(feed).Scale + 4) / 28)) or nil)
 			setHealthShape(phone)
 			setHotbarShape(phone, phone and spots.hotbar or nil, phone and spots.hotbarSlots or nil, phone and spots.inventory or nil)
 			setReadyShape(phone, phone and spots.ready or nil)
@@ -3703,8 +3748,8 @@ local function renderBanner()
 
 	-- Oliver: the players-alive bubble is Battle Royale only. In a team mode the score bar takes
 	-- this slot (ModeScoreHud moves up to it), so the banner hides while you're playing one.
-	banner.Visible = not (matchState.state == "InProgress" and loadout
-		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale")
+	hudLayout.show(banner, not (matchState.state == "InProgress" and loadout
+		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale"))
 
 	if matchState.state == "Waiting" then
 		bannerTitle.Text = ready and "WAITING FOR PLAYERS" or "READY UP TO PLAY"
@@ -3854,7 +3899,7 @@ end
 
 local function refreshSpeedPill()
 	local on = player:GetAttribute("SpeedBoosted") == true
-	speedPill.Visible = on
+	hudLayout.show(speedPill, on)
 	if not on then
 		stopSpeedBoostTick()
 		speedPill.Text = "SPEED BOOST"
@@ -4134,7 +4179,7 @@ matchChanged.OnClientEvent:Connect(function(state)
 	end
 	if state.state ~= "InProgress" then
 		activeDrop = nil
-		bountyLabel.Visible = false
+		hudLayout.show(bountyLabel, false)
 	end
 	-- The match's event is announced by the event banner ("Match event banner", above).
 	renderBanner()
@@ -4180,6 +4225,53 @@ do
 	local CompanionAbilityIcon = require(script.Parent:WaitForChild("CompanionAbilityIcon"))
 	local abilityIcon = CompanionAbilityIcon.new(screenGui)
 	local statsFor, statsKey = nil, nil
+
+	-- On a touch screen the tile goes in PhoneLayout's pet-tile slot (`Rects().petIcon`, above the
+	-- thumbstick's rest). Its own spot is worked out from the desktop hotbar, which on an 844x390 phone
+	-- put it on the thumbstick and on an upright one 400 px off the left edge (#80). Its UIScale is its
+	-- pop animation, so the phone size comes from a holder with a scale of its own (as the READY pill's
+	-- does). The holder is a bare box, so everything that shows, hides or animates the tile still works.
+	-- In a function of its own under pcall: the main chunk is at Luau's 200-local limit, and if the layout
+	-- fails to load the tile keeps its desktop spot.
+	xpcall(function()
+		local okLayout, PhoneLayout = pcall(require, script.Parent:WaitForChild("PhoneLayout"))
+		local tile = abilityIcon.frame
+		local home = { anchor = tile.AnchorPoint, position = tile.Position }
+		local size = CompanionAbilityIcon.Size
+		local holder = create("Frame", {
+			Name = "PhoneAbilityHolder",
+			Size = UDim2.fromOffset(size, size),
+			BackgroundTransparency = 1,
+			Parent = screenGui,
+		})
+		local holderScale = create("UIScale", { Parent = holder })
+		local function placeTile()
+			local viewport = camera.ViewportSize
+			local spot = okLayout and PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport).petIcon or nil
+			if spot then
+				holderScale.Scale = math.min(spot.w, spot.h) / size
+				holder.Position = UDim2.fromOffset(spot.x, spot.y)
+				tile.AnchorPoint = Vector2.new(0, 0)
+				tile.Position = UDim2.fromOffset(0, 0)
+				tile.Parent = holder
+			else
+				tile.AnchorPoint = home.anchor
+				tile.Position = home.position
+				tile.Parent = screenGui
+			end
+			-- The move-and-stats line above the tile grows leftward from its right edge, which from the
+			-- phone slot at the left edge is off the screen and over the companion strip. The tile hides it
+			-- there once CompanionAbilityIcon has SetCompact (proposed with #80); until then this is a no-op.
+			if abilityIcon.SetCompact then
+				abilityIcon:SetCompact(spot ~= nil)
+			end
+		end
+		placeTile()
+		camera:GetPropertyChangedSignal("ViewportSize"):Connect(placeTile)
+		UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(placeTile)
+	end, function(err)
+		warn("[HudClient] the ability tile's phone spot didn't load; it keeps its desktop spot: " .. tostring(err))
+	end)
 
 	-- The badge names the control this player would actually press: their own keyboard key, the
 	-- gamepad's Y button, or nothing on a touch screen, where the on-screen button is the control.
