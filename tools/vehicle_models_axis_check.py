@@ -138,7 +138,7 @@ function Inst.GetAttribute(i, k) return rawget(i, "attrs")[k] end
 Instance = { new = function(c) return setmetatable({ props = { ClassName = c, Shape = Enum.PartType.Block }, kids = {}, attrs = {} }, Inst) end }
 
 local shared = { WaitForChild = function(_, name) return name end }
-game = { GetService = function() return { WaitForChild = function() return shared end } end }
+game = { GetService = function() return { WaitForChild = function() return shared end, AddTag = function() end } end }
 function require(name) return { Fix = function() return { moved = 0 } end } end
 
 function dumpModel(model)
