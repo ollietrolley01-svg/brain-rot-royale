@@ -155,14 +155,9 @@ def judge(gun, rig, moment, out):
 
 # Flags that are known and whose fix is outside the files this check was written with. Each is still
 # printed and counted; only these exact flags may stand, and one that stops appearing is reported so the
-# entry is removed. YardWorkBlower and DustDevilRotary carry their ammunition bag hard against the front of
-# the grip (GunModelsWorkshop: the bags run back to z 139 and 145, against the grips' front straps), so even
-# an open finger is inside the bag and all four are parked. Moving the bags 40 and 20 mm forward clears
-# them (measured with this check); that is a model change, not an anchor.
-KNOWN = {
-    ("H2", "YardWorkBlower", "right"),
-    ("H2", "DustDevilRotary", "right"),
-}
+# entry is removed. Empty: the last two (YardWorkBlower and DustDevilRotary, whose ammunition bags stood
+# against the grip's front strap) were cleared by moving the bags forward in GunModelsWorkshop.
+KNOWN = set()
 
 
 # Each breaks one invariant in the Viewmodel source; the check must catch it. Aimed at what the code
