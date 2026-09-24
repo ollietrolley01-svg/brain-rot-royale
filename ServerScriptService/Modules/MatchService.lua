@@ -1328,6 +1328,9 @@ local function finishMatch()
 		state = "Intermission"
 		countdown = MatchConfig.Intermission
 		broadcast()
+		-- The next match's vote goes up now, not at the countdown: the whole break to read three cards
+		-- and argue about them, where the countdown alone left 8 seconds once everyone was ready.
+		VoteService.Open()
 
 		for _, player in ipairs(Players:GetPlayers()) do
 			-- Only the match's own loadouts. Clearing everyone nilled a lobby player's rack gun taken
@@ -1846,6 +1849,17 @@ local function startMatch()
 			task.wait(1)
 			countdown -= 1
 			broadcast()
+			-- Every player being placed has picked (a leaver has nothing to pick): nobody left to wait for.
+			local waiting = false
+			for _, player in ipairs(joining) do
+				if player.Parent and participants[player] and not chosenDrop[player] then
+					waiting = true
+					break
+				end
+			end
+			if not waiting then
+				break
+			end
 		end
 		dropSelect = false
 		countdown = 0
@@ -2168,11 +2182,21 @@ function MatchService.Start()
 					countdown = readyNow >= #Players:GetPlayers()
 						and math.min(MatchConfig.LobbyCountdown, MatchConfig.AllReadyCountdown)
 						or MatchConfig.LobbyCountdown
-					VoteService.Open()
+					-- Normally already open since the break began; a fresh server, or a failed start that
+					-- closed it, opens it here. Never re-rolled while open: that would wipe the votes cast.
+					if not VoteService.IsOpen() then
+						VoteService.Open()
+					end
 				end
 				broadcast()
 			elseif state == "Intermission" then
-				-- Readying up still works during the break; it just can't start the countdown yet.
+				-- Readying up still works during the break; it just can't start the countdown yet. Once
+				-- everyone here is ready there is nobody left to wait for, so the rest of the break goes,
+				-- all but IntermissionAllReady seconds of it.
+				local present = #Players:GetPlayers()
+				if present > 0 and #readyPlayers() >= present and countdown > MatchConfig.IntermissionAllReady then
+					countdown = MatchConfig.IntermissionAllReady
+				end
 				countdown -= 1
 				if countdown <= 0 then
 					countdown = 0
@@ -2183,9 +2207,11 @@ function MatchService.Start()
 				-- Everyone unreadying cancels the countdown, back to waiting.
 				local readyCount = #readyPlayers()
 				if readyCount < MatchConfig.MinPlayers then
+					-- The vote stays up: it belongs to the lobby now (it opened when the break began), and
+					-- closing it here only to re-roll new cards at the next countdown threw away every vote.
+					-- A close with no winner revealed nothing anyway (VoteReveal.ShouldReveal).
 					state = "Waiting"
 					countdown = 0
-					VoteService.Close()
 				else
 					-- Everyone here is ready: nobody left to wait for.
 					if readyCount >= #Players:GetPlayers() and countdown > MatchConfig.AllReadyCountdown then

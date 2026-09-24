@@ -25,6 +25,10 @@ MatchConfig.ResultsDuration = 15
 -- A break in the lobby after every match, before the next countdown can begin: time to open
 -- crates, trade, kick the balls around or have a go at the Cloud Climb.
 MatchConfig.Intermission = 35
+-- What is left of the break once every player here has readied up: they have said they are done, so
+-- nobody waits out the rest of the 35 s, but the vote (open all break) and the last results still get a
+-- few seconds before the countdown takes over.
+MatchConfig.IntermissionAllReady = 5
 
 -- Shields sit on top of health and take damage first. Everyone drops in with none; shield
 -- potions fill them (ItemData). The storm ignores shields.
