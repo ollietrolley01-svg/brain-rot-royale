@@ -336,9 +336,12 @@ Builders.BoomboxBassline = function(g, K)
 		g:rounded("Pump", V(40, 26, 100), CF(0, -62, -150), 8, chrome)
 	end)
 	g:travel("pump", 50)
-	g:hand("SupportHand", V(-6, -82, -150), V(0.8, 0.5, -0.25), V(-0.4, -1, 0))
+	-- The hand cups the slider from below with the fingers across its right side, level: pointing 30
+	-- degrees up they ran into the body's rounded corner above the slider, even lying open, and every
+	-- finger was parked -- a bare palm under the gun (#92, tools/fps_arms_check.py).
+	g:hand("SupportHand", V(-6, -82, -150), V(0.9, 0.2, -0.3), V(-0.2, -1, 0))
 	g.model:SetAttribute("SupportGroup", "pump")
-	g:hand("ChargeHand", V(-6, -82, -150), V(0.8, 0.5, -0.25), V(-0.4, -1, 0))
+	g:hand("ChargeHand", V(-6, -82, -150), V(0.9, 0.2, -0.3), V(-0.2, -1, 0))
 
 	trigger(g, K, 8, -80, chrome, body)
 	g:grip(V(0, -50, 60), 12, body, { length = 96, depth = 46, front = 22, back = 30, grooves = 3 })

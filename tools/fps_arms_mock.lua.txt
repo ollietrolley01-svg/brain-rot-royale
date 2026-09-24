@@ -1,0 +1,419 @@
+-- A small Roblox mock for tools/fps_arms_check.py and fps_arms_body_check.py: enough Vector3, CFrame, Color3, Enum and Instance for the
+-- REAL GunModels (with ZFight, ArsenalFinish and the creative and workshop modules) to build every gun, and
+-- for the REAL Viewmodel to pose it. Plain Lua 5.x; the Python side rewrites Luau's `x += y` first.
+-- (Plain Lua with harness globals, loaded by the Python checks: named .txt so the Luau static check does not read it as game code.)
+
+table.create = table.create or function() return {} end
+table.clear = table.clear or function(t) for k in pairs(t) do t[k] = nil end end
+table.find = table.find or function(t, v)
+	for i, x in ipairs(t) do
+		if x == v then
+			return i
+		end
+	end
+end
+table.clone = table.clone or function(t)
+	local c = {}
+	for k, v in pairs(t) do
+		c[k] = v
+	end
+	return c
+end
+math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+math.clamp = function(v, a, b) return math.max(a, math.min(b, v)) end
+math.sign = function(v) return v > 0 and 1 or (v < 0 and -1 or 0) end
+math.round = function(v) return math.floor(v + 0.5) end
+local lastRandom = math.random
+math.random = function(a, b)
+	-- Deterministic: a kick's jitter must not make two runs differ.
+	if a then
+		return b and a or 1
+	end
+	return 0.5
+end
+
+V3 = {}
+local function vec(x, y, z) return setmetatable({ X = x, Y = y, Z = z }, V3) end
+V3.__index = function(v, k)
+	if k == "Magnitude" then return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z) end
+	if k == "Unit" then
+		local m = math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+		if m == 0 then return vec(0 / 0, 0 / 0, 0 / 0) end
+		return vec(v.X / m, v.Y / m, v.Z / m)
+	end
+	return V3[k]
+end
+V3.__add = function(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
+V3.__sub = function(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
+V3.__unm = function(a) return vec(-a.X, -a.Y, -a.Z) end
+V3.__mul = function(a, b)
+	if type(a) == "number" then a, b = b, a end
+	if type(b) == "number" then return vec(a.X * b, a.Y * b, a.Z * b) end
+	return vec(a.X * b.X, a.Y * b.Y, a.Z * b.Z)
+end
+V3.__div = function(a, b)
+	if type(b) == "number" then return vec(a.X / b, a.Y / b, a.Z / b) end
+	return vec(a.X / b.X, a.Y / b.Y, a.Z / b.Z)
+end
+V3.__eq = function(a, b) return a.X == b.X and a.Y == b.Y and a.Z == b.Z end
+V3.__tostring = function(v) return string.format("%.3f, %.3f, %.3f", v.X, v.Y, v.Z) end
+function V3.Cross(a, b) return vec(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X) end
+function V3.Dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+function V3.Lerp(a, b, t) return a + (b - a) * t end
+function V3.Abs(a) return vec(math.abs(a.X), math.abs(a.Y), math.abs(a.Z)) end
+function V3.Min(a, b) return vec(math.min(a.X, b.X), math.min(a.Y, b.Y), math.min(a.Z, b.Z)) end
+function V3.Max(a, b) return vec(math.max(a.X, b.X), math.max(a.Y, b.Y), math.max(a.Z, b.Z)) end
+function V3.FuzzyEq(a, b, e) return (a - b).Magnitude <= (e or 1e-5) end
+Vector3 = { new = function(x, y, z) return vec(x or 0, y or 0, z or 0) end }
+Vector3.zero = vec(0, 0, 0)
+Vector3.one = vec(1, 1, 1)
+Vector3.xAxis, Vector3.yAxis, Vector3.zAxis = vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1)
+local V2 = {}
+V2.__index = function(v, k)
+	if k == "Magnitude" then return math.sqrt(v.X * v.X + v.Y * v.Y) end
+	if k == "Unit" then local m = math.sqrt(v.X * v.X + v.Y * v.Y); return Vector2.new(v.X / m, v.Y / m) end
+	return V2[k]
+end
+function V2.Dot(a, b) return a.X * b.X + a.Y * b.Y end
+Vector2 = { new = function(x, y) return setmetatable({ X = x or 0, Y = y or 0 }, V2) end }
+Vector2.zero = Vector2.new(0, 0)
+
+-- A CFrame: a position and three columns, right (X), up (Y), back (Z = -look).
+CF = {}
+local function cf(p, r, u, b) return setmetatable({ p = p, r = r, u = u, b = b }, CF) end
+local function rot(c, v) return c.r * v.X + c.u * v.Y + c.b * v.Z end
+CF.__index = function(c, k)
+	if k == "Position" or k == "p" then return rawget(c, "p") end
+	if k == "RightVector" or k == "XVector" then return c.r end
+	if k == "UpVector" or k == "YVector" then return c.u end
+	if k == "ZVector" then return c.b end
+	if k == "LookVector" then return -c.b end
+	if k == "Rotation" then return cf(Vector3.zero, c.r, c.u, c.b) end
+	if k == "X" then return c.p.X end
+	if k == "Y" then return c.p.Y end
+	if k == "Z" then return c.p.Z end
+	return CF[k]
+end
+CF.__mul = function(a, b)
+	if getmetatable(b) == V3 then return a.p + rot(a, b) end
+	return cf(a.p + rot(a, b.p), rot(a, b.r), rot(a, b.u), rot(a, b.b))
+end
+CF.__add = function(a, v) return cf(a.p + v, a.r, a.u, a.b) end
+CF.__sub = function(a, v) return cf(a.p - v, a.r, a.u, a.b) end
+function CF.Inverse(c)
+	local t = cf(Vector3.zero, vec(c.r.X, c.u.X, c.b.X), vec(c.r.Y, c.u.Y, c.b.Y), vec(c.r.Z, c.u.Z, c.b.Z))
+	t.p = -rot(t, c.p)
+	return t
+end
+function CF.ToObjectSpace(a, b) return a:Inverse() * b end
+function CF.ToWorldSpace(a, b) return a * b end
+function CF.PointToObjectSpace(a, v) return a:Inverse() * v end
+function CF.PointToWorldSpace(a, v) return a * v end
+function CF.VectorToWorldSpace(a, v) return rot(a, v) end
+function CF.VectorToObjectSpace(a, v) return rot(a:Inverse(), v) end
+function CF.GetComponents(c)
+	return c.p.X, c.p.Y, c.p.Z, c.r.X, c.u.X, c.b.X, c.r.Y, c.u.Y, c.b.Y, c.r.Z, c.u.Z, c.b.Z
+end
+-- Quaternions for Lerp, as Roblox does it: the rotation slerped, the position lerped.
+local function toQuat(c)
+	local m00, m01, m02 = c.r.X, c.u.X, c.b.X
+	local m10, m11, m12 = c.r.Y, c.u.Y, c.b.Y
+	local m20, m21, m22 = c.r.Z, c.u.Z, c.b.Z
+	local tr = m00 + m11 + m22
+	local w, x, y, z
+	if tr > 0 then
+		local s = math.sqrt(tr + 1) * 2
+		w, x, y, z = 0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s
+	elseif m00 > m11 and m00 > m22 then
+		local s = math.sqrt(1 + m00 - m11 - m22) * 2
+		w, x, y, z = (m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s
+	elseif m11 > m22 then
+		local s = math.sqrt(1 + m11 - m00 - m22) * 2
+		w, x, y, z = (m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s
+	else
+		local s = math.sqrt(1 + m22 - m00 - m11) * 2
+		w, x, y, z = (m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s
+	end
+	return w, x, y, z
+end
+local function fromQuat(p, w, x, y, z)
+	local n = math.sqrt(w * w + x * x + y * y + z * z)
+	w, x, y, z = w / n, x / n, y / n, z / n
+	return cf(p,
+		vec(1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)),
+		vec(2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)),
+		vec(2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)))
+end
+function CF.Lerp(a, b, t)
+	local aw, ax, ay, az = toQuat(a)
+	local bw, bx, by, bz = toQuat(b)
+	local d = aw * bw + ax * bx + ay * by + az * bz
+	if d < 0 then bw, bx, by, bz, d = -bw, -bx, -by, -bz, -d end
+	local s0, s1
+	if d > 0.9995 then
+		s0, s1 = 1 - t, t
+	else
+		local th = math.acos(d)
+		s0, s1 = math.sin((1 - t) * th) / math.sin(th), math.sin(t * th) / math.sin(th)
+	end
+	return fromQuat(a.p + (b.p - a.p) * t, aw * s0 + bw * s1, ax * s0 + bx * s1, ay * s0 + by * s1, az * s0 + bz * s1)
+end
+local X, Y, Z = vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1)
+CFrame = {}
+function CFrame.new(x, y, z, ...)
+	if type(x) == "table" then
+		if y then return CFrame.lookAt(x, y) end
+		return cf(x, X, Y, Z)
+	end
+	local rest = { ... }
+	if #rest == 9 then
+		return cf(vec(x, y, z), vec(rest[1], rest[4], rest[7]), vec(rest[2], rest[5], rest[8]), vec(rest[3], rest[6], rest[9]))
+	end
+	return cf(vec(x or 0, y or 0, z or 0), X, Y, Z)
+end
+CFrame.identity = CFrame.new()
+function CFrame.fromMatrix(p, r, u, b) return cf(p, r, u, b or r:Cross(u)) end
+local function rx(a) local c, s = math.cos(a), math.sin(a); return cf(Vector3.zero, X, vec(0, c, s), vec(0, -s, c)) end
+local function ry(a) local c, s = math.cos(a), math.sin(a); return cf(Vector3.zero, vec(c, 0, -s), Y, vec(s, 0, c)) end
+local function rz(a) local c, s = math.cos(a), math.sin(a); return cf(Vector3.zero, vec(c, s, 0), vec(-s, c, 0), Z) end
+function CFrame.Angles(x, y, z) return rx(x or 0) * ry(y or 0) * rz(z or 0) end
+CFrame.fromEulerAnglesXYZ = CFrame.Angles
+function CFrame.fromEulerAnglesYXZ(x, y, z) return ry(y or 0) * rx(x or 0) * rz(z or 0) end
+CFrame.fromOrientation = CFrame.fromEulerAnglesYXZ
+function CFrame.fromAxisAngle(axis, angle)
+	local u = axis.Unit
+	local h = angle / 2
+	local s = math.sin(h)
+	return fromQuat(Vector3.zero, math.cos(h), u.X * s, u.Y * s, u.Z * s)
+end
+function CFrame.lookAt(at, target, up)
+	local look = (target - at).Unit
+	up = up or Y
+	local right = look:Cross(up)
+	if right.Magnitude < 1e-6 then right = look:Cross(Z) end
+	right = right.Unit
+	return cf(at, right, right:Cross(look), -look)
+end
+
+local C3 = {}
+C3.__index = C3
+local function color(r, g, b) return setmetatable({ R = r, G = g, B = b, __color = true }, C3) end
+function C3.Lerp(a, b, t) return color(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t) end
+function C3.ToHSV(c)
+	local mx, mn = math.max(c.R, c.G, c.B), math.min(c.R, c.G, c.B)
+	return 0, mx == 0 and 0 or (mx - mn) / mx, mx
+end
+C3.__eq = function(a, b) return a.R == b.R and a.G == b.G and a.B == b.B end
+C3.__tostring = function(c) return string.format("%d,%d,%d", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5)) end
+Color3 = {
+	new = function(r, g, b) return color(r or 0, g or 0, b or 0) end,
+	fromRGB = function(r, g, b) return color((r or 0) / 255, (g or 0) / 255, (b or 0) / 255) end,
+	fromHSV = function(h, s, v) return color(v, v * (1 - s), v * (1 - s)) end,
+}
+BrickColor = { new = function() return { Color = color(0.5, 0.5, 0.5) } end }
+function typeof(v)
+	local mt = getmetatable(v)
+	if mt == V3 then return "Vector3" elseif mt == CF then return "CFrame" elseif mt == C3 then return "Color3" end
+	if type(v) == "table" and rawget(v, "kids") then return "Instance" end
+	return type(v)
+end
+PhysicalProperties = { new = function() return {} end }
+UDim2 = { new = function() return {} end, fromScale = function() return {} end, fromOffset = function() return {} end }
+UDim = { new = function() return {} end }
+NumberSequence = { new = function() return {} end }
+ColorSequence = { new = function() return {} end }
+NumberRange = { new = function() return {} end }
+Font = { new = function() return {} end, fromEnum = function() return {} end }
+local function enumOf(path)
+	return setmetatable({}, { __index = function(t, k)
+		local v = path .. "." .. k
+		if select(2, path:gsub("%.", "")) >= 1 then
+			rawset(t, k, v)
+			return v
+		end
+		local e = enumOf(v)
+		rawset(t, k, e)
+		return e
+	end })
+end
+Enum = enumOf("Enum")
+
+-- Instances: properties, Parent, children, attributes, descendants, Clone.
+Inst = {}
+Inst.__index = function(i, k)
+	if k == "Position" then
+		local c = rawget(i, "props").CFrame
+		return c and c.p
+	end
+	local m = Inst[k]
+	if m then return m end
+	local v = rawget(i, "props")[k]
+	if v ~= nil then return v end
+	for _, kid in ipairs(rawget(i, "kids")) do
+		if kid.Name == k then return kid end
+	end
+	return nil
+end
+Inst.__newindex = function(i, k, v)
+	if k == "Parent" then
+		local old = rawget(i, "props").Parent
+		if old then
+			local kids = rawget(old, "kids")
+			for n = #kids, 1, -1 do if kids[n] == i then table.remove(kids, n) end end
+		end
+		if v then table.insert(rawget(v, "kids"), i) end
+	elseif k == "Position" then
+		local c = rawget(i, "props").CFrame or CFrame.identity
+		rawget(i, "props").CFrame = cf(v, c.r, c.u, c.b)
+		return
+	elseif k == "Orientation" then
+		local c = rawget(i, "props").CFrame or CFrame.identity
+		rawget(i, "props").CFrame = CFrame.fromOrientation(math.rad(v.X), math.rad(v.Y), math.rad(v.Z)) + c.p
+		return
+	end
+	rawget(i, "props")[k] = v
+end
+local PARTS = { Part = true, WedgePart = true, MeshPart = true, CornerWedgePart = true, TrussPart = true }
+function Inst.IsA(i, c)
+	if c == "BasePart" then return PARTS[i.ClassName] == true end
+	if c == "Instance" then return true end
+	if c == "PVInstance" then return PARTS[i.ClassName] == true or i.ClassName == "Model" end
+	if c == "JointInstance" then return i.ClassName == "Motor6D" or i.ClassName == "Weld" end
+	if c == "GuiObject" then return i.ClassName == "TextLabel" or i.ClassName == "Frame" or i.ClassName == "ImageLabel" end
+	if c == "DataModelMesh" then return i.ClassName == "SpecialMesh" end
+	if c == "Light" then return i.ClassName == "PointLight" or i.ClassName == "SpotLight" end
+	return i.ClassName == c
+end
+function Inst.GetChildren(i) local t = {}; for n, k in ipairs(rawget(i, "kids")) do t[n] = k end; return t end
+function Inst.GetDescendants(i)
+	local out = {}
+	local function walk(x) for _, k in ipairs(rawget(x, "kids")) do out[#out + 1] = k; walk(k) end end
+	walk(i)
+	return out
+end
+function Inst.FindFirstChild(i, name, recursive)
+	for _, k in ipairs(rawget(i, "kids")) do
+		if k.Name == name then return k end
+	end
+	if recursive then
+		for _, k in ipairs(rawget(i, "kids")) do
+			local f = k:FindFirstChild(name, true)
+			if f then return f end
+		end
+	end
+	return nil
+end
+Inst.WaitForChild = Inst.FindFirstChild
+function Inst.FindFirstChildOfClass(i, c) for _, k in ipairs(rawget(i, "kids")) do if k.ClassName == c then return k end end end
+function Inst.FindFirstChildWhichIsA(i, c, recursive)
+	for _, k in ipairs(recursive and i:GetDescendants() or rawget(i, "kids")) do
+		if k:IsA(c) then return k end
+	end
+end
+function Inst.FindFirstAncestorOfClass() return nil end
+function Inst.IsDescendantOf() return false end
+function Inst.GetFullName(i) return i.Name end
+function Inst.Destroy(i) i.Parent = nil end
+function Inst.ClearAllChildren(i) for _, k in ipairs(i:GetChildren()) do k.Parent = nil end end
+function Inst.SetAttribute(i, k, v) rawget(i, "attrs")[k] = v end
+function Inst.GetAttribute(i, k) return rawget(i, "attrs")[k] end
+function Inst.GetAttributes(i) local t = {}; for k, v in pairs(rawget(i, "attrs")) do t[k] = v end; return t end
+function Inst.GetPropertyChangedSignal() return { Connect = function() return { Disconnect = function() end } end } end
+function Inst.GetPivot(i)
+	if PARTS[i.ClassName] then return i.CFrame * (i.PivotOffset or CFrame.identity) end
+	local primary = i.PrimaryPart
+	if primary then return primary.CFrame * (primary.PivotOffset or CFrame.identity) end
+	return i.WorldPivot or CFrame.identity
+end
+function Inst.PivotTo(i, target)
+	local delta = target * i:GetPivot():Inverse()
+	if PARTS[i.ClassName] then i.CFrame = delta * i.CFrame; return end
+	for _, d in ipairs(i:GetDescendants()) do
+		if PARTS[d.ClassName] then d.CFrame = delta * d.CFrame end
+	end
+end
+function Inst.Clone(i)
+	local copy = Instance.new(i.ClassName)
+	for k, v in pairs(rawget(i, "props")) do
+		if k ~= "Parent" then rawget(copy, "props")[k] = v end
+	end
+	for k, v in pairs(rawget(i, "attrs")) do rawget(copy, "attrs")[k] = v end
+	local map = { [i] = copy }
+	for _, kid in ipairs(rawget(i, "kids")) do
+		local kc = kid:Clone()
+		map[kid] = kc
+		kc.Parent = copy
+	end
+	-- A model's PrimaryPart follows into the copy.
+	local primary = rawget(i, "props").PrimaryPart
+	if primary then
+		for _, d in ipairs(copy:GetDescendants()) do
+			if d.Name == primary.Name and PARTS[d.ClassName] then rawget(copy, "props").PrimaryPart = d; break end
+		end
+	end
+	return copy
+end
+local defaults = {
+	Part = function(p) p.Shape = Enum.PartType.Block; p.Transparency = 0; p.Size = Vector3.new(4, 1, 2); p.CFrame = CFrame.identity; p.Color = Color3.fromRGB(163, 162, 165); p.LocalTransparencyModifier = 0 end,
+	MeshPart = function(p) p.Transparency = 0; p.Size = Vector3.new(1, 1, 1); p.CFrame = CFrame.identity; p.LocalTransparencyModifier = 0 end,
+	WedgePart = function(p) p.Transparency = 0; p.Size = Vector3.new(4, 1, 2); p.CFrame = CFrame.identity; p.LocalTransparencyModifier = 0 end,
+	Attachment = function(p) p.CFrame = CFrame.identity end,
+}
+Instance = { new = function(c, parent)
+	local i = setmetatable({ props = { ClassName = c, Name = c }, kids = {}, attrs = {} }, Inst)
+	if defaults[c] then defaults[c](rawget(i, "props")) end
+	if parent then i.Parent = parent end
+	return i
+end }
+-- An Attachment's Position is its CFrame's.
+local attachIndex = Inst.__index
+Inst.__index = function(i, k)
+	if k == "Position" and rawget(i, "props").ClassName == "Attachment" then return rawget(i, "props").CFrame.p end
+	return attachIndex(i, k)
+end
+local attachNew = Inst.__newindex
+Inst.__newindex = function(i, k, v)
+	if k == "Position" and rawget(i, "props").ClassName == "Attachment" then
+		local c = rawget(i, "props").CFrame
+		rawget(i, "props").CFrame = cf(v, c.r, c.u, c.b)
+		return
+	end
+	attachNew(i, k, v)
+end
+
+workspace = Instance.new("Workspace")
+workspace.Terrain = Instance.new("Terrain")
+function workspace.BulkMoveTo(_, parts, cframes)
+	for n, part in ipairs(parts) do part.CFrame = cframes[n] end
+end
+function workspace.Raycast() return nil end
+
+-- Modules: `script.Parent:WaitForChild(name)` and `Shared:FindFirstChild(name)` hand back a token that
+-- `require` turns into the module, loaded once.
+MODULES, SOURCES = {}, {}
+local folder = {}
+function folder.WaitForChild(_, name) return name end
+function folder.FindFirstChild(_, name) return SOURCES[name] and name or nil end
+SHARED = folder
+local LOADING = {}
+function loadModule(name)
+	if MODULES[name] == nil then
+		assert(SOURCES[name], "no source for module " .. tostring(name))
+		assert(not LOADING[name], "require cycle at " .. name)
+		LOADING[name] = true
+		local chunk = assert(load(SOURCES[name], "=" .. name, "t", setmetatable({ script = { Parent = folder, Name = name } }, { __index = _G })))
+		MODULES[name] = chunk()
+		LOADING[name] = nil
+	end
+	return MODULES[name]
+end
+function require(token) return loadModule(token) end
+local services = {
+	ReplicatedStorage = { WaitForChild = function() return folder end, FindFirstChild = function() return folder end },
+	Lighting = { ClockTime = 14, Brightness = 2, ExposureCompensation = 0, GetMinutesAfterMidnight = function() return 840 end },
+	CollectionService = { AddTag = function() end, HasTag = function() return false end },
+	RunService = { IsStudio = function() return true end, IsClient = function() return true end, IsServer = function() return false end },
+}
+game = { GetService = function(_, name)
+	return services[name] or setmetatable({}, { __index = function() return function() end end })
+end }

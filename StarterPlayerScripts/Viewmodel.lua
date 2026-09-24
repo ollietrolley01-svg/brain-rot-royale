@@ -87,15 +87,36 @@ Viewmodel.Veil = veil
 local SHOULDER = { [1] = V(0.72, -0.78, 0.3), [-1] = V(-0.7, -0.8, 0.25) }
 local POLE = { [1] = V(1.6, -2.2, 0.4), [-1] = V(-1.0, -2.4, -0.2) }
 local UPPER, FOREARM = 1.12, 1.0
+-- A long gun's support hand is further from the shoulder than the arm is long: at the hip 53 of 62 guns
+-- put the left hand past reach, the railguns by 56%, and the arm was stretched to fit -- a rod half as long
+-- again as its partner, dead straight, which is what reads as "the joints look disconnected on long
+-- rifles" (#11). A body turns into a long gun, and so the shoulder comes forward instead: toward the hand,
+-- as far as REACH_COMFORT of the arm's length, by no more than SHOULDER_TRAVEL, and never into view. The
+-- widest view is Settings' largest field of view (95 degrees, Settings.lua), and the shoulder stays
+-- SHOULDER_HIDE below its bottom edge so the arm's own thickness there is off screen too. Measured by
+-- tools/fps_arms_check.py: worst stretch 1.56 -> 1.07.
+local REACH_COMFORT = 0.97
+local SHOULDER_TRAVEL = 1.3
+local WIDEST_VIEW_TAN = math.tan(math.rad(95 / 2))
+local SHOULDER_HIDE = 0.2
+-- Where the elbow goes. The pole alone put it the same way whatever the hand was doing, and at full aim the
+-- trigger hand met its forearm at 99 to 130 degrees on 56 of 62 guns: a wrist no one has, and the other
+-- half of "disconnected". The elbow is free to swing round the line from shoulder to wrist without moving
+-- either, so it swings WRIST_FOLLOW of the way toward where the forearm would carry straight on from the
+-- hand, and no higher than ELBOW_CEILING above the shoulder, so it never rises into the picture.
+local WRIST_FOLLOW = 0.75
+local ELBOW_CEILING = 0.2
 -- Slimmer than an avatar's own (1 stud): at 0.4 the trigger arm of a straight-stocked gun filled half the
 -- screen beside the sights.
 local ARM_THICKNESS = 0.34
 -- A hand, in the palm frame the rig builds: across the palm, wrist to fingertips, and palm to back. Scaled
 -- on each axis rather than by the arm's width alone, which left an avatar's hand 89 mm thick and 36 mm
 -- long -- a stub that stopped short of the grip instead of closing on it.
--- The palm alone: the fingers below are parts of their own, and together they come to a hand about as long
--- as before (0.3) with a hinge at the knuckles.
-local HAND_WIDTH, HAND_LENGTH, HAND_THICKNESS = 0.3, 0.2, 0.11
+-- The palm alone: the fingers below are parts of their own. The palm is as long as it is wide, as a hand's
+-- is (#92): at 0.2 (53 mm) it was half a real palm, its knuckles stopped short of a pistol grip's front
+-- strap, and the fingers hinged there had the grip's own front in their way at any close -- 26 of 62
+-- trigger hands closed no finger at all and 24 closed one, a flat slab laid on the grip.
+local HAND_WIDTH, HAND_LENGTH, HAND_THICKNESS = 0.3, 0.3, 0.11
 -- How far past the keypoint the palm's inner face goes, so the hand presses into what it holds rather
 -- than resting outside it. The face lands at (keypoint - HAND_SINK) whatever the hand's thickness, and the
 -- guns' keypoints were authored against this depth, so it stays where it was when the hand was thicker.
@@ -126,14 +147,21 @@ end
 -- The knuckle line, ahead of the keypoint: far enough forward to clear the front face of a grip, but never
 -- past the palm's own reach. A handguard runs the length of the gun, and fingers close round it where the
 -- hand actually is, not out by the muzzle.
-local KNUCKLE, KNUCKLE_MAX = 0.1, 0.135
+local KNUCKLE, KNUCKLE_MAX = HAND_LENGTH / 2, HAND_LENGTH / 2 + 0.035
 local FINGER_CLEAR = 0.008
+local KNUCKLE_STEP = 0.012
 -- How far a finger may press into what it holds before the close is called too far (1.6 mm: pressed, not
 -- through), and how finely the close is swept looking for that point.
 local FINGER_PRESS = 0.006
 local CURL_STEPS = 24
 -- Below this a finger has nothing worth closing on, and is kept inside the palm rather than stood out.
 local FINGER_MIN_CLOSE = 0.3
+-- A finger never closes into the sight picture: a cone of 3 degrees round the aimed eye's line, three
+-- times the crosshair's own ring at the widest aimed field of view. A support hand's fingers wrapping up
+-- over a low fore-end otherwise came into the ring when the palm was made its real length.
+local SIGHT_CLEAR = math.tan(math.rad(3))
+-- What blocks a finger there, named like a part so a report says why.
+local SIGHT_LINE = { name = "sight line" }
 -- How deep under the palm a grip can be and still be something to close on, and the step the search walks.
 local GRIP_REACH = 0.34
 local GRIP_STEP = 0.0038
@@ -172,7 +200,7 @@ local function shapeNode(part, offset)
 			kind = "ball"
 		end
 	end
-	return { inverse = offset:Inverse(), half = part.Size / 2, kind = kind }
+	return { inverse = offset:Inverse(), half = part.Size / 2, kind = kind, name = part.Name }
 end
 
 local function insideNode(node, point)
@@ -198,7 +226,9 @@ local function fingerAt(knuckleFrame, curl, turn)
 	return upper * CF(0, 0, -FINGER_UPPER / 2), lower * CF(0, 0, -FINGER_LOWER / 2)
 end
 
-local function gripShape(offsets, keyFrame)
+-- `sight` (the gun's KP_Sight and eye relief) is the aimed eye's line: no finger may close into a cone of
+-- SIGHT_CLEAR round it, which is where the crosshair and the sight picture are (#26).
+local function gripShape(offsets, keyFrame, sight)
 	local origin = keyFrame.Position
 	local near = {}
 	for part, offset in pairs(offsets) do
@@ -206,9 +236,11 @@ local function gripShape(offsets, keyFrame)
 			table.insert(near, shapeNode(part, offset))
 		end
 	end
-	if #near == 0 then
-		return nil
-	end
+	-- With nothing under the palm the fingers close on themselves, as a hand reaching for a magazine or a
+	-- pocket does -- but through the same search as a grip, so a fist too stays out of the sight picture.
+	-- It once came from a fixed table, and with the palm its real length a support hand's fist on a gun
+	-- with nothing under it put a fingertip in the crosshair's ring.
+	local onNothing = #near == 0
 	local function solid(cframe)
 		local point = cframe.Position
 		for _, node in ipairs(near) do
@@ -233,7 +265,8 @@ local function gripShape(offsets, keyFrame)
 	end
 	-- Nothing under the palm, or nothing until well past it: nothing to close on.
 	if not depth or first > 0.02 then
-		return nil
+		onNothing = true
+		table.clear(near)
 	end
 	-- How far forward the face the fingers come over stands, looked for only as far as the knuckles can
 	-- reach: on a grip this finds its front, and on a handguard that runs on to the muzzle it stops at
@@ -249,16 +282,24 @@ local function gripShape(offsets, keyFrame)
 	-- hand gave every finger the topmost obstruction's knuckle line, and three of four then had no room
 	-- to close -- 50 of 100 anchors closed exactly one finger. So the line, what it wraps, and how far it
 	-- may close are all measured per finger.
+	-- Across the finger's whole width, not down its middle line: a grip's finger grooves and nubs stand
+	-- between and beside the fingers' middles, the line never saw them, and the close then stopped on
+	-- them a few degrees in -- the commonest reason (with the trigger guard) a trigger hand closed one
+	-- finger or none (#92).
+	local edge = FINGER_WIDTH / 2 - FINGER_PRESS
 	local function frontAt(across)
 		local nearest
 		for _, level in ipairs(FINGER_LEVELS) do
-			local at = palm * CF(across, -level, 0)
-			local reach, z = 0, 0
-			while z <= KNUCKLE_MAX do
-				if solid(at * CF(0, 0, -z)) then
-					reach = z
+			local reach = 0
+			for _, offset in ipairs({ -edge, 0, edge }) do
+				local at = palm * CF(across + offset, -level, 0)
+				local z = 0
+				while z <= KNUCKLE_MAX do
+					if solid(at * CF(0, 0, -z)) then
+						reach = math.max(reach, z)
+					end
+					z += GRIP_STEP
 				end
-				z += GRIP_STEP
 			end
 			-- A level below the bottom of what the hand holds finds nothing and says nothing.
 			if reach > 0 and (not nearest or reach < nearest) then
@@ -274,6 +315,14 @@ local function gripShape(offsets, keyFrame)
 	-- Returns the part in the way, or nil when the finger has room. Naming what blocks a finger is the
 	-- difference between "it will not close" and knowing why, which is three measured rounds of guessing
 	-- saved the next time this moves.
+	local function inSight(point)
+		if not sight then
+			return false
+		end
+		local p = sight.frame:PointToObjectSpace(point)
+		local depth = sight.relief - p.Z
+		return depth > 0 and p.X * p.X + p.Y * p.Y < (depth * SIGHT_CLEAR) ^ 2
+	end
 	local function blockedBy(frame, length)
 		local hx = FINGER_WIDTH / 2 - FINGER_PRESS
 		local hy = FINGER_THICKNESS / 2 - FINGER_PRESS
@@ -281,9 +330,13 @@ local function gripShape(offsets, keyFrame)
 		for _, sx in ipairs({ -1, 0, 1 }) do
 			for _, sz in ipairs({ -1, 0, 1 }) do
 				for _, sy in ipairs({ -1, 1 }) do
-					local hit = solid(frame * CF(sx * hx, sy * hy, sz * hz))
+					local point = frame * CF(sx * hx, sy * hy, sz * hz)
+					local hit = solid(point)
 					if hit then
 						return hit
+					end
+					if inSight(point) then
+						return SIGHT_LINE
 					end
 				end
 			end
@@ -319,10 +372,8 @@ local function gripShape(offsets, keyFrame)
 
 	local fingers = {}
 	local reach = FINGER_UPPER + FINGER_LOWER
-	for index = 1, FINGER_COUNT do
-		local across = FINGER_X[index]
-		local knuckle = math.clamp(fronts[index] + FINGER_THICKNESS / 2 + FINGER_CLEAR, KNUCKLE, KNUCKLE_MAX)
-		local at = keyFrame * CF(across, -HAND_SINK, -knuckle)
+	local function closeAt(index, knuckle)
+		local at = keyFrame * CF(FINGER_X[index], -HAND_SINK, -knuckle)
 		local wrap, k = 0, 0
 		while k <= GRIP_REACH do
 			if solid(at * CF(0, -k, 0)) then
@@ -343,9 +394,27 @@ local function gripShape(offsets, keyFrame)
 			end
 			blocker = blocker or hit.name
 		end
-		fingers[index] = { knuckle = knuckle, turn = turn, cap = cap, blocker = blocker }
+		return { knuckle = knuckle, turn = turn, cap = cap, blocker = blocker }
 	end
-	return { fingers = fingers }
+	-- The measured front is where the fingers' own band meets the grip at a few depths, and a raked
+	-- grip's front strap runs further forward below them: a finger hinged just clear of the measured
+	-- front then met the strap a few degrees into its close. So a finger that cannot close from there
+	-- tries its knuckle line further forward, KNUCKLE_STEP at a time up to the palm's reach, and keeps
+	-- whichever closes it furthest.
+	for index = 1, FINGER_COUNT do
+		local knuckle = math.clamp(fronts[index] + FINGER_THICKNESS / 2 + FINGER_CLEAR, KNUCKLE, KNUCKLE_MAX)
+		local best = closeAt(index, knuckle)
+		while best.cap < FINGER_MIN_CLOSE and knuckle < KNUCKLE_MAX - 1e-4 do
+			knuckle = math.min(knuckle + KNUCKLE_STEP, KNUCKLE_MAX)
+			local tried = closeAt(index, knuckle)
+			-- Closing further wins; failing that, a line where the finger at least lies free of the gun.
+			if tried.cap > best.cap or (tried.cap == best.cap and not tried.blocker and best.blocker) then
+				best = tried
+			end
+		end
+		fingers[index] = best
+	end
+	return { fingers = fingers, onNothing = onNothing }
 end
 
 local Arms = {}
@@ -388,9 +457,18 @@ end
 
 -- A bone: a part, its unscaled size, and its two joints in its own unscaled space. `fit` scales it to
 -- ARM_THICKNESS across and `length` between the joints (times `stretch` when a hand is out of reach).
-local function bone(part, top, bottom, length)
-	return { part = part, base = part.Size, rawTop = top, rawBottom = bottom, length = length, stretch = -1 }
+-- `elbow` says which end meets the other bone at the elbow ("top" or "bottom").
+local function bone(part, top, bottom, length, elbow)
+	return { part = part, base = part.Size, rawTop = top, rawBottom = bottom, length = length, stretch = -1, elbow = elbow }
 end
+
+-- How far each bone runs on past the elbow joint. Two boxes that END at a joint leave an open wedge on the
+-- outside of any bend -- 0.146 studs across at a bent elbow on the stand-in arms and on an R6 arm, whose
+-- joints are the middles of its end faces. Running each on by half the arm's thickness closes it for any
+-- bend up to a right angle. An R15 arm's rig attachments already sit that far inside the part, so it is
+-- unchanged. The wrist is not lengthened: the forearm is three times the hand's thickness, and run on it
+-- would come out through the back of the hand.
+local ELBOW_OVERRUN = ARM_THICKNESS / 2
 
 local function fit(b, stretch)
 	if math.abs(b.stretch - stretch) < 0.005 then
@@ -414,8 +492,23 @@ local function fit(b, stretch)
 	-- the root of a negative number.
 	along = along > 0 and math.sqrt(along) or (wanted * math.abs(raw.Y) / math.max(raw.Magnitude, 1e-3))
 	local scale = V(across, along / math.max(math.abs(raw.Y), 1e-3), through)
-	b.part.Size = b.base * scale
-	b.top = b.rawTop * scale
+	local size = b.base * scale
+	local top = b.rawTop * scale
+	-- Run on past the elbow (ELBOW_OVERRUN), lengthening the part at that end only: the part grows by
+	-- `extra` and its joints move `extra / 2` away from the elbow end in its own space, so the far end
+	-- stays where it was.
+	if b.elbow then
+		local half = size.Y / 2
+		local at = (b.elbow == "top" and top.Y) or (top.Y - raw.Y * scale.Y)
+		local have = b.elbow == "top" and (half - at) or (half + at)
+		local extra = math.max(ELBOW_OVERRUN - have, 0)
+		if extra > 0 then
+			size = V(size.X, size.Y + extra, size.Z)
+			top = top + V(0, b.elbow == "top" and -extra / 2 or extra / 2, 0)
+		end
+	end
+	b.part.Size = size
+	b.top = top
 	-- The joint line in the scaled part's own space. `place` lays THIS along the bone.
 	b.joint = raw * scale
 end
@@ -435,9 +528,9 @@ function Arms.new(parent, character)
 			local lower = character:FindFirstChild(name .. "LowerArm")
 			local hand = character:FindFirstChild(name .. "Hand")
 			arm.upper = bone(copyPart(upper), joint(upper, name .. "ShoulderRigAttachment", upper.Size.Y / 2),
-				joint(upper, name .. "ElbowRigAttachment", -upper.Size.Y / 2), UPPER)
+				joint(upper, name .. "ElbowRigAttachment", -upper.Size.Y / 2), UPPER, "bottom")
 			arm.lower = lower and bone(copyPart(lower), joint(lower, name .. "ElbowRigAttachment", lower.Size.Y / 2),
-				joint(lower, name .. "WristRigAttachment", -lower.Size.Y / 2), FOREARM)
+				joint(lower, name .. "WristRigAttachment", -lower.Size.Y / 2), FOREARM, "top")
 			if hand then
 				local handPart = copyPart(hand)
 				local scale = handScale(hand.Size)
@@ -448,16 +541,16 @@ function Arms.new(parent, character)
 		elseif r6 then
 			local source = character:FindFirstChild(name .. " Arm")
 			local half = source.Size.Y / 2
-			arm.upper = bone(copyPart(source), V(0, half, 0), V(0, -half, 0), UPPER)
-			arm.lower = bone(copyPart(source), V(0, half, 0), V(0, -half, 0), FOREARM)
+			arm.upper = bone(copyPart(source), V(0, half, 0), V(0, -half, 0), UPPER, "bottom")
+			arm.lower = bone(copyPart(source), V(0, half, 0), V(0, -half, 0), FOREARM, "top")
 		else
-			arm.upper = bone(block(name .. "UpperArm", V(1, 1, 1), DEFAULT_SHIRT), V(0, 0.5, 0), V(0, -0.5, 0), UPPER)
-			arm.lower = bone(block(name .. "LowerArm", V(1, 1, 1), DEFAULT_SKIN), V(0, 0.5, 0), V(0, -0.5, 0), FOREARM)
+			arm.upper = bone(block(name .. "UpperArm", V(1, 1, 1), DEFAULT_SHIRT), V(0, 0.5, 0), V(0, -0.5, 0), UPPER, "bottom")
+			arm.lower = bone(block(name .. "LowerArm", V(1, 1, 1), DEFAULT_SKIN), V(0, 0.5, 0), V(0, -0.5, 0), FOREARM, "top")
 			arm.hand = block(name .. "Hand", V(HAND_THICKNESS, HAND_LENGTH, HAND_WIDTH), DEFAULT_SKIN)
 			arm.handTop = V(0, HAND_LENGTH / 2, 0)
 		end
 		if not arm.lower then
-			arm.lower = bone(block(name .. "LowerArm", V(1, 1, 1), arm.upper.part.Color), V(0, 0.5, 0), V(0, -0.5, 0), FOREARM)
+			arm.lower = bone(block(name .. "LowerArm", V(1, 1, 1), arm.upper.part.Color), V(0, 0.5, 0), V(0, -0.5, 0), FOREARM, "top")
 		end
 		fit(arm.upper, 1)
 		fit(arm.lower, 1)
@@ -512,6 +605,29 @@ function Arms.new(parent, character)
 	return self
 end
 
+-- What the avatar's arms look like, as one string: each arm part's colour, material, size and mesh, and
+-- the shirt. Two equal strings mean a copy made from either looks the same.
+local LOOK_PARTS = {
+	"RightUpperArm", "RightLowerArm", "RightHand", "LeftUpperArm", "LeftLowerArm", "LeftHand", "Right Arm", "Left Arm",
+}
+local LOOK_CHECK = 1
+function Arms.LookOf(character)
+	if not character then
+		return ""
+	end
+	local out = {}
+	for _, name in ipairs(LOOK_PARTS) do
+		local part = character:FindFirstChild(name)
+		if part and part:IsA("BasePart") then
+			out[#out + 1] = string.format("%s|%s|%s|%s|%s", name, tostring(part.Color), tostring(part.Material),
+				tostring(part.Size), part:IsA("MeshPart") and part.MeshId or "")
+		end
+	end
+	local shirt = character:FindFirstChildOfClass("Shirt")
+	out[#out + 1] = shirt and shirt.ShirtTemplate or "-"
+	return table.concat(out, ";")
+end
+
 function Arms:SetHidden(hidden)
 	for _, part in ipairs(self.parts) do
 		part.LocalTransparencyModifier = hidden and 1 or 0
@@ -531,10 +647,52 @@ function Arms:pose(side, view, hand, curl, parts, cframes, held)
 	local handFrame = hand * HAND_AXES[side]
 	-- The wrist is where the hand's own wrist joint is; an R6 arm has no hand, and ends at the palm.
 	local wrist = arm.hand and (handFrame * arm.handTop) or hand.Position
+	local reach = UPPER + FOREARM
+
+	-- A hand past comfortable reach brings the shoulder forward (REACH_COMFORT, SHOULDER_TRAVEL): first
+	-- straight toward the wrist, and where that would bring it into the widest view, on along the view's
+	-- bottom edge (kept SHOULDER_HIDE below it) toward the wrist. Worked in view space, where that edge is
+	-- the plane depth = (-y - SHOULDER_HIDE) / WIDEST_VIEW_TAN.
+	local comfort = reach * REACH_COMFORT
+	if (wrist - shoulder).Magnitude > comfort then
+		local from = SHOULDER[side]
+		local target = view:PointToObjectSpace(wrist)
+		-- How far inside the hidden side of that plane a view-space point is (negative is hidden).
+		local function shown(p)
+			return -p.Z - (-p.Y - SHOULDER_HIDE) / WIDEST_VIEW_TAN
+		end
+		local toward = (target - from).Unit
+		local slide = (target - from).Magnitude - comfort
+		local rate = shown(from + toward) - shown(from)
+		if rate > 0 then
+			slide = math.min(slide, math.max(-shown(from) / rate, 0))
+		end
+		slide = math.min(slide, SHOULDER_TRAVEL)
+		local moved = from + toward * slide
+		local left = SHOULDER_TRAVEL - slide
+		local still = (target - moved).Magnitude - comfort
+		if still > 0 and left > 0 then
+			-- Along the edge: the direction to the wrist with the plane's normal taken out, which keeps
+			-- `shown` where it is. The distance shrinks by less than the step, so a few steps close in.
+			local normal = V(0, 1 / WIDEST_VIEW_TAN, -1).Unit
+			for _ = 1, 4 do
+				local want = target - moved
+				local glide = want - normal * want:Dot(normal)
+				still = want.Magnitude - comfort
+				if still <= 1e-3 or left <= 1e-3 or glide.Magnitude < 1e-4 then
+					break
+				end
+				local step = math.min(still / math.max(glide.Unit:Dot(want.Unit), 0.2), left)
+				moved += glide.Unit * step
+				left -= step
+			end
+		end
+		shoulder = view * moved
+	end
+
 	local toWrist = wrist - shoulder
 	local distance = toWrist.Magnitude
 	local direction = distance > 1e-3 and toWrist.Unit or view.LookVector
-	local reach = UPPER + FOREARM
 	local elbow
 	if distance >= reach * 0.999 then
 		-- Out of reach: stretch both bones rather than leave a gap at the wrist.
@@ -552,7 +710,33 @@ function Arms:pose(side, view, hand, curl, parts, cframes, held)
 		if perpendicular.Magnitude < 1e-3 then
 			perpendicular = -view.UpVector
 		end
-		elbow = shoulder + direction * along + perpendicular.Unit * out
+		local swing = perpendicular.Unit
+		-- Toward a straight wrist (WRIST_FOLLOW): where the elbow would be if the forearm carried straight
+		-- on back from the hand. Weighted by how far off the shoulder-wrist line that is, so it fades out
+		-- smoothly rather than flipping where the line passes through it.
+		local straight = (wrist - hand.LookVector * FOREARM) - shoulder
+		straight -= direction * straight:Dot(direction)
+		local lean = math.min(straight.Magnitude / 0.2, 1) * WRIST_FOLLOW
+		if straight.Magnitude > 1e-4 then
+			local blend = swing * (1 - lean) + straight.Unit * lean
+			if blend.Magnitude > 1e-3 then
+				swing = blend.Unit
+			end
+		end
+		-- No higher than ELBOW_CEILING above the shoulder: the swing is an angle round the line from the
+		-- straight-down direction, and the height limits that angle either way.
+		local up = view.UpVector
+		local down = -up - direction * (-up):Dot(direction)
+		if down.Magnitude > 1e-3 and out > 1e-3 then
+			down = down.Unit
+			local across = direction:Cross(down)
+			local k = -down:Dot(up)
+			local angle = math.atan2(swing:Dot(across), swing:Dot(down))
+			local limit = math.acos(math.clamp((direction:Dot(up) * along - ELBOW_CEILING) / (k * out), -1, 1))
+			angle = math.clamp(angle, -limit, limit)
+			swing = down * math.cos(angle) + across * math.sin(angle)
+		end
+		elbow = shoulder + direction * along + swing * out
 	end
 
 	local function add(part, cframe)
@@ -596,15 +780,19 @@ function Arms:pose(side, view, hand, curl, parts, cframes, held)
 		held = held or FIST
 		for index, finger in ipairs(arm.fingers) do
 			local shape = held[index] or FIST[index]
-			if shape.cap < FINGER_MIN_CLOSE then
-				-- This finger has no room to close here. It is NOT stood out straight: an open finger
-				-- reaches half a hand past the palm, and on some guns that put it across the sight
-				-- picture. It is parked inside the palm instead, so the hand falls back to the plain
-				-- shape it had before fingers existed and no gun is made worse by them.
+			if shape.cap < FINGER_MIN_CLOSE and shape.blocker then
+				-- This finger has no room here even lying open: it would be inside the gun. It is parked
+				-- inside the palm.
 				local inside = palmFace * CF(finger.across, HAND_THICKNESS / 2, 0)
 				add(finger[1], inside)
 				add(finger[2], inside)
 			else
+				-- It closes as far as the gun lets it -- and a finger with no room to close but room to lie
+				-- open lies along the gun, as a trigger finger lies along the guard or a hand lies flat on
+				-- a body too broad to wrap. It used to be parked inside the palm too, because an open finger
+				-- could reach across the sight picture; the close is now tested against the sight line
+				-- (SIGHT_CLEAR) as it is against the gun, and that let 26 of 62 trigger hands show no
+				-- finger at all -- a slab laid on the grip (#92).
 				local close = math.min(curl, shape.cap) * finger.lean
 				local upper, lower = fingerAt(palmFace * CF(finger.across, 0, -shape.knuckle), close, shape.turn)
 				add(finger[1], upper)
@@ -859,14 +1047,16 @@ function Viewmodel.new(def, options)
 	self.eyePoint = ((self.keys.Sight or CF(0, 0.2, 0.2)) * CF(0, 0, self.eyeRelief)).Position
 	self.laserEmitter = model:FindFirstChild("LaserEmitter")
 
-	-- What the fingers close on at each anchor this gun has. `false` is a measured answer too: the hand is
-	-- on nothing there (a pocket, a hand slapped flat on a magazine) and the fingers close on themselves.
+	-- What the fingers close on at each anchor this gun has. Where the hand is on nothing (a pocket, a hand
+	-- slapped flat on a magazine) the shape says so (`onNothing`) and the fingers close on themselves, kept
+	-- out of the sight picture like any other.
 	local shapes = gripCache[def.id]
 	if not shapes then
 		shapes = {}
 		for name in pairs(CURL) do
 			if self.keys[name] then
-				shapes[name] = gripShape(self.offsets, self.keys[name]) or false
+				local sight = self.keys.Sight and { frame = self.keys.Sight, relief = self.eyeRelief }
+				shapes[name] = gripShape(self.offsets, self.keys[name], sight)
 			end
 		end
 		gripCache[def.id] = shapes
@@ -874,7 +1064,10 @@ function Viewmodel.new(def, options)
 	self.gripShapes = shapes
 
 	-- The player's own arms (their avatar, when there is one), in a model of their own under the gun.
+	self.character = options.character
 	self.arms = Arms.new(model, options.character)
+	self.armsLook = Arms.LookOf(options.character)
+	self.lookCheckAt = 0
 
 	-- Animation state.
 	self.now = 0
@@ -1649,6 +1842,23 @@ function Viewmodel:Update(dt, input)
 	if now >= (self.nightCheckAt or 0) then
 		self.nightCheckAt = now + 0.5
 		self:updateNightSights()
+	end
+	-- The arms follow the avatar as it is now (#44). A character spawns as a plain grey rig and its
+	-- appearance -- colours, body package, shirt -- arrives a moment later, and the gun you spawn holding
+	-- is drawn in between: its arms were copied from the grey rig and stayed grey and bare until the next
+	-- weapon swap. Once a second the avatar's arms are compared with what was copied, and copied again if
+	-- they have changed.
+	if self.character and now >= self.lookCheckAt then
+		self.lookCheckAt = now + LOOK_CHECK
+		local look = Arms.LookOf(self.character)
+		if look ~= self.armsLook then
+			self.armsLook = look
+			self.arms.model:Destroy()
+			self.arms = Arms.new(self.model, self.character)
+			if self.hidden then
+				self.arms:SetHidden(true)
+			end
+		end
 	end
 	local view = input.camera
 

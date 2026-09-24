@@ -2474,7 +2474,12 @@ STYLES.doublebarrel = function(g)
 		-- the hand to the right, the heel of the hand behind and above, below the line of sight.
 		-- Forward on the wrist, just behind the guard, where the index finger reaches the triggers: further
 		-- back it sat a hand's breadth under the eye and its forearm filled the right of the sight picture.
-		g:hand("GripHand", V(32, -20, 74), V(-0.2, -0.75, -0.63), V(1, 0.35, 0.05))
+		-- The fingers point 30 degrees down the wrist rather than 50, and the hand sits 4 mm lower and 4 mm
+		-- further forward: steeper, no elbow that stays out of the sight picture could line the forearm up
+		-- with the hand, and the wrist met it at 105 degrees at full aim (#11); with the palm at its real
+		-- length, the forearm behind it then came into the crosshair's ring unless the hand came forward.
+		-- Measured by tools/fps_arms_check.py.
+		g:hand("GripHand", V(32, -24, 70), V(-0.25, -0.5, -0.83), V(1, 0.35, 0.05))
 	end
 
 	if v.engraved or g.rarityIndex >= 5 then
