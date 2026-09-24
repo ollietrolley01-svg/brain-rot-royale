@@ -547,7 +547,7 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	local lotBays = 0
 	local okParking, parkingErr = pcall(function()
 		local ParkingLots = require(script.Parent:WaitForChild("ParkingLots"))
-		lotBays = ParkingLots.Build(town, center, spread, profile.bays and profile.bays.count or 6, space, rectFree) or 0
+		lotBays = ParkingLots.Build(town, center, spread, profile.bays and profile.bays.count or 6, space, rectFree, drawn) or 0
 	end)
 	if not okParking then
 		warn("[MapGenerator] parking lot failed: " .. tostring(parkingErr))

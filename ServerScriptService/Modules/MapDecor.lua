@@ -104,6 +104,9 @@ MapDecor.PavingTop = 0.4
 MapDecor.CobblesTop = 0.46
 MapDecor.PavementTop = 0.35
 local KERB = 0.8
+-- How far every kerb and pavement reaches under the ground it stands on (from -0.06), so nothing
+-- standing at ground level shares its underside.
+local KERB_SINK = 0.06
 
 -- A flat right triangle, `thickness` thick: the right angle at `corner`, one leg `lengthU` long
 -- along `u * signU`, the other `lengthV` long along `v * signV`, with `u` and `v` unit vectors at
@@ -677,6 +680,59 @@ function MapDecor.Street(parent, a, b, width, sidewalk, ends)
 			MapDecor.CentreLineColor, Enum.Material.SmoothPlastic))
 	end
 	currentName = "Part"
+end
+
+-- A dropped kerb: where a driveway or a car park's aisle meets a street, the kerb between them comes
+-- down to the carriageway's own height, so the way in reads as a way in and not as a car park behind
+-- a kerb. `parent` holds the street's kerbs (its town); `centre` is any point on the line vehicles
+-- cross the kerb along, `across` that line's level direction, and `halfWidth` half the opening.
+--
+-- Every kerb the line crosses square-on, within `reach` studs of `centre`, is cut into the kerb either
+-- side of the opening and a lower piece across it: the same length, line and underside, its top at
+-- RoadLift instead of standing 0.1 proud. Cut rather than laid over, so no two pieces share any
+-- volume or face. The pavement behind stays as it is -- it's where people walk. Returns how many
+-- kerbs it dropped.
+function MapDecor.DropKerb(parent, centre, across, halfWidth, reach)
+	reach = reach or 12
+	local dropped = 0
+	for _, kerb in ipairs(parent:GetChildren()) do
+		if kerb.Name == "Kerb" and kerb:IsA("BasePart") then
+			local cf, size = kerb.CFrame, kerb.Size
+			-- The kerb's length is its longer level axis; the crossing has to run square across it.
+			local lengthAxis = size.Z >= size.X and cf.LookVector or cf.RightVector
+			local length = math.max(size.X, size.Z)
+			local offset = kerb.Position - centre
+			local along = offset.X * lengthAxis.X + offset.Z * lengthAxis.Z
+			local out = offset.X * across.X + offset.Z * across.Z
+			if math.abs(lengthAxis.X * across.X + lengthAxis.Z * across.Z) < 0.01 and math.abs(out) <= reach then
+				-- The opening along the kerb, from the kerb's own middle, clipped to its ends.
+				local o0 = math.max(-length / 2, -along - halfWidth)
+				local o1 = math.min(length / 2, -along + halfWidth)
+				if o1 - o0 > 0.05 then
+					local frame = CFrame.lookAt(kerb.Position, kerb.Position + Vector3.new(lengthAxis.X, 0, lengthAxis.Z))
+					local width, height = math.min(size.X, size.Z), size.Y
+					local bottom = kerb.Position.Y - height / 2
+					local function strip(name, from, to, top, color)
+						if to - from > 0.05 then
+							currentName = name
+							-- Local -Z runs along lengthAxis, so a distance `d` along it is local z = -d.
+							clutter(makePart(parent, Vector3.new(width, top - bottom, to - from),
+								frame * CFrame.new(0, (bottom + top) / 2 - kerb.Position.Y, -(from + to) / 2), color, kerb.Material))
+						end
+					end
+					strip("Kerb", -length / 2, o0, bottom + height, kerb.Color)
+					strip("Kerb", o1, length / 2, bottom + height, kerb.Color)
+					-- Down to the carriageway's top: every kerb starts KERB_SINK under the ground it
+					-- stands on, as the asphalt beside it starts at that ground.
+					strip("DroppedKerb", o0, o1, bottom + KERB_SINK + MapDecor.RoadLift, kerb.Color)
+					kerb:Destroy()
+					dropped += 1
+				end
+			end
+		end
+	end
+	currentName = "Part"
+	return dropped
 end
 
 -- The box where streets or roads meet, and its corners, laid so every piece butts the arms
@@ -1479,6 +1535,10 @@ function MapDecor.Driveways(town, houses, setback, sidewalk, lane, groundHeightA
 						CFrame.new(slab.X, ground + DRIVEWAY_TOP - 0.15, slab.Z) * slab.Rotation, DRIVEWAY_COLOR, Enum.Material.Concrete)
 					strip.CanCollide = false
 					currentName = "Part"
+					-- The kerb at the foot of the driveway comes down, so it runs out to the street
+					-- rather than stopping behind a kerb (roads_check.py, driveway access).
+					local kerbLine = turn * CFrame.new(x, 0, pavementBack - sidewalk)
+					MapDecor.DropKerb(town, kerbLine.Position, turn.LookVector, halfSlabX, 2)
 					-- Nose-in: facing the way the house faces away from the street (local +Z).
 					local carAt = turn * CFrame.new(x, 0, centreZ)
 					local frame = CFrame.lookAt(Vector3.new(carAt.X, ground + DRIVEWAY_TOP, carAt.Z),
