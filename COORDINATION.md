@@ -144,10 +144,14 @@ stopped once and was resumed. If any tab is interrupted:
    - Nothing destructive.
    - Never run `tools/publish.ps1`.
    - No system or Roblox settings changes.
-   - Never kill processes you didn't start, and never close a Studio window by hand. The one
-     exception is the harness itself: while it holds the lock, `runtest.ps1` / `gallery.ps1` close
-     Studio processes whose command line carries a `BRR_RunTest.rbxlx` / `BRR_Gallery.rbxlx` snapshot
-     path (never a title match, which used to risk closing Oliver's own loading Studio).
+   - Never kill processes you didn't start, and never close Oliver's own Studio. A harness Studio run
+     (one whose command line carries a `BRR_RunTest.rbxlx` / `BRR_Gallery.rbxlx` snapshot path) may be
+     closed when it is wasting the queue -- wrong build, hidden window -- (Oliver, 2026-09-24: the old
+     never-kill rule is lifted). `runtest.ps1` / `gallery.ps1` move stale `BRR_*` autosaves out of
+     `%LOCALAPPDATA%\Roblox\RobloxStudio\AutoSaves` before every launch, so a closed run no longer
+     leaves an Auto-Recovery dialog over the next one. Stop the run's script too, so the lock frees.
+     The harness itself closes only by snapshot path, never by a title match (which used to risk
+     closing Oliver's own loading Studio).
 4. **Save data.** Additive and backward compatible only. Never wipe, reset or reinterpret existing saves.
 5. **Studio.**
    - `runtest.ps1` and `gallery.ps1` queue on a machine-wide lock by themselves. Always run them with

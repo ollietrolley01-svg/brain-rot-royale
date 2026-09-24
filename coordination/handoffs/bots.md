@@ -75,12 +75,13 @@ branch never exercised — no `NOTE:` line in 15a/15b); network ownership sticks
 <scratchpad>\pin_run15c.rbxlx -WaitSeconds 900` answers S26, S27 and the watch list in ONE launch. If the tree moved
 since 10:07: rebuild the probe copy as tree `tools/bot_probe.lua` + `patch_probe_s26.py` + `patch_probe_s27.py` (NOT
 `patch_probe_run15.py`, already landed), and pin_run15c as a tree copy + `patch_mill_only.py`, built with build_place.py.
-One launch per tab per hour; never kill a Studio job (lesson 4).
+One launch per tab per hour. Closing a Studio job is allowed now (lesson 4).
 
 ## LESSONS
 1. A seam a probe overrides is restored to what it WAS, never nil (4,937 crashes voided a run).
 2. A truncated log is a silent lie: 5,000-line buffer, error spam evicts results. Assert on the tail.
 3. A cached answer about geometry is stale the moment the bot moves toward it. Pin the environment: A/B on one snapshot,
    place built after the edit; numbers that do not move are the tell. Fail your own feature on your own numbers.
-4. Never kill a Studio-driving job (TaskStop/Stop-Process): the Auto-Recovery modal it leaves breaks the NEXT tab's run
-   silently. Let it finish; if you must, clear `%LOCALAPPDATA%\Roblox\AutoSaves` and say so.
+4. (Lifted 2026-09-24 by Oliver.) A killed Studio job used to leave an Auto-Recovery modal that silently broke the NEXT
+   run. The harness now moves stale `BRR_*` autosaves out of `%LOCALAPPDATA%\Roblox\RobloxStudio\AutoSaves` (the real
+   path) before every launch, so closing a job is fine. Stop its script too so the lock frees.
