@@ -138,8 +138,13 @@ by the next grep:
 
 ## Constraints the next tab must not rediscover
 
-- `MenuClient` is at **194 top-level locals**, limit 200, warn 195, and overrunning is a SILENT
-  compile failure. Count NAMES, not `local` statements. `verify.py` prints the fleet max.
+- `MenuClient` hit **200 of 200** on 2026-09-22 — the hard limit, where one more local anywhere in
+  the file stops it compiling SILENTLY and the whole menu stops running. Fixed by wrapping the entire
+  crate reveal in a `do` block (35 locals released at its end); it is now at or below 194 and no
+  longer the fleet max. The reveal was safe to enclose because none of its 35 names is referenced
+  before the block or after it, checked by name in BOTH directions. **Check `verify.py`'s
+  "main-chunk locals" line before adding any top-level local here.** Count NAMES, not `local`
+  statements — two lines in this file declare five between them.
 - `UiKit.form(viewport)` -> `large` / `short` / `tall` is the ONE version test; `PhoneLayout.Mode` is
   a different question (device, not shape) and returns different words on purpose. Do not unify.
 - One `UIScale` per element: a fit and an animation on the same element fight, and the animation wins
@@ -147,7 +152,7 @@ by the next grep:
 - The gallery reads its own file at lock acquisition but modules from the BUILT place — rebuild
   before a render or you will render yesterday's module.
 
-## Three lessons, each cost something
+## Lessons, each cost something
 
 1. **A deletion that slices to the next delimiter deletes the delimiter.** Removing a table entry
    "up to the next `}`" took the enclosing table's brace; static went 0 -> 3 findings and the tree
@@ -164,3 +169,13 @@ by the next grep:
 5. **Back up before the first edit, especially in your own file.** Four files got a `.pre-` copy
    tonight; `EnemyAura` did not, because it felt like mine. Git had it; the habit still failed where
    it was least expected to matter.
+
+6. **Never run a whole-tree git command on a shared working tree.** I ran `git stash` to isolate one
+   file's diff, stashing six other tabs' uncommitted work for the seconds it took to run a check. The
+   pop restored cleanly and nothing was lost — by luck, not design. `git diff -- <file>` was the
+   read-only answer. Same family as the slice-to-next-delimiter, and worse: the blast radius was
+   other people's work.
+7. **A stale check is not a regression.** `verify.py`'s progression check fires on the OLD shape of
+   `ProgressionPanel.Render`; the call now passes `noTabs = true` by deliberate redesign. It fails
+   identically with and without my changes. Update the check to the new contract — do not relax it,
+   and do not "fix" the call.
