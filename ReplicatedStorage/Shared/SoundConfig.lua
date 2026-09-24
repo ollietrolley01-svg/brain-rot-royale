@@ -21,6 +21,8 @@
 -- To use real audio instead, put a Creator Marketplace id ("rbxassetid://123456") in a layer's
 -- `id` and drop the extra layers; nothing outside this file needs to change. `maxDistance` only
 -- applies to positional playback (Sfx.PlayAt), which is how you hear other people's gunfire.
+-- How distance, travel time and indoors/outdoors change a cue is in the Acoustics section at the
+-- bottom (#120); `tools/sound_acoustics_check.py` holds it to its rules.
 
 local SoundConfig = {}
 
@@ -203,10 +205,12 @@ SoundConfig.Sounds = {
 		maxDistance = 460,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 1, pitch = 1.4 },
+			{ id = SNAP, volume = 1, pitch = 1.4, crack = true },
 			{ id = BOOM2, volume = 0.65, pitch = 2.2 },
 			{ id = BASS, volume = 0.35, pitch = 2.4 },
 			{ id = METAL, volume = 0.12, pitch = 2.6, delay = 0.02 },
+			-- Out in the open the report comes back off the terrain a quarter of a second later.
+			{ id = BOOM3, volume = 0.12, pitch = 0.95, delay = 0.25, where = "outdoor" },
 		},
 		effects = {
 			{ "DistortionSoundEffect", { Level = 0.2 } },
@@ -220,9 +224,10 @@ SoundConfig.Sounds = {
 		maxDistance = 620,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 1, pitch = 1.2 },
+			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
 			{ id = BOOM2, volume = 0.8, pitch = 1.7 },
 			{ id = BASS, volume = 0.5, pitch = 1.5 },
+			{ id = BOOM3, volume = 0.18, pitch = 0.8, delay = 0.3, where = "outdoor" },
 		},
 		effects = {
 			{ "DistortionSoundEffect", { Level = 0.2 } },
@@ -236,7 +241,7 @@ SoundConfig.Sounds = {
 		maxDistance = 520,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 0.95, pitch = 1.3 },
+			{ id = SNAP, volume = 0.95, pitch = 1.3, crack = true },
 			{ id = BOOM2, volume = 0.7, pitch = 1.9 },
 			{ id = BASS, volume = 0.45, pitch = 1.9 },
 		},
@@ -263,7 +268,7 @@ SoundConfig.Sounds = {
 		maxDistance = 500,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 0.85, pitch = 1.3 },
+			{ id = SNAP, volume = 0.85, pitch = 1.3, crack = true },
 			{ id = BOOM2, volume = 0.5, pitch = 2.8 },
 			{ id = BASS, volume = 0.4, pitch = 2.6 },
 		},
@@ -274,14 +279,17 @@ SoundConfig.Sounds = {
 	},
 	GunshotShotgun = {
 		-- Mostly boom: a wide explosion body, a lower crack, a thump of bass and a short room tail.
+		-- Pitched lower than any rifle: a 12-bore's muzzle blast comes out of a wide bore at low
+		-- pressure, so its energy sits an octave or so under a rifle's, and the shot is subsonic, so
+		-- there is no separate crack.
 		volume = 0.42,
 		pitch = 1,
 		maxDistance = 440,
 		category = "Weapons",
 		layers = {
-			{ id = BOOM3, volume = 1, pitch = 1.65 },
-			{ id = SNAP, volume = 0.75, pitch = 0.95 },
-			{ id = BASS, volume = 0.65, pitch = 1.3 },
+			{ id = BOOM3, volume = 1, pitch = 1.45 },
+			{ id = SNAP, volume = 0.75, pitch = 0.85 },
+			{ id = BASS, volume = 0.7, pitch = 1.1 },
 			{ id = COLLIDE, volume = 0.25, pitch = 1.6 },
 		},
 		effects = {
@@ -298,18 +306,22 @@ SoundConfig.Sounds = {
 		maxDistance = 800,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 1, pitch = 1.1 },
+			{ id = SNAP, volume = 1, pitch = 1.1, crack = true },
 			{ id = BOOM2, volume = 0.95, pitch = 1.4 },
 			{ id = BASS, volume = 0.7, pitch = 1.0 },
-			{ id = BOOM3, volume = 0.3, pitch = 0.9, delay = 0.08 },
+			-- Outdoors the roll is the terrain answering: a slow second boom, then a fainter echo
+			-- off something further away. Indoors the room reverb below replaces both.
+			{ id = BOOM3, volume = 0.3, pitch = 0.9, delay = 0.08, where = "outdoor" },
+			{ id = BOOM3, volume = 0.2, pitch = 0.7, delay = 0.5, where = "outdoor" },
 		},
 		effects = {
 			{ "DistortionSoundEffect", { Level = 0.18 } },
-			{ "ReverbSoundEffect", { DecayTime = 2.4, WetLevel = -6, DryLevel = 0 } },
+			{ "ReverbSoundEffect", { DecayTime = 1.6, WetLevel = -6, DryLevel = 0 } },
 		},
 	},
 	GunshotSuppressed = {
 		-- A cough, not a crack: a thin high tick, the action cycling, a hiss of gas; lows cut.
+		acoustic = "suppressed",
 		volume = 0.38,
 		pitch = 1,
 		maxDistance = 140,
@@ -338,6 +350,7 @@ SoundConfig.Sounds = {
 	},
 	GunshotRail = {
 		-- Electric: a descending ping, a hard bright crack, a zip of charge, flanged so it shimmers.
+		acoustic = "energy",
 		volume = 0.44,
 		pitch = 1,
 		maxDistance = 700,
@@ -370,6 +383,8 @@ SoundConfig.Sounds = {
 	},
 	GunshotCrossbow = {
 		-- A twang: a slow low snap for the string, a buzz as it settles, the thunk of the stock.
+		-- A bow has no muzzle blast, so it carries like a suppressed gun, not a loud one.
+		acoustic = "suppressed",
 		volume = 0.45,
 		pitch = 1,
 		maxDistance = 160,
@@ -488,6 +503,7 @@ SoundConfig.Sounds = {
 	},
 	GunshotZap = {
 		-- Microwave Zapper: an electric buzz (a tremolo at mains-hum speed), a beep, a zap.
+		acoustic = "energy",
 		volume = 0.36,
 		pitch = 1,
 		maxDistance = 340,
@@ -559,6 +575,8 @@ SoundConfig.Sounds = {
 	},
 	GunshotLavaLamp = {
 		-- Lava Lamp Lancer: a marksman rifle's report with a deep, liquid bloop under it.
+		-- Its reverb is part of the bloop, not a room, so it plays indoors and out.
+		tail = "always",
 		volume = 0.4,
 		pitch = 1,
 		maxDistance = 600,
@@ -573,6 +591,7 @@ SoundConfig.Sounds = {
 	},
 	GunshotSnow = {
 		-- Snow Globe Singularity: a soft crack, a glassy tinkle and a hush of snow, bright and cold.
+		tail = "always",
 		volume = 0.38,
 		pitch = 1,
 		maxDistance = 380,
@@ -965,16 +984,21 @@ SoundConfig.Sounds = {
 
 	-- A rocket going off: a sharp crack off `snap`, the two explosion files under it, one slowed
 	-- for the deep body, and a sub thump. A long room tail, because a blast fills a street.
+	-- Every blast: the reverb is the room when the listener is under a roof; out in the open the tail
+	-- is a late, slowed echo off the terrain instead, and past `distant.from` studs the ExplosionFar
+	-- rumble is layered in underneath as the crack and the top end fall away.
 	ExplosionRocket = {
 		volume = 0.8,
 		pitch = 1,
 		maxDistance = 900,
 		category = "Weapons",
+		distant = { cue = "ExplosionFar", from = 250 },
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 0.5 },
 			{ id = BOOM2, volume = 1, pitch = 1.1 },
 			{ id = BOOM3, volume = 1, pitch = 0.72 },
 			{ id = BASS, volume = 0.9, pitch = 0.55 },
+			{ id = BOOM3, volume = 0.35, pitch = 0.5, delay = 0.45, where = "outdoor" },
 		},
 		effects = { { "ReverbSoundEffect", { DecayTime = 2.4, WetLevel = -8, DryLevel = 0 } } },
 	},
@@ -984,10 +1008,12 @@ SoundConfig.Sounds = {
 		pitch = 1,
 		maxDistance = 750,
 		category = "Weapons",
+		distant = { cue = "ExplosionFar", from = 250 },
 		layers = {
 			{ id = SNAP, volume = 0.8, pitch = 0.65 },
 			{ id = BOOM2, volume = 1, pitch = 1.3 },
 			{ id = BASS, volume = 0.7, pitch = 0.75 },
+			{ id = BOOM3, volume = 0.25, pitch = 0.6, delay = 0.4, where = "outdoor" },
 		},
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.5, WetLevel = -9, DryLevel = 0 } } },
 	},
@@ -997,20 +1023,26 @@ SoundConfig.Sounds = {
 		pitch = 1,
 		maxDistance = 850,
 		category = "Weapons",
+		distant = { cue = "ExplosionFar", from = 250 },
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 0.55 },
 			{ id = BOOM3, volume = 1, pitch = 0.9 },
 			{ id = BOOM2, volume = 0.8, pitch = 1.25 },
 			{ id = METAL, volume = 0.5, pitch = 0.8, delay = 0.05 },
 			{ id = BASS, volume = 0.8, pitch = 0.6 },
+			{ id = BOOM3, volume = 0.3, pitch = 0.5, delay = 0.45, where = "outdoor" },
 		},
 		effects = { { "ReverbSoundEffect", { DecayTime = 2.0, WetLevel = -8, DryLevel = 0 } } },
 	},
 	-- The same blast heard from across the map: a rumble with the top taken off, played flat (not
-	-- positional) at a volume set by distance, so a fight far away still reads as thunder.
+	-- positional) at a volume set by distance, so a fight far away still reads as thunder. Its reverb
+	-- is the roll of distance, not a room, so it plays under a roof or not. `maxDistance` here is
+	-- where Sfx.PlayDistant fades it to nothing (ProjectileClient's FAR_RUMBLE).
 	ExplosionFar = {
 		volume = 0.5,
 		pitch = 1,
+		maxDistance = 1800,
+		tail = "always",
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 0.45 },
@@ -1524,6 +1556,180 @@ SoundConfig.Sounds = {
 	},
 }
 
+--------------------------------------------------------------------------------
+-- Acoustics (#120): distance, travel time and the room around the listener
+--------------------------------------------------------------------------------
+--
+-- A cue's recipe is how it sounds at the source. These are the rules for what reaches your ear
+-- from somewhere else, applied by Sfx on every positional play:
+--
+--   rolloff   each class of sound starts to fade at its own distance (RollOffMinDistance: a
+--             gunshot is loud enough to still be at full level 24 studs off, a mag change is not)
+--             and is gone by its `maxDistance`, clamped to the class's cap;
+--   air       the top end goes first. Air and the ground soak up high frequencies far more than
+--             low ones, which is why a distant gun is a dull thump and a distant blast is thunder:
+--             an equaliser on each positional voice cuts High and Mid in proportion to distance;
+--   travel    sound takes time to arrive. The scale is the one Roblox's own docs give, one stud =
+--             0.28 m, so 343 m/s is 1225 studs/s: a blast 600 studs off is heard half a second
+--             after it is seen, a shot across a 100-stud street 0.08 s after its flash;
+--   crack     a rifle bullet outruns its own report (~900 m/s against 343), so a supersonic shot
+--             that passes you is heard as a crack first and the muzzle's thump after it, the gap
+--             growing with distance. Pistols, shotguns, suppressed and energy guns have no
+--             separate crack;
+--   room      reverb is a room. A gun or blast cue's reverb only plays when the listener has a
+--             roof overhead (Sfx casts one ray up); out in the open its tail comes from layers
+--             tagged `where = "outdoor"` instead: late, slowed copies of the boom, which is what
+--             the terrain sends back. A cue whose reverb is part of its character, not a room,
+--             says `tail = "always"`.
+--
+-- Layer tags: `crack = true` marks the bullet's crack; `where = "outdoor"` / `"indoor"` plays a
+-- layer only there. Cue fields: `acoustic` names the class outright; `distant = { cue, from }`
+-- layers a far rumble in past `from` studs.
+
+local METRES_PER_STUD = 0.28
+
+SoundConfig.Acoustics = {
+	METRES_PER_STUD = METRES_PER_STUD,
+	SPEED_OF_SOUND = 343 / METRES_PER_STUD, -- studs a second
+	BULLET_SPEED = 900 / METRES_PER_STUD,
+	-- The longest any sound is held back for travel. 1800 studs (the far rumble's reach) is 1.47 s.
+	MAX_TRAVEL_DELAY = 1.6,
+	-- A supersonic shot whose line misses the listener by more than this many studs is heard as a
+	-- report only: its crack arrives with the report, at this fraction.
+	CRACK_REACH = 40,
+	CRACK_OFF_PATH = 0.5,
+	-- Where a cue with no `maxDistance` fades out (before the class cap).
+	DEFAULT_MAX_DISTANCE = 400,
+	-- Effects on one Sound: the cue's own chain plus the per-play air and room effects. Every
+	-- effect runs on every playing voice, so this is a performance cap as much as a tidy one.
+	MAX_EFFECTS_PER_SOUND = 4,
+	-- A roof within this many studs above the listener counts as being indoors.
+	CEILING_REACH = 40,
+	-- The room reverb given to a gun or blast cue that has none of its own.
+	ROOM = { DecayTime = 0.9, WetLevel = -9, DryLevel = 0 },
+
+	CLASSES = {
+		gun = { rollMin = 24, maxCap = 900, room = true, air = { low = 0, mid = -6, high = -20 } },
+		blast = { rollMin = 40, maxCap = 1000, room = true, air = { low = 3, mid = -8, high = -24 } },
+		energy = { rollMin = 18, maxCap = 800, room = true, air = { low = 0, mid = -4, high = -14 } },
+		suppressed = { rollMin = 8, maxCap = 200, room = true, air = { low = 0, mid = -3, high = -10 } },
+		-- Hands and feet: reloads, bolts, pickups, vaults. Short range in real life, short here.
+		foley = { rollMin = 6, maxCap = 160, room = false, air = { low = 0, mid = -2, high = -8 } },
+		-- Everything else in the world: breaks, companions, vehicles. Keeps the old 14-stud start.
+		world = { rollMin = 14, maxCap = 900, room = false, air = { low = 0, mid = -3, high = -10 } },
+	},
+
+	FOLEY = {
+		Reload = true, DryFire = true, Equip = true, MagOut = true, MagIn = true, ChargeBack = true,
+		ChargeRelease = true, SlideRelease = true, PumpBack = true, PumpForward = true, ShellIn = true,
+		BoltBack = true, BoltForward = true, CylinderOpen = true, CylinderClose = true, HammerCock = true,
+		BreakOpen = true, BreakClose = true, LeverOpen = true, LeverClose = true, CoverOpen = true,
+		CoverClose = true, RocketSeat = true, StringCock = true, BoltSeat = true, EnergyCharge = true,
+		CasingTink = true, Pickup = true, SlideStart = true, Mantle = true, Vault = true,
+		DoubleJump = true, StaminaEmpty = true,
+	},
+}
+
+local Acoustics = SoundConfig.Acoustics
+
+function SoundConfig.ClassOf(name, cue)
+	if cue and Acoustics.CLASSES[cue.acoustic or ""] then
+		return cue.acoustic
+	end
+	if Acoustics.FOLEY[name] then
+		return "foley"
+	end
+	if type(name) == "string" and string.sub(name, 1, 7) == "Gunshot" then
+		return "gun"
+	end
+	if type(name) == "string" and string.sub(name, 1, 9) == "Explosion" then
+		return "blast"
+	end
+	return "world"
+end
+
+-- RollOffMinDistance and RollOffMaxDistance for a cue played in the world.
+function SoundConfig.Rolloff(name, cue)
+	local class = Acoustics.CLASSES[SoundConfig.ClassOf(name, cue)]
+	local far = (cue and cue.maxDistance) or Acoustics.DEFAULT_MAX_DISTANCE
+	return class.rollMin, math.clamp(far, class.rollMin + 1, class.maxCap)
+end
+
+-- Whether this cue's reverb is a room (played only under a roof) rather than part of the sound.
+function SoundConfig.RoomGated(name, cue)
+	return Acoustics.CLASSES[SoundConfig.ClassOf(name, cue)].room and not (cue and cue.tail == "always")
+end
+
+-- The equaliser gains (dB) that air and ground take off a cue heard `distance` studs away: none
+-- inside the rolloff's start, the class's full cut at its far edge, linear between (absorption in
+-- dB grows in proportion to the path length).
+function SoundConfig.AirAt(name, cue, distance)
+	local class = Acoustics.CLASSES[SoundConfig.ClassOf(name, cue)]
+	local near, far = SoundConfig.Rolloff(name, cue)
+	local t = math.clamp((distance - near) / (far - near), 0, 1)
+	return class.air.low * t, class.air.mid * t, class.air.high * t
+end
+
+-- How loud a far rumble cue (ExplosionFar) is `distance` studs off: full out to half its reach,
+-- then fading to nothing at its `maxDistance`.
+function SoundConfig.DistantGain(cue, distance)
+	local reach = (cue and cue.maxDistance) or Acoustics.DEFAULT_MAX_DISTANCE
+	return math.clamp((reach - distance) / (reach * 0.5), 0, 1)
+end
+
+-- Everything about one play of a cue that depends on where it is heard from. `nearPath` is false
+-- when the shot's line is known to miss the listener; nil means not known, taken as near.
+--   start          seconds before the voice starts (whatever arrives first)
+--   layers         per layer { delay = seconds after start, gain = volume multiplier }
+--   room           the room reverb on or off, or nil when this cue's reverb is not a room
+--   low/mid/high   the air equaliser's gains
+--   distant        the gain for the cue's `distant` rumble, 0 when there is none
+function SoundConfig.Plan(name, cue, distance, enclosed, nearPath)
+	local layers = SoundConfig.LayersOf(cue)
+	if not layers then
+		return nil
+	end
+	distance = math.max(distance or 0, 0)
+	local supersonic = false
+	for _, layer in ipairs(layers) do
+		if layer.crack then
+			supersonic = true
+		end
+	end
+	local report = distance / Acoustics.SPEED_OF_SOUND
+	local first = report
+	if supersonic and nearPath ~= false then
+		first = distance / Acoustics.BULLET_SPEED
+	end
+	if report > Acoustics.MAX_TRAVEL_DELAY then
+		local squeeze = Acoustics.MAX_TRAVEL_DELAY / report
+		report *= squeeze
+		first *= squeeze
+	end
+
+	local plan = { start = first, layers = {}, room = nil, distant = 0 }
+	for index, layer in ipairs(layers) do
+		local gain = 1
+		if (layer.where == "outdoor" and enclosed) or (layer.where == "indoor" and not enclosed) then
+			gain = 0
+		elseif layer.crack and nearPath == false then
+			gain = Acoustics.CRACK_OFF_PATH
+		end
+		local arrives = layer.crack and first or report
+		plan.layers[index] = { delay = layer.delay + (arrives - first), gain = gain }
+	end
+	if SoundConfig.RoomGated(name, cue) then
+		plan.room = enclosed == true
+	end
+	plan.low, plan.mid, plan.high = SoundConfig.AirAt(name, cue, distance)
+	if type(cue.distant) == "table" then
+		local _, far = SoundConfig.Rolloff(name, cue)
+		local from = cue.distant.from or 0
+		plan.distant = math.clamp((distance - from) / math.max(far - from, 1), 0, 1)
+	end
+	return plan
+end
+
 -- Every cue as a list of layers, whether it was written as one file or several. Each layer is
 -- `{ id, volume, pitch, delay }` with the cue's own volume and pitch already folded in, so a
 -- caller only has to apply its own jitter on top.
@@ -1542,6 +1748,8 @@ function SoundConfig.LayersOf(cue)
 					volume = base * (layer.volume or 1),
 					pitch = basePitch * (layer.pitch or 1),
 					delay = layer.delay or 0,
+					crack = layer.crack == true,
+					where = layer.where,
 				})
 			end
 		end
