@@ -1368,9 +1368,26 @@ local function buildSlotCells()
 			Parent = cell,
 		})
 
+		-- The tier as a letter in the bottom-right corner (#86 M4): the bar under the cell says it only in
+		-- colour. C U R E L M S -- the first letters of Rarity.Order, all different. The item name beside
+		-- it stops 14 px short to leave the corner clear.
+		local tier = create("TextLabel", {
+			Name = "Tier",
+			AnchorPoint = Vector2.new(1, 1),
+			Position = UDim2.new(1, -3, 1, -5),
+			Size = UDim2.fromOffset(11, 13),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.GothamBlack,
+			Text = "",
+			TextColor3 = C.Muted,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			TextSize = 10,
+			Parent = cell,
+		})
+
 		local name = create("TextLabel", {
 			Position = UDim2.new(0, 3, 1, -18),
-			Size = UDim2.new(1, -6, 0, 13),
+			Size = UDim2.new(1, -17, 0, 13),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBold,
 			Text = "",
@@ -1415,6 +1432,7 @@ local function buildSlotCells()
 			center = center,
 			name = name,
 			bar = bar,
+			tier = tier,
 		}
 	end
 end
@@ -1450,6 +1468,8 @@ local function renderSlots()
 		refs.cell.BackgroundTransparency = held and 0 or (slot and 0.35 or 0.6)
 		refs.stroke.Enabled = held and true or false
 		refs.key.Text = Settings.KeyLabel("Slot" .. index) .. (index == quickSlot and (" · " .. Settings.KeyLabel("MovementItem")) or "")
+		refs.tier.Text = (slot and type(slot.rarity) == "string") and string.upper(string.sub(slot.rarity, 1, 1)) or ""
+		refs.tier.TextColor3 = slot and Rarity.Color(slot.rarity) or C.Muted
 
 		if not slot then
 			setSlotIcon(refs, nil)
