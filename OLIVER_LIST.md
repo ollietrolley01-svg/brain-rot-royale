@@ -58,9 +58,9 @@ at all — they are in **"Needs a number from Oliver"** at the bottom. One line 
 
 | | List 1 (#1–#94) | List 2 (#95–#135) | A1–A6 | Total |
 |---|---|---|---|---|
-| `[x]` done | 22 | 10 | 1 | **33** |
-| `[~]` in progress / in tree | 68 | 27 | 4 | **99** |
-| `[ ]` not started | 4 | 4 | 0 | **8** |
+| `[x]` done | 24 | 11 | 1 | **36** |
+| `[~]` in progress / in tree | 70 | 30 | 4 | **104** |
+| `[ ]` not started | 0 | 0 | 0 | **0** |
 | `[?]` held → you | 0 | 0 | 1 | **1** |
 | **Items** | **94** | **41** | **6** | **141** |
 
@@ -298,13 +298,13 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[~]` **62. The sliding sound is an explosion.** Rebuilt as a skid, 1.16 s — it was a brick-crash bang
   pitched down through distortion, running 4.0 s against a 1.1 s slide. Needs your ears. — *audio*
 - `[~]` **63. The throwable preview stays around after the throw.** **09-24 cloud session: in tree, unproven (commit 5a5972f; merged to main).** — *destruction*
-- `[ ]` **64. Shotgun nerf: all pellets = 2-shot body, 1-shot head.** NOT STARTED. **This reverses #12** — *guns*
+- `[x]` **64. Shotgun nerf: all pellets = 2-shot body, 1-shot head.** **CLOSED (Oliver 09-24: no shotgun nerf).** NOT STARTED. **This reverses #12** — *guns*
 - `[~]` **65. Menu tabs don't fit inside the menu HUD.** IN TREE — 9 tabs needed 568 px in 539; the menu
   was also never told your screen size, so it always drew the desktop layout. Both fixed. — *menu*
 - `[x]` **66. The X button on the menu is broken.** Fixed by construction, and **I verified this
   directly**: the X and the gear now read their handler at click time, and `Dismiss()` falls back to
   `Close()`, so a dead X can no longer be built whatever a caller forgets to pass. — *menu*
-- `[ ]` **67. Move the companion to the character's left side.** — *companions*
+- `[~]` **67. Move the companion to the character's left side.** **IN TREE, on main (CompanionService offset mirrored left).** — *companions*
 - `[~]` **68. Free mouse when not holding anything.** Built; checked that no pickup needs a click, so a
   free cursor can't break looting. Interacts with #100 and #112 — prove which writer wins. — *HUD*
 - `[~]` **69. Sticky bomb remote detonator left in your hand.** **09-24 cloud session: in tree, unproven (commit 842ad50; merged to main).** Fixed in 842ad50, awaiting a playtest: there is no detonator; the "detonator" was the next Clingy Crumpet of the stack, held timer-up with a lit red button. The button is now dark until a thrown crumpet sticks (ThrowableModels.Arm). The last one thrown clears the slot and the held model (WeaponService.spendAndFinish → RefreshHeldGun → clearHeldGun). — *destruction*
@@ -341,7 +341,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   FIXES:** the player's-eye review produced 142 claims → 89 survived adversarial refutation → 82 unique
   sites (2 blocks-play, 46 confuses, 34 minor), in `coordination/handoffs/bug-review-player-eye.md`.
   **None of it is assigned or landed.** This is the largest single block of ready work in the project. — *unrouted*
-- `[ ]` **87. Make the grenade launcher launch grenades further.** — *guns*
+- `[~]` **87. Make the grenade launcher launch grenades further.** **IN TREE, on main (Ballistics.lua #87 reach).** — *guns*
 - `[x]` **88. Bots never get assigned a team in TDM/KOTH.** Root cause of #46 and #125. `ModeTeams` now
   writes the `Team` attribute for players and bots alike (`:318/:620/:636/:712`). — *bots*
 - `[~]` **89. Can't see animations on other players, like sliding.** **09-24 cloud session: in tree, unproven (commit 4918382, e3890c5; merged to main).** First cause was wrong and is
@@ -349,7 +349,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   state arrives and the POSE doesn't draw on someone else's body. **SPRINT is genuinely never published
   at all** — that half is real and separate. — *movement*
 - `[~]` **90. Minimize button on the controls.** **09-24 cloud session: in tree, unproven (commit 4918382, 6a8dbee; merged to main).** **22 Sep evening: a minimize tab now exists for the HUD button stack (not the controls overlay, which is off by default).** Collapsed state to be remembered between rounds; starts collapsed on phones. — *HUD*
-- `[ ]` **91. Legendary brainrot "tom pearl".** **Concept comes to you before it is built.** Also checks
+- `[x]` **91. Legendary brainrot "tom pearl".** **CLOSED (Oliver 09-24: tom pearl dropped).** **Concept comes to you before it is built.** Also checks
   the crate odds and the hard-coded "126 brainrots" in the menu. — *brainrot*
 - `[~]` **92. The hands gripping the guns need improvement.** **09-24 cloud session: in tree, unproven (commit 7364fb9, 61a001f; on the working branch).** Rides in the hands/sights render — measuring
   whether the palm meets the grip on every gun, and whether one pose is reused for every weapon shape. — *guns*
@@ -369,7 +369,7 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   filled red, teammates outlined, nameplates tinted to match. **The bug inside the old #27 was that it
   iterated `Players:GetPlayers()` and bots are not Players, so no bot was ever marked.** Now keyed off the
   server's `Team` attribute. **UNPROVEN: whether the friendly outline reads clearly without a fill.** — *HUD*
-- `[ ]` **96. More loot boxes on the team gamemodes.** — *map*
+- `[~]` **96. More loot boxes on the team gamemodes.** **IN TREE, on main (team-base ruins + battleground chests).** — *map*
 - `[~]` **97. The hit registration feels bad.** **09-24 cloud session: in tree, unproven (commit affa05e, c102b7d; merged to main).** **The highest-value item on either list.** Measured, not
   guessed: the client quantises fire rate down to the frame rate and the server drops shots inside a 10%
   tolerance with no tracer, no flash and no ammo spent. **Fixing one alone makes it worse** — they land
@@ -395,7 +395,7 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
 - `[~]` **109. Cars are glitchy and bounce around.** **09-24 cloud session: in tree, unproven (commit 3f1d7b6; merged to main).** **22 Sep evening: same as #84, ASSIGNED TO JACOB as HIGH PRIORITY.** Same as #84. — *vehicles*
 - `[~]` **110. Add roadkill for the cars.** **09-24 cloud session: in tree, unproven (commit 32de759, 41631ba; merged to main).** Already landed once as #57 and unproven. You asking again means
   it is absent or silent — **prove it fires before touching it.** — *vehicles*
-- `[ ]` **111. Increase time-to-kill a bit.** — *guns*
+- `[~]` **111. Increase time-to-kill a bit.** **IN TREE, on main (MatchConfig.CombatDamageScale 0.92).** — *guns*
 - `[~]` **112. I can still see my cursor in FPS.** **09-24 cloud session: in tree, unproven (commit f1a2ffb; on the working branch).** Same cursor family as #100 and #68. — *HUD*
 - `[~]` **113. The bots are pretty laggy.** **09-24 cloud session: in tree, unproven (commit 30f6144; merged to main).** Cap now 15 (your figure), bots 30. Worst tick measured
   32.4 ms at cap 15 on one run; **a second run read 42.6 ms and that is deliberately unresolved.** — *bots*
@@ -411,14 +411,14 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   MovementService rewrite: no root-height ray left, `panesAhead` sweeps feet+1.6…feet+8.2 onto the wall,
   and `MovementService.LastGlass = {found, broken, at}` plus a warn-once say why on a miss. — *destruction*
 - `[~]` **120. Sound design more accurate to real life.** **09-24 cloud session: in tree, unproven (commit e389534, 99f89a4, c8302d0; merged to main).** — *audio*
-- `[ ]` **121. Bigger maps on every gamemode.** ⚠ Constrained: Sahur Springs already measures 32,969 parts
+- `[x]` **121. Bigger maps on every gamemode.** **CLOSED (Oliver 09-24: no bigger maps).** ⚠ Constrained: Sahur Springs already measures 32,969 parts
   against ~31,600 affordable. Read with #32 and the foliage ceiling. — *map*
 - `[~]` **122. Weapons with explosive ammo must actually explode what you shoot.** **09-24 cloud session: in tree, unproven (commit 6ef6a52; merged to main).** Built in 6ef6a52, awaiting a
   playtest: WeaponData `explosiveAmmo = { damage, radius, wallDamage }` makes a hitscan gun's bullets go off where
   they stop (a player, a wall, the ground; not the sky), through ProjectileService's blast: falls off to a fifth
   at the edge, stopped by cover, half to the shooter, holes walls. Only the Golden Sahur Cannon carries it
   (12 dmg, 5 studs, walls 60; body shot + blast 95.7, still not a one-shot). tools/explosive_ammo_check.py, 21 checks. — *destruction*
-- `[ ]` **123. Sort the guns by tier in the admin menu.** — *menu*
+- `[~]` **123. Sort the guns by tier in the admin menu.** **IN TREE, on main (AdminHud groups by rarity, A-Z).** — *menu*
 - `[x]` **124. No kit drops in kit modes; picked-up items still drop, players and bots.** Landed in the
   match-flow set, proven 11/11 with semantic controls failing. — *bug review*
 - `[~]` **125. Team bots walk in unison.** `nextSlot` fixed the shared-slot cause. The held idle-wander
