@@ -32,7 +32,8 @@
 -- pier z 98–126, airship z 128–182, market stalls at r74 from 225° to 315° with the Crate
 -- Altar at 270° r84, arena terrace centred (86, 0), pitch centred (-74, 0),
 -- boards at 55° and 125° r84, Walk of Fame at 150°–170° r88, waterfalls at 45°, 135°, 225°,
--- 315° on the rim. The showcase podium ring (ShowcaseService) sits at r70.
+-- 315° on the rim. The showcase podiums (ShowcaseService's SLOTS) stand in arcs on the open paving
+-- at r44, r70 and r90, clear of all of this (tools/showcase_layout_check.py).
 
 local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")

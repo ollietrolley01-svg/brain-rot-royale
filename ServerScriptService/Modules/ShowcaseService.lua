@@ -1,8 +1,10 @@
--- Display podiums ringing the lobby: one per player in the server, showing off whichever
--- brainrot they've picked to feature.
+-- Display podiums round the lobby plaza: one per player in the server (up to MAX_PODIUMS),
+-- showing off whichever brainrot they've picked to feature.
 --
 -- Podiums are derived from the player list rather than claimed, so there is no ownership or
--- conflict logic to get wrong — someone joins, a podium appears; they leave, it goes.
+-- conflict logic to get wrong — someone joins, a podium appears; they leave, it goes. Each player
+-- keeps their slot while they're in the server, and a podium is only rebuilt when what it shows
+-- changes, so nobody else's podium blinks out and back when someone joins, leaves or trades.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,14 +21,30 @@ local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local ShowcaseService = {}
 
--- Inside the colonnade (r84): at 82 the podiums used to sit right in the columns' footings for
--- some player counts.
--- Inside the lamp posts and the statue, round the tree (see LobbyService for the island layout).
-local RING_RADIUS = 44
+-- Where the podiums stand, in the order they fill: { degrees, radius } round the plaza centre, with
+-- 0 = +X (the arena) and 90 = +Z (the pier), as in LobbyService. A ring round the whole plaza cannot
+-- work: at any radius it crosses the arena's ramps, the pitch or the market, and forty-odd podiums
+-- on one ring stood inside each other. So they stand in arcs on the open paving: six on an inner
+-- ring (r44) either side of the statue and across the market side of the tree, eight on the r70
+-- ring between the arena, the boards and the pitch, and two out by the market at r90. Each halo is
+-- at least 2 studs clear of everything the lobby builds, of the walk in from the pier and the
+-- run-up to the ramps, and 4 clear of its neighbours: tools/showcase_layout_check.py builds the
+-- real lobby and proves it for 1 to 50 players, so move a slot only with that check passing.
+local SLOTS = {
+	{ 127.3, 44 }, { 48.3, 44 },
+	{ 113.9, 70 }, { 64.2, 70 }, { 130.6, 70 }, { 47.6, 70 }, { 147.2, 70 }, { 30.9, 70 },
+	{ 257.1, 44 }, { 283.5, 44 }, { 230.6, 44 }, { 310.0, 44 },
+	{ 312.6, 70 }, { 329.2, 70 },
+	{ 204.0, 90 }, { 249.1, 90 },
+}
+-- One podium per slot: past this many players, the rest wait for a slot to free up.
+ShowcaseService.MAX_PODIUMS = #SLOTS
 local PODIUM_HEIGHT = 5
 
 local container = nil
 local spinConnection = nil
+-- [player] = { slot, base, display, key }: the podium standing for each player who has one.
+local podiums = {}
 
 local function ensureContainer()
 	if container and container.Parent then
@@ -35,11 +53,37 @@ local function ensureContainer()
 	container = Instance.new("Folder")
 	container.Name = "Showcase"
 	container.Parent = workspace
+	-- A new folder holds none of the old podiums.
+	podiums = {}
 	return container
 end
 
-local function buildPodium(parent, position, player, brainrotName)
-	local def = brainrotName and BrainrotData.Get(brainrotName) or nil
+-- Where slot `index` stands, or nil past the last slot: the podium's foot, on the plaza's floor. (It
+-- used to stand a stud below it, which buried the foot trim and the halo under the paving.)
+local function slotPosition(index)
+	local slot = SLOTS[index]
+	if not slot then
+		return nil
+	end
+	local angle = math.rad(slot[1])
+	return MatchConfig.LobbyPosition + Vector3.new(math.cos(angle) * slot[2], 0, math.sin(angle) * slot[2])
+end
+
+-- What a player's podium shows. The same key means the podium standing is already right.
+local function showcaseOf(player)
+	local data = PlayerData.Get(player)
+	local def = data and data.Showcase and BrainrotData.Get(data.Showcase) or nil
+	if not def then
+		return nil, player.DisplayName .. "|"
+	end
+	local level = BrainrotData.LevelForXp(data.CompanionXp[def.name] or 0)
+	local stars = data.Stars[def.name] or 0
+	return def, string.format("%s|%s|%d|%d", player.DisplayName, def.name, level, stars)
+end
+
+-- Returns the podium and, when it shows a brainrot, the display turning on it (a sibling in the
+-- folder, where AmbientClient looks for it).
+local function buildPodium(parent, position, player, def)
 	local color = def and Rarity.Color(def.rarity) or Color3.fromRGB(70, 74, 92)
 
 	local base = Instance.new("Part")
@@ -152,7 +196,7 @@ local function buildPodium(parent, position, player, brainrotName)
 	base.Parent = parent
 
 	if not def then
-		return
+		return base, nil
 	end
 
 	-- The brainrot itself, built from the same spec as the companion and inventory photo, on an
@@ -177,26 +221,73 @@ local function buildPodium(parent, position, player, brainrotName)
 	-- Parented last, with the creature already attached. This also means the client's
 	-- ChildAdded hook only ever sees a finished display to spin.
 	display.Parent = parent
+	return base, display
 end
 
+local function clear(entry)
+	entry.base:Destroy()
+	if entry.display then
+		entry.display:Destroy()
+	end
+end
+
+-- Brings the podiums up to date with the player list and what each player is showcasing. Run on
+-- every join, leave, showcase change, trade and match end; it only touches what changed.
 function ShowcaseService.Refresh()
 	local parent = ensureContainer()
-	parent:ClearAllChildren()
-
 	local players = Players:GetPlayers()
+
+	local present = {}
+	for _, player in ipairs(players) do
+		present[player] = true
+	end
+	local taken = {}
+	for player, entry in pairs(podiums) do
+		if present[player] then
+			taken[entry.slot] = true
+		else
+			clear(entry)
+			podiums[player] = nil
+		end
+	end
+
+	-- Anyone without a podium takes the first free slot, the rarest showcase first (then the lowest
+	-- UserId); past the last slot they wait for one to free up. Nobody is moved off a podium for a
+	-- rarer one: a podium that jumps about is worse than one that waits.
+	local rank = {}
+	for _, player in ipairs(players) do
+		local def = showcaseOf(player)
+		rank[player] = def and (Rarity.Index[def.rarity] or 0) or -1
+	end
 	table.sort(players, function(a, b)
+		if rank[a] ~= rank[b] then
+			return rank[a] > rank[b]
+		end
 		return a.UserId < b.UserId
 	end)
+	local nextFree = 1
+	for _, player in ipairs(players) do
+		if not podiums[player] then
+			while taken[nextFree] do
+				nextFree += 1
+			end
+			if not slotPosition(nextFree) then
+				break
+			end
+			taken[nextFree] = true
+			podiums[player] = { slot = nextFree }
+		end
+	end
 
-	local total = math.max(1, #players)
-	local center = MatchConfig.LobbyPosition - Vector3.new(0, 1, 0)
-
-	for index, player in ipairs(players) do
-		local angle = (index / total) * math.pi * 2
-		local position = center + Vector3.new(math.cos(angle) * RING_RADIUS, 0, math.sin(angle) * RING_RADIUS)
-
-		local data = PlayerData.Get(player)
-		buildPodium(parent, position, player, data and data.Showcase or nil)
+	for player, entry in pairs(podiums) do
+		local def, key = showcaseOf(player)
+		if entry.key ~= key then
+			if entry.base then
+				clear(entry)
+			end
+			entry.base, entry.display = buildPodium(parent, slotPosition(entry.slot), player, def)
+			entry.key = key
+		end
 	end
 end
 
