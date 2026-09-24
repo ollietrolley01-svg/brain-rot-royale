@@ -307,7 +307,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[ ]` **67. Move the companion to the character's left side.** — *companions*
 - `[~]` **68. Free mouse when not holding anything.** Built; checked that no pickup needs a click, so a
   free cursor can't break looting. Interacts with #100 and #112 — prove which writer wins. — *HUD*
-- `[ ]` **69. Sticky bomb remote detonator left in your hand.** — *destruction*
+- `[~]` **69. Sticky bomb remote detonator left in your hand.** Fixed in 842ad50, awaiting a playtest: there is no detonator; the "detonator" was the next Clingy Crumpet of the stack, held timer-up with a lit red button. The button is now dark until a thrown crumpet sticks (ThrowableModels.Arm). The last one thrown clears the slot and the held model (WeaponService.spendAndFinish → RefreshHeldGun → clearHeldGun). — *destruction*
 - `[~]` **70. Bombs leave a floating circle on a destructible floor.** Same cause as #29 and reopened with it. — *destruction*
 - `[ ]` **71. A breaking animation per material instead of fading to clear.** — *destruction*
 - `[ ]` **72. Random floating texts on some gun textures in FPS.** — *guns*
