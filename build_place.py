@@ -112,6 +112,10 @@ total += add_scripts(modules, ROOT / "ServerScriptService" / "Modules")
 starter_player = item(roblox, "StarterPlayer", "StarterPlayer")
 player_scripts = item(starter_player, "StarterPlayerScripts", "StarterPlayerScripts")
 total += add_scripts(player_scripts, ROOT / "StarterPlayerScripts")
+# Only the empty "Health" Script, which replaces Roblox's default 1%/s character regen (MatchService
+# heals players out of combat instead). Leave it out and every player regenerates all match.
+character_scripts = item(starter_player, "StarterCharacterScripts", "StarterCharacterScripts")
+total += add_scripts(character_scripts, ROOT / "StarterCharacterScripts")
 
 # Several sessions build at once: write a private temp file and swap it in atomically, so two
 # builds can't interleave and a harness snapshotting the place never copies a half-written file.

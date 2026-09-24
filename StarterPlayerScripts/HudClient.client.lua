@@ -1374,30 +1374,31 @@ local function buildSlotCells()
 
 		-- The tier as a letter in the bottom-right corner (#86 M4): the bar under the cell says it only in
 		-- colour. C U R E L M S -- the first letters of Rarity.Order, all different. The item name beside
-		-- it stops 14 px short to leave the corner clear.
+		-- it stops 15 px short to leave the corner clear. Both are 12 px text, the smallest the HUD uses: at
+		-- 10 they were hard to read on a phone.
 		local tier = create("TextLabel", {
 			Name = "Tier",
 			AnchorPoint = Vector2.new(1, 1),
-			Position = UDim2.new(1, -3, 1, -5),
-			Size = UDim2.fromOffset(11, 13),
+			Position = UDim2.new(1, -3, 1, -4),
+			Size = UDim2.fromOffset(12, 14),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBlack,
 			Text = "",
 			TextColor3 = C.Muted,
 			TextXAlignment = Enum.TextXAlignment.Right,
-			TextSize = 10,
+			TextSize = 12,
 			Parent = cell,
 		})
 
 		local name = create("TextLabel", {
 			Position = UDim2.new(0, 3, 1, -18),
-			Size = UDim2.new(1, -17, 0, 13),
+			Size = UDim2.new(1, -18, 0, 14),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBold,
 			Text = "",
 			TextColor3 = C.Text,
 			TextTruncate = Enum.TextTruncate.AtEnd,
-			TextSize = 10,
+			TextSize = 12,
 			Parent = cell,
 		})
 
@@ -2395,9 +2396,11 @@ local function refreshTownMarkers()
 		seen[child] = true
 		local marker = townMarkers[child]
 		if not marker then
+			-- 12 px names (9 was unreadable) in a box wide enough for most on one line; a long one
+			-- ("Grass Toucher's Rest") wraps onto a second line under the first rather than spilling sideways.
 			marker = create("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Size = UDim2.fromOffset(84, 22),
+				Size = UDim2.fromOffset(112, 22),
 				BackgroundTransparency = 1,
 				ZIndex = 0,
 				Parent = minimap,
@@ -2414,13 +2417,15 @@ local function refreshTownMarkers()
 			}, { rounded(3) })
 			create("TextLabel", {
 				Position = UDim2.new(0, 0, 0, 6),
-				Size = UDim2.new(1, 0, 0, 12),
+				Size = UDim2.new(1, 0, 0, 14),
+				AutomaticSize = Enum.AutomaticSize.Y,
 				BackgroundTransparency = 1,
 				Font = Enum.Font.GothamBold,
 				Text = name,
 				TextColor3 = color,
 				TextStrokeTransparency = 0.6,
-				TextSize = 9,
+				TextWrapped = true,
+				TextSize = 12,
 				ZIndex = 0,
 				Parent = marker,
 			})
@@ -2577,15 +2582,19 @@ local function compassMarker(key, text, color, kind)
 		elseif kind ~= "drop" then
 			create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = dot })
 		end
+		-- 12 px (9 was unreadable), filling the strip under the dot to its bottom edge. The box is as wide
+		-- as the longest name ("GRASS TOUCHER'S REST" is about 150 px at this size); the de-clutter pass below
+		-- hides a name that would print over another, by its TextBounds.
 		label = create("TextLabel", {
-			Position = UDim2.new(0, 0, 0, 10),
-			Size = UDim2.new(1, 0, 0, 12),
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 10),
+			Size = UDim2.fromOffset(180, COMPASS_H - 10),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBold,
 			Text = text,
 			TextColor3 = color,
 			TextStrokeTransparency = 0.6,
-			TextSize = 9,
+			TextSize = 12,
 			Parent = frame,
 		})
 	end
@@ -3029,34 +3038,100 @@ local toast = create("TextLabel", {
 	Parent = screenGui,
 }, { rounded(8) })
 
-local toastToken = 0
+-- Toasts come in bunches: a climb record and its coins, a chest's contents and the quest it finished,
+-- the end-of-match quests. With one label and no queue the last of a bunch overwrote the others in the
+-- same frame, so nobody ever read them. They queue now: each one stays up at least TOAST_GAP before the
+-- next replaces it, in the order they came, and the last stays its full time. A line already showing
+-- or already waiting is not queued a second time. In a do-block: the main chunk is near Luau's limit.
+local showToast
+do
+	local TOAST_GAP = 1.2
+	-- A burst bigger than this drops its OLDEST waiting lines, so the backlog never runs past ~7 s.
+	local TOAST_QUEUE_MAX = 6
+	local waiting = {} -- { message, isError }, oldest first
+	local showing = nil -- the line on screen, until it fades
+	local shownAt = 0
+	local token = 0
+	local pumping = false
 
-local function showToast(message, isError)
-	toastToken += 1
-	local token = toastToken
+	local function display(message, isError)
+		token += 1
+		local mine = token
+		showing = message
+		shownAt = tick()
 
-	toast.Text = message
-	toast.TextColor3 = isError and C.Red or C.Text
-	-- In a vehicle on a desktop screen the driving HUD fills the band the toast normally uses (the speed
-	-- panel 178-256 up, its hint to 280, the damage line to 304: VehicleClient), so the toast goes above
-	-- it (#80). A phone places the toast itself, top-anchored (the phone layout block), and is left alone.
-	if toast.AnchorPoint.Y == 1 then
-		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		local seat = humanoid and humanoid.SeatPart
-		-- A gunner's panel sits in the same band as the driver's (VehicleWeaponClient), so a gunner counts.
-		local driving = seat ~= nil and (seat:IsA("VehicleSeat") or seat.Name == "GunnerSeat" or seat:GetAttribute("Gunner") == true)
-			or player:GetAttribute("VehicleGunActive") == true
-		toast.Position = UDim2.new(0.5, 0, 1, driving and -(304 + 8) or -(16 + 150 + 8))
+		toast.Text = message
+		toast.TextColor3 = isError and C.Red or C.Text
+		-- In a vehicle on a desktop screen the driving HUD fills the band the toast normally uses (the speed
+		-- panel 178-256 up, its hint to 280, the damage line to 304: VehicleClient), so the toast goes above
+		-- it (#80). A phone places the toast itself, top-anchored (the phone layout block), and is left alone.
+		if toast.AnchorPoint.Y == 1 then
+			local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			local seat = humanoid and humanoid.SeatPart
+			-- A gunner's panel sits in the same band as the driver's (VehicleWeaponClient), so a gunner counts.
+			local driving = seat ~= nil and (seat:IsA("VehicleSeat") or seat.Name == "GunnerSeat" or seat:GetAttribute("Gunner") == true)
+				or player:GetAttribute("VehicleGunActive") == true
+			toast.Position = UDim2.new(0.5, 0, 1, driving and -(304 + 8) or -(16 + 150 + 8))
+		end
+		TweenService:Create(toast, TweenInfo.new(0.15), { BackgroundTransparency = 0.15, TextTransparency = 0 }):Play()
+
+		-- Long enough to read: 2.6 s for a short line, more for a long one (#86 C3).
+		task.delay(math.max(2.6, 1.5 + 0.05 * #message), function()
+			if mine ~= token then
+				return
+			end
+			showing = nil
+			TweenService:Create(toast, TweenInfo.new(0.35), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+		end)
 	end
-	TweenService:Create(toast, TweenInfo.new(0.15), { BackgroundTransparency = 0.15, TextTransparency = 0 }):Play()
 
-	-- Long enough to read: 2.6 s for a short line, more for a long one (#86 C3).
-	task.delay(math.max(2.6, 1.5 + 0.05 * #tostring(message)), function()
-		if token ~= toastToken then
+	local function alreadyQueued(message)
+		for _, entry in ipairs(waiting) do
+			if entry[1] == message then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- One runner at a time works through the queue, holding each line up for its TOAST_GAP.
+	local function pump()
+		if pumping then
 			return
 		end
-		TweenService:Create(toast, TweenInfo.new(0.35), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
-	end)
+		pumping = true
+		task.spawn(function()
+			while #waiting > 0 do
+				local left = shownAt + TOAST_GAP - tick()
+				if showing ~= nil and left > 0 then
+					task.wait(left)
+				else
+					local entry = table.remove(waiting, 1)
+					display(entry[1], entry[2])
+				end
+			end
+			pumping = false
+		end)
+	end
+
+	showToast = function(message, isError)
+		message = tostring(message)
+		if alreadyQueued(message) then
+			return
+		end
+		if message == showing and #waiting == 0 then
+			-- The same line again with nothing behind it: keep it up for its full time from now.
+			display(message, isError)
+			return
+		elseif message == showing then
+			return
+		end
+		table.insert(waiting, { message, isError })
+		if #waiting > TOAST_QUEUE_MAX then
+			table.remove(waiting, 1)
+		end
+		pump()
+	end
 end
 
 notify.OnClientEvent:Connect(showToast)

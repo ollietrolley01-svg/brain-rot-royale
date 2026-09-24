@@ -175,7 +175,9 @@ local function stormTickDue(outside, health, before, now, lastAt)
 end
 
 stormChanged.OnClientEvent:Connect(function(info)
-	if not info or info.status == "Idle" or not info.radius or info.radius < 2 then
+	-- A tiny or zero radius is sudden death closing (MatchConfig.StormSuddenDeath), not "no storm": the
+	-- wall is drawn down to layout's 2-stud floor and outsideNow keeps the storm's cues going.
+	if not info or info.status == "Idle" or not info.radius then
 		target = nil
 		wasOutside = false
 		gateSwirls(true)

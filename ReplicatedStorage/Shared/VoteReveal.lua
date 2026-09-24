@@ -77,12 +77,18 @@ end
 -- match is still Loading (or, for a remote that arrives a beat early, Countdown), and never over the
 -- drop picker.
 --
--- The interactive vote is drawn only during the lobby countdown, whatever the snapshot says: the
--- server's `open` and the match's `Countdown` arrive on two different remotes, and requiring both
--- means neither can put the vote over a match on its own.
-function VoteReveal.View(match, voteOpen, revealing)
+-- The interactive vote is drawn only in the lobby, whatever the snapshot says: the server's `open`
+-- and the match state arrive on two different remotes, and requiring both means neither can put the
+-- vote over a match on its own. The server opens it when the break after a match begins (findings C4),
+-- so it is up through Intermission and Waiting as well as the countdown -- but outside the countdown
+-- only for a player who is `ready`: the break is for crates, trading and the Cloud Climb, and a greyed
+-- panel over the whole lobby for 35 s is in the way of all of it. The countdown shows it to everyone,
+-- greyed for the unready (VoteCursor.Screen), as before.
+local LOBBY_VOTE = { Intermission = true, Waiting = true }
+
+function VoteReveal.View(match, voteOpen, revealing, ready)
 	local state = type(match) == "table" and match.state or nil
-	local open = voteOpen == true and state == "Countdown"
+	local open = voteOpen == true and (state == "Countdown" or (LOBBY_VOTE[state] == true and ready == true))
 	local showReveal = revealing == true
 		and (state == "Loading" or state == "Countdown")
 		and not (type(match) == "table" and match.dropSelect == true)

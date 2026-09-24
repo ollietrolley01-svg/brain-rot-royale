@@ -1,0 +1,5 @@
+-- Deliberately empty. Roblox copies a default Script named "Health" into every character, and it
+-- regenerates 1% of MaxHealth a second, all match long: storm phase 1 (1 dmg/s) did nothing and heal
+-- items were worth half as much. A script of the same name here replaces it. Players heal out of
+-- combat on the server instead, at the bots' rate after the bots' lull (MatchService's `regen`,
+-- MatchConfig.BotRegenDelay / BotRegenPerSecond). tools/regen_check.py fails if this goes.

@@ -25,6 +25,10 @@ MatchConfig.ResultsDuration = 15
 -- A break in the lobby after every match, before the next countdown can begin: time to open
 -- crates, trade, kick the balls around or have a go at the Cloud Climb.
 MatchConfig.Intermission = 35
+-- What is left of the break once every player here has readied up: they have said they are done, so
+-- nobody waits out the rest of the 35 s, but the vote (open all break) and the last results still get a
+-- few seconds before the countdown takes over.
+MatchConfig.IntermissionAllReady = 5
 
 -- Shields sit on top of health and take damage first. Everyone drops in with none; shield
 -- potions fill them (ItemData). The storm ignores shields.
@@ -70,6 +74,12 @@ MatchConfig.StormPhases = {
 	{ holdTime = 22, shrinkTime = 28, radiusScale = 0.12, damagePerSecond = 7 },
 	{ holdTime = 18, shrinkTime = 22, radiusScale = 0.03, damagePerSecond = 12 },
 }
+-- Sudden death, after the last circle: it holds for `holdTime`, then closes to nothing over `shrinkTime`
+-- and everyone left is in the storm, at a rate no heal keeps up with (a Med Kit is 100 health over 5 s).
+-- Without it two campers inside the last circle could hold a match open forever: the battle royale has
+-- no time limit. StormService runs it as one more circle, so the HUD counts "Circle 6 of 6" and bots
+-- read it like any other.
+MatchConfig.StormSuddenDeath = { holdTime = 15, shrinkTime = 30, radiusScale = 0, damagePerSecond = 25 }
 
 MatchConfig.VoteCandidates = 3
 
