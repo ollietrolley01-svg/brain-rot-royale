@@ -124,7 +124,7 @@ local function setup()
 
 	-- Chests, as GameMode seeds them (its call today passes no kind; gap 14 is the chest call).
 	for team = 1, 2 do
-		local spots = ModeTeams.BaseLootSpots(team, 8, 20, 80, 14)
+		local spots = ModeTeams.BaseLootSpots(team, LootService.BaseStock.chest, 20, 80, 14, "chest")
 		LootService.SeedAt(spots, "chest")
 		local weapons = ModeTeams.BaseLootSpots(team, 16, 10, 80, 6)
 		LootService.SeedAt(weapons, "weapon")

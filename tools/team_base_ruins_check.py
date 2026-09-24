@@ -59,6 +59,9 @@ CORRIDOR_HALF, CORRIDOR_HEIGHT = 4.8, 7.5
 DRIVE_OUT = 62
 # One bay per base vehicle (MatchConfig.TeamBaseVehicles.Slots, read from the source).
 BAYS = None
+# One named chest spot per base chest (LootService.BaseStock.chest, read from the source): GameMode
+# stocks and refills that many, and ModeTeams puts chests only in the compound's spots.
+CHESTS = None
 FOOTING_TOLERANCE = 0.5
 TOUCH = 0.12
 
@@ -183,6 +186,11 @@ function makeFrame(x, y, z, yaw)
     return CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0)
 end
 """
+
+
+def chest_stock(repo):
+    text = (Path(repo) / "ServerScriptService/Modules/LootService.lua").read_text()
+    return int(re.search(r"LootService\.BaseStock = \{[^}]*chest = (\d+)", text).group(1))
 
 
 def slot_count(repo):
@@ -589,6 +597,8 @@ def check_all(build, frame, model, info, parts, log):
         if inside:
             problems.append("chest %s: not clear (%s)" % (name, ", ".join(sorted({p["name"] for p in inside}))))
     log("chest spots: %d (%s)" % (len(chests), ", ".join(chest_names)))
+    if CHESTS is not None and len(chests) != CHESTS:
+        problems.append("chest spots: %d, but LootService.BaseStock.chest is %d" % (len(chests), CHESTS))
 
     # loot
     for x, y, z in loot:
@@ -636,6 +646,12 @@ def check_all(build, frame, model, info, parts, log):
         mid = (reach - hz) / 2
         centre = (x + look[0] * mid, y + (0.6 + CORRIDOR_HEIGHT) / 2, z + look[2] * mid)
         way = hits_obb(parts, centre, axes, (CORRIDOR_HALF, (CORRIDOR_HEIGHT - 0.6) / 2, length / 2), lambda p: p["collide"])
+        # A chest there would be in the car's way out (or under it): none may be.
+        lane = (centre, axes, (CORRIDOR_HALF, (CORRIDOR_HEIGHT - 0.6) / 2, length / 2))
+        for cname, (cx, cy, cz) in zip(chest_names, chests):
+            chest_box = ((cx, cy + 1.85, cz), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (CHEST_CLEAR, 1.65, CHEST_CLEAR))
+            if obb_overlap(lane, chest_box):
+                problems.append("chest %s is in %s's way out" % (cname, name))
         if way:
             problems.append("%s: drive-out blocked by %s" % (name, ", ".join(sorted({p["name"] for p in way}))))
     for i in range(len(frames)):
@@ -975,6 +991,11 @@ PLANTS = [
     ("built at the asked height", [("local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)",
                                     "local frame = CFrame.new(position.X, position.Y, position.Z) * CFrame.Angles(0, yaw, 0)")],
      "build (levelled): pad 1 is not where"),
+    ("a chest in bay 5's way", [('table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(16.5, TILE_TOP, 19.5) })',
+                                 'table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(38, TILE_TOP, 4) })')],
+     "is in Bay5's way out"),
+    ("a chest spot short", [('	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(-39, TILE_TOP, -34.8) })\n', '')],
+     "but LootService.BaseStock.chest is"),
     ("crate on a chest spot", [('	table.insert(B.chests, { name = "LeanTo"',
                                 '	box(yard, "Crate", -42, -39.6, TILE_TOP, TILE_TOP + 2.4, -23, -21, WOOD, MAT.WoodPlanks)\n'
                                 '	table.insert(B.chests, { name = "LeanTo"')], "chest LeanTo: not clear"),
@@ -1002,8 +1023,9 @@ def sweep_seeds(src, seeds, log):
 def main(argv):
     repo = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else "."
     plant = "--plant" in argv
-    global BAYS
+    global BAYS, CHESTS
     BAYS = slot_count(repo)
+    CHESTS = chest_stock(repo)
     src = sources(repo)
     problems = run(src, print)
     problems += sweep_seeds(src, range(1, 25), print)

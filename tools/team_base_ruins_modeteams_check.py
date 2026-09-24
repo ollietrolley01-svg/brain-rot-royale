@@ -5,7 +5,7 @@ the compound section, BaseLootSpots, Teardown and the base vehicles) plus ClearS
 world of tools/team_vehicles_check.py (flat ground with a hill, a hole, buildings and loot round each
 base; VehicleService.Create parks where it is told). TeamBaseRuins itself is a stub here: its geometry
 is tools/team_base_ruins_check.py's business. The stub hands back a compound shaped like the real one
-(8 pads, 8 named chest spots, 6 bays in two rows, 15 loot spots, in the frame it was given) and
+(8 pads, one named chest spot per LootService.BaseStock.chest, 6 bays in two rows, 15 loot spots, in the frame it was given) and
 records what it was asked for. Measured, per match:
 
   * each team's spawn pads ARE its compound's pads, and both compounds got the same seed;
@@ -78,7 +78,7 @@ TeamBaseRuins = {
         for _, z in ipairs({ 16, 30 }) do
             for _, x in ipairs({ -36, -27, -18, -9 }) do table.insert(ruin.pads, site(frame, x, z)) end
         end
-        for i = 1, 8 do table.insert(ruin.chestSpots, site(frame, -40 + i * 9, 36.9)) end
+        for i = 1, R.chestStock do table.insert(ruin.chestSpots, site(frame, -40 + ((i - 1) % 7) * 9, 36.9 + math.floor((i - 1) / 7) * 4)) end
         -- Six bays, as the real yard: three facing the gate, three across the east end facing out.
         for _, x in ipairs({ 12.5, 25, 37.5 }) do table.insert(ruin.vehicleBays, site(frame, x, -26)) end
         for _, z in ipairs({ -7, 4, 15 }) do table.insert(ruin.vehicleBays, site(frame, 32, z) * CFrame.Angles(0, -math.pi / 2, 0)) end
@@ -130,11 +130,16 @@ end
 -- loot round the bases is cleared first, so what lies on a spot is only what this puts there.
 for _, item in ipairs(R.lootFolder:GetChildren()) do item.Parent = nil end
 local ruin = M.BaseRuin(1)
-local spots = M.BaseLootSpots(1, 8, 20, 80, 14)
-if #spots ~= 8 then fail("chest call: " .. #spots .. " spots, want 8") end
+-- GameMode's call, with `missing` = the whole stock at the start (LootService.BaseStock.chest).
+local want = R.chestStock
+local spots = M.BaseLootSpots(1, want, 20, 80, 14, "chest")
+if #spots ~= want then fail("chest call: " .. #spots .. " spots, want " .. want) end
 for i, s in ipairs(spots) do
     if R.flat(s, ruin.chestSpots[i].Position) > 1e-6 then fail("chest call: spot " .. i .. " is not the compound's chest spot") break end
 end
+-- A caller that does not name the kind (the gap says chest) gets the same.
+local legacy = M.BaseLootSpots(1, want, 20, 80, 14)
+if #legacy ~= want or R.flat(legacy[1], ruin.chestSpots[1].Position) > 1e-6 then fail("kind-less chest call left the chest spots") end
 -- Loot lying on three chest spots: those are skipped and nothing goes in the field instead.
 local lying = {}
 for _, i in ipairs({ 2, 5, 7 }) do
@@ -143,8 +148,9 @@ for _, i in ipairs({ 2, 5, 7 }) do
     item.Parent = R.lootFolder
     table.insert(lying, item)
 end
-spots = M.BaseLootSpots(1, 8, 20, 80, 14, "chest")
-if #spots ~= 5 then fail("chest call with three taken: " .. #spots .. " spots, want 5") end
+-- The refill: three still lying, so GameMode asks for the rest, and gets exactly the free spots.
+spots = M.BaseLootSpots(1, want - 3, 20, 80, 14, "chest")
+if #spots ~= want - 3 then fail("chest refill with three taken: " .. #spots .. " spots, want " .. (want - 3)) end
 for _, s in ipairs(spots) do
     local ok = false
     for i, c in ipairs(ruin.chestSpots) do if R.flat(s, c.Position) < 1e-6 and i ~= 2 and i ~= 5 and i ~= 7 then ok = true end end
@@ -218,6 +224,7 @@ return out
 PLANTS = [
     ("field pads kept", ("\t\tif ruin then\n\t\t\tpads[team] = {}", "\t\tif false then\n\t\t\tpads[team] = {}")),
     ("chests left to the field", ("\t\tif kind == nil and gap >= RUIN_CHEST_GAP then", "\t\tif false then")),
+    ("chests put in the loot spots", ('freeRuinSpots(kind == "chest" and ruin.chestSpots or ruin.lootSpots, count)', 'freeRuinSpots(ruin.lootSpots, count)')),
     ("taken chest spots reused", ("if item:IsA(\"BasePart\") and Vector3.new(item.Position.X - at.X", "if false and Vector3.new(item.Position.X - at.X")),
     ("a seed per compound", ("\t\t\tModeTeams.BuildRuin(team, bases[team], mapInfo, ruinSeed)",
                              "\t\t\tModeTeams.BuildRuin(team, bases[team], mapInfo, math.random(1, 2147483646))")),
@@ -228,6 +235,12 @@ PLANTS = [
     ("the rolled axis, road or not", ("\t\taxis, fraction = ModeTeams.PickBaseAxis(axis, mapInfo)", "\t\tlocal _ = 0")),
     ("busy pad reused", ("\t\t\tif not occupiedAt(other, except) then\n\t\t\t\treturn other", "\t\t\tif false then\n\t\t\t\treturn other")),
 ]
+
+
+def chest_stock(root):
+    import re
+    text = read(root, "ServerScriptService", "Modules", "LootService.lua")
+    return int(re.search(r"LootService\.BaseStock = \{[^}]*chest = (\d+)", text).group(1))
 
 
 def run(root, plant=None, seeds=6):
@@ -245,6 +258,7 @@ def run(root, plant=None, seeds=6):
         R = lua.eval("{}")
         R.models = lua.table_from([lua.table_from(list(m[:2]) + [int(m[2])]) for m in models])
         R.mounts = lua.table_from(mounts)
+        R.chestStock = chest_stock(root)
         lua.execute("math.randomseed(%d)" % seed)
         lua.globals()._R = R
         lua.execute(PRELUDE.replace("local R = ...", "local R = _R"))

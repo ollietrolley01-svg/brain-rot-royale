@@ -824,6 +824,8 @@ local function buildBunker(model)
 	-- Chest spots: the armoury corner and beside the console.
 	table.insert(B.chests, { name = "BunkerArmoury", at = CFrame.new(-40.5, ROOM_FLOOR, 36.9) })
 	table.insert(B.chests, { name = "BunkerConsole", at = CFrame.new(-1.5, ROOM_FLOOR, 36.9) })
+	-- And under the lamp on the back wall, between the two back rows of pads' ends.
+	table.insert(B.chests, { name = "BunkerBackWall", at = CFrame.new(-31.5, ROOM_FLOOR, 36.9) })
 	table.insert(B.loot, CFrame.new(-22.5, ROOM_FLOOR, 36.6))
 	table.insert(B.loot, CFrame.new(-22.5, ROOM_FLOOR, 23))
 	table.insert(B.loot, CFrame.new(-4.5, ROOM_FLOOR, 23))
@@ -898,6 +900,8 @@ local function buildSupply(model)
 		box(room, "Shelf", x - 0.5, x + 0.5, ROOM_FLOOR, 6.3, 34, 39.8, WOOD, MAT.WoodPlanks)
 		box(room, "ShelfTin", x - 0.4, x + 0.4, 6.3, 7.0, 35.2, 36.4, OLIVE, MAT.Metal, TRIM)
 	end
+	-- One more on the open floor in front of the alcoves, beside the way in from the door.
+	table.insert(B.chests, { name = "SupplyFloor", at = CFrame.new(20.5, ROOM_FLOOR, 31.5) })
 	local alcoves = { { 9, 9 }, { 19, 19.5 }, { 29, 27.3 }, { 39, 39 } }
 	for number, alcove in ipairs(alcoves) do
 		local x, sign = alcove[1], alcove[2]
@@ -1125,7 +1129,9 @@ local function buildYard(model)
 		{ tag = "Prop:fallenLamp" })
 	box(yard, "FallenLampHead", 17.9, 19.4, TILE_TOP, TILE_TOP + 0.7, -4.2, -3.0, STEEL_DARK, MAT.Metal, { tag = "Prop:fallenLamp" })
 
-	table.insert(B.loot, CFrame.new(15.5, TILE_TOP, 17.5))
+	-- A chest beside the workbench, clear of the back row's bays and their way out.
+	table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(16.5, TILE_TOP, 19.5) })
+	table.insert(B.loot, CFrame.new(8.0, TILE_TOP, 14.0))
 	table.insert(B.loot, CFrame.new(12.0, TILE_TOP, 8.0))
 	table.insert(B.loot, CFrame.new(14.0, TILE_TOP, -11.5))
 	return yard
@@ -1175,6 +1181,8 @@ local function buildTower(model)
 	put(tower, "TowerRoof", Vector3.new((low - high).Magnitude + 1.4, 0.25, 8.2),
 		CFrame.new(mid.X, mid.Y, (z0 + z1) / 2) * CFrame.Angles(0, 0, -tilt) * CFrame.new(0, 0.05, 0),
 		mix(STEEL, RUST, 0.5), MAT.CorrodedMetal)
+	-- A chest under the deck, between the legs; the way in is the open north side.
+	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(-39, TILE_TOP, -34.8) })
 	-- A pennant on the tall back leg.
 	rod(tower, "PennantPole", Vector3.new(x0, 11.4, z0), Vector3.new(x0, 14.2, z0), 0.2, STEEL, MAT.Metal)
 	box(tower, "TeamPennant", x0 + 0.05, x0 + 2.6, 12.9, 14.1, z0 - 0.04, z0 + 0.04, B.team, MAT.Fabric, TRIM)
@@ -1298,6 +1306,10 @@ local function buildCourtyard(model)
 	wallPanel(ruin, "x", -6.6, -1, -16, 1.2, 5.6, { color = BRICK, material = MAT.Brick, brick = false })
 	wallPanel(ruin, "z", -15.4, -11, -6, 1.2, 4.2, { color = BRICK_DARK, material = MAT.Brick, brick = false })
 	rubble(ruin, -3.6, -17.8, 1.4, 5, TILE_TOP, { BRICK, BRICK_DARK, CONCRETE_DARK })
+
+	-- Caches: one in the lee of the brick ruin's corner, one by the flag.
+	table.insert(B.chests, { name = "RuinCorner", at = CFrame.new(-2.8, TILE_TOP, -12.8) })
+	table.insert(B.chests, { name = "FlagCache", at = CFrame.new(-8.5, TILE_TOP, -27) })
 
 	-- A lamp post at the corner of the bunker.
 	box(yard, "LampBase", 0.2, 1.4, TILE_TOP, TILE_TOP + 0.6, 4.6, 5.8, CONCRETE_DARK, MAT.Concrete, { tag = "Prop:lampPost" })
