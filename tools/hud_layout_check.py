@@ -360,6 +360,32 @@ def check(root, sources, dump=False, quiet=False):
     if "YOU" not in mine:
         problems.append(f"a bounty on me (my UserId) does not say YOU: {mine!r}")
 
+    # 6. The effects pill carries every timed effect at once (#86 C17 boots, C32 protection), and goes
+    # away when the last one ends.
+    speed_site = sites_by_var.get("speedPill")
+    pill = world.run("""
+        local site = select(2, ...)
+        local pill
+        for _, inst in ipairs(W.created) do
+            if W.instSite(inst) == site then pill = inst end
+        end
+        W.player:SetAttribute('BounceBootsUntil', W.now + 12)
+        W.character:SetAttribute('SpawnProtected', true)
+        W.frame(2)
+        local both = pill.Text .. '|' .. tostring(pill.Visible)
+        W.player:SetAttribute('SpeedBoosted', nil)
+        W.player:SetAttribute('BounceBootsUntil', nil)
+        W.character:SetAttribute('SpawnProtected', nil)
+        W.frame(2)
+        return both .. '|' .. tostring(pill.Visible)
+    """, speed_site)
+    text, shown, after = pill.split("|")
+    for word in ("SPEED BOOST", "BOUNCE BOOTS", "PROTECTED"):
+        if word not in text or shown != "true":
+            problems.append(f"the effects pill does not show {word} with all three on: {text!r} (shown {shown})")
+    if after != "false":
+        problems.append("the effects pill stays up after every effect has ended")
+
     # 4. static: writers of droppable pieces go through the gate
     hud = sources["HudClient.client.lua"]
     start = hud.index("-- Phone and tablet layout (StarterPlayerScripts/PhoneLayout)")
@@ -382,6 +408,8 @@ def check(root, sources, dump=False, quiet=False):
 
 # Planted faults, each aimed at an invariant the code must keep forever, not at the bug as it was.
 PLANTS = [
+    ("the effects pill forgetting Bounce Boots",
+     "HudClient.client.lua", 'table.insert(out, string.format("BOUNCE BOOTS  %ds", math.ceil(boots - now)))', "local _ = boots"),
     ("the bounty toast asking 'is it me?' by name, not UserId",
      "HudClient.client.lua", "if info.userId == nil or info.userId ~= player.UserId then",
      "if info.name ~= player.DisplayName then"),

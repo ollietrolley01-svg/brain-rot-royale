@@ -9,7 +9,7 @@ Sites in files other workers own right now (HudClient, PhoneLayout, MatchConfig,
 
 Logic check: `python tools/player_eye_check.py .` (5 checks on the real modules) and `--plant` (5 planted faults, all caught).
 
-Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82 (a row with two halves counts under its first status).
+Totals: fixed-now 48 · already-fixed 22 · still-open 5 · needs-Studio 7 = 82 (a row with two halves counts under its first status).
 
 ## Blocks play (2)
 
@@ -33,13 +33,13 @@ Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82
 | C9 | CombatClient:486 phone spectator has no NEXT | fixed-now | NEXT / LEAVE TextButtons on touch `CombatClient.client.lua:548`; line says "tap NEXT or LEAVE" `:450`. |
 | C10 | HudClient:1505 "0 / 0" in white | already-fixed | `HudClient.client.lua:1519` "NO AMMO" in red; empty mag names the reload key. |
 | C11 | HudClient:2726 bounty warning misses display names | already-fixed | `HudClient.client.lua:2877` compares `player.Name` (what the server sends). |
-| C12 | HudClient:2842 phone never sees reserve | still-open | `HudClient.client.lua:1393` `refs.count.Text = tostring(slot.mag)` → `refs.count.Text = (phone and string.format("%d/%d", slot.mag, slot.reserve)) or tostring(slot.mag)` (needs the phone flag in renderSlots) and `refs.center.Text = "NO AMMO"` when `slot.mag == 0 and slot.reserve == 0`. Width check wants a phone render. |
+| C12 | HudClient:2842 phone never sees reserve | fixed-now | `HudClient.client.lua:1437` phone cells read "mag/reserve" (`PhoneShape` attribute set by setHotbarShape, which redraws); "NO AMMO" in red at `:1436` when both are 0. Cell width at phone scale wants a render. |
 | C13 | LobbyService:3220 Start-over on the Ready key | fixed-now | `LobbyService.lua:3316` KeyboardKeyCode H, GamepadKeyCode ButtonB. |
 | C14 | ItemData:198 item descriptions never shown | still-open | No client reads `ItemData.description`. Needs space on the held-item line (HudClient `:1503`) or the bag card (`InventoryPanel.lua:605`, a 16 px line already full); a layout call. |
 | C15 | MovementService:274 Blink Bean dead click | fixed-now | `MovementService.lua:277` returns a reason; threaded `WeaponService.lua:1894` (applyItem) and `:1955` (StartUse) to Bootstrap's existing toast; description `ItemData.lua:112`. |
 | C16 | WeaponService:1809 "only heals up to 75" at 113 HP | fixed-now | `WeaponService.lua:1869` quotes `math.floor(healCap(...))`; `ItemData.lua:29` "up to 75% of your max health". |
-| C17 | HudClient:983 no boots pill / no countdown | already-fixed (soda) · still-open (boots) | Soda countdown `HudClient.client.lua:3877`. Boots: add a pill driven by the `BounceBootsUntil` attribute (MovementService) beside speedPill, same countdown code. |
-| C18 | MovementClient:959 which item X uses | fixed-now (label) · still-open (HUD) | `Settings.lua:26` "Use the first movement item in your bag". Still open in HudClient renderSlots `:1371`: `refs.key.Text = Settings.KeyLabel("Slot" .. index)` → append `.. " · " .. Settings.KeyLabel("MovementItem")` on the first movement-item slot. No client toast channel exists for "No movement item". |
+| C17 | HudClient:983 no boots pill / no countdown | already-fixed (soda) · fixed-now (boots) | Soda countdown as before; the same pill now also counts Bounce Boots down off `BounceBootsUntil` (`HudClient.client.lua:4005` effects list), text scaled into the pill. Held by `hud_layout_check.py` check 6 (plant = boots dropped, caught). |
+| C18 | MovementClient:959 which item X uses | fixed-now | `Settings.lua:26` label; `HudClient.client.lua:1403` the first movement item's cell key reads "3 · X" on a keyboard (same test as MovementClient.firstMovementSlot). |
 | C19 | ProjectileClient:679 phone cannot cook | needs-Studio | `ProjectileClient.client.lua:657` startCook exists; routing BRR_Fire's Begin/End on touch into startCook/throw is an input-flow change that needs a device. |
 | C20 | MatchService:1571 drop toast says hold W | fixed-now | `MatchService.lua:1734` "Dropping in over your spot — hold nothing to land there, or steer with WASD" when a spot was picked. |
 | C21 | EventBanner:367 event card hidden under the vote reveal | fixed-now | `EventBanner.lua:46` HoldFor, `:847` Announce defers inside the hold; `VoteDropClient.client.lua:206` holds for REVEAL_SECONDS. Untested on screen (render). |
@@ -53,11 +53,11 @@ Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82
 | C29 | MenuClient:1340 Style crates on Crates tab "You own 0 / 0" | fixed-now | `MenuClient.client.lua:1337` skips `category == "Cosmetic"` (they have the Style tab). |
 | C30 | MenuClient:1616 pass reward "Cosmetic" | fixed-now | `MenuClient.client.lua:1732` names the next unowned pool item (same walk as grantCosmetic) or the 1,000-coin fallback. Every unclaimed cosmetic tier names the same next item. |
 | C31 | MenuClient:1705 Daily Spin from menu silent | already-fixed (toast) · fixed-now (index) | Toast via guard `Bootstrap.server.lua:776`; menu spin now goes through `LobbyService.OnDailySpin` (RecordIndex) `:990`. |
-| C32 | CombatService:353 vetoed hit silent; protection never broken by attacking | fixed-now | Grey "+" tick on veto `CombatService.lua:409` (kind "structure"); landing a hit ends your own protection `ModeTeams.lua:427`. Still open: a "PROTECTED" pill (HudClient reads `SpawnProtected`). |
+| C32 | CombatService:353 vetoed hit silent; protection never broken by attacking | fixed-now | Grey "+" tick on veto `CombatService.lua:409` (kind "structure"); landing a hit ends your own protection `ModeTeams.lua:427`. Fixed now too: the effects pill says "PROTECTED" while `SpawnProtected` is on (`HudClient.client.lua:4005`). |
 | C33 | HudClient:1823 (modes) "Storm moves in 0s" over the scoreline | already-fixed | Same as C23 (`:1867`), the line is empty in team modes. |
-| C34 | HudClient:2441 nothing points at the hill | still-open | KOTH is now multi-objective ("Two teams, two objectives", `VoteScreen.lua:70`); `HudClient.client.lua:2586` still draws only the storm "ZONE" marker. Needs a marker per objective from ModeKingOfTheHill.Objectives; design call. |
+| C34 | HudClient:2441 nothing points at the hill | fixed-now | `HudClient.client.lua:2677` compass markers "A" / "B" from `workspace.Hill.Objective<letter>` HillX/HillZ (ModeKingOfTheHill.buildObjective); hidden when the hill is gone. Owner colours not shown (one accent colour). |
 | C35 | HudClient:3510 "+0 / +0" and "#2" in team modes | already-fixed | `ResultsScreen.client.lua:325` VICTORY / DEFEAT / DRAW; the old "+0" result is gone (header comment `:4`). |
-| C36 | HudClient:3587 "50 ALIVE" in respawn modes | already-fixed (players) · still-open (late joiner) | Banner hidden in team matches `HudClient.client.lua:3706`. Late joiner `:3749` `bannerTitle.Text = matchState.aliveCount .. " ALIVE"` → `bannerTitle.Text = (matchState.mode and matchState.mode ~= "BattleRoyale") and string.upper(GameModes.Get(matchState.mode).name) or (matchState.aliveCount .. " ALIVE")`. |
+| C36 | HudClient:3587 "50 ALIVE" in respawn modes | already-fixed (players) · fixed-now (late joiner) | `HudClient.client.lua:3893` a respawn mode's banner names the mode (GameModes.Get(mode).name) instead of a living count. |
 | C37 | ModeScoreHud:187 "level", hill status invisible | fixed-now (TIED) · still-open (status) | `ModeScoreHud.client.lua:271` "TIED". Hill status line not added: KOTH now scores several objectives, one status word no longer describes it. |
 | C38 | ModeScoreHud:200 TDM has no clock | fixed-now | `ModeScoreHud.client.lua:278` "FIRST TO 100\n7:42", red in the last 30 s. |
 | C39 | ArsenalExpansion:14 gun names carry no type | still-open | Needs `def.style` in the slot payload and a type word on floor label / HUD line; floor label already carries rarity (`LootService.lua:284`). |
@@ -77,7 +77,7 @@ Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82
 | M2 | HudClient:207 "[F] join next match" on phones | fixed-now | `HudClient.client.lua:229` touch or pad: "tap to join next match" / "tap to stay in lobby", no key. |
 | M3 | HudClient:885 tips hard-code F, M, T, 1-8, Q | fixed-now | `HudClient.client.lua:916-922` {Ready}, {Slot1}/{Slot8}/{NextSlot}, {ToggleCamera}, filled from this player's bindings by the existing filler. |
 | M4 | HudClient:1372 rarity colour-only | already-fixed (floor) · still-open (hotbar) | Floor label/prompt carry the word `LootService.lua:284`. Hotbar `HudClient.client.lua:1383` colour only; proposal: a one-letter tier tag in the cell corner. |
-| M5 | HudClient:1493 "click to use" on a pad | still-open | `HudClient.client.lua:1503` `slot.name .. "  •  click to use"` → `slot.name .. (lastInputIsGamepad and "  •  RT to use" or "  •  click to use")`. |
+| M5 | HudClient:1493 "click to use" on a pad | fixed-now | `HudClient.client.lua:1556-1562` "RT to use" on a pad, "tap FIRE to use" on touch, "click to use" otherwise. |
 | M6 | HudClient:2224 minimap names 9 px, towns vs landmarks by colour | needs-Studio | `HudClient.client.lua:2273`, `:2438` TextSize 9; diamond markers need a render. |
 | M7 | MenuClient:646 filter chips 28 px | needs-Studio | `MenuClient.client.lua:658`; growing to 44 px wraps the row, needs a render. |
 | M8 | HudClient:2653 kill feed row runs off screen | fixed-now | `HudClient.client.lua:2843` TextTruncate AtEnd, right-aligned, placement first. |
@@ -86,9 +86,9 @@ Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82
 | M11 | LobbyService:3168 sprint key never named | fixed-now | `LobbyService.lua:3265` KeyHint "Hold [{Sprint}] for the long leaps"; the ControlsHint half is moot (removed). |
 | M12 | HudClient:890 "Stay inside the storm" | fixed-now | `HudClient.client.lua:921` "Stay inside the zone — the purple storm wall hurts. …". |
 | M13 | ItemData:149 three-structure cap unstated | still-open | Text exists as `capRule` `ItemData.lua:253`, but nothing reads it. Proposal: MenuClient/HUD caption appends `item.capRule` wherever the description is shown (none yet, see C14). |
-| M14 | ProjectileService:587 driver's throw refused silently | still-open | Client sinks the click; `HudClient.client.lua:1503` → when `Humanoid.SeatPart` is a VehicleSeat: `slot.name .. "  •  hands on the wheel"`. |
+| M14 | ProjectileService:587 driver's throw refused silently | fixed-now | `HudClient.client.lua:1558` a held item in a VehicleSeat reads "hands on the wheel". |
 | M15 | SupplyDropService:251 supplies never announced | fixed-now | Spilled on the ground since #85; toast names every piece `SupplyDropService.lua:268`. |
-| M16 | HudClient:1492 first click after a swap eaten | still-open | `HudClient.client.lua:1500-1503` item branch: reuse `local raising = (loadout.equipReadyIn or 0) > 0.05` (`:1508`) and when raising set `ammoText.Text = "RAISING"`, `weaponName.Text = slot.name`. |
+| M16 | HudClient:1492 first click after a swap eaten | fixed-now | `HudClient.client.lua:1549` a held item shows "RAISING" while `equipReadyIn` runs, as guns do. |
 | M17 | MatchEvents:77 "half again as fast"; Shield Up "drops in" | fixed-now | `MatchEvents.lua:81` composed from the speed ("50% faster"); `:53` "Everyone starts with 50 shield." Check "events" (plant = field 1.75, caught). |
 | M18 | MatchService:1739 countdown 15 → 7 | fixed-now | `MatchService.lua:1910` an all-ready lobby enters Countdown at AllReadyCountdown. VoteScreen's bar total is still LobbyCountdown (VoteDropClient passes it): bar starts part-empty rather than snapping. |
 | M19 | StormService:269 storm damage silent | already-fixed (enter/leave) · still-open (tick) | `StormClient.client.lua:206` StormEnter/StormLeave cues (#45). No per-tick sound. |
@@ -106,7 +106,7 @@ Totals: fixed-now 43 · already-fixed 22 · still-open 10 · needs-Studio 7 = 82
 | M31 | ProgressionPanel:1429 "pull it in play" | fixed-now | `ProgressionPanel.lua:1557` "BOUGHT — get one\nfrom a coin crate" (old line lengths). |
 | M32 | GameMode:382 respawn wait only in a 2.6 s toast | still-open | Needs the recap (HudClient `:3540`) to carry a countdown: add `respawnDelay` to the recap payload and title it `"DOWNED BY " .. name .. " — BACK IN " .. n`. |
 | M33 | VoteScreen:70 KOTH pitch drops "alone" | already-fixed (superseded) | KOTH is now objective capture; pitch `VoteScreen.lua:70` "Two teams, two objectives. Capture and hold them, first to %d." |
-| M34 | LootService:247 rarity colour-only on the floor | already-fixed (floor) · still-open (HUD) | `LootService.lua:284` "Uncommon Crocodilo Rifle" label and prompt. HUD `HudClient.client.lua:1529` could append `string.upper(slot.rarity)`. |
+| M34 | LootService:247 rarity colour-only on the floor | already-fixed (floor) · fixed-now (HUD) | `HudClient.client.lua:1599` the held gun's line leads with its tier word ("LEGENDARY  Crocodilo Rifle"). |
 
 ## What Oliver's machine should run
 

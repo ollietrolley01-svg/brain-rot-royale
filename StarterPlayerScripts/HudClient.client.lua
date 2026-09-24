@@ -1013,10 +1013,11 @@ local speedPill = create("TextLabel", {
 	Font = Enum.Font.FredokaOne,
 	Text = "SPEED BOOST",
 	TextColor3 = Color3.new(1, 1, 1),
-	TextSize = 16,
+	-- Scaled into the box, up to 16: with two effects on at once the line is longer than the pill.
+	TextScaled = true,
 	Visible = false,
 	Parent = screenGui,
-}, { rounded(14) })
+}, { rounded(14), create("UITextSizeConstraint", { MaxTextSize = 16 }), padding(4) })
 
 local function updateCompanionWidget()
 	local show = companionDef ~= nil and loadout ~= nil
@@ -1387,6 +1388,23 @@ local function renderSlots()
 		buildSlotCells()
 	end
 
+	-- The phone hotbar has no ammo line under it (setHotbarShape hides it), so each gun cell says its
+	-- reserve too (#86 C12). And the first movement item says the key that uses it without switching
+	-- off your gun (#86 C18: MovementClient's quick-use, the first "movement" item in the bag), on a
+	-- keyboard, where a key means something.
+	local phoneShape = weaponFrame:GetAttribute("PhoneShape") == true
+	local quickSlot = nil
+	if UserInputService.KeyboardEnabled and loadout and loadout.slots then
+		local ItemData = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("ItemData"))
+		for index = 1, SLOT_COUNT do
+			local slot = loadout.slots[index]
+			local item = type(slot) == "table" and slot.kind == "item" and ItemData.Get(slot.id)
+			if item and item.kind == "movement" then
+				quickSlot = index
+				break
+			end
+		end
+	end
 	for index = 1, SLOT_COUNT do
 		local refs = slotCells[index]
 		local slot = loadout and loadout.slots[index]
@@ -1395,7 +1413,7 @@ local function renderSlots()
 		refs.cell.BackgroundColor3 = held and C.Panel or C.Background
 		refs.cell.BackgroundTransparency = held and 0 or (slot and 0.35 or 0.6)
 		refs.stroke.Enabled = held and true or false
-		refs.key.Text = Settings.KeyLabel("Slot" .. index)
+		refs.key.Text = Settings.KeyLabel("Slot" .. index) .. (index == quickSlot and (" · " .. Settings.KeyLabel("MovementItem")) or "")
 
 		if not slot then
 			setSlotIcon(refs, nil)
@@ -1414,10 +1432,11 @@ local function renderSlots()
 			refs.bar.BackgroundColor3 = Rarity.Color(slot.rarity)
 		else
 			setSlotIcon(refs, nil)
-			refs.center.Text = slot.name
-			refs.center.TextColor3 = Rarity.Color(slot.rarity)
+			local empty = slot.mag == 0 and slot.reserve == 0
+			refs.center.Text = (phoneShape and empty) and "NO AMMO" or slot.name
+			refs.center.TextColor3 = (phoneShape and empty) and C.Red or Rarity.Color(slot.rarity)
 			refs.name.Text = ""
-			refs.count.Text = tostring(slot.mag)
+			refs.count.Text = phoneShape and string.format("%d/%d", slot.mag, slot.reserve or 0) or tostring(slot.mag)
 			refs.count.TextColor3 = slot.mag == 0 and C.Red or C.Text
 			refs.bar.Visible = true
 			refs.bar.BackgroundColor3 = Rarity.Color(slot.rarity)
@@ -1525,9 +1544,24 @@ local function renderWeapon()
 
 	local slot = loadout.equipped and loadout.slots[loadout.equipped]
 	if slot and slot.kind == "item" then
-		ammoText.Text = "x" .. slot.count
-		ammoText.TextColor3 = C.Text
-		weaponName.Text = slot.name .. "  •  click to use"
+		-- The same "not ready yet" as a gun gets after a swap (#86 M16): a click in it is eaten.
+		local raising = (loadout.equipReadyIn or 0) > 0.05
+		ammoText.Text = raising and "RAISING" or ("x" .. slot.count)
+		ammoText.TextColor3 = raising and C.Muted or C.Text
+		-- How to use it on this device (#86 M5), and why nothing happens from a driver's seat, where
+		-- the server refuses it (#86 M14: ProjectileService won't let a driver throw).
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		local lastInput = UserInputService:GetLastInputType()
+		local how = "click to use"
+		if seat ~= nil and seat:IsA("VehicleSeat") then
+			how = "hands on the wheel"
+		elseif string.find(lastInput.Name, "Gamepad", 1, true) then
+			how = "RT to use"
+		elseif lastInput == Enum.UserInputType.Touch then
+			how = "tap FIRE to use"
+		end
+		weaponName.Text = slot.name .. "  •  " .. how
 		weaponName.TextColor3 = Rarity.Color(slot.rarity)
 		showCrosshair(false)
 	elseif slot then
@@ -1561,7 +1595,9 @@ local function renderWeapon()
 			explosive = "EXPLOSIVE: splash",
 			goldRush = "GOLD RUSH: kills pay coins",
 		}
-		weaponName.Text = slot.name .. (slot.ability and ("  •  " .. (abilityWords[slot.ability] or slot.ability)) or "")
+		-- The tier in words as well as colour (#86 M34), as the floor label already says it.
+		weaponName.Text = (type(slot.rarity) == "string" and (string.upper(slot.rarity) .. "  ") or "") .. slot.name
+			.. (slot.ability and ("  •  " .. (abilityWords[slot.ability] or slot.ability)) or "")
 		weaponName.TextColor3 = Rarity.Color(slot.rarity)
 		showCrosshair(true)
 	else
@@ -2633,6 +2669,21 @@ local function updateCompass(root)
 	elseif compassMarkers.drop then
 		compassMarkers.drop.frame.Visible = false
 	end
+	-- King of the Hill's objectives by letter (#86 C34): nothing on the HUD pointed at them. The mode
+	-- builds each as workspace.Hill.Objective<letter> with its centre as HillX / HillZ
+	-- (ModeKingOfTheHill.buildObjective), and takes the model down with the match.
+	local hill = workspace:FindFirstChild("Hill")
+	for _, letter in ipairs({ "A", "B" }) do
+		local key = "objective:" .. letter
+		local folder = hill and hill:FindFirstChild("Objective" .. letter)
+		local x = folder and folder:GetAttribute("HillX")
+		local z = folder and folder:GetAttribute("HillZ")
+		if x and z then
+			placeCompassMarker(compassMarker(key, letter, C.Accent, "zone"), bearingTo(here, Vector3.new(x, 0, z)), heading)
+		elseif compassMarkers[key] then
+			compassMarkers[key].frame.Visible = false
+		end
+	end
 end
 
 task.spawn(function()
@@ -3069,6 +3120,11 @@ do
 		local function setHotbarShape(phone, spot, slots, invSpot)
 			remember(weaponFrame)
 			remember(slotRow)
+			-- The cells word their ammo differently in the phone shape (renderSlots).
+			if weaponFrame:GetAttribute("PhoneShape") ~= (phone == true) then
+				weaponFrame:SetAttribute("PhoneShape", phone == true)
+				renderSlots()
+			end
 			ammoText.Visible = not phone
 			weaponName.Visible = not phone
 			if rowLayout then
@@ -3831,7 +3887,10 @@ local function renderBanner()
 			bannerSub.Text = "Generating terrain, towns and loot"
 		end
 	elseif matchState.state == "InProgress" then
-		bannerTitle.Text = matchState.aliveCount .. " ALIVE"
+		-- A count of the living means nothing in a respawn mode (#86 C36): there it names the mode.
+		local modeDef = matchState.mode and matchState.mode ~= "BattleRoyale"
+			and require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("GameModes")).Get(matchState.mode)
+		bannerTitle.Text = modeDef and string.upper(modeDef.name) or (matchState.aliveCount .. " ALIVE")
 
 		-- No loadout during a live match means this player isn't in it — they joined after
 		-- it started, or they've been eliminated and are spectating.
@@ -3937,33 +3996,59 @@ local function stopSpeedBoostTick()
 	end
 end
 
+--
+-- The same pill carries the other things on you that run out (#86): Bounce Boots, counted down off
+-- `BounceBootsUntil` (MovementService, a server-time stamp like the soda's; C17), and spawn protection
+-- in a team mode, off the character's `SpawnProtected` (ModeTeams; C32), which ends the moment you
+-- shoot. One pill rather than three, so there is still one thing in that spot to keep clear.
 local function refreshSpeedPill()
-	local on = player:GetAttribute("SpeedBoosted") == true
-	hudLayout.show(speedPill, on)
-	if not on then
+	local function effects()
+		local now = workspace:GetServerTimeNow()
+		local out = {}
+		if player:GetAttribute("SpeedBoosted") == true then
+			local endsAt = player:GetAttribute("SpeedBoostUntil")
+			local left = endsAt and endsAt - now or 0
+			table.insert(out, left > 0 and string.format("SPEED BOOST  %ds", math.ceil(left)) or "SPEED BOOST")
+		end
+		local boots = player:GetAttribute("BounceBootsUntil")
+		if boots and boots - now > 0 then
+			table.insert(out, string.format("BOUNCE BOOTS  %ds", math.ceil(boots - now)))
+		end
+		if player.Character and player.Character:GetAttribute("SpawnProtected") == true then
+			table.insert(out, "PROTECTED")
+		end
+		return out
+	end
+	local current = effects()
+	hudLayout.show(speedPill, #current > 0)
+	if #current == 0 then
 		stopSpeedBoostTick()
 		speedPill.Text = "SPEED BOOST"
 		return
 	end
+	speedPill.Text = table.concat(current, "  •  ")
 	if speedBoostTick then
 		return
 	end
 	speedBoostTick = RunService.Heartbeat:Connect(function()
-		local endsAt = player:GetAttribute("SpeedBoostUntil")
-		if not endsAt then
-			speedPill.Text = "SPEED BOOST"
-			return
+		local live = effects()
+		if #live == 0 then
+			refreshSpeedPill()
+		else
+			speedPill.Text = table.concat(live, "  •  ")
 		end
-		local left = endsAt - workspace:GetServerTimeNow()
-		if left <= 0 then
-			speedPill.Text = "SPEED BOOST"
-			return
-		end
-		speedPill.Text = string.format("SPEED BOOST  %ds", math.ceil(left))
 	end)
 end
 
 player:GetAttributeChangedSignal("SpeedBoosted"):Connect(refreshSpeedPill)
+player:GetAttributeChangedSignal("BounceBootsUntil"):Connect(refreshSpeedPill)
+player.CharacterAdded:Connect(function(character)
+	character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+	refreshSpeedPill()
+end)
+if player.Character then
+	player.Character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+end
 refreshSpeedPill()
 
 --------------------------------------------------------------------------------
