@@ -1,5 +1,5 @@
--- The two screens a player sees before a match: the mode+map vote during the lobby countdown, and
--- the drop-location picker once the map is built.
+-- The two screens a player sees before a match: the mode+map vote in the lobby (from the break after
+-- the last match through the countdown), and the drop-location picker once the map is built.
 --
 -- This script is the WIRING only — remotes, match state, keys, the cursor and the viewport. The
 -- drawing lives in VoteScreen.lua and DropPicker.lua, which are ModuleScripts so tools/gallery.ps1
@@ -140,10 +140,10 @@ end
 
 local function renderVote()
 	-- Both faces of the screen are gated on the MATCH state, in Shared/VoteReveal.View so a harness
-	-- can run it (tools/vote_open_check.py): the interactive vote only in the lobby countdown, the
+	-- can run it (tools/vote_open_check.py): the interactive vote only in the lobby, the
 	-- winner reveal only while the match is still loading and never behind the drop picker. Without
 	-- the second half, a respawn mode on a quick-building map had the reveal over live play (#107).
-	local stateOpen, showReveal = VoteReveal.View(matchState, voteState.open, revealId ~= nil and tick() < revealUntil)
+	local stateOpen, showReveal = VoteReveal.View(matchState, voteState.open, revealId ~= nil and tick() < revealUntil, isReady())
 	local decided = showReveal and revealId or nil
 	-- The shop, the inventory and the merge dialog all raise `MenuOpen`, and this screen is drawn
 	-- above every one of them (DisplayOrder 30). A vote panel sitting on top of the menu somebody
@@ -180,7 +180,8 @@ local function renderVote()
 		decided = decided,
 		candidates = candidates,
 		seconds = matchState.countdown or 0,
-		total = MatchConfig.LobbyCountdown,
+		-- The vote opens with the break after a match, so its clock is the break's until the countdown.
+		total = matchState.state == "Intermission" and MatchConfig.Intermission or MatchConfig.LobbyCountdown,
 		ready = isReady(),
 		-- Named on the "ready up to vote" line, so the panel that asks for it says which key it is.
 		readyKey = Settings.KeyLabel("Ready"),
@@ -222,10 +223,10 @@ player:GetAttributeChangedSignal("Ready"):Connect(renderVote)
 player:GetAttributeChangedSignal("MenuOpen"):Connect(renderVote)
 
 -- 1, 2, 3 vote for the first, second and third card. There is no clash with the hotbar: those keys
--- only do anything in CombatClient while a match is in progress, and this screen is only up during
--- the countdown.
+-- only do anything in CombatClient while a match is in progress, and this screen is only up in the
+-- lobby (the break, waiting and the countdown).
 UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or not voteState.open or matchState.state ~= "Countdown" or not isReady() then
+	if processed or not isReady() or not (VoteReveal.View(matchState, voteState.open, false, true)) then
 		return
 	end
 	local index
