@@ -200,10 +200,35 @@ local lastPickup = nil
 local MAX_DROPPED = 50
 local dropped = {}
 
+-- A dropped pickup can't be taken for its first second on the ground (Oliver, 2026-09-24: "the supply
+-- drops still deposit straight to inventory"). A crate is opened by HOLDING the key for 1.2 s and its
+-- spill lands a few studs in front of the opener, well inside a pickup prompt's 10-stud reach; those
+-- prompts need no hold, and the key was still down as they appeared, so the whole spill went into the
+-- bag in the same moment it hit the floor. Settling keeps the prompt off until the key has been let go
+-- (a chest's 0.8 s hold, a swap's dropped slot and a body's drop go the same way), so taking what fell
+-- out is a fresh press. The server refuses a take while `Settling` is set, whatever a client does.
+local DROP_SETTLE = 1
+
+local function settle(base)
+	local prompt = base:FindFirstChildOfClass("ProximityPrompt")
+	if not prompt then
+		return
+	end
+	prompt.Enabled = false
+	base:SetAttribute("Settling", true)
+	task.delay(DROP_SETTLE, function()
+		if base.Parent then
+			base:SetAttribute("Settling", nil)
+			prompt.Enabled = true
+		end
+	end)
+end
+
 local function trackDrop(base)
 	if not base or not base.Parent then
 		return
 	end
+	settle(base)
 	table.insert(dropped, base)
 	-- Forget ones already picked up or cleared, then trim the oldest down to the cap.
 	local live = {}
@@ -321,7 +346,7 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 	ZFight.Fix(pad)
 
 	prompt.Triggered:Connect(function(player)
-		if not base.Parent then
+		if not base.Parent or base:GetAttribute("Settling") then
 			return
 		end
 		-- A gun someone dropped keeps the ammo it had. Refilling it — or topping up every
@@ -428,7 +453,7 @@ local function spawnConsumable(position, itemId, amount)
 	end
 
 	prompt.Triggered:Connect(function(player)
-		if not base.Parent or base:GetAttribute("Claimed") then
+		if not base.Parent or base:GetAttribute("Claimed") or base:GetAttribute("Settling") then
 			return
 		end
 		local added = WeaponService.GiveConsumable(player, itemId, amount)
