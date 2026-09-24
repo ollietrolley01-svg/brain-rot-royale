@@ -33,6 +33,7 @@ local RewardService = require(script.Parent:WaitForChild("RewardService"))
 local StateSync = require(script.Parent:WaitForChild("StateSync"))
 local StormService = require(script.Parent:WaitForChild("StormService"))
 local SupplyDropService = require(script.Parent:WaitForChild("SupplyDropService"))
+local VendorService = require(script.Parent:WaitForChild("VendorService"))
 local VoteService = require(script.Parent:WaitForChild("VoteService"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 -- S1. The mode table this file consults; it never consults this file back. Required after
@@ -64,7 +65,8 @@ local leftSpectate = {}
 
 -- The battle royale's AFK rule, the team modes' participation check (GameMode.sampleActivity) applied to
 -- a placement: every `every` seconds of a running match each living player is checked for having moved
--- MoveStuds or hurt someone since the last check. One active in fewer than minActiveShare of their checks
+-- MoveStuds, hurt someone, been hurt, fired, reloaded or used an item since the last check (findings C2:
+-- moving and hurting alone called a camper holding an angle, a looter and a healer idle). One active in fewer than minActiveShare of their checks
 -- is paid the team modes' `afk` line instead of their placement -- a Ready player who never touches the
 -- keyboard used to drop in, stand still and collect a placement crate and coins every match. A dead or
 -- spectating player is not checked (their placement is already fixed), nor is anyone before their first
@@ -125,10 +127,66 @@ function afk.award(player, rank)
 	}
 end
 
--- Hurting someone is playing, even standing still (a camper holding an angle is not AFK).
-CombatService.OnDamage(function(attacker, _, dealt)
-	if state == "InProgress" and participants[attacker] and (dealt or 0) > 0 and Combatants.IsPlayer(attacker) then
-		afk.record(attacker).busy = true
+-- Hurting someone is playing, even standing still (a camper holding an angle is not AFK); so is being
+-- hurt by someone, and firing, reloading or using an item (WeaponService.NoteActivity).
+function afk.busy(token)
+	if state == "InProgress" and token ~= nil and participants[token] and Combatants.IsPlayer(token) then
+		afk.record(token).busy = true
+	end
+end
+CombatService.OnDamage(function(attacker, victim, dealt)
+	-- Someone else's hit: not the storm (no attacker) and not your own splash.
+	if (dealt or 0) > 0 and attacker ~= nil and attacker ~= victim then
+		afk.busy(attacker)
+		afk.busy(victim)
+	end
+end)
+WeaponService.OnActivity = afk.busy
+
+-- Players' out-of-combat regen, the bots' own rule (BotService: MatchConfig.BotRegenDelay seconds with no
+-- damage taken or dealt, then BotRegenPerSecond, up to MaxHealth). Roblox's default character "Health"
+-- script used to regenerate players 1% a second all match, storm and all; StarterCharacterScripts/Health
+-- replaces it with nothing, and this is the whole of player regen now. Only for someone playing a running
+-- match (MatchService.IsPlaying: not the lobby, not Loading, not downed), from the 1 s loop in Start.
+local regen = {
+	lastCombat = {}, -- [player] = tick() of the last damage taken or dealt
+	lastHealth = {}, -- [player] = Health after the last step: any loss (storm, a fall) is combat too
+	at = nil, -- tick() of the last step, so a late loop heals for the time that really passed
+}
+
+function regen.step(player, now, seconds)
+	local humanoid = Combatants.GetHumanoid(player)
+	if not humanoid or humanoid.Health <= 0 then
+		regen.lastHealth[player] = nil
+		return
+	end
+	local health = humanoid.Health
+	local before = regen.lastHealth[player]
+	if before and health < before then
+		regen.lastCombat[player] = now
+	end
+	-- Never above MaxHealth, and never DOWN to it: a heal cap only ever raises health.
+	if health < humanoid.MaxHealth and now - (regen.lastCombat[player] or 0) > MatchConfig.BotRegenDelay then
+		health = math.min(humanoid.MaxHealth, health + MatchConfig.BotRegenPerSecond * seconds)
+		humanoid.Health = health
+	end
+	regen.lastHealth[player] = health
+end
+
+function regen.forget(player)
+	regen.lastCombat[player], regen.lastHealth[player] = nil, nil
+end
+
+-- Dealing damage, or a hit the shield soaked (health never moved), is combat as well.
+CombatService.OnDamage(function(attacker, victim, dealt)
+	if (dealt or 0) <= 0 or attacker == victim then
+		return
+	end
+	local now = tick()
+	for _, token in ipairs({ attacker, victim }) do
+		if token ~= nil and Combatants.IsPlayer(token) then
+			regen.lastCombat[token] = now
+		end
 	end
 end)
 local aliveCount = 0
@@ -1281,6 +1339,9 @@ local function finishMatch()
 		state = "Intermission"
 		countdown = MatchConfig.Intermission
 		broadcast()
+		-- The next match's vote goes up now, not at the countdown: the whole break to read three cards
+		-- and argue about them, where the countdown alone left 8 seconds once everyone was ready.
+		VoteService.Open()
 
 		for _, player in ipairs(Players:GetPlayers()) do
 			-- Only the match's own loadouts. Clearing everyone nilled a lobby player's rack gun taken
@@ -1709,6 +1770,8 @@ local function startMatch()
 	local event = currentEvent or {}
 	applyEventKnobs(event)
 	CombatService.ResetStats()
+	-- The vendors' per-player caps (2 heals, 1 shield) are per match.
+	VendorService.ResetMatch()
 
 	-- Who's in is fixed the moment loading begins. Readying up or down during the few seconds
 	-- of map generation applies to the match after this one.
@@ -1744,6 +1807,8 @@ local function startMatch()
 	table.clear(leftSpectate)
 	table.clear(afk.players)
 	afk.tick = 0
+	table.clear(regen.lastCombat)
+	table.clear(regen.lastHealth)
 	table.clear(streaks)
 	CompanionService.ResetStats()
 
@@ -1797,6 +1862,17 @@ local function startMatch()
 			task.wait(1)
 			countdown -= 1
 			broadcast()
+			-- Every player being placed has picked (a leaver has nothing to pick): nobody left to wait for.
+			local waiting = false
+			for _, player in ipairs(joining) do
+				if player.Parent and participants[player] and not chosenDrop[player] then
+					waiting = true
+					break
+				end
+			end
+			if not waiting then
+				break
+			end
 		end
 		dropSelect = false
 		countdown = 0
@@ -2059,6 +2135,7 @@ function MatchService.OnPlayerRemoving(player)
 	end
 	leftSpectate[player] = nil
 	afk.players[player] = nil
+	regen.forget(player)
 	-- Keyed by UserId, so a weak table can't drop it mid-visit; nothing else let it go on leave.
 	lastReadyToggle[player.UserId] = nil
 	participants[player] = nil
@@ -2075,6 +2152,22 @@ function MatchService.Start()
 	task.spawn(function()
 		while true do
 			task.wait(1)
+
+			if state == "InProgress" then
+				local now = tick()
+				local seconds = regen.at and math.clamp(now - regen.at, 0, 3) or 1
+				regen.at = now
+				for token in pairs(participants) do
+					if Combatants.IsPlayer(token) and MatchService.IsPlaying(token) then
+						local ok, err = pcall(regen.step, token, now, seconds)
+						if not ok then
+							warn("[MatchService] regen failed: " .. tostring(err))
+						end
+					end
+				end
+			else
+				regen.at = nil
+			end
 
 			if state == "InProgress" and not currentMode.respawn then
 				-- The battle royale's participation checks (a respawn mode runs its own, in GameMode).
@@ -2102,11 +2195,21 @@ function MatchService.Start()
 					countdown = readyNow >= #Players:GetPlayers()
 						and math.min(MatchConfig.LobbyCountdown, MatchConfig.AllReadyCountdown)
 						or MatchConfig.LobbyCountdown
-					VoteService.Open()
+					-- Normally already open since the break began; a fresh server, or a failed start that
+					-- closed it, opens it here. Never re-rolled while open: that would wipe the votes cast.
+					if not VoteService.IsOpen() then
+						VoteService.Open()
+					end
 				end
 				broadcast()
 			elseif state == "Intermission" then
-				-- Readying up still works during the break; it just can't start the countdown yet.
+				-- Readying up still works during the break; it just can't start the countdown yet. Once
+				-- everyone here is ready there is nobody left to wait for, so the rest of the break goes,
+				-- all but IntermissionAllReady seconds of it.
+				local present = #Players:GetPlayers()
+				if present > 0 and #readyPlayers() >= present and countdown > MatchConfig.IntermissionAllReady then
+					countdown = MatchConfig.IntermissionAllReady
+				end
 				countdown -= 1
 				if countdown <= 0 then
 					countdown = 0
@@ -2117,9 +2220,11 @@ function MatchService.Start()
 				-- Everyone unreadying cancels the countdown, back to waiting.
 				local readyCount = #readyPlayers()
 				if readyCount < MatchConfig.MinPlayers then
+					-- The vote stays up: it belongs to the lobby now (it opened when the break began), and
+					-- closing it here only to re-roll new cards at the next countdown threw away every vote.
+					-- A close with no winner revealed nothing anyway (VoteReveal.ShouldReveal).
 					state = "Waiting"
 					countdown = 0
-					VoteService.Close()
 				else
 					-- Everyone here is ready: nobody left to wait for.
 					if readyCount >= #Players:GetPlayers() and countdown > MatchConfig.AllReadyCountdown then

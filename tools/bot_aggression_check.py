@@ -32,7 +32,6 @@ the probe's own overheads, and any feel. tools/bot_aggression_ab.lua measures th
 import importlib.util
 import os
 import re
-import subprocess
 import sys
 
 from lupa import LuaRuntime
@@ -401,10 +400,15 @@ def main():
     tree = {p: perf.read_tree(root, p) for p in PATHS}
     rev = args[args.index("--before") + 1] if "--before" in args else None
     if rev is None:
-        log = subprocess.run(["git", "-C", root, "log", "--format=%H", "--diff-filter=A", "--",
-                              "tools/bot_aggression_check.py"], capture_output=True, text=True).stdout.split()
-        rev = (log[-1] + "~1") if log else "HEAD"
-    before = {p: perf.read_rev(root, rev, p) for p in PATHS}
+        rev = perf.default_before(root, "tools/bot_aggression_check.py")
+    try:
+        before = {p: perf.read_rev(root, rev, p) for p in PATHS}
+    except perf.NoRevision as err:
+        # No git: the working tree is its own "before", so the absolute reaction targets are still
+        # checked and a planted fault is still measured against the unplanted tree; only the
+        # comparison with the stock revision is lost.
+        perf.no_before_note("bot_aggression_check", err)
+        rev, before = "working tree: no git", dict(tree)
 
     if "--plant" in args:
         caught = 0

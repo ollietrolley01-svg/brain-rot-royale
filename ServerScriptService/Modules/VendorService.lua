@@ -4,9 +4,16 @@
 --
 --   VendorService.Build(parent, cframe)   builds one, its base on `cframe`, facing -Z
 --   VendorService.Buy(player, product)    what the buttons do; returns ok, message
+--   VendorService.ResetMatch()            MatchService, as each match starts: the per-match caps
 --
 -- Only serves players who are alive in a running match, and only if the item fits.
+--
+-- PER-MATCH CAPS (findings C5, Oliver's option a). Coins can be bought with Robux, so an uncapped Med
+-- Kit button was healing for money: a player could refill to full after every fight. Each player gets
+-- MatchCaps[kind] of each kind a match, across every vendor on the map -- 2 heals, 1 shield -- and the
+-- button says so when they are gone. Ammo is not capped: it only refills what the guns already hold.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -28,6 +35,27 @@ VendorService.Products = {
 	{ id = "ShieldPotion", label = "SHIELD POTION", price = 300, kind = "item", itemId = "ShieldPotion", amount = 1 },
 	{ id = "Ammo", label = "AMMO REFILL", price = 150, kind = "ammo", fraction = 0.6 },
 }
+
+-- How many of each ItemData kind one player may buy in one match, from all the vendors together.
+VendorService.MatchCaps = { heal = 2, shield = 1 }
+local CAP_NAMES = { heal = { "heal", "heals" }, shield = { "shield potion", "shield potions" } }
+
+-- [player] = { [kind] = bought this match }. Strong, cleared on leave and by ResetMatch.
+local boughtThisMatch = {}
+
+-- The capped kind a product counts against, or nil (ammo).
+local function cappedKind(product)
+	local item = product.kind == "item" and ItemData.Get(product.itemId)
+	return item and VendorService.MatchCaps[item.kind] and item.kind or nil
+end
+
+function VendorService.ResetMatch()
+	table.clear(boughtThisMatch)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	boughtThisMatch[player] = nil
+end)
 
 -- Every vendor built this map, so one can be put down again if what it stands on breaks.
 local built = {}
@@ -92,6 +120,13 @@ function VendorService.Buy(player, product)
 	if not data then
 		return false, "Couldn't reach your coins."
 	end
+	local capKind = cappedKind(product)
+	local bought = boughtThisMatch[player] or {}
+	if capKind and (bought[capKind] or 0) >= VendorService.MatchCaps[capKind] then
+		local cap = VendorService.MatchCaps[capKind]
+		return false, string.format("Sold out for you — the vendors sell each player %d %s a match.",
+			cap, CAP_NAMES[capKind][cap == 1 and 1 or 2])
+	end
 	if (data.SahurCoins or 0) < product.price then
 		return false, string.format("Not enough SahurCoins — %s costs %d.", product.label, product.price)
 	end
@@ -111,6 +146,10 @@ function VendorService.Buy(player, product)
 	end
 
 	data.SahurCoins -= product.price
+	if capKind then
+		bought[capKind] = (bought[capKind] or 0) + 1
+		boughtThisMatch[player] = bought
+	end
 	StateSync.Push(player)
 	QuestService.Progress(player, "vendor", 1)
 	return true, string.format("Bought %s for %d SahurCoins", product.label, product.price)
@@ -156,8 +195,10 @@ function VendorService.Build(parent, cframe)
 		local prompt = Instance.new("ProximityPrompt")
 		prompt.ActionText = "Buy"
 		-- The ammo row says what a refill is, so it can be judged before buying (#86).
+		local capKind = cappedKind(product)
 		prompt.ObjectText = product.kind == "ammo"
 			and string.format("%s (+%d%% every gun) · %d C", product.label, math.floor(product.fraction * 100 + 0.5), product.price)
+			or capKind and string.format("%s · %d C · %d a match", product.label, product.price, VendorService.MatchCaps[capKind])
 			or string.format("%s · %d C", product.label, product.price)
 		prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 		prompt.HoldDuration = 0.35
