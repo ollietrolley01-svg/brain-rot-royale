@@ -17,6 +17,31 @@
 --
 -- One rig is built up front and cloned for the rest: CreateHumanoidModelFromDescription is
 -- a web call, and doing it 29 times would stall the match start.
+--
+-- SHARED INFRASTRUCTURE (for every section in this file: archetypes, looting, vehicles, animation).
+-- Bot code is hot: up to 13 bots think in one server frame. Anything a new behaviour needs from the
+-- world goes through these, never through its own workspace:Raycast or a walk over Combatants.All():
+--   BotService.Tick                  counts think slices; stamp a per-tick cache with it (see hostile()).
+--   combatantList / combatantsNear   the living combatants this tick (token, character, root, humanoid,
+--     (BotService.SpatialQuery)      position, isPlayer) and the ones within a radius, from a uniform
+--                                    grid rebuilt once a tick. The returned list is a SHARED scratch
+--                                    buffer: read it, never keep it. SpatialQuery.Loot(position,
+--                                    radius, kind) does the same for pickups; SpatialQuery.NewGrid
+--                                    makes a grid for anything else (vehicles, structures).
+--   castRay(origin, direction,       every ray a bot casts. A per-frame budget (BotService.RaycastBudget)
+--     params, priority)              serves "combat" (sight lines) before "navigation" (steps, cover,
+--                                    floors) before "idle" (wander and loot walking). Returns result,
+--                                    granted; on granted == false do the cautious thing (not visible,
+--                                    can't step) and DON'T cache the answer: the next think retries.
+--                                    BotNav.CastRay is the same function for BotNav's own rays.
+--   BotService.LodDefers             far from every player, an idle bot thinks every other turn; a
+--                                    bot that is fighting, fleeing, in the storm or was just hit never
+--                                    does. Time-based behaviour (regen, timers) must use elapsed time,
+--                                    not "one think = BotThinkInterval".
+-- Allocation: reuse rows (see refreshCombatants, findTarget, planCombatMove) rather than building
+-- tables in a per-think path; the GC pause is part of the frame. tools/perf_bot_cost.py counts rays,
+-- candidates examined, KB allocated and thinks per frame at 30 and 50 bots, and its planted faults
+-- must all still be caught after a change here.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -61,16 +86,40 @@ local BotService = {}
 BotService.IsHostile = nil
 BotService.SpawnLoadout = nil
 
+-- The think slice being run, bumped by refreshCombatants. Per-tick caches are stamped with it.
+BotService.Tick = 0
+
+-- The hook is a pcall per pair, and findTarget asks it for every combatant in reach of every bot
+-- that thinks: at 50 bots that was ~600 pcalls a slice. Teams don't change inside a slice, so the
+-- answer is kept per bot for the tick (cleared when BotService.Tick moves on). shootAt still asks
+-- at the trigger, through this same cache, so a side swap mid-match is seen by the next slice.
 local function hostile(bot, token)
 	local hook = BotService.IsHostile
 	if not hook then
 		return true
 	end
-	local ok, result = pcall(hook, bot, token)
-	if not ok then
-		return true
+	local cache = bot.hostileCache
+	if cache then
+		if bot.hostileTick ~= BotService.Tick then
+			table.clear(cache)
+			bot.hostileTick = BotService.Tick
+		else
+			local known = cache[token]
+			if known ~= nil then
+				return known
+			end
+		end
+	elseif type(bot) == "table" then
+		cache = {}
+		bot.hostileCache = cache
+		bot.hostileTick = BotService.Tick
 	end
-	return result ~= false
+	local ok, result = pcall(hook, bot, token)
+	result = (not ok) or result ~= false
+	if cache then
+		cache[token] = result
+	end
+	return result
 end
 
 -- Counters for tools/bot_probe.lua, shared with BotNav so the probe reads one table.
@@ -85,6 +134,8 @@ for _, key in ipairs({
 	-- BOT ARCHETYPES (tools/bot_archetype_sim.py reads these)
 	"peeks", "repositions", "thirdPartyHolds", "avoided", "flankMoves", "focusFire", "throwsSticky",
 	"buildsFortify", "buildsBlock", "buildsCross", "buildsPushed", "throwsRefusedFriendly", "buildsRefusedFriendly",
+	"rays", "raysCombat", "raysNavigation", "raysIdle", "raysDenied", "raysFrameMax", "sightDenied",
+	"candidatesExamined", "lodSkips", "lodThinks",
 }) do
 	STATS[key] = STATS[key] or 0
 end
@@ -803,30 +854,128 @@ end
 -- Perception
 --------------------------------------------------------------------------------
 
+-- RAYCAST BUDGET. Rays are the bots' frame cost: a think can cast 6 sight rays, 5 combat-step checks
+-- of up to 6 rays each and a cover search of up to 24 sight rays plus 6 step checks, and 13 bots
+-- think in one frame. Every bot ray goes through castRay, which counts it against one frame's cap
+-- and refuses the rest, least important class first: "idle" (a wandering or looting bot checking
+-- its footing) is cut at half the cap, "navigation" (combat steps, cover, floors, fleeing) at three
+-- quarters, "combat" (the sight lines that decide whether anyone gets shot) only at the cap itself.
+-- The cap is sized so an ordinary slice never reaches it; it is there for the burst (a fight
+-- breaking out in a crowd, the drop) so that burst costs a bounded number of rays a frame and a
+-- few bots wait one think, rather than the whole server waiting on the frame. A refused ray returns
+-- nil, false; callers take the cautious answer and don't cache it. tools/perf_bot_cost.py runs
+-- this against a crowd and checks the order of refusal; tools/perf_tick_probe.lua reads
+-- Stats.raysFrameMax / raysDenied in Studio.
+local castRay
+BotService.RaycastBudget = { FrameCap = 240, Share = { combat = 1, navigation = 0.75, idle = 0.5 } }
+do
+	local budget = BotService.RaycastBudget
+	local spent = 0
+	-- One RaycastParams and one filter list per class, refilled rather than rebuilt: RaycastParams.new
+	-- plus a filter table per ray was two allocations for every sight line.
+	local folderNames = { "Loot", "Effects", "Companions" }
+	local folders = { at = -1 }
+
+	-- The workspace folders every bot ray looks past, found once a frame rather than per ray.
+	function budget.Folders()
+		if folders.at ~= BotService.Tick then
+			folders.at = BotService.Tick
+			for index, name in ipairs(folderNames) do
+				folders[index] = workspace:FindFirstChild(name) or false
+			end
+		end
+		return folders
+	end
+
+	-- Fill `filter` with `first` and the folders (nil entries skipped), for params.FilterDescendantsInstances.
+	function budget.Filter(filter, first, withCompanions)
+		table.clear(filter)
+		filter[1] = first
+		local list = budget.Folders()
+		for index = 1, #folderNames do
+			local folder = list[index]
+			if folder and (withCompanions ~= false or index ~= 3) then
+				filter[#filter + 1] = folder
+			end
+		end
+		return filter
+	end
+
+	function budget.BeginFrame()
+		if spent > STATS.raysFrameMax then
+			STATS.raysFrameMax = spent
+		end
+		spent = 0
+	end
+
+	function budget.Spent()
+		return spent
+	end
+
+	function budget.Remaining(priority)
+		local share = budget.Share[priority or "navigation"] or budget.Share.navigation
+		return math.max(0, math.floor(budget.FrameCap * share) - spent)
+	end
+
+	function budget.Cast(origin, direction, params, priority)
+		priority = priority or "navigation"
+		local share = budget.Share[priority] or budget.Share.navigation
+		if spent >= budget.FrameCap * share then
+			STATS.raysDenied += 1
+			return nil, false
+		end
+		spent += 1
+		STATS.rays += 1
+		if priority == "combat" then
+			STATS.raysCombat += 1
+		elseif priority == "idle" then
+			STATS.raysIdle += 1
+		else
+			STATS.raysNavigation += 1
+		end
+		return workspace:Raycast(origin, direction, params), true
+	end
+	castRay = budget.Cast
+	-- BotNav casts through the same budget (it loads before this module, so it is handed the function).
+	BotNav.CastRay = castRay
+
+	-- The sight-line params (hasLineOfSight). Terrain water is not cover: a raycast hits it unless
+	-- told not to, so a bot would refuse to shoot across a river at a target a player could hit — the
+	-- shot itself ignores water (CombatService.buildRaycastParams), as does the client's own trace.
+	budget.LosParams = RaycastParams.new()
+	budget.LosParams.FilterType = Enum.RaycastFilterType.Exclude
+	budget.LosParams.IgnoreWater = true
+	budget.LosFilter = {}
+	-- The barricade-finding params (coverBetween): only what can be collided with counts as cover.
+	budget.CoverParams = RaycastParams.new()
+	budget.CoverParams.FilterType = Enum.RaycastFilterType.Exclude
+	budget.CoverParams.RespectCanCollide = true
+	budget.CoverParams.IgnoreWater = true
+	budget.CoverFilter = {}
+	-- The "can that spot see me" params (exposedTo).
+	budget.ExposedParams = RaycastParams.new()
+	budget.ExposedParams.FilterType = Enum.RaycastFilterType.Exclude
+	budget.ExposedParams.RespectCanCollide = true
+	budget.ExposedParams.IgnoreWater = true
+	budget.ExposedFilter = {}
+end
+
+-- Returns visible, denied. `denied` is true when the ray budget refused the frame's ray, in which
+-- case `visible` is the cautious false and the caller must not cache it.
 local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 	local toPart = toCharacter:FindFirstChild("HumanoidRootPart")
 	if not toPart then
-		return false
+		return false, false
 	end
 
 	-- A smoke cloud hides whoever is behind it (ProjectileService).
 	if CombatService.SmokeBlocks and CombatService.SmokeBlocks(fromPart.Position, toPart.Position) then
-		return false
+		return false, false
 	end
 
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	-- Terrain water is not cover: a raycast hits it unless told not to, so a bot would refuse to
-	-- shoot across a river at a target a player could hit — the shot itself ignores water
-	-- (CombatService.buildRaycastParams), as does the client's own trace.
-	params.IgnoreWater = true
-	local filter = { botCharacter }
-	for _, name in ipairs({ "Loot", "Effects", "Companions" }) do
-		local instance = workspace:FindFirstChild(name)
-		if instance then
-			table.insert(filter, instance)
-		end
-	end
+	local budget = BotService.RaycastBudget
+	local params = budget.LosParams
+	local filter = budget.Filter(budget.LosFilter, botCharacter)
 	-- A bot at the wheel looks out from inside its own vehicle: its roof and panels aren't cover, or
 	-- it would never see anyone to fire the mount at.
 	local seated = botCharacter:FindFirstChildOfClass("Humanoid")
@@ -841,35 +990,169 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 
 	-- Window glass is see-through, and a shot breaks it on the way (CombatService), so a pane
 	-- in the way is looked past rather than counted as cover. A few panes at most in one line.
-	local result
+	local result, granted
 	for _ = 1, 4 do
-		result = workspace:Raycast(fromPart.Position, toPart.Position - fromPart.Position, params)
+		result, granted = castRay(fromPart.Position, toPart.Position - fromPart.Position, params, "combat")
+		if not granted then
+			return false, true
+		end
 		if not (result and CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(result.Instance)) then
 			break
 		end
 		table.insert(filter, result.Instance)
 		params.FilterDescendantsInstances = filter
 	end
-	return result ~= nil and result.Instance:IsDescendantOf(toCharacter)
+	return result ~= nil and result.Instance:IsDescendantOf(toCharacter), false
 end
 
 -- The living combatants, looked up once per think tick for every bot to share: token, character, root,
--- humanoid and the root's position at the time. Positions are at most one think slice old
--- (BotThinkInterval / THINK_SLICES); line of sight always uses the live root.
+-- humanoid, whether it is a player, and the root's position at the time. Positions are at most one
+-- think slice old (BotThinkInterval / THINK_SLICES); line of sight always uses the live root.
+--
+-- SPATIAL QUERY. The list is also binned into a uniform grid, so "who is within R of here" reads
+-- the few cells R covers instead of every combatant: findTarget (vision range), squadCentroid
+-- (80), the outnumbered count (70) and clusterAround (10) used to each walk the whole list for
+-- every bot, N² a slice. Rows are pooled and refilled, not rebuilt, so a refresh allocates nothing
+-- once the pool has grown to the lobby. combatantsNear returns one shared scratch list, valid until
+-- the next call: read it there and then; never keep it or hand it on.
 local combatantList = {}
+local combatantsNear
+local refreshCombatants
+BotService.SpatialQuery = {}
+do
+	local query = BotService.SpatialQuery
+	local FLOOR = math.floor
+	local OFFSET = 32768 -- cells are keyed (cx + OFFSET) + (cz + OFFSET) * 65536: unique to ±2M studs
 
-local function refreshCombatants()
-	table.clear(combatantList)
-	for character, token in pairs(Combatants.All()) do
-		if character.Parent then
-			local root = character:FindFirstChild("HumanoidRootPart")
-			local humanoid = root and character:FindFirstChildOfClass("Humanoid")
-			if humanoid and humanoid.Health > 0 then
-				table.insert(combatantList, {
-					token = token, character = character, root = root, humanoid = humanoid, position = root.Position,
-				})
+	-- A grid of rows that carry `.position`. Cells are reused across Rebuild calls; `Near` fills and
+	-- returns the grid's own scratch list.
+	function query.NewGrid(cellSize)
+		local grid = { cellSize = cellSize, cells = {}, used = {}, scratch = {}, count = 0 }
+		local cells, used, scratch = grid.cells, grid.used, grid.scratch
+
+		local function keyOf(x, z)
+			return (FLOOR(x / cellSize) + OFFSET) + (FLOOR(z / cellSize) + OFFSET) * 65536
+		end
+
+		function grid.Rebuild(rows)
+			for index = 1, #used do
+				table.clear(used[index])
+			end
+			table.clear(used)
+			for index = 1, #rows do
+				local row = rows[index]
+				local position = row.position
+				local key = keyOf(position.X, position.Z)
+				local cell = cells[key]
+				if not cell then
+					cell = {}
+					cells[key] = cell
+				end
+				if #cell == 0 then
+					used[#used + 1] = cell
+				end
+				cell[#cell + 1] = row
+			end
+			grid.count = #rows
+		end
+
+		-- Rows within `radius` of `position` (3D distance, as the linear scans measured), in the
+		-- shared scratch list. `accept(row)` may filter; the distance is stored on `distances[i]`.
+		function grid.Near(position, radius, accept)
+			table.clear(scratch)
+			local n = 0
+			local px, pz = position.X, position.Z
+			local minX, maxX = FLOOR((px - radius) / cellSize), FLOOR((px + radius) / cellSize)
+			local minZ, maxZ = FLOOR((pz - radius) / cellSize), FLOOR((pz + radius) / cellSize)
+			for cz = minZ, maxZ do
+				local rowKey = (cz + OFFSET) * 65536 + OFFSET
+				for cx = minX, maxX do
+					local cell = cells[rowKey + cx]
+					if cell then
+						for index = 1, #cell do
+							local row = cell[index]
+							if (row.position - position).Magnitude <= radius and (accept == nil or accept(row)) then
+								n += 1
+								scratch[n] = row
+							end
+						end
+					end
+				end
+			end
+			return scratch, n
+		end
+
+		return grid
+	end
+
+	local grid = query.NewGrid(128)
+	local pool = {}
+	local playerPositions = {}
+
+	function refreshCombatants()
+		BotService.Tick += 1
+		-- A tick is a frame to the ray budget: whoever drives the thinks (the loop, or a sim calling
+		-- updateBot itself) opens the budget here, so it can never run dry across ticks.
+		BotService.RaycastBudget.BeginFrame()
+		local count = 0
+		local players = 0
+		for character, token in pairs(Combatants.All()) do
+			if character.Parent then
+				local root = character:FindFirstChild("HumanoidRootPart")
+				local humanoid = root and character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					count += 1
+					local row = pool[count]
+					if not row then
+						row = {}
+						pool[count] = row
+					end
+					row.token, row.character, row.root, row.humanoid = token, character, root, humanoid
+					row.position = root.Position
+					row.isPlayer = Combatants.IsPlayer(token)
+					combatantList[count] = row
+					if row.isPlayer then
+						players += 1
+						playerPositions[players] = row.position
+					end
+				end
 			end
 		end
+		for index = #combatantList, count + 1, -1 do
+			combatantList[index] = nil
+		end
+		for index = #playerPositions, players + 1, -1 do
+			playerPositions[index] = nil
+		end
+		grid.Rebuild(combatantList)
+	end
+
+	function combatantsNear(position, radius, accept)
+		return grid.Near(position, radius, accept)
+	end
+	query.Combatants = combatantsNear
+
+	-- All living combatants this tick (the snapshot itself; read-only).
+	function query.All()
+		return combatantList
+	end
+
+	-- How far the nearest living player is from `position`, or math.huge with no players in the match.
+	function query.NearestPlayerDistance(position)
+		local best = math.huge
+		for index = 1, #playerPositions do
+			local distance = (playerPositions[index] - position).Magnitude
+			if distance < best then
+				best = distance
+			end
+		end
+		return best
+	end
+
+	function query.Clear()
+		table.clear(combatantList)
+		table.clear(playerPositions)
+		grid.Rebuild(combatantList)
 	end
 end
 
@@ -901,9 +1184,20 @@ local function sightOf(bot, head, token, character, now, recheck)
 		return false, false, entry
 	end
 	STATS.sightChecks += 1
-	local visible = hasLineOfSight(head, character, bot.character)
-	entry = { at = now, visible = visible }
-	bot.sight[token] = entry
+	local visible, denied = hasLineOfSight(head, character, bot.character)
+	if denied then
+		-- The frame's ray budget is spent: nothing is learned, nothing is cached, and this think
+		-- carries on with what it already knew. The next think looks again.
+		STATS.sightDenied += 1
+		return false, false, nil
+	end
+	-- The row is reused when there is one: a fresh table per sight ray was one allocation per ray.
+	if entry then
+		entry.at, entry.visible, entry.cover = now, visible, nil
+	else
+		entry = { at = now, visible = visible }
+		bot.sight[token] = entry
+	end
 	return visible, true, entry
 end
 
@@ -918,13 +1212,16 @@ local function coverBetween(bot, head, targetRoot)
 		return nil
 	end
 	STATS.coverChecks += 1
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
+	local budget = BotService.RaycastBudget
+	local params = budget.CoverParams
 	-- Companions hover beside their owners and take raycasts; they aren't cover.
-	params.FilterDescendantsInstances = { bot.character, workspace:FindFirstChild("Companions") }
-	params.RespectCanCollide = true
-	params.IgnoreWater = true
-	local hit = workspace:Raycast(head.Position, targetRoot.Position - head.Position, params)
+	local filter = budget.CoverFilter
+	filter[1] = bot.character
+	filter[2] = budget.Folders()[3] or nil
+	params.FilterDescendantsInstances = filter
+	-- Refused by the frame's ray budget: no barricade found this think (the target is treated as
+	-- hidden by the world, as it was a moment ago); the next think asks again.
+	local hit = castRay(head.Position, targetRoot.Position - head.Position, params, "combat")
 	if not hit then
 		return nil
 	end
@@ -956,13 +1253,45 @@ local teamFocus = {}
 --
 -- The old version picked the nearest combatant and only then asked whether it was visible — so a bot
 -- with an enemy hiding behind a wall 40 studs away ignored the one shooting it from 100.
+--
+-- Candidate rows are pooled and the list reused: findTarget runs for every armed bot every think,
+-- and a fresh list plus a row per combatant in reach was the biggest per-think allocation. The row
+-- returned is valid until the next findTarget call (fight() and botVehicleThink use it at once;
+-- quickFirstShot copies what it needs before its timer).
+--
+-- One table for the file's pooled per-think rows (the main chunk is near Luau's 200-local limit;
+-- tools/verify.py counts them): findTarget's candidates and planCombatMove's options.
+local scratch = {
+	candidatePool = {},
+	candidates = {},
+	-- planCombatMove sorts combatOptions in place, so it is refilled from baseOptions (the nine
+	-- standard moves) plus, for a Flanker, the two flankOptions rows, every replan.
+	combatOptions = {},
+	baseOptions = {
+		{ kind = 1, hold = true }, { kind = 2, side = 1 }, { kind = 3, side = -1 }, { kind = 4, side = 1 },
+		{ kind = 5, side = -1 }, { kind = 6, side = 1 }, { kind = 7, side = -1 }, { kind = 8, side = 1 },
+		{ kind = 9, side = -1 },
+	},
+	flankOptions = { { flank = true }, { flank = true } },
+	coverRadii = { 10, 18, 28 },
+	byScore = function(a, b)
+		return a.score < b.score
+	end,
+}
+
 local function findTarget(bot, root, head, now)
 	local threat = now - bot.lastHurtAt < THREAT_WINDOW and CombatService.GetLastAttacker(bot) or nil
 	local reach = math.max(MatchConfig.BotVisionRange, bot.weapon and bot.weapon.range or 0)
-	local candidates = {}
+	local candidatePool, candidates = scratch.candidatePool, scratch.candidates
+	table.clear(candidates)
+	local count = 0
 
 	local position = root.Position
-	for _, entry in ipairs(combatantList) do
+	-- Only combatants within reach can qualify, so only they are looked at (the grid, not the list).
+	local near, nearCount = combatantsNear(position, reach)
+	STATS.candidatesExamined += nearCount
+	for index = 1, nearCount do
+		local entry = near[index]
 		local token = entry.token
 		if token ~= bot and entry.humanoid.Health > 0 and hostile(bot, token) then
 			local distance = (entry.position - position).Magnitude
@@ -970,7 +1299,7 @@ local function findTarget(bot, root, head, now)
 			if distance <= MatchConfig.BotVisionRange or (token == threat and distance <= reach) then
 				local humanoid = entry.humanoid
 				local score = distance
-				if Combatants.IsPlayer(token) then
+				if entry.isPlayer then
 					score /= MatchConfig.BotPlayerBias
 				end
 				if token == threat then
@@ -1002,16 +1331,22 @@ local function findTarget(bot, root, head, now)
 					score *= 0.6
 					STATS.focusFire += 1
 				end
-				table.insert(candidates, { token = token, character = entry.character, root = entry.root, distance = distance, score = score })
+				count += 1
+				local row = candidatePool[count]
+				if not row then
+					row = {}
+					candidatePool[count] = row
+				end
+				row.token, row.character, row.root, row.distance, row.score = token, entry.character, entry.root, distance, score
+				row.throughCover = nil
+				candidates[count] = row
 			end
 		end
 	end
-	if #candidates == 0 then
+	if count == 0 then
 		return nil
 	end
-	table.sort(candidates, function(a, b)
-		return a.score < b.score
-	end)
+	table.sort(candidates, scratch.byScore)
 
 	local look = flatLook(root)
 	local fresh = 0
@@ -1020,7 +1355,8 @@ local function findTarget(bot, root, head, now)
 		if computed then
 			fresh += 1
 		end
-		if not visible and candidate.distance <= 120 then
+		-- No `entry` means the ray budget refused the look: nothing is known, so nothing is decided.
+		if not visible and entry and candidate.distance <= 120 then
 			-- Hidden by a barricade rather than by the world: engage, and the shots go into the cover.
 			-- The barricade ray is cast when the sight ray is (or once, for a row made while the
 			-- target was out past 120), and its answer kept on the sight row for as long as that
@@ -1105,24 +1441,20 @@ local function forgetStale(bot, now)
 end
 
 -- Can anything at `from` see this bot? Characters, loot and effects don't count as cover.
+-- Water hides nobody: IgnoreWater (set on ExposedParams) defaulted to false, which counted the river
+-- as cover: a bot standing in it read as hidden, so it wouldn't put a barricade up or break off
+-- while in plain sight. Every other sight line in the project ignores water (CombatService,
+-- hasLineOfSight). A ray the frame's budget refuses reads as NOT exposed, so nothing is built on
+-- it this think; the next think asks again.
 local function exposedTo(bot, root, from)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	local filter = { bot.character }
-	for _, name in ipairs({ "Loot", "Effects", "Companions" }) do
-		local instance = workspace:FindFirstChild(name)
-		if instance then
-			table.insert(filter, instance)
-		end
-	end
-	params.FilterDescendantsInstances = filter
-	params.RespectCanCollide = true
-	-- Water hides nobody. IgnoreWater defaults to false, which counted the river as cover: a bot
-	-- standing in it read as hidden, so it wouldn't put a barricade up or break off while in plain
-	-- sight. Every other sight line in the project ignores water (CombatService, hasLineOfSight).
-	params.IgnoreWater = true
+	local budget = BotService.RaycastBudget
+	local params = budget.ExposedParams
+	params.FilterDescendantsInstances = budget.Filter(budget.ExposedFilter, bot.character)
 	local eye = root.Position + Vector3.new(0, 1.5, 0)
-	local hit = workspace:Raycast(from, eye - from, params)
+	local hit, granted = castRay(from, eye - from, params, "navigation")
+	if not granted then
+		return false
+	end
 	return hit == nil or hit.Instance:FindFirstAncestorOfClass("Model") ~= nil
 		and hit.Instance:FindFirstAncestorOfClass("Model"):FindFirstChildOfClass("Humanoid") ~= nil
 end
@@ -1224,9 +1556,10 @@ local SIGHTING_MEMORY = 25
 -- Living friendlies near a bot, from the shared per-tick snapshot.
 local function squadCentroid(bot, root, team)
 	local sum, count = Vector3.zero, 0
-	for _, entry in ipairs(combatantList) do
-		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - root.Position).Magnitude <= RALLY_RANGE
-			and not hostile(bot, entry.token) then
+	local near, nearCount = combatantsNear(root.Position, RALLY_RANGE)
+	for index = 1, nearCount do
+		local entry = near[index]
+		if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token) then
 			sum += entry.position
 			count += 1
 		end
@@ -1400,7 +1733,9 @@ local function navigate(bot, humanoid, root, goal, priority, now)
 	if not BotNav.HasRoute(bot) and not BotNav.IsPending(bot) and not BotNav.RecentlyFailed(bot, goal, 3) then
 		BotNav.Request(bot, goal, priority)
 	end
-	BotNav.Follow(bot, humanoid, root, goal, now)
+	-- Footing checks for a wandering or looting bot are the first rays the frame budget gives up.
+	local branch = bot.branch
+	BotNav.Follow(bot, humanoid, root, goal, now, (branch == "wander" or branch == "loot") and "idle" or "navigation")
 	-- No route and the straight line isn't safe: wait for the route that's coming, or give up on this
 	-- goal once a route has already failed.
 	if bot.nav.directBlockedAt == now then
@@ -1662,20 +1997,42 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 	local reloading = bot.reloadUntil ~= nil
 	local relocating = bot.relocateUntil ~= nil and now < bot.relocateUntil
 
-	local options = {
-		{ offset = Vector3.zero, hold = true },
-		{ offset = right * 12, side = 1 },
-		{ offset = -right * 12, side = -1 },
-		{ offset = right * 22, side = 1 },
-		{ offset = -right * 22, side = -1 },
-		{ offset = forward * 18 + right * 8, side = 1 },
-		{ offset = forward * 18 - right * 8, side = -1 },
-		{ offset = -forward * 18 + right * 10, side = 1 },
-		{ offset = -forward * 18 - right * 10, side = -1 },
-	}
+	-- The rows are reused across replans (a fighting bot replans every 0.45 s); only the offsets
+	-- change. The list is sorted in place, so it is put back in base order first and any flank rows
+	-- from the last replan dropped; the hold row is found by its flag, not its index.
+	local options = scratch.combatOptions
+	for i = #options, 10, -1 do
+		options[i] = nil
+	end
+	for i = 1, 9 do
+		options[i] = scratch.baseOptions[i]
+	end
+	for _, option in ipairs(options) do
+		local kind = option.kind
+		if kind == 1 then
+			option.offset = Vector3.zero
+		elseif kind == 2 then
+			option.offset = right * 12
+		elseif kind == 3 then
+			option.offset = -right * 12
+		elseif kind == 4 then
+			option.offset = right * 22
+		elseif kind == 5 then
+			option.offset = -right * 22
+		elseif kind == 6 then
+			option.offset = forward * 18 + right * 8
+		elseif kind == 7 then
+			option.offset = forward * 18 - right * 8
+		elseif kind == 8 then
+			option.offset = -forward * 18 + right * 10
+		else
+			option.offset = -forward * 18 - right * 10
+		end
+	end
 	-- A Flanker works round the target: two points on the arc at its range, 35 degrees round in the
 	-- direction it settled on when the fight began (bot.flankDir), so the angle keeps growing instead
 	-- of wobbling either side of the line between them.
+	-- The flank points are the two pooled rows past the nine base ones, refilled, not rebuilt.
 	if dials.flank and not retreating and toThreat.Magnitude > 8 then
 		local fromThreat = -forward
 		for _, step in ipairs({ math.rad(35), math.rad(60) }) do
@@ -1684,7 +2041,9 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 				fromThreat.X * math.cos(angle) - fromThreat.Z * math.sin(angle), 0,
 				fromThreat.X * math.sin(angle) + fromThreat.Z * math.cos(angle))
 			local point = threatPosition + turned * math.max(preferred, 12)
-			table.insert(options, { offset = point - root.Position, side = bot.flankDir or 1, flank = true })
+			local row = scratch.flankOptions[#options - 8]
+			row.offset, row.side = point - root.Position, bot.flankDir or 1
+			options[#options + 1] = row
 		end
 	end
 	-- Team modes: the nearest teammate also on this target. Points that line up behind or in front of
@@ -1692,7 +2051,9 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 	local friendBearing = nil
 	if bot.focusTeam then
 		local nearest = 60
-		for _, entry in ipairs(combatantList) do
+		local near, nearCount = combatantsNear(root.Position, nearest)
+		for index = 1, nearCount do
+			local entry = near[index]
 			if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token) then
 				local gap = flatDistance(entry.position, root.Position)
 				if gap < nearest then
@@ -1757,11 +2118,9 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 		option.point = point
 		option.score = score + math.random() * 0.25
 	end
-	table.sort(options, function(a, b)
-		return a.score < b.score
-	end)
+	table.sort(options, scratch.byScore)
 
-	local params = BotNav.StepParams(bot.character)
+	local params = BotNav.StepParams(bot.character, bot.nav)
 	local checked = 0
 	for _, option in ipairs(options) do
 		if option.hold then
@@ -1769,11 +2128,17 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 		end
 		if stormAllows(root.Position, option.point) then
 			checked += 1
-			if BotNav.CanStep(root, bot.character, option.point, params) then
+			local ok, reason = BotNav.CanStep(root, bot.character, option.point, params, "navigation")
+			if ok then
 				if option.flank then
 					STATS.flankMoves += 1
 				end
 				return option.point, false
+			end
+			-- The frame's ray budget is spent: hold this think rather than walk unchecked, and
+			-- don't commit to the hold for the whole COMBAT_REPLAN (the caller replans next think).
+			if reason == "budget" then
+				return root.Position, true, true
 			end
 			if checked >= COMBAT_CHECKS then
 				break
@@ -1802,14 +2167,15 @@ local function combatMove(bot, root, threatPosition, distance, retreating, now)
 	end
 	if replan then
 		STATS.combatReplans += 1
-		local point, hold = planCombatMove(bot, root, threatPosition, distance, retreating, now)
+		local point, hold, unchecked = planCombatMove(bot, root, threatPosition, distance, retreating, now)
 		move = {
 			point = point,
 			hold = hold,
 			retreating = retreating,
 			startedAt = now,
 			startPosition = root.Position,
-			untilTime = now + COMBAT_REPLAN + math.random() * 0.3,
+			-- A hold forced by the ray budget lasts one think, not a whole replan interval.
+			untilTime = unchecked and now or now + COMBAT_REPLAN + math.random() * 0.3,
 		}
 		bot.combatMove = move
 	end
@@ -1835,9 +2201,14 @@ local function seekCover(bot, root, threatEye, now, threatCharacter)
 	if now < (bot.coverBlockedUntil or 0) then
 		return nil
 	end
-	local point, direct = BotNav.FindCover(root, bot.character, threatEye, { 10, 18, 28 }, function(candidate)
+	local point, direct, refused = BotNav.FindCover(root, bot.character, threatEye, scratch.coverRadii, function(candidate)
 		return stormAllows(from, candidate)
-	end, threatCharacter)
+	end, threatCharacter, "navigation")
+	if refused == "budget" then
+		-- The frame's rays are spent: this search didn't happen, so it isn't rate-limited away.
+		bot.lastCoverSearchAt = now - COVER_SEARCH_INTERVAL
+		return nil
+	end
 	if point then
 		STATS.coverFound += 1
 		if not direct then
@@ -1984,11 +2355,15 @@ end
 -- A barricade can't go up across a doorway or an alley the bot (or anyone) needs to get through:
 -- with something solid close on both sides of the site, it's a gap, not open ground.
 local function narrowSite(bot, centre, facing)
-	local params = BotNav.StepParams(bot.character)
+	local params = BotNav.StepParams(bot.character, bot.nav)
 	local across = Vector3.new(-facing.Z, 0, facing.X)
-	local left = workspace:Raycast(centre, across * 7, params)
-	local right = workspace:Raycast(centre, -across * 7, params)
-	return left ~= nil and right ~= nil
+	-- Refused by the ray budget: counted as narrow, so the build waits for a think that can look.
+	local left, granted = castRay(centre, across * 7, params, "navigation")
+	if not granted then
+		return true
+	end
+	local right, grantedRight = castRay(centre, -across * 7, params, "navigation")
+	return not grantedRight or (left ~= nil and right ~= nil)
 end
 
 local function placeBarricade(bot, root, toward, now, reason)
@@ -2256,15 +2631,19 @@ end
 
 -- A lob needs headroom: a clear line up from the hand, and across above the landing point.
 local function lobClear(bot, head, point)
+	-- Fresh params, not the cached step params: a throw arcs over water perfectly well; only solid
+	-- things stop it, and IgnoreWater must not leak into the step checks. A ray the budget refuses
+	-- reads as blocked; the throw is tried again next think.
 	local params = BotNav.StepParams(bot.character)
-	-- A throw arcs over water perfectly well; only solid things stop it.
 	params.IgnoreWater = true
 	local apex = head.Position + Vector3.new(0, 10, 0)
-	if workspace:Raycast(head.Position, apex - head.Position, params) then
+	local hit, granted = castRay(head.Position, apex - head.Position, params, "navigation")
+	if hit or not granted then
 		return false
 	end
 	local above = point + Vector3.new(0, 10, 0)
-	return workspace:Raycast(apex, above - apex, params) == nil
+	hit, granted = castRay(apex, above - apex, params, "navigation")
+	return hit == nil and granted
 end
 
 local function tryThrow(bot, root, head, kind, point, now)
@@ -2333,10 +2712,11 @@ end
 -- A grenade is worth it at two or more enemies bunched together round the target.
 local function clusterAround(bot, targetRoot)
 	local count, sum = 0, Vector3.zero
-	local at = targetRoot.Position
-	for _, entry in ipairs(combatantList) do
+	local near, nearCount = combatantsNear(targetRoot.Position, 10)
+	for index = 1, nearCount do
+		local entry = near[index]
 		-- Enemies only: a team-mate in melee with the target isn't a reason to throw.
-		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - at).Magnitude <= 10 and hostile(bot, entry.token) then
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token) then
 			count += 1
 			sum += entry.position
 		end
@@ -2410,8 +2790,13 @@ end
 --
 -- Pickups don't move, so the folder is read once a second into a shared list (item, position, kind)
 -- rather than walked by every bot that looks.
+--
+-- The snapshot is also binned into a SpatialQuery grid (64-stud cells), so a bot looking 200 studs
+-- around itself reads the cells that cover that circle rather than every pickup on a 1280-stud map.
+-- BotService.SpatialQuery.Loot(position, radius, kind, now) is the way in for any section: rows are
+-- { item, position, kind } ("gear" or "heal"), in a shared scratch list, valid until the next call.
 local LOOT_SNAPSHOT_SECONDS = 1
-local lootSnapshot = { at = -math.huge, items = {} }
+local lootSnapshot = { at = -math.huge, items = {}, grid = BotService.SpatialQuery.NewGrid(64) }
 
 local function lootItems(now)
 	if now - lootSnapshot.at < LOOT_SNAPSHOT_SECONDS then
@@ -2432,21 +2817,40 @@ local function lootItems(now)
 	end
 	lootSnapshot.at = now
 	lootSnapshot.items = items
+	lootSnapshot.grid.Rebuild(items)
 	return items
+end
+
+function BotService.SpatialQuery.Loot(position, radius, kind, now)
+	lootItems(now or os.clock())
+	if radius == math.huge then
+		-- No circle to read: the whole snapshot, filtered.
+		local list, n = lootSnapshot.grid.scratch, 0
+		table.clear(list)
+		for _, entry in ipairs(lootSnapshot.items) do
+			if kind == nil or entry.kind == kind then
+				n += 1
+				list[n] = entry
+			end
+		end
+		return list, n
+	end
+	return lootSnapshot.grid.Near(position, radius, kind and function(entry)
+		return entry.kind == kind
+	end or nil)
 end
 
 local function findLoot(bot, position, radius, heals, center, circleRadius, now)
 	local best, bestDistance = nil, radius
-	local wantedKind = heals and "heal" or "gear"
-	for _, entry in ipairs(lootItems(now)) do
-		if entry.kind == wantedKind then
-			local distance = (entry.position - position).Magnitude
-			if distance < bestDistance then
-				local item = entry.item
-				if item.Parent and not item:GetAttribute("Claimed") and (not heals or item:GetAttribute("HealId") ~= nil)
-					and lootAllowed(bot, item, distance, center, circleRadius, now) then
-					best, bestDistance = item, distance
-				end
+	local near, nearCount = BotService.SpatialQuery.Loot(position, radius, heals and "heal" or "gear", now)
+	for index = 1, nearCount do
+		local entry = near[index]
+		local distance = (entry.position - position).Magnitude
+		if distance < bestDistance then
+			local item = entry.item
+			if item.Parent and not item:GetAttribute("Claimed") and (not heals or item:GetAttribute("HealId") ~= nil)
+				and lootAllowed(bot, item, distance, center, circleRadius, now) then
+				best, bestDistance = item, distance
 			end
 		end
 	end
@@ -2788,10 +3192,11 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	-- not at full health. Push a target that's nearly dead when the bot is healthy.
 	local outnumbered = 0
 	if humanoid.Health < humanoid.MaxHealth * 0.85 then
-		local position = root.Position
-		for _, entry in ipairs(combatantList) do
+		local near, nearCount = combatantsNear(root.Position, 70)
+		for index = 1, nearCount do
+			local entry = near[index]
 			if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
-				and (entry.position - position).Magnitude < 70 then
+				and (entry.position - root.Position).Magnitude < 70 then
 				outnumbered += 1
 			end
 		end
@@ -3373,12 +3778,13 @@ local function updateBot(bot)
 		return
 	end
 
-	-- Slow out-of-combat regen: the fallback for a bot with no heal items left.
+	-- Slow out-of-combat regen: the fallback for a bot with no heal items left. Over the time since
+	-- the last think, not a fixed interval: a far-from-players bot thinks every other turn (LOD) and
+	-- must heal at the same rate as one thinking every turn.
 	if humanoid.Health < humanoid.MaxHealth and now - bot.lastCombatAt > MatchConfig.BotRegenDelay then
-		humanoid.Health = math.min(
-			humanoid.MaxHealth,
-			humanoid.Health + MatchConfig.BotRegenPerSecond * MatchConfig.BotThinkInterval
-		)
+		local since = bot.thoughtAt and math.min(now - bot.thoughtAt, MatchConfig.BotThinkInterval * 3)
+			or MatchConfig.BotThinkInterval
+		humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + MatchConfig.BotRegenPerSecond * since)
 	end
 
 	if now >= bot.strafeFlipAt then
@@ -4157,6 +4563,47 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 	return spawned
 end
 
+-- LEVEL OF DETAIL. A bot no player is anywhere near is being simulated for the match's sake, not
+-- for anyone to watch: it thinks every LodSkip-th turn instead of every turn, so at the drop (fifty
+-- bots spread over the map, players in two or three places) a slice carries about half its thinks.
+-- Never deferred: a bot that is fighting, fleeing, dodging or in the storm (its last branch), one
+-- that has taken damage since it last thought, or one within LodDistance of a living player. Bot
+-- fights far from players therefore run at full rate; only the walking and looting between them is
+-- coarser. Time-based behaviour reads elapsed time (bot.thoughtAt), so regen and timers are
+-- unchanged. tools/perf_bot_cost.py checks the far/idle period and that no fighting or hurt bot
+-- is ever deferred; tools/perf_tick_probe.lua runs Studio with LodEnabled on and off.
+BotService.LodEnabled = true
+BotService.LodDistance = 300
+BotService.LodSkip = 2
+BotService.LodActiveBranches = { fight = true, flee = true, dodge = true, storm = true }
+
+function BotService.LodDefers(bot, now)
+	if not BotService.LodEnabled or BotService.LodSkip <= 1 then
+		return false
+	end
+	if BotService.LodActiveBranches[bot.lastBranch] then
+		return false
+	end
+	local humanoid = bot.humanoid
+	if humanoid and humanoid.Health < bot.lastHealth then
+		return false
+	end
+	if bot.threat and now - bot.threat.at < FLEE_WINDOW then
+		return false
+	end
+	local root = bot.character and bot.character:FindFirstChild("HumanoidRootPart")
+	if not root or BotService.SpatialQuery.NearestPlayerDistance(root.Position) <= BotService.LodDistance then
+		return false
+	end
+	bot.lodTurn = (bot.lodTurn or 0) + 1
+	if bot.lodTurn % BotService.LodSkip == 0 then
+		STATS.lodThinks += 1
+		return false
+	end
+	STATS.lodSkips += 1
+	return true
+end
+
 -- Bots think every BotThinkInterval, but not all in the same frame: they are split into
 -- THINK_SLICES groups that take turns, one group every BotThinkInterval / THINK_SLICES, so each bot
 -- still thinks once an interval and the worst frame carries 1/THINK_SLICES of the bots. It was two
@@ -4184,10 +4631,11 @@ function BotService.Start()
 			local started = os.clock()
 			local startedWall = tick()
 			BotNav.Pump()
+			-- Also opens the frame's ray budget: every ray this slice casts is counted against it.
 			refreshCombatants()
 			local updated = 0
 			for index, bot in ipairs(bots) do
-				if index % THINK_SLICES == slice then
+				if index % THINK_SLICES == slice and not BotService.LodDefers(bot, started) then
 					updated += 1
 					bot.branch = "idle"
 					local began = os.clock()
@@ -4195,6 +4643,8 @@ function BotService.Start()
 					if not ok then
 						warn("[BotService] Bot update failed: " .. tostring(err))
 					end
+					bot.lastBranch = bot.branch
+					bot.thoughtAt = began
 					-- Where the think time goes, for tools/bot_probe.lua; the slowest single think and
 					-- its branch, for tools/perf_tick_probe.lua (the 42.6 ms tick is still unexplained).
 					local took = os.clock() - began
@@ -4242,7 +4692,7 @@ function BotService.Clear()
 	table.clear(lootClaims)
 	table.clear(teamSightings)
 	table.clear(teamFocus)
-	table.clear(combatantList)
+	BotService.SpatialQuery.Clear()
 	table.clear(botDrivers)
 	lootSnapshot.at = -math.huge
 	table.clear(bots)

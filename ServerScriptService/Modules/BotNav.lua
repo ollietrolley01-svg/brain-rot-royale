@@ -19,9 +19,18 @@ local BotNav = {}
 
 BotNav.Priority = { Urgent = 1, Combat = 2, Loot = 3, Wander = 4 }
 
+-- Every ray this module casts goes through here. BotService replaces it with its per-frame ray
+-- budget (BotService.RaycastBudget.Cast) when it loads; this default is the same call with no cap,
+-- for a probe that requires BotNav on its own. Returns result, granted: granted == false means the
+-- frame's rays are spent and the caller answers cautiously ("can't step", reason "budget") without
+-- caching. `priority` is "combat", "navigation" or "idle" (the module's own rays are navigation).
+function BotNav.CastRay(origin, direction, params, priority)
+	return workspace:Raycast(origin, direction, params), true
+end
+
 -- Counters for tools/bot_probe.lua. Cheap increments; nothing reads them in a match.
 BotNav.Stats = {
-	pathRequests = 0, pathReused = 0, pathOk = 0, pathFail = 0, pathTime = 0, pathDiscarded = 0,
+	pathRequests = 0, pathReused = 0, pathShared = 0, pathOk = 0, pathFail = 0, pathTime = 0, pathDiscarded = 0,
 	queueWait = 0, queueWaitMax = 0, queuePeak = 0,
 	fallbackMoves = 0, pathMoves = 0, lookAheads = 0, blocked = 0,
 	jumps = 0, sidesteps = 0, hops = 0, parkour = 0, parkourFromJump = 0, abandons = 0, recovers = 0,
@@ -198,8 +207,12 @@ end
 -- Path requests
 --------------------------------------------------------------------------------
 
+local sharedRoute, rememberRoute, adoptRoute
+
 -- Ask for a route. Returns immediately; the route arrives in `bot.nav` when its turn comes. A
--- destination next to where the bot is already going is not recomputed.
+-- destination next to where the bot is already going is not recomputed, nor one a compute is
+-- already in flight for, and a route a neighbour just had computed to the same place is copied
+-- rather than computed again (route sharing, below).
 function BotNav.Request(bot, destination, priority)
 	local nav = bot.nav
 	if not nav or not destination then
@@ -212,11 +225,20 @@ function BotNav.Request(bot, destination, priority)
 		STATS.pathReused += 1
 		return
 	end
+	if nav.computing and nav.computingTo and (nav.computingTo - destination).Magnitude < REUSE_RADIUS then
+		-- The answer is already on its way: asking again would compute the same route twice and
+		-- throw the first away.
+		STATS.pathReused += 1
+		return
+	end
 	local pending = nav.request
 	if pending and (pending.destination - destination).Magnitude < REUSE_RADIUS then
 		-- Same place: keep its place in the queue, but take the more urgent priority.
 		pending.priority = math.min(pending.priority, priority)
 		pending.destination = destination
+		return
+	end
+	if adoptRoute(bot, destination) then
 		return
 	end
 
@@ -232,9 +254,81 @@ function BotNav.Request(bot, destination, priority)
 	STATS.queuePeak = math.max(STATS.queuePeak, #waiting)
 end
 
+-- ROUTE SHARING. In a team mode most of a side asks for the same place (the hill, the base's
+-- chests, the squad's sighting) from the same few spawn points, and at the drop a knot of bots
+-- lands together and heads for the same town: each of those was its own ComputeAsync at 77-120 ms.
+-- A route that succeeded in the last ROUTE_SHARE_SECONDS, from within ROUTE_SHARE_START of where
+-- this bot stands, to within REUSE_RADIUS of where it wants to go, is copied instead: the bot
+-- joins it at the waypoint nearest to itself and walks the rest. The waypoint list is shared
+-- read-only (Follow only reads it). A shared route has no Path.Blocked watcher; the stuck ladder
+-- covers a barricade dropped across it, as it does for any route that goes stale. Only the last
+-- ROUTE_SHARE_KEEP routes are kept; anything older than the window is useless anyway.
+-- tools/perf_bot_cost.py counts computes for N bots asking for one place (before: N; after: at
+-- most the first pump's starts) and checks a bot standing far from the route's start never adopts it.
+local ROUTE_SHARE_START = 12
+local ROUTE_SHARE_SECONDS = 8
+local ROUTE_SHARE_KEEP = 32
+local recentRoutes, recentRouteIndex = {}, 0
+
+function rememberRoute(start, destination, waypoints)
+	if #waypoints < 2 then
+		return
+	end
+	recentRouteIndex = recentRouteIndex % ROUTE_SHARE_KEEP + 1
+	local slot = recentRoutes[recentRouteIndex]
+	if not slot then
+		slot = {}
+		recentRoutes[recentRouteIndex] = slot
+	end
+	-- tick(): a wall-clock window; os.clock() is CPU time in Roblox (COORDINATION.md).
+	slot.start, slot.destination, slot.waypoints, slot.at = start, destination, waypoints, tick()
+end
+
+function sharedRoute(position, destination, now)
+	for index = 1, #recentRoutes do
+		local route = recentRoutes[index]
+		if now - route.at < ROUTE_SHARE_SECONDS and (route.destination - destination).Magnitude < REUSE_RADIUS
+			and flatDistance(route.start, position) < ROUTE_SHARE_START then
+			return route
+		end
+	end
+	return nil
+end
+
+-- Take a neighbour's recent route to `destination` if there is one. Returns true when the bot now
+-- has a route.
+function adoptRoute(bot, destination)
+	local nav = bot.nav
+	local position = bot.character:GetPivot().Position
+	local route = sharedRoute(position, destination, tick())
+	if not route then
+		return false
+	end
+	local waypoints = route.waypoints
+	-- Join at the waypoint nearest the bot (never the very last: that is the destination itself).
+	local nearest, nearestDistance = 1, math.huge
+	for index = 1, #waypoints - 1 do
+		local distance = flatDistance(waypoints[index].Position, position)
+		if distance < nearestDistance then
+			nearest, nearestDistance = index, distance
+		end
+	end
+	STATS.pathShared += 1
+	disconnectBlocked(nav)
+	nav.waypoints = waypoints
+	nav.index = math.min(nearest + 1, #waypoints)
+	nav.routeEnd = destination
+	nav.jumpedIndex = 0
+	nav.failures = 0
+	nav.request = nil
+	nav.computing = nil
+	return true
+end
+
 local function compute(bot, request)
 	local nav = bot.nav
 	nav.computing = request.id
+	nav.computingTo = request.destination
 	inFlight += 1
 	local waited = os.clock() - request.at
 	STATS.queueWait += waited
@@ -243,8 +337,9 @@ local function compute(bot, request)
 	task.spawn(function()
 		local path = PathfindingService:CreatePath(AGENT)
 		local started = os.clock()
+		local from = bot.character:GetPivot().Position
 		local ok = pcall(function()
-			path:ComputeAsync(bot.character:GetPivot().Position, request.destination)
+			path:ComputeAsync(from, request.destination)
 		end)
 		STATS.pathTime += os.clock() - started
 		inFlight -= 1
@@ -264,6 +359,7 @@ local function compute(bot, request)
 			nav.routeEnd = request.destination
 			nav.jumpedIndex = 0
 			nav.failures = 0
+			rememberRoute(from, request.destination, nav.waypoints)
 			-- A barricade thrown down or a car parked across the route after it was computed.
 			nav.blockedConnection = path.Blocked:Connect(function(blockedIndex)
 				if bot.nav == nav and nav.waypoints and blockedIndex >= nav.index then
@@ -324,7 +420,13 @@ function BotNav.Pump()
 		local request = bot.nav.request
 		if request then
 			bot.nav.request = nil
-			compute(bot, request)
+			-- A route to the same place landed for a neighbour while this one waited: take it, and
+			-- the start it would have used goes to the next in the queue.
+			if adoptRoute(bot, request.destination) then
+				started -= 1
+			else
+				compute(bot, request)
+			end
 		end
 	end
 end
@@ -338,6 +440,8 @@ end
 
 function BotNav.Clear()
 	table.clear(waiting)
+	table.clear(recentRoutes)
+	recentRouteIndex = 0
 	-- In-flight computes finish on their own and find their bot's nav replaced or gone.
 end
 
@@ -345,28 +449,47 @@ end
 -- Probes
 --------------------------------------------------------------------------------
 
-local function stepParams(character)
-	local params = RaycastParams.new()
+-- With `nav` given, the params are kept on it and refilled only when the character or the loot /
+-- effects folders change: a RaycastParams and a filter table per step check was two allocations for
+-- every one of a fighting bot's five-a-replan checks. Without `nav` (a probe, or a caller that will
+-- change a field such as IgnoreWater), a fresh one.
+local STEP_FOLDERS = { "Loot", "Effects" }
+local function stepParams(character, nav)
+	local loot, effects = workspace:FindFirstChild(STEP_FOLDERS[1]), workspace:FindFirstChild(STEP_FOLDERS[2])
+	if nav then
+		local cached = nav.stepParams
+		if cached and nav.stepParamsFor == character and nav.stepParamsLoot == loot and nav.stepParamsEffects == effects then
+			return cached
+		end
+	end
+	local params = nav and nav.stepParams or RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local filter = { character }
-	for _, name in ipairs({ "Loot", "Effects" }) do
-		local instance = workspace:FindFirstChild(name)
-		if instance then
-			table.insert(filter, instance)
-		end
+	if loot then
+		table.insert(filter, loot)
+	end
+	if effects then
+		table.insert(filter, effects)
 	end
 	params.FilterDescendantsInstances = filter
 	-- Undergrowth, spruce skirts and other walk-through decor are CanCollide false.
 	params.RespectCanCollide = true
+	if nav then
+		nav.stepParams, nav.stepParamsFor, nav.stepParamsLoot, nav.stepParamsEffects = params, character, loot, effects
+	end
 	return params
 end
 BotNav.StepParams = stepParams
 
--- The floor under a point, looked for from `fromY` down to `depth` below it. Returns the hit, or nil
--- over a drop. Water counts as floor here; callers that care check the material.
-function BotNav.FloorAt(x, z, fromY, depth, params)
-	return workspace:Raycast(Vector3.new(x, fromY, z), Vector3.new(0, -depth, 0), params)
+-- The floor under a point, looked for from `fromY` down to `depth` below it. Returns the hit (or nil
+-- over a drop) and whether the ray was granted by the budget. Water counts as floor here; callers
+-- that care check the material.
+function BotNav.FloorAt(x, z, fromY, depth, params, priority)
+	return BotNav.CastRay(Vector3.new(x, fromY, z), Vector3.new(0, -depth, 0), params, priority or "navigation")
 end
+
+local STEP_LIFTS = { 0, -1.8 }
+local STEP_SHARES = { 0.5, 1 }
 
 -- Can a bot standing at `root` walk straight to `point` without meeting a wall, stepping off a drop
 -- or into water? Checks a waist ray and a knee ray along the way, and the floor halfway and at the
@@ -377,8 +500,12 @@ end
 -- slope ahead, and a floor ray started at waist height begins inside ground that has risen above it.
 -- So a hit whose surface is walkable (normal within the agent's max slope) doesn't block, and a floor
 -- ray that finds nothing is tried again from above the highest walkable rise at that distance.
-function BotNav.CanStep(root, character, point, params)
+--
+-- A fifth answer, false plus "budget", means the frame's ray budget refused a ray: nothing is known
+-- about the step, so callers neither take it nor remember the refusal.
+function BotNav.CanStep(root, character, point, params, priority)
 	params = params or stepParams(character)
+	priority = priority or "navigation"
 	local origin = root.Position
 	local delta = flat(point - origin)
 	local distance = delta.Magnitude
@@ -387,8 +514,11 @@ function BotNav.CanStep(root, character, point, params)
 	end
 	local direction = delta.Unit
 
-	for _, lift in ipairs({ 0, -1.8 }) do
-		local hit = workspace:Raycast(origin + Vector3.new(0, lift, 0), direction * (distance + 1.5), params)
+	for _, lift in ipairs(STEP_LIFTS) do
+		local hit, granted = BotNav.CastRay(origin + Vector3.new(0, lift, 0), direction * (distance + 1.5), params, priority)
+		if not granted then
+			return false, "budget"
+		end
 		if hit and hit.Normal.Y < WALKABLE_NORMAL_Y then
 			return false, "wall", flat(hit.Position - origin).Magnitude
 		end
@@ -396,14 +526,21 @@ function BotNav.CanStep(root, character, point, params)
 
 	local standing = footHeight(character, root)
 	local feet = origin.Y - standing
-	for _, share in ipairs({ 0.5, 1 }) do
+	for _, share in ipairs(STEP_SHARES) do
 		local along = distance * share
 		local at = origin + direction * along
-		local floor = BotNav.FloorAt(at.X, at.Z, origin.Y + 1, standing + 1 + MAX_STEP_DOWN, params)
+		local floor, granted = BotNav.FloorAt(at.X, at.Z, origin.Y + 1, standing + 1 + MAX_STEP_DOWN, params, priority)
+		if not granted then
+			return false, "budget"
+		end
 		if not floor then
 			-- Maybe uphill: look down from above the steepest rise that's still walkable.
 			local rise = along * MAX_RISE_PER_STUD + MAX_STEP_UP
-			local above = BotNav.FloorAt(at.X, at.Z, feet + rise + 1, rise + 1 - (standing + 1), params)
+			local above
+			above, granted = BotNav.FloorAt(at.X, at.Z, feet + rise + 1, rise + 1 - (standing + 1), params, priority)
+			if not granted then
+				return false, "budget"
+			end
 			if above and above.Normal.Y >= WALKABLE_NORMAL_Y then
 				floor = above
 			end
@@ -430,11 +567,16 @@ end
 -- accepted too, and the caller paths to it. Rings of 10, 18 and 28 studs, nearest first, eight
 -- directions each starting straight away from the threat; callers rate-limit this. `threatCharacter`,
 -- when given, is left out of the sight line: the shooter's own gun or arm hides nothing.
+--
+-- Returns nil, nil, "budget" when the frame's ray budget ran out part way: the search did not
+-- happen, and the caller should try again next think rather than count it as a search.
 local COVER_DIRECTIONS = 8
+local COVER_RADII = { 10, 18, 28 }
 -- (origin, radius) -> { floor point... } nearest first, or nil. Set by ModeTeams while a team match's
 -- battleground stands (TeamBattleground.CoverNear), cleared at its teardown.
 BotNav.CoverHints = nil
-function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, threatCharacter)
+function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, threatCharacter, priority)
+	priority = priority or "navigation"
 	local params = stepParams(character)
 	local los = RaycastParams.new()
 	los.FilterType = Enum.RaycastFilterType.Exclude
@@ -470,9 +612,19 @@ function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, thr
 				local point = Vector3.new(floorPoint.X, floorPoint.Y + standing, floorPoint.Z)
 				if not isAllowed or isAllowed(point) then
 					local eye = point + Vector3.new(0, 1.5, 0)
-					local hit = workspace:Raycast(threatPosition, eye - threatPosition, los)
-					if hit and (hit.Position - eye).Magnitude > 2 and BotNav.CanStep(root, character, point, params) then
-						return point, true
+					-- Through the ray budget like the rings below; a refusal ends the search unfinished.
+					local hit, granted = BotNav.CastRay(threatPosition, eye - threatPosition, los, priority)
+					if not granted then
+						return nil, nil, "budget"
+					end
+					if hit and (hit.Position - eye).Magnitude > 2 then
+						local ok, reason = BotNav.CanStep(root, character, point, params, priority)
+						if ok then
+							return point, true
+						end
+						if reason == "budget" then
+							return nil, nil, "budget"
+						end
 					end
 				end
 			end
@@ -485,7 +637,7 @@ function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, thr
 	-- A spot that needs a route round the back is the fallback, and only after every ring has been
 	-- tried for one the bot can simply walk to.
 	local routed = nil
-	for _, radius in ipairs(radii or { 10, 18, 28 }) do
+	for _, radius in ipairs(radii or COVER_RADII) do
 		for step = 0, COVER_DIRECTIONS - 1 do
 			-- Straight away from the threat first, then fanning out either side of it.
 			local offset = (step % 2 == 0 and 1 or -1) * math.ceil(step / 2) * (math.pi * 2 / COVER_DIRECTIONS)
@@ -494,14 +646,25 @@ function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, thr
 			if not isAllowed or isAllowed(point) then
 				local eye = point + Vector3.new(0, 1.5, 0)
 				local toEye = eye - threatPosition
-				local hit = workspace:Raycast(threatPosition, toEye, los)
+				local hit, granted = BotNav.CastRay(threatPosition, toEye, los, priority)
+				if not granted then
+					return nil, nil, "budget"
+				end
 				if hit and (hit.Position - eye).Magnitude > 2 then
-					if BotNav.CanStep(root, character, point, params) then
+					local ok, reason = BotNav.CanStep(root, character, point, params, priority)
+					if ok then
 						return point, true
+					end
+					if reason == "budget" then
+						return nil, nil, "budget"
 					end
 					if not routed then
 						local standing = footHeight(character, root)
-						local floor = BotNav.FloorAt(point.X, point.Z, origin.Y + 4, standing + 4 + MAX_STEP_DOWN, params)
+						local floor
+						floor, granted = BotNav.FloorAt(point.X, point.Z, origin.Y + 4, standing + 4 + MAX_STEP_DOWN, params, priority)
+						if not granted then
+							return nil, nil, "budget"
+						end
 						if floor and floor.Material ~= Enum.Material.Water and floor.Normal.Y >= WALKABLE_NORMAL_Y then
 							local stand = Vector3.new(point.X, floor.Position.Y + standing, point.Z)
 							if #workspace:GetPartBoundsInRadius(stand, 1.2, room) == 0 then
@@ -530,7 +693,7 @@ local DIRECT_LOOKAHEAD = 10
 local DIRECT_RECHECK = 0.6
 local DIRECT_MOVED_RECHECK = 4
 
-local function directSafe(bot, root, goal, now)
+local function directSafe(bot, root, goal, now, priority)
 	local nav = bot.nav
 	local distance = flatDistance(root.Position, goal)
 	if distance < 1.5 then
@@ -544,14 +707,15 @@ local function directSafe(bot, root, goal, now)
 	-- 1.7 studs, the bot never asked to climb; run 15b with this line: over the wall at 2.3 s). Walls
 	-- are re-measured every think; the cache serves the open-ground, drop and water answers, which
 	-- don't change while the bot stands still.
-	if now - (nav.directCheckedAt or 0) < DIRECT_RECHECK and nav.directReason ~= "wall" and nav.directGoal
-		and (nav.directGoal - goal).Magnitude < 2
+	-- A check the ray budget refused ("budget") is not an answer and is never served from the cache.
+	if now - (nav.directCheckedAt or 0) < DIRECT_RECHECK and nav.directReason ~= "wall" and nav.directReason ~= "budget"
+		and nav.directGoal and (nav.directGoal - goal).Magnitude < 2
 		and nav.directCheckedFrom and flatDistance(root.Position, nav.directCheckedFrom) < DIRECT_MOVED_RECHECK then
 		return nav.directOk, nav.directReason, nav.directWallDistance
 	end
 	local step = math.min(distance, DIRECT_LOOKAHEAD)
 	local point = root.Position + flat(goal - root.Position).Unit * step
-	local ok, reason, wallDistance = BotNav.CanStep(root, bot.character, point)
+	local ok, reason, wallDistance = BotNav.CanStep(root, bot.character, point, stepParams(bot.character, nav), priority)
 	nav.directCheckedAt = now
 	nav.directCheckedFrom = root.Position
 	nav.directGoal = goal
@@ -582,7 +746,7 @@ local function parkourAcross(bot, humanoid, root, goal, wallDistance, now)
 	direction = direction.Unit
 	if wallDistance and wallDistance > PARKOUR_REACH + 0.5 then
 		local approach = root.Position + direction * (wallDistance - PARKOUR_REACH)
-		if not BotNav.CanStep(root, bot.character, approach) then
+		if not BotNav.CanStep(root, bot.character, approach, stepParams(bot.character, nav)) then
 			return false
 		end
 		nav.moveTarget = approach
@@ -626,7 +790,7 @@ local function catchUpRoute(bot, root)
 		local segment = flat(following - current)
 		local passed = segment.Magnitude > 0.1 and flat(position - current):Dot(segment.Unit) > 0.5
 		if passed and math.abs(following.Y - feetY) < ADVANCE_RISE + 3
-			and BotNav.CanStep(root, bot.character, following + Vector3.new(0, standing, 0)) then
+			and BotNav.CanStep(root, bot.character, following + Vector3.new(0, standing, 0), stepParams(bot.character, nav)) then
 			nav.index += 1
 			STATS.waypointsSkipped += 1
 		else
@@ -644,8 +808,9 @@ end
 -- Walk the route toward `goal`. Without a route (none yet, or it failed) this walks straight at the
 -- goal when the way looks clear, which is right for short hops and the best there is while a request
 -- waits its turn; when it doesn't, it stands and sets `nav.directBlockedAt`.
--- Returns true while following a real route.
-function BotNav.Follow(bot, humanoid, root, goal, now)
+-- Returns true while following a real route. `priority` is the ray class for the direct-line check
+-- ("idle" for a wandering or looting bot, "navigation" otherwise; see BotNav.CastRay).
+function BotNav.Follow(bot, humanoid, root, goal, now, priority)
 	local nav = bot.nav
 	now = now or os.clock()
 
@@ -667,7 +832,7 @@ function BotNav.Follow(bot, humanoid, root, goal, now)
 
 	local waypoints = nav.waypoints
 	if not waypoints or nav.index > #waypoints then
-		local safe, reason, wallDistance = directSafe(bot, root, goal, now)
+		local safe, reason, wallDistance = directSafe(bot, root, goal, now, priority)
 		if not safe and reason == "wall" and parkourAcross(bot, humanoid, root, goal, wallDistance, now) then
 			return false
 		end
@@ -708,7 +873,7 @@ function BotNav.Follow(bot, humanoid, root, goal, now)
 		and nextPoint.Action == Enum.PathWaypointAction.Walk
 		and math.abs(nextPoint.Position.Y - feetY) < 2 and humanoid.FloorMaterial ~= Enum.Material.Air then
 		nav.lookAheadAt = now
-		if BotNav.CanStep(root, bot.character, nextPoint.Position + Vector3.new(0, standing, 0)) then
+		if BotNav.CanStep(root, bot.character, nextPoint.Position + Vector3.new(0, standing, 0), stepParams(bot.character, nav), priority) then
 			STATS.lookAheads += 1
 			nav.index += 1
 			waypoint = nextPoint
@@ -780,8 +945,9 @@ local function sidestepPoint(root, character)
 	local right = Vector3.new(-look.Z, 0, look.X)
 	local best, bestRoom = nil, 0
 	for _, side in ipairs({ right, -right }) do
-		local hit = workspace:Raycast(root.Position, side * 8, params)
-		local room = hit and (hit.Position - root.Position).Magnitude or 8
+		local hit, granted = BotNav.CastRay(root.Position, side * 8, params, "navigation")
+		-- A refused ray is no room at all: with both refused the bot backs out, which is safe anywhere.
+		local room = not granted and 0 or (hit and (hit.Position - root.Position).Magnitude or 8)
 		if room > bestRoom then
 			best, bestRoom = side, room
 		end
