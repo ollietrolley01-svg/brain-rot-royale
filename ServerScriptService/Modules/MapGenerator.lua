@@ -530,24 +530,51 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	local vendorAt = c + Vector3.new(21.5, MapGenerator.GroundHeightAt(c.X + 21.5, c.Z - 13.5) + MapDecor.PavingTop, -13.5)
 	VendorService.Build(town, CFrame.lookAt(vendorAt, Vector3.new(c.X, vendorAt.Y, c.Z)))
 
-	-- Lamps, benches, parked cars, planters and the welcome sign along the streets.
-	-- The kinds zero their kerbside cars because their cars were meant to stand in parking bays, which
-	-- have no builder yet: until they do, the kerbside cars stay, or most towns would have none.
-	local furniture = table.clone(profile.furniture or {})
-	furniture.cars = nil
-	local decorSpots = MapDecor.Town(town, center, preset, spread, drawn, townName or "Rotville", MapGenerator.GroundHeightAt, space,
-		furniture)
-
+	-- Where the town's cars go (Oliver 09-24, "make all the car placements make sense"): a town parks
+	-- its cars the way its kind says (TownKinds), in its car park, on driveways by its houses, and at
+	-- the kerb only where the kind has kerbside cars. The car park goes first so the kerb knows whether
+	-- there is one: a town that got none keeps a few cars at the kerb, or it would have none at all. A
+	-- town whose own description says it has no cars gets none of its own.
+	local noCars = string.find(string.lower(profile.blurb or ""), "no cars", 1, true) ~= nil
 	-- The town's car park (#31): painted bays on flat asphalt near the square, published on the town
-	-- for VehicleService.ParkInTowns. After the buildings and furniture so it only takes ground they
-	-- left; a town with no room for one keeps its cars on the verge.
+	-- for VehicleService.ParkInTowns and MapDecor.ParkBays. After the buildings, so it only takes ground
+	-- they left, and before the street furniture, which only stands on the streets' own ground anyway.
+	local lotBays = 0
 	local okParking, parkingErr = pcall(function()
 		local ParkingLots = require(script.Parent:WaitForChild("ParkingLots"))
-		ParkingLots.Build(town, center, spread, profile.bays and profile.bays.count or 6, space, rectFree)
+		lotBays = ParkingLots.Build(town, center, spread, profile.bays and profile.bays.count or 6, space, rectFree) or 0
 	end)
 	if not okParking then
 		warn("[MapGenerator] parking lot failed: " .. tostring(parkingErr))
 	end
+	if noCars then
+		town:SetAttribute("NoParkedCars", true)
+	end
+
+	-- Driveways beside the houses: most houses in a neighbourhood, now and then one elsewhere. Before
+	-- the street furniture, so a driveway's mouth is claimed before a bench or a kerbside car takes it.
+	-- At most four a neighbourhood and two elsewhere: every parked car is a real design (#121).
+	local drivewayChance = noCars and 0 or (profile.kind == "neighbourhood" and 0.6 or 0.2)
+	local driveways = MapDecor.Driveways(town, placed, setback, SIDEWALK, 9, MapGenerator.GroundHeightAt, space, drivewayChance,
+		profile.kind == "neighbourhood" and 4 or 2)
+
+	-- Lamps, benches, kerbside cars, planters and the welcome sign along the streets. The kerbside cars
+	-- are the kind's own count where it gives one; the kinds that zero it park their cars in bays, and
+	-- get just a couple at the kerb (a town with a car park still has cars in its streets), or none in
+	-- a neighbourhood whose houses have driveways enough; a town with neither a car park nor driveways
+	-- gets three.
+	local furniture = table.clone(profile.furniture or {})
+	if noCars then
+		furniture.cars = 0
+	elseif (furniture.cars or 0) == 0 then
+		if lotBays == 0 and driveways == 0 then
+			furniture.cars = 3
+		else
+			furniture.cars = (profile.kind == "neighbourhood" and driveways >= 2) and 0 or 2
+		end
+	end
+	local decorSpots = MapDecor.Town(town, center, preset, spread, drawn, townName or "Rotville", MapGenerator.GroundHeightAt, space,
+		furniture)
 	for _, spot in ipairs(decorSpots) do
 		table.insert(lootSpots[math.random() < 0.75 and "weapon" or "heal"], spot)
 	end
@@ -934,41 +961,123 @@ function MapGenerator.Build(mapId)
 	-- pushed out there was that a vehicle's own free-space check failed against the ROAD's claim every
 	-- time -- but MapSpace.IsFree already takes an entry to ignore, and roads:Claim keeps each edge's
 	-- claim on the edge, so the car can be checked against everything except the road it parks beside.
-	local VERGE = RoadNetwork.Width / 2 + 7
+	--
+	-- Pulled in off the edge of the lane the way a car stops on a country road (Oliver 09-24): its
+	-- middle VERGE out, so the widest vehicle, mirrors and all, has its inner side a stud past the
+	-- carriageway's edge (9) and its outer side a stud inside the flat corridor (20); parallel to the
+	-- road and facing the traffic on its side (it drives on the right); VERGE_END_CLEAR from either end
+	-- of an edge's straight part, clear of the junctions, bends and town mouths; nowhere near a bridge;
+	-- and never on top of one of the road's own lamp posts or signs, which the road builds inside its
+	-- claim without claiming them.
+	local VERGE = RoadNetwork.Width / 2 + 5.5
+	local VERGE_END_CLEAR = 38
+	local posts = {}
+	for _, part in ipairs(roadsModel:GetDescendants()) do
+		if part:IsA("BasePart") and (part.Name == "LampPost" or part.Name == "FingerpostPost" or part.Name == "SignalPole"
+			or part.Name == "StopSignPost") then
+			table.insert(posts, part.Position)
+		end
+	end
+	-- Level under the whole of the biggest vehicle, the way VehicleService judges footing: a road climbs
+	-- at up to a tenth, and a car parked on a verge on that grade would either spawn with one end in
+	-- the air or be moved along the road until it found level ground -- onto a lamp post, as often as not.
+	local function levelAt(at, along, side)
+		local low, high = math.huge, -math.huge
+		for _, a in ipairs({ -9, 0, 9 }) do
+			for _, b in ipairs({ -4.6, 4.6 }) do
+				local p = at + along * a + side * b
+				local height = MapGenerator.GroundHeightAt(p.X, p.Z)
+				low, high = math.min(low, height), math.max(high, height)
+			end
+		end
+		return high - low <= 0.5
+	end
+	-- A car pulled over on a country road stands on its own, not in a queue: VERGE_APART between them.
+	local VERGE_APART = 60
+	local onVerge = {}
+	local function apart(at)
+		for _, other in ipairs(onVerge) do
+			if (other.X - at.X) ^ 2 + (other.Z - at.Z) ^ 2 < VERGE_APART * VERGE_APART then
+				return false
+			end
+		end
+		return true
+	end
+	local function clearOfPosts(at)
+		for _, post in ipairs(posts) do
+			if (post.X - at.X) ^ 2 + (post.Z - at.Z) ^ 2 < 12 * 12 then
+				return false
+			end
+		end
+		return true
+	end
 	local wantedVehicles = math.clamp(math.floor(radius / 95), 6, 16)
 	-- Most of them in the towns' car parks first (#31); the verge takes whatever is left.
 	local parked = 0
 	local okPark, inLots = pcall(VehicleService.ParkInTowns, vehicles, map, math.ceil(wantedVehicles * 0.6))
 	if okPark and type(inLots) == "number" then
 		parked = inLots
+	elseif not okPark then
+		warn("[MapGenerator] ParkInTowns failed: " .. tostring(inLots))
 	end
 	for _, edge in ipairs(roads.edges) do
 		if parked >= wantedVehicles then
 			break
 		end
 		-- The straight part of the edge: a bend with a curve has no road on its last stretch.
-		local from = edge.a.curve and edge.a.box or 0
-		local to = edge.length - (edge.b.curve and edge.b.box or 0)
+		local from = (edge.a.curve and edge.a.box or 0) + VERGE_END_CLEAR
+		local to = edge.length - (edge.b.curve and edge.b.box or 0) - VERGE_END_CLEAR
 		local span = to - from
-		if span > 90 then
+		if span > 20 then
 			local along = edge.dir
-			for _ = 1, 3 do
-				if parked >= wantedVehicles then
+			local onEdge = 0
+			for _ = 1, 6 do
+				if parked >= wantedVehicles or onEdge >= 2 then
 					break
 				end
-				local side = Vector3.new(-along.Z, 0, along.X) * (math.random() < 0.5 and 1 or -1)
-				local at = edge.from + along * (from + span * (0.2 + math.random() * 0.6)) + side * VERGE
-				if space:IsFree(at.X, at.Z, 9, edge.claim) and not MapTerrain.InRiver(river, at.X, at.Z, 14) then
+				local sideSign = math.random() < 0.5 and 1 or -1
+				local side = Vector3.new(-along.Z, 0, along.X) * sideSign
+				local at = edge.from + along * (from + span * math.random()) + side * VERGE
+				if space:IsFree(at.X, at.Z, 9, edge.claim) and not MapTerrain.InRiver(river, at.X, at.Z, 14)
+					and not roads:NearBridge(at.X, at.Z, 20) and clearOfPosts(at) and levelAt(at, along, side) and apart(at) then
 					space:AddCircle(at.X, at.Z, 9)
-					-- Parked pointing along the road, give or take. A vehicle's front is its own -Z, so
-					-- the yaw that puts -Z along the road is atan2 of the negated direction.
-					local yaw = math.atan2(-along.X, -along.Z) + (math.random() - 0.5) * 0.3
-					-- `inward`: the road's flat corridor is 3 studs towards the road if the verge spot is on
-					-- its outer edge (#39), still clear of the carriageway.
-					VehicleService.Create(vehicles, Vector3.new(at.X, MapGenerator.GroundHeightAt(at.X, at.Z), at.Z),
-						yaw, math.random() < 0.38 and "bike" or "car", { inward = -side * 3 })
+					table.insert(onVerge, at)
+					-- Nose along the traffic on its side: `side` +1 is the right of `along`, whose traffic
+					-- runs along it. A vehicle's front is its own -Z, so the yaw that puts -Z along a
+					-- direction is atan2 of the negated direction. A degree either way, not a lurch.
+					local facing = along * sideSign
+					local yaw = math.atan2(-facing.X, -facing.Z) + (math.random() - 0.5) * 0.03
+					-- `inward`: level ground lies toward the road if the spot isn't level (#39), and a spot
+					-- that has to step aside steps along the road, never across it (parkOn).
+					local model = VehicleService.Create(vehicles, Vector3.new(at.X, MapGenerator.GroundHeightAt(at.X, at.Z), at.Z),
+						yaw, math.random() < 0.38 and "bike" or "car", { inward = -side * 1.5 })
+					-- If it had to move, where it stands now is claimed too, so nothing grows into it.
+					if model then
+						local now = model:GetPivot().Position
+						if Vector2.new(now.X - at.X, now.Z - at.Z).Magnitude > 1 then
+							space:AddCircle(now.X, now.Z, 9)
+						end
+					end
 					parked += 1
+					onEdge += 1
 				end
+			end
+		end
+	end
+	-- A map whose roads had too few good verge spots (steep, crowded, bridged) puts the rest in the car
+	-- parks after all, up to three quarters of each, rather than go short of vehicles.
+	if parked < wantedVehicles then
+		local okMore, more = pcall(VehicleService.ParkInTowns, vehicles, map, wantedVehicles - parked, nil, 0.75)
+		if okMore and type(more) == "number" then
+			parked += more
+		end
+	end
+	-- What's left of each car park is part-filled with parked cars (scenery), so it reads as in use.
+	for _, town in ipairs(map:GetChildren()) do
+		if town.Name == "Town" and not town:GetAttribute("NoParkedCars") then
+			local okBays, bayErr = pcall(MapDecor.ParkBays, town, vehicles:GetChildren())
+			if not okBays then
+				warn("[MapGenerator] parking the car parks failed: " .. tostring(bayErr))
 			end
 		end
 	end

@@ -434,14 +434,24 @@ local function parkOn(parent, position, yaw, size, label, inward)
 		end
 	end
 
-	-- Step aside: a ring of nearby spots, nearest first, taking the first that is level. A candidate
-	-- also has to be at about the same height as where it was asked to park: a building roof and the
-	-- bottom of a ditch are both perfectly level, and a car parked on either is worse than a car on a
-	-- slope.
+	-- Step aside: nearby spots, nearest first, taking the first that is level. A candidate also has to
+	-- be at about the same height as where it was asked to park: a building roof and the bottom of a
+	-- ditch are both perfectly level, and a car parked on either is worse than a car on a slope. A spot
+	-- beside a road (one given `inward`) only steps along the road: a ring of spots round it would put
+	-- the car out in the lane on one side, or on the bank or in the field on the other.
+	local across = typeof(inward) == "Vector3" and inward.Magnitude > 0 and inward.Unit or nil
 	for _, reach in ipairs({ 8, 16, FOOTING_REACH }) do
-		for turn = 0, 7 do
-			local angle = turn * math.pi / 4
-			local at = position + Vector3.new(math.cos(angle) * reach, 0, math.sin(angle) * reach)
+		local candidates = {}
+		if across then
+			local alongRoad = Vector3.new(-across.Z, 0, across.X)
+			candidates = { position + alongRoad * reach, position - alongRoad * reach }
+		else
+			for turn = 0, 7 do
+				local angle = turn * math.pi / 4
+				table.insert(candidates, position + Vector3.new(math.cos(angle) * reach, 0, math.sin(angle) * reach))
+			end
+		end
+		for _, at in ipairs(candidates) do
 			local otherSpread, otherTop = footingAt(at, yaw, size)
 			if otherSpread and otherSpread <= FOOTING_TOLERANCE and math.abs(otherTop - (top or position.Y)) <= 4 then
 				return Vector3.new(at.X, otherTop, at.Z), yaw
@@ -1007,62 +1017,122 @@ function VehicleService.Start()
 	end)
 end
 
--- Parks vehicles on a town's declared parking bays, and returns how many it managed.
+-- Parks vehicles on the towns' declared parking bays, and returns how many it managed.
 --
 -- Oliver, twice: cars should stand in parking lots and spaces that make sense, not on random grass.
--- The towns declare where those are -- each town carries a `ParkingBays` attribute, a list of
--- { cf = CFrame, w = width, d = depth } in world space, built on made ground -- and this fills them.
--- It is written to do nothing at all while that attribute is absent, so it can land before the towns
--- do. A bay is used only if the ground under its own footprint is level: a declared bay that is not
--- (a town wired up wrongly, or a bay laid on a slope) is refused and said out loud, rather than
--- parking a car somewhere that looks worse than the verge it came from.
-function VehicleService.ParkInTowns(parent, map, wanted, rng)
+-- The towns declare where those are (ParkingLots) and this fills them. It does nothing at all while
+-- no town has any. A bay is used only if the ground under its own footprint is level: a declared bay
+-- that is not (a town wired up wrongly, or a bay laid on a slope) is refused and said out loud, rather
+-- than parking a car somewhere that looks worse than the verge it came from.
+--
+-- The way a real car park fills (Oliver 09-24, "make all the car placements make sense"): every
+-- town's car park gets its turn before any gets a second car, so they don't all go in the first
+-- town's; no more than LOT_DRIVABLE_SHARE of a car park is taken, and never its last bay, so what's
+-- left of it is MapDecor.ParkBays' to part-fill with parked scenery; the bays are taken at random, not
+-- from one end; and each car stands square in its bay, nose the bay's way, the middle of the car on
+-- the middle of the bay (a van's body runs further back than forward). Each bay taken is marked
+-- `ParkingBayTaken_<i>` on its town.
+local LOT_DRIVABLE_SHARE = 0.5
+-- The most a car stands off the middle of its bay, along it, so a row doesn't look stamped out.
+local BAY_JITTER = 0.3
+
+-- Moves a vehicle, keeping its yaw and height, so the middle of its bounding box is at `centre`
+-- (about its own axes: a model's box is turned to its PrimaryPart).
+local function centreModel(model, centre)
+	local pivot = model:GetPivot()
+	local box = model:GetBoundingBox()
+	local offset = pivot:PointToObjectSpace(box.Position)
+	local wanted = pivot:PointToObjectSpace(Vector3.new(centre.X, pivot.Y, centre.Z))
+	model:PivotTo(pivot * CFrame.new(wanted.X - offset.X, 0, wanted.Z - offset.Z))
+end
+
+-- `share` (optional, default LOT_DRIVABLE_SHARE) is the most of any one car park, counting what's
+-- already in it, that this call may fill.
+function VehicleService.ParkInTowns(parent, map, wanted, rng, share)
 	if not parent or not map or (wanted or 0) <= 0 then
 		return 0
 	end
+	local roll = rng or Random.new(math.random(1, 2147483646))
 	-- Flat attributes, because a Roblox attribute cannot hold a table: `ParkingBays` is the count and
 	-- each bay is `ParkingBay_<i>`, a CFrame whose position is the bay's centre on the hardstanding
 	-- and whose LookVector is the way a parked car's nose should point.
 	local towns = map:FindFirstChild("Towns") or map
-	local bays = {}
+	local lots = {}
 	for _, town in ipairs(towns:GetChildren()) do
 		local count = tonumber(town:GetAttribute("ParkingBays")) or 0
 		local size = town:GetAttribute("ParkingBaySize")
+		local lot = { town = town, bays = {}, used = 0, taken = {} }
 		for index = 1, count do
 			local cf = town:GetAttribute("ParkingBay_" .. index)
-			if typeof(cf) == "CFrame" then
-				table.insert(bays, {
+			if typeof(cf) == "CFrame" and town:GetAttribute("ParkingBayTaken_" .. index) then
+				lot.used += 1
+				table.insert(lot.taken, cf.Position)
+			elseif typeof(cf) == "CFrame" then
+				-- Shuffled in as they come, so the bays are taken in no particular order.
+				table.insert(lot.bays, roll:NextInteger(1, #lot.bays + 1), {
 					cf = cf,
+					index = index,
 					w = typeof(size) == "Vector3" and size.X or nil,
 					d = typeof(size) == "Vector3" and size.Z or nil,
-					lot = town:GetAttribute("ParkingBayLot_" .. index),
 				})
 			end
 		end
+		-- A town that says it has no cars (MapGenerator marks it) leaves its car park empty.
+		if count >= 2 and #lot.bays > 0 and not town:GetAttribute("NoParkedCars") then
+			lot.cap = math.min(count - 1, math.max(1, math.floor(count * (share or LOT_DRIVABLE_SHARE))))
+			table.insert(lots, lot)
+		end
 	end
-	if #bays == 0 then
+	if #lots == 0 then
 		return 0
 	end
 
 	local parked, refused = 0, 0
-	for _, bay in ipairs(bays) do
-		if parked >= wanted then
-			break
-		end
-		local roll = rng or Random.new(math.random(1, 2147483646))
-		-- A stud of jitter so a filled row does not look stamped out.
-		local at = bay.cf * CFrame.new(roll:NextNumber(-1, 1), 0, roll:NextNumber(-1, 1))
-		local yaw = math.atan2(-at.LookVector.X, -at.LookVector.Z)
-		-- The bay's own size if the town gave one, otherwise the biggest vehicle in the set plus a
-		-- stud each side (the Crocodilo Ranger, 6.9 across and 14.6 long).
-		local size = Vector3.new(bay.w or 8.9, 1, bay.d or 16.6)
-		footingParams.FilterDescendantsInstances = { parent }
-		local spread = footingAt(at.Position, yaw, size)
-		if spread and spread <= FOOTING_TOLERANCE then
-			VehicleService.Create(parent, at.Position, yaw, roll:NextNumber() < 0.3 and "bike" or "car", { rng = roll })
-			parked += 1
-		else
-			refused += 1
+	local progress = true
+	while parked < wanted and progress do
+		progress = false
+		for _, lot in ipairs(lots) do
+			if parked >= wanted then
+				break
+			end
+			while lot.used < lot.cap and #lot.bays > 0 do
+				-- The next bay with nobody either side of it, if there is one: drivers spread out while a
+				-- car park is empty, and two big cars side by side are mirror to mirror.
+				local pickAt = #lot.bays
+				for index = #lot.bays, 1, -1 do
+					local free = true
+					for _, taken in ipairs(lot.taken) do
+						if (taken - lot.bays[index].cf.Position).Magnitude < (lot.bays[index].w or 8.9) + 0.5 then
+							free = false
+							break
+						end
+					end
+					if free then
+						pickAt = index
+						break
+					end
+				end
+				local bay = table.remove(lot.bays, pickAt)
+				local yaw = math.atan2(-bay.cf.LookVector.X, -bay.cf.LookVector.Z)
+				-- The bay's own size if the town gave one, otherwise TownKinds.Bay's.
+				local size = Vector3.new(bay.w or 8.9, 1, bay.d or 16.6)
+				footingParams.FilterDescendantsInstances = { parent }
+				local spread, _ = footingAt(bay.cf.Position, yaw, size)
+				if spread and spread <= FOOTING_TOLERANCE then
+					local model = VehicleService.Create(parent, bay.cf.Position, yaw, roll:NextNumber() < 0.3 and "bike" or "car",
+						{ rng = roll })
+					if model then
+						centreModel(model, (bay.cf * CFrame.new(0, 0, roll:NextNumber(-BAY_JITTER, BAY_JITTER))).Position)
+						lot.town:SetAttribute("ParkingBayTaken_" .. bay.index, true)
+						table.insert(lot.taken, bay.cf.Position)
+						lot.used += 1
+						parked += 1
+						progress = true
+					end
+					break
+				end
+				refused += 1
+			end
 		end
 	end
 	if refused > 0 then
