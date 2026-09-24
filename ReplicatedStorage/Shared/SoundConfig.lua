@@ -621,6 +621,337 @@ SoundConfig.Sounds = {
 		},
 	},
 
+	-- The signature guns (GunModelsSignature, the gun rework): the older arsenal rebuilt with its own looks, and
+	-- a report to match each one. Every report keeps its family's weight -- a pistol stays a pistol's crack, a
+	-- shotgun a shotgun's boom -- so positional hearing still tells you what is shooting; the object is laid
+	-- over the top. The model names its cue (attribute ShotCue), so CombatClient needs no entry per gun.
+	GunshotTung = {
+		-- Sahur Pistol: a pistol's crack with a hollow wooden knock in it, the drummer's "tok".
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 360,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 1.6 },
+			{ id = HIT, volume = 0.55, pitch = 0.62 },
+			{ id = COLLIDE, volume = 0.35, pitch = 0.8 },
+			{ id = BOOM2, volume = 0.3, pitch = 3.0 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = 2, MidGain = 2, HighGain = -1 } } },
+	},
+	GunshotPopcorn = {
+		-- Pocket Popper: a bright pop with a kernel bursting a beat behind it.
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 340,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.9 },
+			{ id = BUTTON, volume = 0.45, pitch = 1.7 },
+			{ id = BOOM2, volume = 0.28, pitch = 3.2 },
+			{ id = SNAP, volume = 0.35, pitch = 2.6, delay = 0.05 },
+		},
+		effects = { { "CompressorSoundEffect", { Threshold = -22, Ratio = 5, Attack = 0.002, Release = 0.08 } } },
+	},
+	GunshotPistachio = {
+		-- Pistacchio Pum: a dry pistol shot with a shell cracking open in the transient.
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 360,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.45 },
+			{ id = CLICK, volume = 0.5, pitch = 0.9 },
+			{ id = BOOM2, volume = 0.35, pitch = 2.8 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.1 } } },
+	},
+	GunshotRot = {
+		-- Rot SMG: the can suppressor's cough, and something wet in it.
+		acoustic = "suppressed",
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.3, pitch = 2.6 },
+			{ id = CLICK, volume = 0.5, pitch = 1.2 },
+			{ id = WATER, volume = 0.22, pitch = 1.6 },
+			{ id = SLIDER, volume = 0.14, pitch = 2.2 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -10, MidGain = -2, HighGain = -3 } } },
+	},
+	GunshotCrumb = {
+		-- Crumbly Carbine: a light rifle crack with a crunch through the middle of it.
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 440,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.5, crack = true },
+			{ id = COLLIDE, volume = 0.4, pitch = 2.2 },
+			{ id = BOOM2, volume = 0.55, pitch = 2.4 },
+			{ id = BOOM3, volume = 0.1, pitch = 0.95, delay = 0.25, where = "outdoor" },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.16 } } },
+	},
+	GunshotClonk = {
+		-- Ciabatta Clonk: a shotgun's boom with the heavy metal clonk of the old security action under it.
+		volume = 0.42,
+		pitch = 1,
+		maxDistance = 440,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 1, pitch = 1.4 },
+			{ id = SNAP, volume = 0.7, pitch = 0.8 },
+			{ id = METAL, volume = 0.35, pitch = 0.7, delay = 0.03 },
+			{ id = BASS, volume = 0.6, pitch = 1.05 },
+		},
+		effects = {
+			{ "DistortionSoundEffect", { Level = 0.24 } },
+			{ "ReverbSoundEffect", { DecayTime = 0.7, WetLevel = -16, DryLevel = 0 } },
+		},
+	},
+	GunshotCroc = {
+		-- Crocodilo Rifle: an AK's heavy crack, and the jaws snapping shut on it.
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 470,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
+			{ id = BOOM2, volume = 0.7, pitch = 2.0 },
+			{ id = COLLIDE, volume = 0.45, pitch = 1.3, delay = 0.02 },
+			{ id = BOOM3, volume = 0.12, pitch = 0.9, delay = 0.25, where = "outdoor" },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
+	},
+	GunshotShark = {
+		-- Tralala Shotgun: the pump's boom with a splash through it.
+		volume = 0.42,
+		pitch = 1,
+		maxDistance = 440,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 1, pitch = 1.45 },
+			{ id = SNAP, volume = 0.7, pitch = 0.85 },
+			{ id = WATER, volume = 0.4, pitch = 1.2 },
+			{ id = BASS, volume = 0.6, pitch = 1.1 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.24 } } },
+	},
+	GunshotLag = {
+		-- Lag Switch SMG: a light SMG crack with a digital blip that stutters behind it.
+		volume = 0.32,
+		pitch = 1,
+		maxDistance = 320,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 1.95 },
+			{ id = PING, volume = 0.18, pitch = 2.2 },
+			{ id = BOOM2, volume = 0.26, pitch = 3.4 },
+			{ id = PING, volume = 0.1, pitch = 2.2, delay = 0.04 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -6, MidGain = 0, HighGain = 2 } } },
+	},
+	GunshotScroll = {
+		-- Scrolla Scrolla Brrrap: an SMG's chatter with a screen-tap click on every round.
+		volume = 0.32,
+		pitch = 1,
+		maxDistance = 320,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 1.9 },
+			{ id = BUTTON, volume = 0.3, pitch = 2.2 },
+			{ id = BOOM2, volume = 0.26, pitch = 3.3 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -6, MidGain = 0, HighGain = 2 } } },
+	},
+	GunshotTrail = {
+		-- Scarponcino Trotto Trotto: a carbine's crack that carries, and the valley answering.
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 460,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.4, crack = true },
+			{ id = BOOM2, volume = 0.6, pitch = 2.2 },
+			{ id = BASS, volume = 0.3, pitch = 2.3 },
+			{ id = BOOM3, volume = 0.2, pitch = 0.9, delay = 0.3, where = "outdoor" },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.18 } } },
+	},
+	GunshotBanana = {
+		-- Bananini Burst: a rifle's crack with a soft, squashy thump under it.
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 460,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.45, crack = true },
+			{ id = BOOM2, volume = 0.55, pitch = 2.3 },
+			{ id = JUMP, volume = 0.35, pitch = 0.8 },
+			{ id = BASS, volume = 0.3, pitch = 2.0 },
+		},
+		effects = { { "DistortionSoundEffect", { Level = 0.18 } } },
+	},
+	GunshotLawn = {
+		-- Grass Toucher DMR: a battle rifle's report, and the sprinkler's hiss after it.
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 620,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
+			{ id = BOOM2, volume = 0.8, pitch = 1.7 },
+			{ id = SLIDER, volume = 0.2, pitch = 1.4, delay = 0.03 },
+			{ id = BOOM3, volume = 0.18, pitch = 0.8, delay = 0.3, where = "outdoor" },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 1.3, WetLevel = -10, DryLevel = 0 } } },
+	},
+	GunshotSigma = {
+		-- Sigma Scout: a marksman's report with the plates clanking on the bar.
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 620,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
+			{ id = BOOM2, volume = 0.8, pitch = 1.7 },
+			{ id = METAL, volume = 0.35, pitch = 1.1, delay = 0.03 },
+			{ id = BASS, volume = 0.45, pitch = 1.5 },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 1.2, WetLevel = -11, DryLevel = 0 } } },
+	},
+	GunshotMeadow = {
+		-- Prato Prato Pium: a marksman's report, lighter, with a bright chime in its tail.
+		volume = 0.38,
+		pitch = 1,
+		maxDistance = 600,
+		category = "Weapons",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.25, crack = true },
+			{ id = BOOM2, volume = 0.7, pitch = 1.8 },
+			{ id = PING, volume = 0.14, pitch = 2.6, delay = 0.05 },
+			{ id = BOOM3, volume = 0.16, pitch = 0.85, delay = 0.3, where = "outdoor" },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 1.2, WetLevel = -11, DryLevel = 0 } } },
+	},
+	GunshotAura = {
+		-- Aura Scattergun: a shotgun's boom with a shimmer of light ringing off it.
+		volume = 0.42,
+		pitch = 1,
+		maxDistance = 440,
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 1, pitch = 1.45 },
+			{ id = SNAP, volume = 0.7, pitch = 0.9 },
+			{ id = PING, volume = 0.22, pitch = 1.5 },
+			{ id = BASS, volume = 0.55, pitch = 1.1 },
+		},
+		effects = {
+			{ "DistortionSoundEffect", { Level = 0.22 } },
+			{ "ChorusSoundEffect", { Depth = 0.25, Mix = 0.35, Rate = 3 } },
+		},
+	},
+
+	-- Flair: the little noises of a signature gun being shown off (Viewmodel's FLAIR clips).
+	FlairChomp = {
+		-- Jaws snapping shut.
+		volume = 0.32,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = COLLIDE, volume = 0.5, pitch = 1.4 },
+			{ id = SNAP, volume = 0.35, pitch = 0.7 },
+		},
+	},
+	FlairSqueak = {
+		-- A sneaker sole on a gym floor.
+		volume = 0.26,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = OOF, volume = 0.3, pitch = 2.8 },
+			{ id = SLIDER, volume = 0.2, pitch = 2.4 },
+		},
+	},
+	FlairBeep = {
+		-- A status light blinking.
+		volume = 0.22,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = PING, volume = 0.4, pitch = 2.4 } },
+	},
+	FlairSwipe = {
+		-- A thumb dragged across something.
+		volume = 0.24,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.4, pitch = 1.3 },
+			{ id = CLICK, volume = 0.15, pitch = 2.2 },
+		},
+	},
+	FlairWhoosh = {
+		-- A slow breath of air.
+		volume = 0.22,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = SLIDER, volume = 0.35, pitch = 0.6 } },
+	},
+	FlairClank = {
+		-- Iron plates knocking together.
+		volume = 0.3,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = METAL, volume = 0.5, pitch = 0.9 },
+			{ id = HIT, volume = 0.3, pitch = 0.7 },
+		},
+	},
+	FlairChime = {
+		-- A bright, soft chime.
+		volume = 0.22,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = PING, volume = 0.35, pitch = 1.6 },
+			{ id = PING, volume = 0.2, pitch = 2.4, delay = 0.06 },
+		},
+	},
+	FlairTap = {
+		-- A knuckle on wood or polymer.
+		volume = 0.3,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = HIT, volume = 0.6, pitch = 1.1 },
+			{ id = CLICK, volume = 0.3, pitch = 0.7 },
+		},
+	},
+	FlairPop = {
+		-- A flick: a small pop and a whoosh of air.
+		volume = 0.28,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = BUTTON, volume = 0.5, pitch = 1.6 },
+			{ id = SLIDER, volume = 0.2, pitch = 1.8 },
+		},
+	},
+	FlairRattle = {
+		-- Loose parts rattling in a shaken gun.
+		volume = 0.28,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = COLLIDE, volume = 0.4, pitch = 2.4 },
+			{ id = CLICK, volume = 0.3, pitch = 1.9, delay = 0.03 },
+			{ id = METAL, volume = 0.15, pitch = 2.8, delay = 0.05 },
+		},
+	},
+
 	-- The mechanism, one cue a movement, fired by the viewmodel's animation clips at the moment the
 	-- part moves: a magazine leaving and seating, a charging handle drawn and let go, a pump, a bolt, a
 	-- cylinder, a break, a lever, a feed cover. Two or three stock files each, pitched apart so a click
@@ -2183,6 +2514,9 @@ SoundConfig.Acoustics = {
 		CoverClose = true, RocketSeat = true, StringCock = true, BoltSeat = true, EnergyCharge = true,
 		CasingTink = true, Pickup = true, SlideStart = true, Mantle = true, Vault = true,
 		DoubleJump = true, StaminaEmpty = true,
+		-- A signature gun being shown off (Viewmodel's FLAIR clips) is handling noise too.
+		FlairTap = true, FlairPop = true, FlairRattle = true, FlairChomp = true, FlairSqueak = true, FlairBeep = true,
+		FlairSwipe = true, FlairWhoosh = true, FlairClank = true, FlairChime = true,
 	},
 }
 

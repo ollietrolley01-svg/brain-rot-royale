@@ -996,6 +996,8 @@ function Viewmodel.new(def, options)
 	self.eyeRelief = model:GetAttribute("EyeRelief") or 0.6
 	self.flash = model:GetAttribute("Flash") or "rifle"
 	self.casing = model:GetAttribute("Casing") or "rifle"
+	-- The gun's signature handling (see Flair below); nil for a gun without one.
+	self.flair = model:GetAttribute("Flair")
 	self.keyGroups = {
 		SupportHand = model:GetAttribute("SupportGroup"),
 		Load = model:GetAttribute("LoadGroup"),
@@ -1546,6 +1548,367 @@ local function fireClip(self, roundsLeft)
 	return nil
 end
 
+--------------------------------------------------------------------------------
+-- Flair: a gun's signature handling (the gun rework, 2026-09-24)
+--
+-- The model's `Flair` attribute (GunModelsSignature) names how this gun is shown off and handled beyond
+-- what its mechanism does: its inspect, a flourish as it is drawn, and a flourish as a reload finishes.
+-- A gun without the attribute animates exactly as before -- every hook below hands back the stock clip
+-- untouched when there is no flair.
+--
+-- Every flair moves the gun about the grip with the hands still on their keypoints, as the stock inspect
+-- does, so the arms follow; tools/gunfun_flair_check.py poses every flair gun through its inspect, its draw
+-- and the end of its reload on three rigs and holds the wrist (85 degrees), the joints and the bone lengths
+-- to the same limits fps_arms_check does. A reload flourish only uses the clip's last stretch (after
+-- FLAIR_RELOAD_FROM) and is skipped when the clip is still moving the gun there, so the working of the
+-- mechanism itself never changes.
+--------------------------------------------------------------------------------
+
+local FLAIR_RELOAD_FROM = 0.86
+
+-- A left hand that taps `anchor` `times` times between t0 and t1, starting and ending on the support hand.
+local function taps(anchor, times, t0, t1, lift, sound)
+	local left = { key(0, "SupportHand"), key(t0 - 0.08, anchor) }
+	local events = {}
+	local span = (t1 - t0) / times
+	for index = 0, times - 1 do
+		local s = t0 + index * span
+		table.insert(left, key(s + span * 0.35, anchor, lift))
+		table.insert(left, key(s + span * 0.7, anchor))
+		table.insert(events, key(s + span * 0.7, "sound", sound))
+	end
+	table.insert(left, key(t1 + 0.12, "SupportHand"))
+	table.insert(left, key(1, "SupportHand"))
+	return left, events
+end
+
+-- A rattle: the gun rolled back and forth `times` times from t0, `step` apart, about a held pose.
+local function rattle(pose, roll, times, t0, step, sound)
+	local gun, events = {}, {}
+	for index = 0, times - 1 do
+		local s = t0 + index * step
+		table.insert(gun, key(s, pose[1], pose[2] + V(0, 0, (index % 2 == 0) and roll or -roll)))
+		if index % 2 == 0 and sound then
+			table.insert(events, key(s, "sound", sound))
+		end
+	end
+	return gun, events
+end
+
+local FLAIR = {}
+
+-- Sahur Pistol: turn the slide up and drum on it, tok-tok-tok.
+FLAIR.drum = {
+	inspect = function()
+		local left, events = taps("ChargeHand", 3, 0.24, 0.66, V(0, 0.07, 0), "FlairTap")
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.16, V(-0.12, 0.1, 0.04), V(8, 30, -24)), key(0.72, V(-0.12, 0.1, 0.04), V(8, 34, -26)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.45, V(0, 0.03, 0), V(-6, 0, -10)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairTap") } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-8, 0, 6)) }, events = { key(0.92, "sound", "FlairTap") } },
+}
+
+-- Pocket Popper: a flick up and a catch, like tossing a kernel.
+FLAIR.toss = {
+	inspect = function()
+		return {
+			duration = 2.0,
+			gun = {
+				key(0, V(), V()), key(0.14, V(0, -0.04, 0), V(6, 0, 0)), key(0.26, V(0, 0.14, 0.02), V(-28, 10, -16)),
+				key(0.38, V(0, 0.05, 0), V(-4, 30, -24)), key(0.7, V(-0.08, 0.08, 0.02), V(6, 42, -28)), key(1, V(), V()),
+			},
+			events = { key(0.26, "sound", "FlairPop") },
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.4, V(0, 0.06, 0), V(-14, 0, 0)), key(1, V(), V()) }, events = { key(0.4, "sound", "FlairPop") } },
+	reload = { gun = { key(0.92, V(0, 0.05, 0), V(-14, 0, 0)) }, events = { key(0.92, "sound", "FlairPop") } },
+}
+
+-- Pistacchio Pum: slap the magazine home and turn it over to read the price tag.
+FLAIR.tap = {
+	inspect = function()
+		local left, events = taps("MagHand", 2, 0.22, 0.48, V(0, -0.08, 0.02), "FlairTap")
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.16, V(-0.08, 0.08, 0.04), V(14, 20, -34)), key(0.55, V(-0.08, 0.08, 0.04), V(14, 24, -36)),
+				key(0.7, V(-0.14, 0.12, 0.04), V(0, 48, -14)), key(0.88, V(-0.14, 0.12, 0.04), V(0, 52, -14)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.5, V(0, 0.02, 0), V(0, 0, 12)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(4, 0, -12)) }, events = { key(0.9, "sound", "FlairTap") } },
+}
+
+-- Rot SMG: shake the bugs out of it.
+FLAIR.shake = {
+	inspect = function()
+		local pose = { V(-0.06, 0.06, 0.02), V(4, 26, -14) }
+		local shakes, events = rattle(pose, 16, 6, 0.2, 0.08, "FlairRattle")
+		local gun = { key(0, V(), V()), key(0.12, pose[1], pose[2]) }
+		for _, entry in ipairs(shakes) do
+			table.insert(gun, entry)
+		end
+		table.insert(gun, key(0.8, pose[1], pose[2] + V(0, 4, 0)))
+		table.insert(gun, key(1, V(), V()))
+		return { duration = 2.2, gun = gun, events = events }
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.3, V(), V(0, 0, -12)), key(0.6, V(), V(0, 0, 8)), key(1, V(), V()) }, events = { key(0.3, "sound", "FlairRattle") } },
+	reload = { gun = { key(0.9, V(), V(0, 0, -10)), key(0.95, V(), V(0, 0, 6)) }, events = { key(0.9, "sound", "FlairRattle") } },
+}
+
+-- Crumbly Carbine: tip it muzzle-down and knock the crumbs off.
+FLAIR.crumbs = {
+	inspect = function()
+		local left, events = taps("SupportHand", 3, 0.3, 0.62, V(0, 0.06, 0), "FlairTap")
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.18, V(-0.04, 0.02, 0.06), V(26, 18, -10)), key(0.66, V(-0.04, 0.02, 0.06), V(28, 22, -12)),
+				key(0.8, V(-0.1, 0.1, 0.04), V(0, 40, -24)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.4, V(0, 0, 0.02), V(12, 0, -6)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0, 0.02), V(10, 0, -8)) }, events = { key(0.92, "sound", "FlairTap") } },
+}
+
+-- Ciabatta Clonk: two quick pumps and a look down the side.
+FLAIR.pump = {
+	inspect = function()
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.14, V(-0.05, 0.05, 0.03), V(4, -8, 16)), key(0.5, V(-0.05, 0.05, 0.03), V(4, -8, 16)),
+				key(0.66, V(-0.1, 0.1, 0.04), V(8, 38, -20)), key(0.88, V(-0.1, 0.1, 0.04), V(8, 40, -22)), key(1, V(), V()) },
+			values = { pump = { key(0, 0), key(0.18, 0), key(0.26, 1), key(0.33, 0), key(0.4, 1), key(0.47, 0) } },
+			events = { key(0.26, "sound", "PumpBack"), key(0.33, "sound", "PumpForward"), key(0.4, "sound", "PumpBack"), key(0.47, "sound", "PumpForward") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.4, V(0, 0.02, 0.02), V(-6, 0, 10)), key(1, V(), V()) } },
+	reload = { gun = { key(0.93, V(0, 0.03, 0.02), V(-8, 0, 8)) } },
+}
+
+-- Crocodilo Rifle: turn the head to you and let it snap, three times.
+FLAIR.chomp = {
+	inspect = function()
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.16, V(-0.1, 0.08, 0.02), V(6, 36, -18)), key(0.78, V(-0.1, 0.08, 0.02), V(6, 40, -20)), key(1, V(), V()) },
+			values = { jaw = { key(0, 0), key(0.26, 0), key(0.31, 1), key(0.36, 0), key(0.46, 1), key(0.51, 0), key(0.62, 1), key(0.68, 0) } },
+			events = { key(0.36, "sound", "FlairChomp"), key(0.51, "sound", "FlairChomp"), key(0.68, "sound", "FlairChomp") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.5, V(), V(-4, 0, 0)), key(1, V(), V()) },
+		values = { jaw = { key(0, 0), key(0.3, 1), key(0.5, 0) } }, events = { key(0.5, "sound", "FlairChomp") } },
+	reload = { gun = { key(0.93, V(0, 0.02, 0), V(-6, 0, 4)) }, events = { key(0.93, "sound", "FlairChomp") } },
+}
+
+-- Tralala Shotgun: turn the sneaker over, tap it twice, rack it once. Squeak.
+FLAIR.sneaker = {
+	inspect = function()
+		local left, events = taps("SupportHand", 2, 0.3, 0.52, V(0, -0.06, 0), "FlairSqueak")
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.18, V(-0.06, 0.06, 0.03), V(6, 18, 30)), key(0.6, V(-0.06, 0.06, 0.03), V(6, 20, 32)),
+				key(0.74, V(-0.08, 0.08, 0.03), V(4, 36, -16)), key(0.9, V(-0.08, 0.08, 0.03), V(4, 38, -16)), key(1, V(), V()) },
+			left = left,
+			values = { pump = { key(0, 0), key(0.64, 0), key(0.7, 1), key(0.77, 0) } },
+			events = { events[1], events[2], key(0.7, "sound", "PumpBack"), key(0.77, "sound", "PumpForward") },
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.45, V(0, 0.04, 0), V(-6, 0, 8)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairSqueak") } },
+	reload = { gun = { key(0.92, V(0, 0.04, 0), V(-6, 0, 0)) }, events = { key(0.92, "sound", "FlairSqueak") } },
+}
+
+-- Lag Switch SMG: it lags. The gun jumps from pose to pose with no frames between.
+FLAIR.lag = {
+	inspect = function()
+		local poses = {
+			{ V(-0.06, 0.06, 0.02), V(4, 22, -12) }, { V(-0.1, 0.1, 0.03), V(8, 40, -20) },
+			{ V(-0.04, 0.04, 0.02), V(0, 10, 18) }, { V(-0.1, 0.1, 0.03), V(6, 34, -26) },
+		}
+		local gun, events = { key(0, V(), V()), key(0.14, poses[1][1], poses[1][2]) }, {}
+		local t = 0.3
+		for index = 2, #poses do
+			-- Held, then a snap: two keys a hair apart.
+			local before = poses[index - 1]
+			table.insert(gun, key(t, before[1], before[2]))
+			table.insert(gun, key(t + 0.005, poses[index][1], poses[index][2]))
+			table.insert(events, key(t, "sound", "FlairBeep"))
+			t += 0.16
+		end
+		table.insert(gun, key(t, poses[#poses][1], poses[#poses][2]))
+		table.insert(gun, key(1, V(), V()))
+		return { duration = 2.2, gun = gun, events = events }
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V(0, 0, -10)), key(0.5, V(), V(0, 0, -10)), key(0.505, V(), V()), key(1, V(), V()) }, events = { key(0.5, "sound", "FlairBeep") } },
+	reload = { gun = { key(0.9, V(0, 0.02, 0), V(0, 0, 8)), key(0.905, V(), V()) }, events = { key(0.9, "sound", "FlairBeep") } },
+}
+
+-- Scrolla Scrolla Brrrap: turn the phone to you and swipe it, twice.
+FLAIR.scroll = {
+	inspect = function()
+		local left, events = taps("MagHand", 2, 0.3, 0.56, V(0, 0.1, 0.02), "FlairSwipe")
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.18, V(-0.04, 0.08, 0.04), V(8, -34, 26)), key(0.66, V(-0.04, 0.08, 0.04), V(8, -38, 28)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.45, V(0, 0.02, 0), V(0, -8, 8)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairSwipe") } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(0, -6, 8)) }, events = { key(0.92, "sound", "FlairSwipe") } },
+}
+
+-- Scarponcino Trotto Trotto: tip the stock over to read the compass.
+FLAIR.compass = {
+	inspect = function()
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.2, V(-0.06, 0.1, 0.04), V(10, -30, 34)), key(0.55, V(-0.06, 0.1, 0.04), V(10, -34, 36)),
+				key(0.62, V(-0.06, 0.1, 0.04), V(10, -28, 32)), key(0.7, V(-0.06, 0.1, 0.04), V(10, -34, 36)), key(1, V(), V()) },
+			events = { key(0.62, "sound", "FlairTap") },
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.45, V(0, 0.02, 0), V(0, -6, 10)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(4, -6, 8)) } },
+}
+
+-- Bananini Burst: tug the peel back, twice.
+FLAIR.peel = {
+	inspect = function()
+		local left, events = taps("SupportHand", 2, 0.3, 0.54, V(0, 0.02, -0.12), "FlairSwipe")
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.18, V(-0.06, 0.06, 0.03), V(4, 24, -22)), key(0.62, V(-0.06, 0.06, 0.03), V(4, 26, -24)), key(1, V(), V()) },
+			left = left,
+			events = events,
+		}
+	end,
+	draw = { duration = 0.45, gun = { key(0, V(), V()), key(0.45, V(0, 0.03, 0), V(-4, 6, -8)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(-4, 4, -8)) }, events = { key(0.92, "sound", "FlairSwipe") } },
+}
+
+-- Grass Toucher DMR: bring the stock up and smell the daisies.
+FLAIR.sniff = {
+	inspect = function()
+		return {
+			duration = 2.4,
+			gun = { key(0, V(), V()), key(0.24, V(-0.08, 0.1, 0.1), V(12, 28, -20)), key(0.7, V(-0.08, 0.12, 0.12), V(14, 30, -22)), key(1, V(), V()) },
+			events = { key(0.4, "sound", "FlairWhoosh") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.5, V(0, 0.02, 0.02), V(4, 8, -6)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0.02), V(4, 6, -6)) } },
+}
+
+-- Sigma Scout: two curls. Never skip arm day.
+FLAIR.curl = {
+	inspect = function()
+		local up, down = { V(0, 0.08, 0.06), V(-24, 6, 0) }, { V(0, -0.02, 0), V(4, 6, 0) }
+		return {
+			duration = 2.2,
+			gun = { key(0, V(), V()), key(0.16, down[1], down[2]), key(0.3, up[1], up[2]), key(0.44, down[1], down[2]),
+				key(0.58, up[1], up[2]), key(0.72, down[1], down[2]), key(1, V(), V()) },
+			events = { key(0.3, "sound", "FlairClank"), key(0.58, "sound", "FlairClank") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.45, V(0, 0.04, 0.03), V(-12, 0, 0)), key(1, V(), V()) }, events = { key(0.45, "sound", "FlairClank") } },
+	reload = { gun = { key(0.92, V(0, 0.04, 0.03), V(-12, 0, 0)) }, events = { key(0.92, "sound", "FlairClank") } },
+}
+
+-- Prato Prato Pium: a slow sway, like grass in the wind.
+FLAIR.breeze = {
+	inspect = function()
+		return {
+			duration = 2.6,
+			gun = { key(0, V(), V()), key(0.2, V(-0.04, 0.06, 0.02), V(4, 20, -10)), key(0.4, V(-0.04, 0.07, 0.02), V(2, 30, -18)),
+				key(0.6, V(-0.04, 0.06, 0.02), V(4, 18, -6)), key(0.8, V(-0.04, 0.07, 0.02), V(2, 30, -18)), key(1, V(), V()) },
+			events = { key(0.4, "sound", "FlairWhoosh") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.5, V(0, 0.02, 0), V(0, 6, -6)), key(1, V(), V()) } },
+	reload = { gun = { key(0.92, V(0, 0.02, 0), V(0, 6, -8)) } },
+}
+
+-- Aura Scattergun: raise it up into the light.
+FLAIR.halo = {
+	inspect = function()
+		return {
+			duration = 2.3,
+			gun = { key(0, V(), V()), key(0.22, V(-0.04, 0.14, 0.02), V(-8, 20, -16)), key(0.66, V(-0.04, 0.16, 0.02), V(-8, 26, -20)), key(1, V(), V()) },
+			events = { key(0.22, "sound", "FlairChime") },
+		}
+	end,
+	draw = { duration = 0.5, gun = { key(0, V(), V()), key(0.5, V(0, 0.05, 0), V(-6, 0, 0)), key(1, V(), V()) }, events = { key(0.5, "sound", "FlairChime") } },
+	reload = { gun = { key(0.92, V(0, 0.04, 0), V(-6, 0, 0)) }, events = { key(0.92, "sound", "FlairChime") } },
+}
+
+Viewmodel.Flair = FLAIR
+
+-- The flair's inspect clip for this gun, or nil (the stock inspect plays).
+local function flairInspect(self)
+	local flair = self.flair and FLAIR[self.flair]
+	return flair and flair.inspect and flair.inspect(self) or nil
+end
+
+-- A fresh copy of a flair's clip table: a playing clip is stamped with its start and the events it fired.
+local function copyClip(clip)
+	local out = {}
+	for name, value in pairs(clip) do
+		out[name] = type(value) == "table" and table.clone(value) or value
+	end
+	return out
+end
+
+local function flairDraw(self)
+	local flair = self.flair and FLAIR[self.flair]
+	return flair and flair.draw and copyClip(flair.draw) or nil
+end
+
+-- The reload clip with this gun's flourish laid over its last stretch.
+local function flairReload(self, clip)
+	local flair = self.flair and FLAIR[self.flair]
+	local flourish = flair and flair.reload
+	if not clip or not flourish then
+		return clip
+	end
+	local gun = clip.gun or { key(0, V(), V()), key(1, V(), V()) }
+	for _, entry in ipairs(gun) do
+		if entry[1] > FLAIR_RELOAD_FROM and entry[1] < 1 then
+			-- The mechanism is still moving the gun here (an empty reload's charging handle): no flourish.
+			return clip
+		end
+	end
+	local merged = {}
+	for _, entry in ipairs(gun) do
+		table.insert(merged, entry)
+	end
+	for _, entry in ipairs(flourish.gun or {}) do
+		table.insert(merged, entry)
+	end
+	table.sort(merged, function(a, b)
+		return a[1] < b[1]
+	end)
+	clip.gun = merged
+	if flourish.events then
+		clip.events = clip.events or {}
+		for _, entry in ipairs(flourish.events) do
+			table.insert(clip.events, entry)
+		end
+	end
+	return clip
+end
+
+local baseReloadClip = reloadClip
+reloadClip = function(self, empty, missing)
+	return flairReload(self, baseReloadClip(self, empty, missing))
+end
+
 -- Plays a clip over `duration` seconds from now, replacing any clip of the same kind.
 function Viewmodel:play(kind, clip, duration)
 	if not clip then
@@ -1601,6 +1964,14 @@ function Viewmodel:Equip(rack)
 			self.pendingRack = clip
 		end
 	end
+	-- A flair gun's draw flourish, once it is up (and after the rack, when there is one).
+	local draw = flairDraw(self)
+	if draw then
+		draw.delay = self.pendingRack and 0.9 or 0.3
+		self.pendingFlair = draw
+	else
+		self.pendingFlair = nil
+	end
 	emit(self, "sound", "Equip")
 end
 
@@ -1615,6 +1986,7 @@ function Viewmodel:Fire(roundsLeft)
 	self.shotAt = self.now
 	self.clips.inspect = nil
 	self.pendingRack = nil
+	self.pendingFlair = nil
 	self.clips.rack = nil
 	if self.action == "rotary" then
 		self.spinSpeed = math.max(self.spinSpeed, 26)
@@ -1644,6 +2016,7 @@ end
 function Viewmodel:StartReload(seconds, roundsLeft, magSize)
 	self.clips.inspect = nil
 	self.pendingRack = nil
+	self.pendingFlair = nil
 	self.clips.rack = nil
 	local empty = roundsLeft <= 0
 	local clip = reloadClip(self, empty, (magSize or 1) - roundsLeft)
@@ -1664,6 +2037,12 @@ end
 
 function Viewmodel:Inspect()
 	if self.clips.reload then
+		return
+	end
+	self.pendingFlair = nil
+	local flair = flairInspect(self)
+	if flair then
+		self:play("inspect", flair, flair.duration)
 		return
 	end
 	self:play("inspect", {
@@ -1890,6 +2269,10 @@ function Viewmodel:Update(dt, input)
 	if self.pendingRack and now - self.equipAt >= self.pendingRack.delay then
 		self:play("rack", self.pendingRack, 0.55)
 		self.pendingRack = nil
+	end
+	if self.pendingFlair and now - self.equipAt >= self.pendingFlair.delay and not self.clips.reload then
+		self:play("inspect", self.pendingFlair)
+		self.pendingFlair = nil
 	end
 
 	-- Clips: sample every track of every playing clip. Later kinds win where they overlap.
@@ -2218,6 +2601,9 @@ function Viewmodel:Pose(camera, state)
 		self:play("fire", fireClip(self, state.roundsLeft or 5), 1)
 	elseif state.clip == "inspect" then
 		self:Inspect()
+	elseif state.clip == "draw" then
+		-- A flair gun's draw flourish (tools/gunfun_flair_check.py); nothing for a gun without one.
+		self:play("inspect", flairDraw(self))
 	end
 	local onEvent = self.onEvent
 	self.onEvent = nil
@@ -2262,7 +2648,8 @@ end
 -- The reload (`kind` "reload") or rack ("rack") clip for the gun `model`, as first person would play it.
 -- `empty` and `missing` are what StartReload is given. Nil when the gun has no such clip.
 function Viewmodel.ClipFor(model, kind, empty, missing)
-	local context = { action = model:GetAttribute("Action") or "ar", groupParts = {}, def = {} }
+	-- The flair too: its reload flourish is part of the reload the body plays.
+	local context = { action = model:GetAttribute("Action") or "ar", groupParts = {}, def = {}, flair = model:GetAttribute("Flair") }
 	for _, part in ipairs(model:GetDescendants()) do
 		local group = part:IsA("BasePart") and part:GetAttribute("Anim")
 		if group then

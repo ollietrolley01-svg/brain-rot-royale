@@ -46,6 +46,10 @@ local GunModelsCreative = creativeModule and require(creativeModule) or { Varian
 -- The workshop guns (WorkshopArsenal) build the same way, from their own module.
 local workshopModule = Shared:FindFirstChild("GunModelsWorkshop")
 local GunModelsWorkshop = workshopModule and require(workshopModule) or { Variants = {}, Builders = {} }
+-- The older arsenal's guns rebuilt with their own designs (the gun rework, 2026-09-24): same ids, stats and
+-- mechanisms, their own looks and a Flair for the viewmodel.
+local signatureModule = Shared:FindFirstChild("GunModelsSignature")
+local GunModelsSignature = signatureModule and require(signatureModule) or { Variants = {}, Builders = {} }
 
 local GunModels = {}
 
@@ -3383,12 +3387,18 @@ function GunModels.Build(def, color, material, options)
 	local g = Builder.new(def, color, material, options)
 	-- A creative or workshop gun (their Builders, by id) builds itself; everything after this (finish,
 	-- sight marker, z-fight, receiver, muzzle, welds) is shared with the stock guns.
-	local own = (GunModelsCreative.Builders and GunModelsCreative.Builders[def.id])
+	local signature = GunModelsSignature.Builders and GunModelsSignature.Builders[def.id]
+	local own = signature
+		or (GunModelsCreative.Builders and GunModelsCreative.Builders[def.id])
 		or (GunModelsWorkshop.Builders and GunModelsWorkshop.Builders[def.id])
 	local build = own and function(builder)
 		return own(builder, GunModels.Kit)
 	end or STYLES[g.style] or STYLES.rifle
 	local receiver = build(g)
+	-- A signature gun carries its own colours: marked, so ArsenalFinish leaves it alone.
+	if signature then
+		g.model:SetAttribute("Signature", true)
+	end
 	ArsenalFinish.Apply(g.model, def.id, options.skinned == true)
 	markSight(g)
 

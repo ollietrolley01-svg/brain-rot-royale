@@ -2032,7 +2032,9 @@ shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity)
 	local mine = shooter == player
 	local gun = shooterGun(shooter, origin)
 	local flash = gun and gun:GetAttribute("Flash") or "rifle"
-	local cue = SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
+	-- A signature gun (GunModelsSignature) names its own report on the model (ShotCue), so a new one needs no
+	-- entry here; everything else goes by weapon id, then by flash kind.
+	local cue = (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
 
 	if mine then
 		-- In first person the body — and the gun on it — sits below and beside the camera,

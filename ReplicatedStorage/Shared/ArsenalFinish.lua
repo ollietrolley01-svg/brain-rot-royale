@@ -84,7 +84,9 @@ end
 
 function Finish.Apply(model, id, skinned)
 	local look = looks[id]
-	if not look then return end
+	-- A signature rebuild (GunModelsSignature) has its own colours and markings, and none of the parts this
+	-- recolours by name are where the stock build put them.
+	if not look or model:GetAttribute("Signature") then return end
 	model:SetAttribute("ArsenalPack", "AfterHours15")
 	-- The legacy lever builder supplies a loading gate but no ejection keypoint.
 	-- Its firing clip emits an eject event, so give this gun a real outlet there.
