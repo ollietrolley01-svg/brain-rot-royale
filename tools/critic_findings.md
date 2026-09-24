@@ -227,12 +227,10 @@ Line numbers are at branch tip `7e61c81` unless a finding says otherwise.
 ### C12 (minor, ROUTE: loot) The 1 s settle assumes the key is let go within a second
 - `ServerScriptService/Modules/LootService.lua:211-226` (3441c0f). If the mechanism is right (prompts
   appearing under a held key), a player who keeps E held past 1 s after the 1.2 s crate hold gets the
-  same result the fix is for. Unproven either way offline. Cheaper and exact: re-enable the prompts only
-  once the opener's prompt input ends, i.e. keep DROP_SETTLE but also store the opener on the base
-  (`base:SetAttribute("SettlingFor", player.UserId)`) and have LootService refuse that player's
-  Triggered until a PromptButtonHoldEnded / a new PromptTriggered sequence starts (ProximityPrompt
-  `PromptButtonHoldBegan` on the server fires for zero-hold prompts too). Ask Oliver whether the 1 s
-  build fixed it before doing this.
+  same result the fix is for. Unproven either way offline, and the server cannot see a key being let
+  go. Ask Oliver whether the build with 3441c0f fixed it; if a held key still takes the spill, raise
+  DROP_SETTLE to 2 s (the prompt reappearing a second later costs nothing) rather than build more on an
+  unconfirmed mechanism.
 
 ### C13 (process) BotService local count with both bot branches
 - On the tree: BotService peaks at 191 live locals (tools/local_limit_check.py), 9 under Luau's limit;
@@ -248,3 +246,10 @@ Line numbers are at branch tip `7e61c81` unless a finding says otherwise.
   Sigma Scout, Aura Scattergun): read as distinct designs; the Crocodilo head reads well from the side.
   The Sahur Pistol's domed muzzle cap fills the lower third of the ADS picture (below the sight line, so
   the sight check passes); worth a Studio look at ADS.
+
+### C14 (minor, ROUTE: foundations worker) foundation_check is red on the landed tree
+- `python3 tools/foundation_check.py` at 22baf77 + critic commits: 3 violations over 15 map-seeds (exit
+  1): `landmark:SahurAqueduct` buried (SahurSprings 303), `landmark:TurbineRidge` Turbine1 buried 2.10 at
+  (-347,-618) (RotRidge 202), `wilds:slateShelter` sill 0.41 at (-646,-218) (RotRidge 202). ddd4ba1
+  reported 0; a later landing (the main merge 58db872 or MapDecor's 22baf77 shifting the placement
+  stream) changed those maps. Re-run and re-baseline before the gate is trusted.
