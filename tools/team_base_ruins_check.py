@@ -24,10 +24,14 @@ TrussPart and Roblox's part defaults), then measures what was built:
   identical  team 2's base, built turned and moved with the other colour, is team 1's part for part in
              its own frame; the only differences are colours, only on parts named Team*
   seed       the same seed builds the same ruin twice
-  build      TeamBaseRuins.Build itself, on a mock map: it clears the small scenery and the loot off
-             the site and keeps the big things and the roads, stands at the height FlattenPad
-             returns, and where FlattenPad refuses stands on a Foundation plinth down to the lowest
-             ground; the pads come out where Layout put them in the site's frame
+  build      TeamBaseRuins.Build itself, on a mock hillside whose terrain RAYS are stale (they report
+             the ground as it was before any write, as a real one does straight after WriteVoxels)
+             and whose voxels are true: it clears the small scenery and the loot off the site and
+             keeps the big things and the roads, stands FLUSH at the height FlattenPad returns (no
+             plinth), grades the ground round it (no step the work made steeper than 1 in 3, the
+             gate ramps 1 in 8 along their middles, the ground under a road untouched), takes away
+             the scenery left on moved ground, and refuses a site FlattenPad refuses or that did not
+             come out level; the pads come out where Layout put them in the site's frame
 
 Planted faults (source edits, rebuilt through the same pipeline) must each be caught:
     python3 tools/team_base_ruins_check.py [repo]            the checks
@@ -860,8 +864,13 @@ SEED = 20260924
 
 
 SMOKE = r"""
--- Terrain as a function of (x, z), and Raycast against it and against parts' boxes, the way the real
--- one answers a straight-down ray: the highest surface under the start point.
+-- THE GROUND. A voxel terrain over the natural ground T(x, z): ReadVoxels hands back each 4-stud column
+-- filled to its ground (less MapTerrain's SurfaceLift), WriteVoxels keeps what was written, and every
+-- later read sees it. Terrain RAYCASTS do not: they report T, the ground as it was before any write,
+-- which is what a real terrain raycast straight after WriteVoxels does (measured in Studio: every plinth
+-- the compounds ever stood on was a raycast reading a slope the pad had already levelled). So nothing
+-- Build decides may rest on a terrain raycast, and this world proves it.
+local CELL, LIFT = 4, 2
 local function partTop(part, x, z, below)
     if part.CanQuery == false then return nil end
     local c, s = part.CFrame, part.Size
@@ -872,6 +881,17 @@ local function partTop(part, x, z, below)
     local top = c.p.Y + ey
     if top > below then return nil end
     return top
+end
+CF.PointToObjectSpace = function(c, v) return c:Inverse() * v end
+Region3 = {}
+function Region3.new(a, b)
+    local r = { min = a, max = b, Size = b - a, CFrame = CFrame.new((a + b) / 2) }
+    function r:ExpandToGrid(res)
+        local function lo(v) return math.floor(v / res + 1e-9) * res end
+        local function hi(v) return math.ceil(v / res - 1e-9) * res end
+        return Region3.new(Vector3.new(lo(a.X), lo(a.Y), lo(a.Z)), Vector3.new(hi(b.X), hi(b.Y), hi(b.Z)))
+    end
+    return r
 end
 function smoke(Ruins, mode)
     local out = {}
@@ -885,20 +905,57 @@ function smoke(Ruins, mode)
     map.Parent = ws
     local base = CFrame.new(100, 3, -50) * CFrame.Angles(0, 0.7, 0)
     local centre = base.p
-    -- The ground: FlattenPad reports 12.5. "flat": it is, within a hair, all over (bumps of 0.2, as a
-    -- real pad's smooth-terrain surface is not a plane). "partial": only 30 studs round the centre is
-    -- levelled and the rest still climbs away, 0.08 a stud. "refused": FlattenPad says no (a road).
+    local site = CFrame.new(centre) * CFrame.Angles(0, 0.7, 0)
+    local function localOf(x, z) return site:Inverse() * Vector3.new(x, centre.Y, z) end
+    -- A hillside: level for 10 studs either side of the compound's middle, then climbing 1 in 4 toward
+    -- its east (+X, the east gate's side) and falling as far to the west, levelling out 9.5 up and 9.5
+    -- down: the east gate opens onto a bank 9.5 high at the pad's edge, the main gate's way out (-Z)
+    -- crosses the slope.
     local function T(x, z)
-        local r = math.sqrt((x - centre.X) ^ 2 + (z - centre.Z) ^ 2)
-        local bump = 0.2 * math.sin(x * 0.7) * math.cos(z * 0.9)
-        if mode == "partial" and r > 30 then return 12.5 + 0.08 * (r - 30) + bump end
-        if mode == "refused" then return 8 + 0.05 * (x - centre.X + 60) end
-        -- Past the foundation the ground sags 0.8 (the pad's edge): no reason for a plinth, but what
-        -- lies out there must be put on the ground really there, not at the planned height.
-        local d = CFrame.new(centre) * CFrame.Angles(0, 0.7, 0)
-        local here = d:Inverse() * Vector3.new(x, 0, z)
-        if math.abs(here.X) > 46.5 or math.abs(here.Z) > 42.5 then return 12.5 - 0.8 + bump * 0.05 end
-        return 12.5 + bump
+        local here = localOf(x, z)
+        local rise = math.clamp(here.X, -48, 48) - math.clamp(here.X, -10, 10)
+        return 12.5 + 0.25 * rise + 0.1 * math.sin(x * 0.7) * math.cos(z * 0.9)
+    end
+    local written = {}
+    local function key(x, z) return math.floor(x / CELL) .. "," .. math.floor(z / CELL) end
+    local function ground(x, z)
+        local w = written[key(x, z)]
+        if w then return w end
+        return T((math.floor(x / CELL) + 0.5) * CELL, (math.floor(z / CELL) + 0.5) * CELL)
+    end
+    rawget(terrain, "props").ReadVoxels = function(self, region, res)
+        local nx, ny, nz = math.floor(region.Size.X / res + 0.5), math.floor(region.Size.Y / res + 0.5), math.floor(region.Size.Z / res + 0.5)
+        local mats, occs = {}, {}
+        for ix = 1, nx do
+            mats[ix], occs[ix] = {}, {}
+            local x = region.min.X + (ix - 0.5) * res
+            for iy = 1, ny do
+                mats[ix][iy], occs[ix][iy] = {}, {}
+                local bottom = region.min.Y + (iy - 1) * res
+                for iz = 1, nz do
+                    local g = ground(x, region.min.Z + (iz - 0.5) * res)
+                    local occ = math.max(0, math.min(1, (g - LIFT - bottom) / res))
+                    occs[ix][iy][iz] = occ
+                    mats[ix][iy][iz] = occ > 0 and "Enum.Material.Grass" or "Enum.Material.Air"
+                end
+            end
+        end
+        return mats, occs
+    end
+    rawget(terrain, "props").WriteVoxels = function(self, region, res, mats, occs)
+        local nx, ny, nz = math.floor(region.Size.X / res + 0.5), math.floor(region.Size.Y / res + 0.5), math.floor(region.Size.Z / res + 0.5)
+        for ix = 1, nx do
+            local x = region.min.X + (ix - 0.5) * res
+            for iz = 1, nz do
+                local z = region.min.Z + (iz - 0.5) * res
+                for iy = ny, 1, -1 do
+                    if occs[ix][iy][iz] > 0 and mats[ix][iy][iz] ~= "Enum.Material.Air" then
+                        written[key(x, z)] = region.min.Y + (iy - 1) * res + occs[ix][iy][iz] * res + LIFT
+                        break
+                    end
+                end
+            end
+        end
     end
     function ws:Raycast(origin, dir, params)
         local best = nil
@@ -920,7 +977,7 @@ function smoke(Ruins, mode)
         end
         return best and { Position = Vector3.new(origin.X, best, origin.Z) } or nil
     end
-    local function item(folderName, name, extents, offset, tag, count)
+    local function item(folderName, name, extents, offset, tag, count, y)
         local folder = map:FindFirstChild(folderName)
         if not folder then
             folder = Instance.new("Model")
@@ -933,19 +990,22 @@ function smoke(Ruins, mode)
             part.Name = name
             part.Size = Vector3.new(2, 2, 2)
             part.CFrame = base * CFrame.new(offset.X, 0, offset.Z)
+            if y then part.CFrame = CFrame.new(part.CFrame.p.X, y, part.CFrame.p.Z) end
             if tag then part:SetAttribute("Destructible", tag) end
             part.Parent = folder
             first = first or part
         end
         return first, folder
     end
-    -- A tree inside the footprint, one just outside the margin but where FlattenPad grades the ground,
-    -- a two-piece tree (trunk and leaves, a tag group sharing Props with everything else), a landmark
-    -- too big to clear, a road, and a loot pickup of two pieces.
-    local treeIn = item("Props", "TreeIn", nil, Vector3.new(10, 0, 10))
+    -- On the site: a tree inside the footprint, one just outside the margin where FlattenPad grades the
+    -- ground, a two-piece tree (trunk and leaves, a tag group sharing Props with everything else), a
+    -- landmark too big to clear, a road, and a loot pickup of two pieces.
+    -- (The ones in the site stand where the hillside crosses the pad's height, so the ground under them
+    -- does not move: it is ClearSite that must take them, not the clearing after the ground work.)
+    local treeIn = item("Props", "TreeIn", nil, Vector3.new(0, 0, 10))
     local treeOut = item("Props", "TreeOut", nil, Vector3.new(0, 0, 60))
-    local trunk = item("Props", "Trunk", nil, Vector3.new(-20, 0, -20), "Tree:9")
-    local leaves = item("Props", "Leaves", nil, Vector3.new(-20, 0, -20), "Tree:9")
+    local trunk = item("Props", "Trunk", nil, Vector3.new(0, 0, -20), "Tree:9")
+    local leaves = item("Props", "Leaves", nil, Vector3.new(0, 0, -20), "Tree:9")
     local towerModel = Instance.new("Model")
     towerModel.Name = "Tower"
     rawget(towerModel, "props").Extents = Vector3.new(120, 60, 90)
@@ -953,6 +1013,22 @@ function smoke(Ruins, mode)
     towerModel.Parent = lm
     local towerPart = Instance.new("Part"); towerPart.Size = Vector3.new(2, 2, 2); towerPart.CFrame = base; towerPart.Parent = towerModel
     local roadPart = item("Roads", "Segment", nil, Vector3.new(5, 0, 5))
+    -- Round it, where the ground work reaches but ClearSite's box query never looks (none of them are in
+    -- the query's list): flowers on the east bank (non-collidable, cut 17 studs down by the gate ramp), a
+    -- tagged tree on the west bank (filled 14 up), a tree far out on untouched ground, and a road across
+    -- the west slope whose ground must not move at all.
+    local flowers = item("Wilds", "Flowers", nil, Vector3.new(80, 0, 20), nil, 1, T((base * Vector3.new(80, 0, 20)).X, (base * Vector3.new(80, 0, 20)).Z))
+    flowers.CanCollide = false
+    flowers.CanQuery = false
+    local bankTree = item("Props", "BankTree", nil, Vector3.new(-70, 0, 20), "Tree:11")
+    local farTree = item("Props", "FarTree", nil, Vector3.new(0, 0, 190), "Tree:12")
+    local road = item("Roads", "RoadSurface", nil, Vector3.new(-80, 0, -60))
+    road.Size = Vector3.new(18, 0.8, 60)
+    local roadGround = {}
+    for dz = -86, -34, 4 do
+        local p = base * Vector3.new(-80, 0, dz)
+        table.insert(roadGround, { p.X, p.Z, ground(p.X, p.Z) })
+    end
     local loot = Instance.new("Folder")
     loot.Name = "Loot"
     loot.Parent = ws
@@ -977,9 +1053,48 @@ function smoke(Ruins, mode)
     end
     OverlapParams = { new = function() return {} end }
     RaycastParams = { new = function() return {} end }
-    MODULES.MapTerrain.FlattenPad = function() if mode == "refused" then return nil, "road" end return 12.5 end
-    MODULES.MapTerrain.PadCost = function() return 8, 14, 11 end
-    local info = Ruins.Build(base, Color3.fromRGB(255, 112, 36), { map = map }, 42)
+    -- MapTerrain: the pad flattens the footprint, the margin and two columns past it at 12.5 ("partial":
+    -- only 30 studs round the middle; "refused": nothing, a road in the way); PadCost reads the voxels.
+    MODULES.MapTerrain.SurfaceLift = LIFT
+    MODULES.MapTerrain._padGround = "Enum.Material.Ground"
+    MODULES.MapTerrain.PadAt = function() return nil end
+    MODULES.MapTerrain.InRiver = function() return false end
+    MODULES.MapTerrain.FlattenPad = function(padSite, size, options)
+        if mode == "refused" then return nil, "road" end
+        for x = -80, 80, 2 do
+            for z = -80, 80, 2 do
+                local p = base * Vector3.new(x, 0, z)
+                local cx, cz = (math.floor(p.X / CELL) + 0.5) * CELL, (math.floor(p.Z / CELL) + 0.5) * CELL
+                local l = localOf(cx, cz)
+                local flat = math.abs(l.X) <= size.X / 2 + options.margin + 8 and math.abs(l.Z) <= size.Z / 2 + options.margin + 8
+                if mode == "partial" then flat = l.Magnitude <= 30 end
+                if flat then written[key(cx, cz)] = 12.5 end
+            end
+        end
+        return 12.5
+    end
+    MODULES.MapTerrain.PadCost = function(padSite, size, options)
+        local low, high, total, n = math.huge, -math.huge, 0, 0
+        for x = -size.X / 2 - options.margin, size.X / 2 + options.margin, 4 do
+            for z = -size.Z / 2 - options.margin, size.Z / 2 + options.margin, 4 do
+                local p = padSite * Vector3.new(x, 0, z)
+                local g = ground(p.X, p.Z)
+                low, high, total, n = math.min(low, g), math.max(high, g), total + g, n + 1
+            end
+        end
+        return low, high, total / n
+    end
+    local info, why = Ruins.Build(base, Color3.fromRGB(255, 112, 36), { map = map }, 42)
+    if mode == "partial" then
+        if info then fail("built on ground that is not level (only 30 studs round the middle were levelled)") end
+        if not tostring(why):find("not level") then fail("refused for " .. tostring(why) .. ", not the ground under it") end
+        return out
+    end
+    if mode == "refused" then
+        if info then fail("built on a site FlattenPad refused") end
+        return out
+    end
+    if not info then fail("not built: " .. tostring(why)) return out end
     if info.model.Parent ~= map then fail("the compound is not in the map") end
     if treeIn.Parent then fail("a tree on the site was left standing") end
     if treeOut.Parent then fail("a tree where the ground is graded was left standing") end
@@ -987,39 +1102,98 @@ function smoke(Ruins, mode)
     if pickup.Parent then fail("a loot pickup on the site was left (only a piece of it went)") end
     if not towerModel.Parent then fail("a landmark too big to clear was removed") end
     if not roadPart.Parent then fail("a road piece was removed") end
-
-    -- The ground under the footprint, measured the way Build does it.
-    local frame = info.frame
-    local low, high = math.huge, -math.huge
-    -- Under the foundation (the footprint): the margin round it only carries rubble, settled apart.
-    for x = -46, 46, 2 do
-        for z = -42, 42, 2 do
-            local p = frame * Vector3.new(x, 0, z)
-            local y = T(p.X, p.Z)
-            low, high = math.min(low, y), math.max(high, y)
-        end
+    if not road.Parent then fail("the road across the west slope was removed") end
+    if flowers.Parent then fail("scenery left where the ground moved: flowers on the east bank") end
+    if bankTree.Parent then fail("scenery left where the ground moved: a tree on the west bank") end
+    if not farTree.Parent then fail("a tree on ground the grading never touched was removed") end
+    for _, g in ipairs(roadGround) do
+        if math.abs(ground(g[1], g[2]) - g[3]) > 1e-6 then fail("the ground under a road was moved") break end
     end
-    local plinth = nil
     for _, child in ipairs(info.model:GetChildren()) do
-        if child.Name == "Foundation" and child.ClassName == "Part" then plinth = child end
+        if child.Name == "Foundation" and child.ClassName == "Part" then fail("a plinth under a compound on levelled ground") end
     end
-    if mode == "flat" then
-        if plinth then fail("a plinth on levelled ground") end
-        if math.abs(info.frame.p.Y - 12.5) > 1e-6 then fail(("stands at %.2f, want 12.5"):format(info.frame.p.Y)) end
-    else
-        if not plinth then
-            fail("no plinth where the ground is not level")
-        else
-            local bottom = plinth.CFrame.p.Y - plinth.Size.Y / 2
-            local top = plinth.CFrame.p.Y + plinth.Size.Y / 2
-            if bottom > low then fail(("plinth stops at %.2f, above the lowest ground %.2f"):format(bottom, low)) end
-            if top < high - 0.36 then fail(("plinth top %.2f under the highest ground %.2f: terrain shows through"):format(top, high)) end
+    if math.abs(info.frame.p.Y - 12.5) > 1e-6 then fail(("stands at %.2f, want 12.5"):format(info.frame.p.Y)) end
+
+    -- FLUSH, AND THE GROUND ROUND IT. On the pad's flat, the ground at the floor's (the paving is 0.3
+    -- over it). Off it, every step between neighbouring columns the grading moved is no steeper than its
+    -- grade -- 1 in 3, or 1 in 8 where both are in a gate's corridor -- or than the hillside was (both
+    -- columns clear of the road, where
+    -- the pad and the road are too close to be met at a grade and the ground goes halfway).
+    local function nearRoad(x, z)
+        local c, s = road.CFrame, road.Size
+        local ex = math.abs(c.r.X) * s.X / 2 + math.abs(c.u.X) * s.Y / 2 + math.abs(c.b.X) * s.Z / 2 + 40
+        local ez = math.abs(c.r.Z) * s.X / 2 + math.abs(c.u.Z) * s.Y / 2 + math.abs(c.b.Z) * s.Z / 2 + 40
+        return math.abs(x - c.p.X) <= ex and math.abs(z - c.p.Z) <= ez
+    end
+    local flatX, flatZ = Ruins.GateCorridors.flat.X, Ruins.GateCorridors.flat.Z
+    local function corridor(l)
+        local front, east = Ruins.GateCorridors.front, Ruins.GateCorridors.east
+        return (l.Z < -flatZ and l.X >= front[1] and l.X <= front[2]) or (l.X > flatX and l.Z >= east[1] and l.Z <= east[2])
+    end
+    local worstFlat, worstStep, bank = 0, 0, 0
+    local cx0, cz0 = math.floor(centre.X / CELL), math.floor(centre.Z / CELL)
+    for i = -60, 60 do
+        for k = -60, 60 do
+            local x, z = (cx0 + i + 0.5) * CELL, (cz0 + k + 0.5) * CELL
+            local l = localOf(x, z)
+            local g = ground(x, z)
+            if math.abs(l.X) <= flatX and math.abs(l.Z) <= flatZ then
+                worstFlat = math.max(worstFlat, math.abs(g - 12.5))
+            elseif not nearRoad(x, z) and Ruins.FlatDistance(l.X, l.Z) < Ruins.GradeReach - 16 then
+                -- (Not the last 16 before the ring the work stops at, which it meets as it stands: where a
+                -- hillside runs across a ramp's end, the ramp's flat section cannot match it there.)
+                bank = math.max(bank, math.abs(g - 12.5))
+                local moved = math.abs(g - T(x, z)) > 0.02
+                for _, n in ipairs({ { CELL, 0 }, { 0, CELL } }) do
+                    local x2, z2 = x + n[1], z + n[2]
+                    local l2 = localOf(x2, z2)
+                    if not nearRoad(x2, z2) and Ruins.FlatDistance(l2.X, l2.Z) < Ruins.GradeReach - 16
+                        and (moved or math.abs(ground(x2, z2) - T(x2, z2)) > 0.02) then
+                        -- (Never steeper than its grade, or than the hillside there already was.)
+                        local grade = (corridor(l) and corridor(l2)) and 1 / Ruins.GradeGate or 1 / Ruins.GradeBank
+                        local natural = math.abs(T(x2, z2) - T(x, z)) / CELL
+                        worstStep = math.max(worstStep, math.abs(ground(x2, z2) - g) / CELL - math.max(grade, natural))
+                    end
+                end
+            end
         end
     end
+    if worstFlat > 0.05 then fail(("the ground under the compound and its margin is up to %.2f off the floor's"):format(worstFlat)) end
+    if worstStep > 0.02 then fail(("bank: the graded ground climbs %.3f steeper than its grade between neighbouring columns"):format(worstStep)) end
+    if bank < 5 then fail(("the hillside was not there to grade (the most off the floor round it is %.2f)"):format(bank)) end
+    -- The gate ramps: the steepest step along each gate corridor's middle, and the banks beside the yard.
+    -- (The ground between column centres read bilinearly, as smooth terrain draws it: the line is turned
+    -- with the compound and the columns are on the world's axes, so a column-to-column step would mix in
+    -- the hillside's slope across the line.)
+    local function smooth(x, z)
+        local fx, fz = x / CELL - 0.5, z / CELL - 0.5
+        local ix, iz = math.floor(fx), math.floor(fz)
+        local tx, tz = fx - ix, fz - iz
+        local function at(i, k) return ground((i + 0.5) * CELL, (k + 0.5) * CELL) end
+        return (at(ix, iz) * (1 - tx) + at(ix + 1, iz) * tx) * (1 - tz) + (at(ix, iz + 1) * (1 - tx) + at(ix + 1, iz + 1) * tx) * tz
+    end
+    local function steepest(from, step, count)
+        local worst = 0
+        local last = nil
+        for k = 0, count * 2 do
+            local p = site * (from + step * (k / 2))
+            local g = smooth(p.X, p.Z)
+            if last then worst = math.max(worst, math.abs(g - last) / (step.Magnitude / 2)) end
+            last = g
+        end
+        return worst
+    end
+    local east = steepest(Vector3.new(60, 0, 4), Vector3.new(4, 0, 0), 30)
+    local front = steepest(Vector3.new(24, 0, -56), Vector3.new(0, 0, -4), 30)
+    local back = steepest(Vector3.new(-30, 0, 56), Vector3.new(0, 0, 4), 30)
+    if east > 1 / 8 + 0.035 then fail(("gate ramp: the east gate's way out climbs %.3f, steeper than 1 in 8"):format(east)) end
+    if front > 1 / 8 + 0.035 then fail(("gate ramp: the main gate's way out climbs %.3f, steeper than 1 in 8"):format(front)) end
+    if back > 1 / Ruins.GradeBank + 0.035 then fail(("bank: behind the compound the ground climbs %.3f, steeper than 1 in %d"):format(back, Ruins.GradeBank)) end
+    if not info.graded or info.graded.moved == 0 then fail("no ground was graded on a hillside") end
+
     -- Nothing outside the foundation hovers: every rubble chunk out there has its lowest corner at or
-    -- under the ground (or plinth) really beneath its centre.
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = plinth and { terrain, plinth } or { terrain }
+    -- under the ground really beneath its centre (the voxels'; the rays are stale).
+    local frame = info.frame
     local outside, floating = 0, 0
     for _, part in ipairs(info.model:GetDescendants()) do
         if part:IsA("BasePart") and part.Name == "Rubble" then
@@ -1028,8 +1202,7 @@ function smoke(Ruins, mode)
                 outside = outside + 1
                 local c, s = part.CFrame, part.Size
                 local lowest = c.p.Y - (math.abs(c.r.Y) * s.X + math.abs(c.u.Y) * s.Y + math.abs(c.b.Y) * s.Z) / 2
-                local hit = ws:Raycast(c.p + Vector3.new(0, 30, 0), Vector3.new(0, -90, 0), params)
-                if not hit or lowest > hit.Position.Y + 0.02 then floating = floating + 1 end
+                if lowest > ground(c.p.X, c.p.Z) + 0.02 then floating = floating + 1 end
             end
         end
     end
@@ -1056,6 +1229,8 @@ function smoke(Ruins, mode)
         if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") then unmarked = unmarked + 1 end
     end
     if unmarked > 0 then fail(unmarked .. " parts not marked TeamBaseRuin") end
+    out.bank = bank
+    out.moved = info.graded and info.graded.moved or 0
     workspace = nil
     return out
 end
@@ -1064,13 +1239,17 @@ end
 
 def check_build(src, log):
     problems = []
+    notes = []
     for mode in ("flat", "partial", "refused"):
         b = Build(src)
         b.lua.execute(SMOKE)
         found = b.lua.globals().smoke(b.ruins, mode)
         lines = [found[i] for i in range(1, len(found) + 1)]
         problems += ["build (%s): %s" % (mode, line) for line in lines]
-    log("build: levelled, partly levelled and refused sites, %d problems" % len(problems))
+        if mode == "flat" and found["bank"] is not None:
+            notes.append("hillside graded: %d columns moved, banks up to %.1f off the floor" % (found["moved"], found["bank"]))
+    log("build: flush on a hillside (terrain rays stale, voxels true), a partly levelled site and a refused one refused, "
+        "%d problems%s" % (len(problems), ("; " + "; ".join(notes)) if notes else ""))
     return problems
 
 
@@ -1173,10 +1352,16 @@ PLANTS = [
      "build (flat): a tree's leaves"),
     ("a piece of a pickup cleared", [("\t\t\twhile pickup.Parent and pickup.Parent ~= loot do", "\t\t\twhile false do")],
      "build (flat): a loot pickup"),
-    ("no plinth on a refused site", [("if plinthBottom and height - plinthBottom > 0.05 then", "if false then")], "build (refused): no plinth"),
-    ("levelling taken on trust", [("if not height or (worst and worst > LEVEL_SLACK) then", "if not height then")],
-     "build (partial): no plinth"),
-    ("rubble left at the planned height", [("\tsettleOutside(model, frame, plinth)\n", "\n")], "float over the ground"),
+    ("levelling taken on trust", [("if not low or worst > LEVEL_SLACK then", "if not low then")],
+     "build (partial): built on ground that is not level"),
+    ("ground round it left alone", [("local graded = TeamBaseRuins.GradeSurroundings(site, height, mapInfo, after, locked)",
+                                     "local graded = { moved = 0, most = 0, bank = 0 }")], "build (flat): gate ramp"),
+    ("gate ramp as steep as a bank", [("local GRADE_BANK, GRADE_GATE = 4, 8", "local GRADE_BANK, GRADE_GATE = 4, 4")],
+     "build (flat): gate ramp"),
+    ("scenery left on moved ground", [("graded.cleared = TeamBaseRuins.ClearMoved(before, after, map, site.Position, reach)",
+                                       "graded.cleared = 0")], "build (flat): scenery left where the ground moved"),
+    ("road ground regraded", [("local locked = lockedColumns(after, map, site.Position, reach)", "local locked = {}")],
+     "build (flat): the ground under a road was moved"),
     ("spots never snapped", [("\t\tlocal hit = workspace:Raycast(spot.Position + Vector3.new(0, 4, 0), Vector3.new(0, -8, 0), params)",
                               "\t\tlocal hit = nil")], "SnapSpots left a spot"),
     ("built at the asked height", [("local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)",

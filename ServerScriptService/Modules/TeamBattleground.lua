@@ -54,8 +54,10 @@
 -- ZFight, DestructibleService and BotNav): the mirror, no coplanar faces, nothing floating, cylinders
 -- round, doorways wide and tall enough, the walk from both teams' ends to everything, every high place
 -- reached by two ways or more, no trap a bot can fall into and not leave, the longest eye-level line
--- down each lane, cover along every route, the vehicle routes clear, the objectives equidistant, the
--- part budget. What it cannot prove is how it looks: tools/team_battleground_gallery.lua renders it.
+-- down each lane, cover along every route, the vehicle routes clear, the objectives equidistant (and A
+-- on real floor), the part budget, and Build on a mock town: every road reaching the disc cut square at
+-- the apron's edge and finished, none left under the battleground. What it cannot prove is how it
+-- looks: tools/team_battleground_gallery.lua renders it.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -99,8 +101,10 @@ local rgb = Color3.fromRGB
 local STONE = rgb(198, 184, 150)
 local STONE_DARK = rgb(162, 146, 112)
 local STONE_LIGHT = rgb(216, 204, 172)
-local LIME = rgb(208, 204, 190)
-local LIME_DARK = rgb(176, 170, 154)
+-- The pit's stone: a warm limestone. (It was near-white, 208/204/190, and under a bright sky the whole
+-- pit read as one glare of marble with nothing to pick out a step or a tier.)
+local LIME = rgb(200, 190, 164)
+local LIME_DARK = rgb(166, 154, 128)
 local BASALT = rgb(76, 74, 80)
 local BASALT_LIGHT = rgb(100, 98, 104)
 local CONCRETE = rgb(150, 147, 140)
@@ -487,7 +491,26 @@ local function brazier(parent, x, z, floor)
 	rod(parent, "BrazierFoot", Vector3.new(x, floor, z), Vector3.new(x, floor + 0.3, z), 1.6, STEEL_DARK, MAT.Metal, opts)
 	rod(parent, "BrazierBowl", Vector3.new(x, floor + 2.4, z), Vector3.new(x, floor + 3.2, z), 2.2, BRONZE, MAT.Metal, opts)
 	local fire = ball(parent, "BrazierFire", Vector3.new(x, floor + 3.3, z), 1.5, ROT_GREEN, MAT.Neon, trimWith({ transparency = 0.1 }))
-	light(fire, ROT_GREEN, 18, 1.1)
+	-- The fire is the rot's green; the light it throws is warmed toward a flame's, and softer: two green
+	-- braziers at full strength in the keep's hall washed the whole floor and every wall one acid green.
+	light(fire, mix(ROT_GREEN, WARM, 0.55), 16, 0.8)
+end
+
+-- A street lamp: a concrete foot, a steel pole, an arm out along `heading` (radians round Y, 0 = +X) and
+-- a warm lamp under its end. One pool (it comes down whole). The arena at dusk was lit only by its green
+-- braziers and a handful of wall lamps; these light the ways in along each lane.
+local function lampPost(parent, x, z, floor, heading)
+	local opts = pool("Prop")
+	box(parent, "LampFoot", x - 0.55, x + 0.55, floor - 0.3, floor + 0.5, z - 0.55, z + 0.55, CONCRETE_DARK, MAT.Concrete, opts)
+	rod(parent, "LampPole", Vector3.new(x, floor + 0.4, z), Vector3.new(x, floor + 10.7, z), 0.36, STEEL_DARK, MAT.Metal, opts)
+	local dx, dz = math.cos(heading), math.sin(heading)
+	local tip = Vector3.new(x + dx * 2, floor + 10.4, z + dz * 2)
+	rod(parent, "LampArm", Vector3.new(x, floor + 10.4, z), tip, 0.2, STEEL_DARK, MAT.Metal, trimWith({ tag = opts.tag }))
+	box(parent, "LampHead", tip.X - 0.5, tip.X + 0.5, floor + 9.85, floor + 10.35, tip.Z - 0.5, tip.Z + 0.5, STEEL_DARK, MAT.Metal,
+		trimWith({ tag = opts.tag }))
+	local glass = box(parent, "LampGlass", tip.X - 0.4, tip.X + 0.4, floor + 9.75, floor + 9.85, tip.Z - 0.4, tip.Z + 0.4, WARM, MAT.Neon,
+		trimWith({ tag = opts.tag }))
+	light(glass, WARM, 30, 1.2)
 end
 
 --------------------------------------------------------------------------------
@@ -680,10 +703,14 @@ local function buildKeep(root)
 
 	-- The floor: a slab under dark flagstones, 0.2 cracks between them.
 	box(keep, "Foundation", -20, 20, -0.7, 0.6, -20, 0, BASALT, MAT.Slate, NEVER)
+	-- The middle strip stops 4 short of the mirror: the square across it is one slab of its own
+	-- (buildMiddle), so objective A stands on stone. With every strip running to 0.1 short of the
+	-- mirror the objective's middle was the 0.2 crack between the two halves' flagstones, and a ray
+	-- down onto it found nothing of the battleground's at all (the gallery: "floor NONE (gap inf)").
 	for i = 0, 4 do
 		local x0 = -20 + i * 8
 		local shade = i % 2 == 0 and BASALT_LIGHT or mix(BASALT_LIGHT, STONE_DARK, 0.25)
-		box(keep, "Paving", x0 + 0.1, x0 + 7.9, 0.5, KF, -19.9, -0.1, shade, MAT.Slate, NEVER)
+		box(keep, "Paving", x0 + 0.1, x0 + 7.9, 0.5, KF, -19.9, i == 2 and -4.1 or -0.1, shade, MAT.Slate, NEVER)
 	end
 	-- Thresholds in the doorways, level with the flagstones.
 	box(keep, "Foundation", -15, -9, -0.7, KF, -22, -20, BASALT, MAT.Slate, NEVER)
@@ -744,6 +771,28 @@ local function buildKeep(root)
 	for _, drip in ipairs({ { -18.5, 3.4 }, { 17.9, 2.6 } }) do
 		facePlate(keep, "GooDrip", "z", -22, 0.06, drip[1] - 0.22, drip[1] + 0.22, drip[2], 10.1, ROT_GREEN, MAT.Neon)
 	end
+	-- THE FACADE, so the keep reads as built rather than as a limestone box: a dark plinth course along
+	-- the foot of the face between its openings, three buttresses with sloped caps, arrow slits in the
+	-- ground storey, and a dressed surround to the door with a keystone. Each stands proud of the face by
+	-- its own fixed step -- plinth 0.2, surround 0.3, slits 0.1 -- never the string course's 0.14 or the
+	-- soot's 0.28, so no two lie in one plane; the jambs stand 0.1 back from the doorway's own edges.
+	for _, run in ipairs({ { -21.8, -15.9 }, { -8.1, 5.6 }, { 13.4, 21.8 } }) do
+		facePlate(keep, "PlinthCourse", "z", -22, 0.2, run[1], run[2], -0.3, 1.6, BASALT_LIGHT, MAT.Slate)
+	end
+	for _, x in ipairs({ -19.7, -2.7, 18.5 }) do
+		box(keep, "Buttress", x - 0.9, x + 0.9, -1, 7, -23.6, -22, STONE_DARK, MAT.Limestone, NEVER)
+		put(keep, "ButtressCap", Vector3.new(1.8, 1.6, 1.6), CFrame.new(x, 7.8, -22.8), STONE_DARK, MAT.Limestone,
+			{ class = "WedgePart", tag = false })
+		coverAt(x, -24.8, 0)
+	end
+	for _, x in ipairs({ -5.8, 1.8, 20.6 }) do
+		facePlate(keep, "ArrowSlit", "z", -22, 0.1, x - 0.3, x + 0.3, 4.4, 7.8, SOOT, MAT.Slate)
+	end
+	-- (The lintel's underside 0.15 over the doorway's head, 9.8, where the wall over the door has its own.)
+	facePlate(keep, "DoorJamb", "z", -22, 0.3, -15.8, -15.1, -0.3, 9.95, STONE_LIGHT, MAT.Limestone)
+	facePlate(keep, "DoorJamb", "z", -22, 0.3, -8.9, -8.2, -0.3, 9.95, STONE_LIGHT, MAT.Limestone)
+	facePlate(keep, "DoorLintel", "z", -22, 0.3, -15.8, -8.2, 9.95, 10.95, STONE_LIGHT, MAT.Limestone)
+	box(keep, "Keystone", -12.5, -11.5, 9.5, 11.3, -22.45, -21.9, STONE, MAT.Limestone, TRIM)
 
 	-- The gallery floor, round the void, and a low broken balustrade along the void's edge.
 	box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, NEVER)
@@ -781,6 +830,16 @@ local function buildKeep(root)
 	brazier(keep, 17, -17, KF)
 	wallLamp(keep, Vector3.new(-3, 7.6, -20), Vector3.new(0, 0, 1), 24)
 	wallLamp(keep, Vector3.new(-8, GAL + 1.2, -20), Vector3.new(0, 0, 1), 20, ROT_GREEN)
+	-- Lanterns hung on chains from under the gallery, either side of the hall: warm light on the floor
+	-- round objective A, against the braziers' green.
+	for _, x in ipairs({ -8, 8 }) do
+		local z = -15
+		rod(keep, "LanternChain", Vector3.new(x, GAL - 1, z), Vector3.new(x, 8.35, z), 0.12, STEEL_DARK, MAT.Metal, TRIM)
+		box(keep, "LanternCap", x - 0.45, x + 0.45, 8.15, 8.4, z - 0.45, z + 0.45, STEEL_DARK, MAT.Metal, TRIM)
+		local glow = box(keep, "LanternGlow", x - 0.3, x + 0.3, 7.25, 8.15, z - 0.3, z + 0.3, WARM, MAT.Neon, TRIM)
+		box(keep, "LanternBase", x - 0.4, x + 0.4, 7.1, 7.25, z - 0.4, z + 0.4, STEEL_DARK, MAT.Metal, TRIM)
+		light(glow, WARM, 22, 1.1)
+	end
 	-- Banners in the arena's purple, hanging from under the gallery against the south wall.
 	for _, x in ipairs({ -18 }) do
 		rod(keep, "BannerRod", Vector3.new(x - 2.2, GAL - 1.15, -19.6), Vector3.new(x + 2.2, GAL - 1.15, -19.6), 0.3, STEEL_DARK, MAT.Metal, TRIM)
@@ -971,6 +1030,13 @@ local function buildGatehouse(root)
 		disc(gate, "BannerPupil", Vector3.new(x, 5.5, -64.72), Vector3.new(0, 0, 1), 0.06, 0.8, ROT_GREEN, MAT.Neon)
 		wallLamp(gate, Vector3.new(x + (x < 0 and 2.6 or -2.6), 6.6, -65), Vector3.new(0, 0, 1), 18)
 	end
+	-- The towers' feet in a dark plinth course on both faces, and an arrow slit in each outer face.
+	for _, side in ipairs({ -1, 1 }) do
+		local u0, u1 = side < 0 and -19.8 or 13.2, side < 0 and -13.2 or 19.8
+		facePlate(gate, "PlinthCourse", "z", -72, 0.2, u0, u1, -0.3, 1.4, BASALT_LIGHT, MAT.Slate)
+		facePlate(gate, "PlinthCourse", "z", -65, 0.2, u0, u1, -0.3, 1.4, BASALT_LIGHT, MAT.Slate)
+		facePlate(gate, "ArrowSlit", "z", -72, 0.1, side * 16.5 - 0.3, side * 16.5 + 0.3, 3.2, 6.6, SOOT, MAT.Slate)
+	end
 	rubble(gate, -10.5, -76.5, 1.4, 4, 0, { STONE, STONE_DARK })
 	-- Seven studs clear of the pier: at two studs further north the gap between them was five, exactly
 	-- a bot's width, and a bot that dropped into it off the walk could not path back out.
@@ -1092,12 +1158,14 @@ end
 
 local function buildPit(root)
 	local pit = folder(root, "Pit", true)
+	-- Its tiers, rim, stairs and gate in sandstone (limestone's texture glared white whatever its colour);
+	-- the marble is kept for what was carved: the columns, the busts, the fountain, the flags round it.
 	-- The floor, pale flags round the fountain, and the cut's floor.
 	paving(pit, -102, -66, -18, 0, 4, 1, { LIME, LIME_DARK, mix(LIME, STONE, 0.4) }, MAT.Marble)
 	paving(pit, -76, -66, -26, -18, 1, 1, { LIME_DARK }, MAT.Marble)
 	-- The rim: along the south (the cut ends it at -76) and down the west side.
-	box(pit, "PitRim", -110, -76, -1, RIM, -26, -18, LIME_DARK, MAT.Limestone, NEVER)
-	box(pit, "PitRim", -110, -102, -1, RIM, -18, 0, LIME_DARK, MAT.Limestone, NEVER)
+	box(pit, "PitRim", -110, -76, -1, RIM, -26, -18, LIME_DARK, MAT.Sandstone, NEVER)
+	box(pit, "PitRim", -110, -102, -1, RIM, -18, 0, LIME_DARK, MAT.Sandstone, NEVER)
 	facePlate(pit, "RimCoping", "z", -18, 0.12, -101.8, -76.2, RIM - 0.55, RIM - 0.15, LIME, MAT.Marble)
 	facePlate(pit, "RimCoping", "x", -102, 0.12, -17.8, -0.2, RIM - 0.55, RIM - 0.15, LIME, MAT.Marble)
 	doorway("PitCut", -76, -66, -26, -18, TILE, 40)
@@ -1107,25 +1175,25 @@ local function buildPit(root)
 	for k = 1, 7 do
 		local top = TILE + RISE * k
 		box(pit, "BermStep", -66 + 1.3 * (k - 1), -48 - 1.3 * (k - 1), bottom, top, -26, -4, k % 2 == 0 and LIME or LIME_DARK,
-			MAT.Limestone, NEVER)
+			MAT.Sandstone, NEVER)
 		bottom = top
 	end
 	doorway("BermCut", -66, -48, -4, 0, 0, 40)
 	-- The rim's parapets: chest-high on the pit's edge (the rim's cover), knee-high on the outer edge.
 	for _, run in ipairs({ { -108.6, -103.4 }, { -99.2, -92 }, { -88.6, -80.4 } }) do
-		box(pit, "RimParapet", run[1], run[2], RIM, RIM + 2.4, -18.8, -18, LIME, MAT.Limestone, NEVER)
+		box(pit, "RimParapet", run[1], run[2], RIM, RIM + 2.4, -18.8, -18, LIME, MAT.Sandstone, NEVER)
 		table.insert(B.cover, here((run[1] + run[2]) / 2, RIM, -20.4))
 	end
 	for _, run in ipairs({ { -16.2, -10.9 }, { -6.4, -1.2 } }) do
-		box(pit, "RimParapet", -102.8, -102, RIM, RIM + 2.4, run[1], run[2], LIME, MAT.Limestone, NEVER)
+		box(pit, "RimParapet", -102.8, -102, RIM, RIM + 2.4, run[1], run[2], LIME, MAT.Sandstone, NEVER)
 		table.insert(B.cover, here(-104.4, RIM, (run[1] + run[2]) / 2))
 	end
 	for _, run in ipairs({ { -108.6, -94 }, { -84, -77.6 } }) do
-		box(pit, "RimParapet", run[1], run[2], RIM, RIM + 1.2, -26, -25.2, LIME, MAT.Limestone, NEVER)
+		box(pit, "RimParapet", run[1], run[2], RIM, RIM + 1.2, -26, -25.2, LIME, MAT.Sandstone, NEVER)
 	end
 	-- Two ways up from outside: a stair up the south face, one up the west.
-	flightZ(pit, "RimStair", -92, -86, -35.1, -26, 0, RIM, 8, LIME_DARK, MAT.Limestone, -0.5)
-	flightX(pit, "RimStair", -10.2, -5, -119.1, -110, 0, RIM, 8, LIME_DARK, MAT.Limestone, -0.5)
+	flightZ(pit, "RimStair", -92, -86, -35.1, -26, 0, RIM, 8, LIME_DARK, MAT.Sandstone, -0.5)
+	flightX(pit, "RimStair", -10.2, -5, -119.1, -110, 0, RIM, 8, LIME_DARK, MAT.Sandstone, -0.5)
 	-- A colonnade on the west rim: two whole columns under a length of architrave, one snapped.
 	local colTop = RIM + 0.4 + 8
 	for index, z in ipairs({ -16, -12.4, -2.8 }) do
@@ -1143,8 +1211,8 @@ local function buildPit(root)
 	box(pit, "Architrave", -109.9, -107.7, colTop + 0.5, colTop + 1.5, -17.2, -11.2, LIME, MAT.Marble, NEVER)
 
 	-- The cut's gate: posts on the rim and the berm, a lintel, the pit's name hanging from it.
-	box(pit, "GatePost", -77.6, -76.2, RIM, RIM + 6.4, -22.7, -21.3, LIME, MAT.Limestone, NEVER)
-	box(pit, "GatePost", -65.8, -64.4, -0.6, RIM + 6.4, -22.7, -21.3, LIME, MAT.Limestone, NEVER)
+	box(pit, "GatePost", -77.6, -76.2, RIM, RIM + 6.4, -22.7, -21.3, LIME, MAT.Sandstone, NEVER)
+	box(pit, "GatePost", -65.8, -64.4, -0.6, RIM + 6.4, -22.7, -21.3, LIME, MAT.Sandstone, NEVER)
 	box(pit, "GateLintel", -77.6, -64.4, RIM + 6.4, RIM + 7.6, -22.8, -21.2, BASALT, MAT.Basalt, NEVER)
 	for _, x in ipairs({ -73.8, -68.2 }) do
 		rod(pit, "SignChain", Vector3.new(x, RIM + 6.45, -22), Vector3.new(x, 12.05, -22), 0.12, STEEL_DARK, MAT.Metal, TRIM)
@@ -1217,9 +1285,28 @@ local function buildMarket(root)
 	paving(ground, 37, 62, -50, -10, 3, 3, { PAVING, CONCRETE, mix(PAVING, BRICK, 0.2) }, MAT.Cobblestone)
 	groundDisc(ground, "BlastMark", 49.5, -30, 5.2, mix(SOOT, CONCRETE_DARK, 0.4), MAT.Slate, 1)
 
-	stall(market, 52, -22)
-	stall(market, 43.5, -44)
+	local stallA = stall(market, 52, -22)
+	local stallB = stall(market, 43.5, -44)
 	stall(market, 57, -40.5, true)
+	-- Festoon lights strung between the stalls' corner posts just under their tops, sagging a stud, warm
+	-- bulbs along them: the market is the one warm-lit place in the arena at dusk. Each string belongs to
+	-- the stall it starts from (it comes down with that stall).
+	local function festoon(owner, a, b)
+		local mid = (a + b) / 2 - Vector3.new(0, 1, 0)
+		rod(owner, "FestoonCable", a, mid, 0.08, SOOT, MAT.Plastic, TRIM)
+		rod(owner, "FestoonCable", mid, b, 0.08, SOOT, MAT.Plastic, TRIM)
+		for k = 1, 5 do
+			local t = k / 6
+			local p = t < 0.5 and a + (mid - a) * (t * 2) or mid + (b - mid) * (t * 2 - 1)
+			local bulb = ball(owner, "FestoonBulb", p - Vector3.new(0, 0.14, 0), 0.34, k % 2 == 0 and WARM or mix(WARM, ROT_GREEN, 0.35), MAT.Neon, TRIM)
+			if k == 3 then
+				light(bulb, WARM, 20, 0.9)
+			end
+		end
+	end
+	festoon(stallA, Vector3.new(48.7, 6.35, -23.8), Vector3.new(46.8, 6.35, -42.2))
+	festoon(stallA, Vector3.new(55.3, 6.35, -23.8), Vector3.new(53.7, 6.35, -38.7))
+	festoon(stallB, Vector3.new(46.8, 6.35, -42.2), Vector3.new(53.7, 6.35, -42.3))
 
 	-- A corner shop, gutted: a brick front with its window blown out and one side wall.
 	local shop = folder(market, "ShopRuin")
@@ -1383,6 +1470,20 @@ local function buildApproach(root)
 	disc(monolith, "MonolithPupil", Vector3.new(-48.1, 7.6, -11.54), Vector3.new(0, 0, 1), 0.08, 0.9, ROT_GREEN, MAT.Neon)
 	coverAt(-48.1, -18.9, 0)
 	coverAt(-43.2, -14, 0)
+	-- A billboard out on the tram approach, facing the centre lane over the field: the tallest thing on
+	-- this side after the keep, lit from above at night, the approach's landmark.
+	local board = folder(approach, "Billboard", true)
+	for _, z in ipairs({ -88, -80 }) do
+		box(board, "BillboardPost", -80.3, -79.7, -0.8, 13.4, z - 0.3, z + 0.3, STEEL_DARK, MAT.Metal, NEVER)
+		box(board, "BillboardFoot", -81, -79, -0.4, 0.6, z - 1, z + 1, CONCRETE_DARK, MAT.Concrete, NEVER)
+		rod(board, "BillboardArm", Vector3.new(-80, 13.2, z), Vector3.new(-78.2, 13.2, z), 0.18, STEEL_DARK, MAT.Metal, TRIM)
+		local lamp = box(board, "BillboardLamp", -78.6, -77.8, 12.8, 13.3, z - 0.4, z + 0.4, WARM, MAT.Neon, TRIM)
+		light(lamp, WARM, 16, 1)
+	end
+	local face = box(board, "BillboardBoard", -80.2, -79.8, 7.6, 12.8, -89.4, -78.6, PURPLE_DARK, MAT.Metal, NEVER)
+	signText(face, "TRALALERO TOURS", HAZARD)
+	box(board, "BillboardTrim", -80.4, -79.6, 7.3, 7.6, -89.6, -78.4, STEEL_DARK, MAT.Metal, TRIM)
+	coverAt(-78, -84, 0)
 	lootSpot("Chapel", -36.5, TILE, -43.4, "weapon")
 	return approach
 end
@@ -1430,6 +1531,18 @@ local function container(parent, x0, x1, z0, z1, color, doorsAtLow, sealedEnd)
 		local out = (doorsAtLow and -1 or 1) * 0.18
 		local p0 = alongX and Vector3.new(door + out, 0.6, bar) or Vector3.new(bar, 0.6, door + out)
 		rod(parent, "ContainerBar", p0, p0 + Vector3.new(0, 5.8, 0), 0.16, STEEL_DARK, MAT.Metal, dressing)
+	end
+	-- The shipping line stencilled on both long sides (on an unseen plate standing off the face, so only
+	-- the letters show over the ribs), and a steel rail along the top of each long side, stopping short
+	-- of the ends so its end never lies in an end face's plane.
+	if alongX then
+		for _, face in ipairs({ z0, z1 }) do
+			local stencil = facePlate(parent, "ContainerStencil", "z", face, 0.06, x0 + 2.4, math.min(x1 - 2.4, x0 + 14), 4.1, 5.9, color, MAT.Metal,
+				trimWith({ tag = opts.tag, transparency = 1 }))
+			signText(stencil, "ROT FREIGHT CO.", mix(WHITE_PAINT, color, 0.25))
+			box(parent, "ContainerRail", x0 + 0.1, x1 - 0.1, 6.75, 7.15, math.min(face, face + (face == z0 and 0.3 or -0.3)) - (face == z0 and 0.1 or 0),
+				math.max(face, face + (face == z0 and 0.3 or -0.3)) + (face == z1 and 0.1 or 0), mix(color, SOOT, 0.35), MAT.Metal, dressing)
+		end
 	end
 	-- Along both long sides, and at each end that is not up against something.
 	if alongX then
@@ -1623,11 +1736,38 @@ local function buildPerimeter(root)
 			local ux, uz = (bx - ax) / len * 0.25, (bz - az) / len * 0.25
 			wallRun(ring, ax + ux, az + uz, bx - ux, bz - uz, 1.6, 5.8, 8.8, style)
 		end
+		-- A capped pier over each joint between chords, standing a stud over the walls either side: the
+		-- run reads as a built wall that has been shot up, not a row of slabs.
+		for k = 1, chords - 1 do
+			local t = a + (b - a) * k / chords
+			local x, z = PERIMETER * math.cos(t), PERIMETER * math.sin(t)
+			local brick = index % 2 == 0
+			-- (Its foot at -1.3: the chords' feet are at -1 and -1.1.)
+			put(ring, "Pier", Vector3.new(2.4, 11.3, 2.4), CFrame.new(x, 4.35, z) * CFrame.Angles(0, -t, 0), brick and BRICK_DARK or CONCRETE_DARK,
+				brick and MAT.Brick or MAT.Concrete, NEVER)
+			put(ring, "PierCap", Vector3.new(3, 0.6, 3), CFrame.new(x, 10.3, z) * CFrame.Angles(0, -t, 0), STONE_LIGHT, MAT.Limestone, NEVER)
+		end
 		local t = index % 2 == 0 and a - 0.03 or b + 0.03
 		rubble(ring, (PERIMETER - 2.5) * math.cos(t), (PERIMETER - 2.5) * math.sin(t), 1.6, 4, 0,
 			index % 2 == 0 and { BRICK, BRICK_DARK, CONCRETE_DARK } or nil)
 	end
 	return ring
+end
+
+-- The street lamps along the ways in, each off its lane's route (a bot is 5 wide, a lamp foot 1.1) and
+-- clear of the ziplines, the vehicle cut and the loot: west of the gatehouse, out on the tram approach and
+-- by the pit's south stair, between the gatehouse and the market's gate, and east of the cut.
+local LAMPS = {
+	{ -26.5, -58, 0 }, { -68, -80, 0 }, { -100, -48, math.pi / 2 }, { 28, -64, math.pi }, { 100, -30, math.pi },
+}
+
+local function buildLamps(root)
+	local lamps = folder(root, "Lamps")
+	for _, spot in ipairs(LAMPS) do
+		lampPost(lamps, spot[1], spot[2], 0, spot[3])
+		coverAt(spot[1] + 1.6, spot[2], 0)
+	end
+	return lamps
 end
 
 --------------------------------------------------------------------------------
@@ -1679,7 +1819,8 @@ end
 
 local function buildMiddle(root)
 	local middle = folder(root, "Middle", true)
-	-- Objective A's mosaic in the keep's floor: the rot eye.
+	-- Objective A's flagstone, across the mirror under the mosaic, and the mosaic in it: the rot eye.
+	box(middle, "Paving", -3.9, 3.9, 0.5, KF, -3.9, 3.9, BASALT_LIGHT, MAT.Slate, NEVER)
 	groundDisc(middle, "Mosaic", 0, 0, 12, PURPLE_DARK, MAT.Slate, 0, KF)
 	groundDisc(middle, "MosaicEye", 0, 0, 6.4, WHITE_PAINT, MAT.Marble, 1, KF)
 	groundDisc(middle, "MosaicPupil", 0, 0, 2.6, ROT_GREEN, MAT.Neon, 2, KF)
@@ -1687,6 +1828,8 @@ local function buildMiddle(root)
 	-- Objective B: the fountain, brimming with rot, its globe still lit.
 	rod(middle, "FountainBasin", Vector3.new(PX, -0.2, 0), Vector3.new(PX, 1.2, 0), 11, LIME, MAT.Marble, NEVER)
 	rod(middle, "FountainGoo", Vector3.new(PX, 1.2, 0), Vector3.new(PX, 1.32, 0), 9.6, ROT_GREEN, MAT.Neon, TRIM)
+	-- The rot has brimmed over: a ring of it round the basin's foot on the flags.
+	groundDisc(middle, "GooPool", PX, 0, 13.4, ROT_GREEN, MAT.Neon, 1)
 	rod(middle, "FountainPedestal", Vector3.new(PX, 1.1, 0), Vector3.new(PX, 3.6, 0), 2.0, LIME_DARK, MAT.Marble, NEVER)
 	rod(middle, "FountainBowl", Vector3.new(PX, 3.6, 0), Vector3.new(PX, 4.2, 0), 4.2, LIME, MAT.Marble, NEVER)
 	local globe = ball(middle, "RotGlobe", Vector3.new(PX, 5.3, 0), 2.4, ROT_GREEN, MAT.Neon, TRIM)
@@ -1742,6 +1885,7 @@ function TeamBattleground.Layout(frame, seed)
 		buildGantry(half)
 		buildBridge(half)
 		buildPerimeter(half)
+		buildLamps(half)
 		recordRoutes()
 	end
 	B.mirror = false
@@ -1873,58 +2017,557 @@ local function trimPart(part, centre, radius)
 	return #pieces
 end
 
--- Clears the site: every map item overlapping the disc and its apron that is no bigger than
--- ClearableSpan goes (buildings, parked cars, trees, props, street furniture); long flat pieces that
--- reach into the disc itself (the town's streets) are cut back to its edge; the loot lying there goes
--- too. Bigger things stay (the landmarks), and so does anything in KEEP or either team's base.
--- Returns cleared, trimmed, kept (the widest thing it had to leave).
-function TeamBattleground.ClearSite(site, map)
-	if not map then
-		return 0, 0, 0
+--------------------------------------------------------------------------------
+-- The roads: cut back to the apron's edge and ended properly
+--------------------------------------------------------------------------------
+-- Oliver, 2026-09-24: "make the battleground work with the road -- it's clipped all over the road and
+-- stuff". The battleground stands on the centre town's square, and the town's streets, its back-street
+-- crossroads with their traffic lights, the square's paving and fountain, and the ends of the roads
+-- out of town all ran on through it: containers, walls and the keep on the asphalt. ClearSite never
+-- saw them: every street slab, kerb, pavement, marking and signal head is built non-queryable
+-- (MapDecor's clutter()), and ClearSite found what to clear with GetPartBoundsInBox, which skips
+-- non-queryable parts; the Roads model it left alone by name. Measured in Studio (RotRidge seed 101):
+-- 290 town parts left inside the site, among them 8 Asphalt, 33 Kerb, 27 Pavement, 50 Crossing, 33
+-- Dash, 4 traffic signals' heads and arms (their poles, queryable, cleared, the heads left in the air),
+-- 4 street lamps' arms and lamps (the same), the fountain, and 7 road slabs of the roads out of town.
+--
+-- So the site is now walked part by part, queryable or not, and the roads are ENDED at the arena
+-- rather than run through it (the battleground is laid out in its own frame, turned to face the bases,
+-- while every street and road runs on the world's axes, so no road can line up with its lanes):
+--   * every road or street that reaches within RoadReach of the middle (the disc, its margin and 6)
+--     is cut square across where it meets the apron's outer edge, RoadEnd from the middle, all of its
+--     slabs, kerbs, pavements and edge lines on one line, and everything of it inside that line goes;
+--     a road that only passes through the apron is left as it is (it is drivable ground);
+--   * each cut end is finished (RoadEnds): the pavements closed off with a kerb across their ends, the
+--     markings stopped at a give-way line, and the arena's gateway over the carriageway -- two
+--     concrete pillars on the verges with hazard bands and lamps, a beam at 12.3 (the tallest vehicle,
+--     the armed Sahur Van, is 10.3) and the ROT ARENA board. The carriageway runs straight on onto the
+--     apron's ground at the same height, so a vehicle drives in and out as it always could;
+--   * the ground paint the streets and the cleared buildings leave (Pavement) goes back to ground.
+local ROAD_PIECES = {
+	RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true, RoadEdge = true, RoadDash = true,
+	RoadCentreLine = true, StopLine = true, Dash = true, Crossing = true, Kerb = true, Pavement = true, Paving = true,
+	Cobbles = true, RoadCurve = true, DroppedKerb = true, PavementTaper = true,
+}
+-- Of those, marks lying on the carriageway that are only ever kept whole or taken away (half a dash or
+-- half a zebra crossing is a mistake, not a marking).
+local ROAD_MARKS = { Dash = true, RoadDash = true, Crossing = true, StopLine = true }
+-- Lines along the carriageway, stopped short of the give-way line.
+local ROAD_LINES = { RoadEdge = true, RoadCentreLine = true }
+local CARRIAGEWAY = { Asphalt = true, RoadSurface = true, BridgeRoad = true }
+TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 6
+TeamBattleground.RoadEnd = TeamBattleground.Radius + TeamBattleground.Margin + TeamBattleground.Apron
+-- MapDecor's road heights: the asphalt's top over the ground, a kerb's top, a marking's thickness.
+local ROAD_LIFT, KERB_TOP, KERB_BOTTOM, KERB_WIDE, MARK = 0.4, 0.5, -0.06, 0.8, 0.07
+local KERB_GREY = rgb(176, 174, 166)
+-- The gateway's beam: its underside over the road, clear of the tallest vehicle by 2.
+local GATEWAY_CLEAR = 12.3
+local VOXEL = 4
+
+-- A part's footprint on the ground, as the box on the world's axes round it.
+local function footprintOf(part)
+	local cf, size = part.CFrame, part.Size
+	local ex = math.abs(cf.RightVector.X) * size.X / 2 + math.abs(cf.UpVector.X) * size.Y / 2 + math.abs(cf.LookVector.X) * size.Z / 2
+	local ez = math.abs(cf.RightVector.Z) * size.X / 2 + math.abs(cf.UpVector.Z) * size.Y / 2 + math.abs(cf.LookVector.Z) * size.Z / 2
+	local p = cf.Position
+	return p.X - ex, p.X + ex, p.Z - ez, p.Z + ez
+end
+
+local function nearestTo(x0, x1, z0, z1, centre)
+	local dx = math.max(0, x0 - centre.X, centre.X - x1)
+	local dz = math.max(0, z0 - centre.Z, centre.Z - z1)
+	return math.sqrt(dx * dx + dz * dz)
+end
+
+-- A road piece as a stretch along one of the world's axes (every street and road runs on them):
+-- { part, axis, a0, a1 (along), l0, l1 (across) }, or nil for a piece with no such line (a junction's
+-- square, a curve's wedge, a pavement taper), which is only ever kept whole or taken away.
+local function stretchOf(part)
+	if not part:IsA("Part") or part.Shape ~= Enum.PartType.Block then
+		return nil
 	end
-	local frame = flatFrame(site)
-	local centre = frame.Position
-	local outer = TeamBattleground.Radius + TeamBattleground.Margin + TeamBattleground.Apron
-	local cut = TeamBattleground.Radius + TeamBattleground.Margin + 2
-	local params = OverlapParams.new()
-	params.FilterType = Enum.RaycastFilterType.Include
-	local include = { map }
-	local loot = workspace:FindFirstChild("Loot")
-	if loot then
-		table.insert(include, loot)
+	local cf, size = part.CFrame, part.Size
+	if math.abs(cf.UpVector.Y) < 0.95 or math.abs(size.X - size.Z) < 0.5 then
+		return nil
 	end
-	params.FilterDescendantsInstances = include
-	local cleared, trimmed, kept = 0, 0, 0
-	local seen = {}
-	local found = workspace:GetPartBoundsInBox(CFrame.new(centre + Vector3.new(0, 100, 0)), Vector3.new(outer * 2, 600, outer * 2), params)
-	for _, part in ipairs(found) do
-		local offset = part.Position - centre
-		local flat = Vector3.new(offset.X, 0, offset.Z).Magnitude
-		local reach = math.max(part.Size.X, part.Size.Z) / 2
-		if part.Parent and flat - reach <= outer then
-			if loot and part:IsDescendantOf(loot) then
-				if not seen[part] then
-					seen[part] = true
-					part:Destroy()
-				end
+	local useX = size.X > size.Z
+	local dir = useX and cf.RightVector or cf.LookVector
+	local flat = Vector3.new(dir.X, 0, dir.Z)
+	if flat.Magnitude < 0.5 then
+		return nil
+	end
+	flat = flat.Unit
+	local x0, x1, z0, z1 = footprintOf(part)
+	if math.abs(flat.X) > 0.999 then
+		return { part = part, axis = "x", a0 = x0, a1 = x1, l0 = z0, l1 = z1, useX = useX }
+	elseif math.abs(flat.Z) > 0.999 then
+		return { part = part, axis = "z", a0 = z0, a1 = z1, l0 = x0, l1 = x1, useX = useX }
+	end
+	return nil
+end
+
+-- A stretch's part cut down to the world along-coordinates [keep0, keep1] on its axis (its own long
+-- axis may climb a grade: the cut is where it crosses those coordinates). nil when under half a stud
+-- would be left (the part is then destroyed).
+local function cutStretch(stretch, keep0, keep1)
+	local part = stretch.part
+	local cf, size = part.CFrame, part.Size
+	local dir = stretch.useX and cf.RightVector or cf.LookVector
+	local comp = stretch.axis == "x" and dir.X or dir.Z
+	local half = (stretch.useX and size.X or size.Z) / 2
+	local p = stretch.axis == "x" and cf.Position.X or cf.Position.Z
+	local ta, tb = (keep0 - p) / comp, (keep1 - p) / comp
+	local t0, t1 = math.max(-half, math.min(ta, tb)), math.min(half, math.max(ta, tb))
+	if t1 - t0 < 0.5 then
+		return nil
+	end
+	local length = t1 - t0
+	part.Size = stretch.useX and Vector3.new(length, size.Y, size.Z) or Vector3.new(size.X, size.Y, length)
+	part.CFrame = cf + dir * ((t0 + t1) / 2)
+	local x0, x1, z0, z1 = footprintOf(part)
+	if stretch.axis == "x" then
+		stretch.a0, stretch.a1 = x0, x1
+	else
+		stretch.a0, stretch.a1 = z0, z1
+	end
+	return stretch
+end
+
+-- The road pieces sorted into roads: stretches on one axis whose lines overlap across (within 0.3)
+-- and along (within a stud) are one road -- a street's asphalt, its kerbs, its pavements and its marks,
+-- and the road out of town carrying straight on from its end.
+local function roadsOf(stretches)
+	local root = {}
+	for index in ipairs(stretches) do
+		root[index] = index
+	end
+	local function find(i)
+		while root[i] ~= i do
+			root[i] = root[root[i]]
+			i = root[i]
+		end
+		return i
+	end
+	for i = 1, #stretches do
+		local a = stretches[i]
+		for j = i + 1, #stretches do
+			local b = stretches[j]
+			if a.axis == b.axis and a.l0 <= b.l1 + 0.3 and b.l0 <= a.l1 + 0.3 and a.a0 <= b.a1 + 1 and b.a0 <= a.a1 + 1 then
+				root[find(i)] = find(j)
+			end
+		end
+	end
+	local byRoot, list = {}, {}
+	for index, stretch in ipairs(stretches) do
+		local key = find(index)
+		local road = byRoot[key]
+		if not road then
+			road = { axis = stretch.axis, stretches = {}, l0 = math.huge, l1 = -math.huge, a0 = math.huge, a1 = -math.huge }
+			byRoot[key] = road
+			table.insert(list, road)
+		end
+		table.insert(road.stretches, stretch)
+		road.l0, road.l1 = math.min(road.l0, stretch.l0), math.max(road.l1, stretch.l1)
+		road.a0, road.a1 = math.min(road.a0, stretch.a0), math.max(road.a1, stretch.a1)
+	end
+	return list
+end
+
+-- One finished road end (the pieces are the road's own, already cut to `cut`): see the note at the
+-- top of this section. `outward` is +1 when the road carries on toward +along from the cut, -1 toward
+-- -along. Built into `parent` in the end's own frame: origin on the carriageway's centre line at the
+-- cut, on the ground under the road; +Z out along the road, X across it.
+local function roadEnd(parent, road, cut, outward, centre)
+	-- The carriageway at the cut: its span across, and its top.
+	local c0, c1, top, kerbColor = math.huge, -math.huge, nil, KERB_GREY
+	local atEnd = {}
+	for _, stretch in ipairs(road.stretches) do
+		local part = stretch.part
+		if part.Parent and math.abs((outward > 0 and stretch.a0 or stretch.a1) - cut) < 0.6 then
+			table.insert(atEnd, stretch)
+			if CARRIAGEWAY[part.Name] then
+				c0, c1 = math.min(c0, stretch.l0), math.max(c1, stretch.l1)
+				local cf, size = part.CFrame, part.Size
+				local dir = stretch.useX and cf.RightVector or cf.LookVector
+				local half = (stretch.useX and size.X or size.Z) / 2
+				local comp = road.axis == "x" and dir.X or dir.Z
+				-- The end of this slab at the cut, and its top face's height there.
+				local t = ((cut - (road.axis == "x" and cf.Position.X or cf.Position.Z)) / comp)
+				t = math.clamp(t, -half, half)
+				local y = (cf + dir * t + cf.UpVector * (size.Y / 2)).Position.Y
+				top = top and math.max(top, y) or y
+			elseif part.Name == "Kerb" then
+				kerbColor = part.Color
+			end
+		end
+	end
+	if not top then
+		return nil
+	end
+	local mid = (c0 + c1) / 2
+	local out = road.axis == "x" and Vector3.new(outward, 0, 0) or Vector3.new(0, 0, outward)
+	local origin = road.axis == "x" and Vector3.new(cut, top - ROAD_LIFT, mid) or Vector3.new(mid, top - ROAD_LIFT, cut)
+	local frame = CFrame.lookAt(origin, origin - out)
+	local function across(l)
+		local p = road.axis == "x" and Vector3.new(cut, origin.Y, l) or Vector3.new(l, origin.Y, cut)
+		return frame:PointToObjectSpace(p).X
+	end
+	local cx0, cx1 = across(c0), across(c1)
+	cx0, cx1 = math.min(cx0, cx1), math.max(cx0, cx1)
+
+	B = { frame = frame, mirror = false, cover = {}, pools = 0 }
+	local model = folder(parent, "RoadEnd", true)
+	-- The pavements: shortened by a kerb's width, and a kerb laid across the end of each (the same
+	-- height and colour as the kerb along the road, standing against its outer face).
+	for _, stretch in ipairs(atEnd) do
+		local part = stretch.part
+		if part.Name == "Pavement" and part.Parent then
+			local keep0, keep1 = stretch.a0, stretch.a1
+			if outward > 0 then
+				keep0 = keep0 + KERB_WIDE
 			else
-				local item = itemOf(part, map)
-				if item and not seen[item] then
-					seen[item] = true
-					local span = spanOf(item)
-					if span <= TeamBattleground.ClearableSpan then
-						item:Destroy()
-						cleared += 1
-					elseif item:IsA("BasePart") and flat - reach <= cut and trimPart(item, centre, cut) ~= 1 then
-						trimmed += 1
-					else
-						kept = math.max(kept, span)
+				keep1 = keep1 - KERB_WIDE
+			end
+			if cutStretch(stretch, keep0, keep1) then
+				local x0, x1 = across(stretch.l0), across(stretch.l1)
+				box(model, "Kerb", math.min(x0, x1), math.max(x0, x1), KERB_BOTTOM, KERB_TOP, 0, KERB_WIDE, kerbColor, MAT.Concrete)
+			else
+				part:Destroy()
+			end
+		elseif ROAD_LINES[part.Name] and part.Parent then
+			-- The lines along the road stop short of the give-way line.
+			local keep0, keep1 = stretch.a0, stretch.a1
+			if outward > 0 then
+				keep0 = keep0 + 2.6
+			else
+				keep1 = keep1 - 2.6
+			end
+			if not cutStretch(stretch, keep0, keep1) then
+				part:Destroy()
+			end
+		end
+	end
+	-- Any whole mark within the first few studs goes (the give-way line lies there).
+	for _, stretch in ipairs(road.stretches) do
+		local part = stretch.part
+		if ROAD_MARKS[part.Name] and part.Parent then
+			local near = outward > 0 and stretch.a0 - cut or cut - stretch.a1
+			if near < 2.6 then
+				part:Destroy()
+			end
+		end
+	end
+	-- The give-way line, across the carriageway a little in from its end.
+	box(model, "StopLine", cx0 + 0.35, cx1 - 0.35, ROAD_LIFT, ROAD_LIFT + MARK, 1.1, 1.7, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
+	-- The gateway: a pillar on each verge, clear of the carriageway by 1.1, a beam across.
+	local pillarZ0, pillarZ1 = 2.4, 5.0
+	for _, side in ipairs({ -1, 1 }) do
+		local inner = side < 0 and cx0 - 1.1 or cx1 + 1.1
+		local x0, x1 = side < 0 and inner - 2.6 or inner, side < 0 and inner or inner + 2.6
+		box(model, "GatewayPillar", x0, x1, -1, GATEWAY_CLEAR + 1.5, pillarZ0, pillarZ1, CONCRETE_DARK, MAT.Concrete, NEVER)
+		box(model, "GatewayCap", x0 - 0.25, x1 + 0.25, GATEWAY_CLEAR + 1.5, GATEWAY_CLEAR + 2.1, pillarZ0 - 0.25, pillarZ1 + 0.25, CONCRETE, MAT.Concrete, NEVER)
+		box(model, "GatewayPlinth", x0 - 0.3, x1 + 0.3, -0.5, 1.2, pillarZ0 - 0.3, pillarZ1 + 0.3, CONCRETE, MAT.Concrete, NEVER)
+		-- Hazard bands on the face toward the traffic: a yellow board with two black stripes on it.
+		facePlate(model, "HazardBoard", "x", inner, 0.12, pillarZ0 + 0.3, pillarZ1 - 0.3, 1.8, 5.4, HAZARD, MAT.SmoothPlastic)
+		for _, y in ipairs({ 2.6, 4.0 }) do
+			facePlate(model, "HazardStripe", "x", inner, 0.2, pillarZ0 + 0.45, pillarZ1 - 0.45, y, y + 0.6, SOOT, MAT.SmoothPlastic)
+		end
+		-- A lamp on the outer face, lighting the way in.
+		wallLamp(model, Vector3.new((x0 + x1) / 2, 9.4, pillarZ1), Vector3.new(0, 0, 1), 26)
+	end
+	box(model, "GatewayBeam", cx0 - 2.5, cx1 + 2.5, GATEWAY_CLEAR, GATEWAY_CLEAR + 1.2, pillarZ0 + 0.5, pillarZ1 - 0.5, STEEL_DARK, MAT.Metal, NEVER)
+	local board = box(model, "GatewaySign", (cx0 + cx1) / 2 - 7, (cx0 + cx1) / 2 + 7, GATEWAY_CLEAR - 0.1, GATEWAY_CLEAR + 2.3,
+		pillarZ1 - 0.5, pillarZ1 - 0.25, PURPLE_DARK, MAT.Metal, NEVER)
+	signText(board, "ROT ARENA", WHITE_PAINT)
+	B = nil
+	return model
+end
+
+-- The terrain paint the town leaves under what was cleared (MapGenerator paints Pavement under every
+-- street and building footprint) back to ground, over the disc and apron and under every cleared
+-- thing's footprint, but never under a road piece that is still there.
+local function repaint(centre, height, clearedBoxes, keptBoxes)
+	local reach = TeamBattleground.RoadEnd
+	for _, b in ipairs(clearedBoxes) do
+		reach = math.max(reach, nearestTo(b[1], b[2], b[3], b[4], centre) + math.max(b[2] - b[1], b[4] - b[3]))
+	end
+	reach = math.min(reach, TeamBattleground.RoadEnd + 90) + VOXEL
+	local region = Region3.new(Vector3.new(centre.X - reach, height - 12, centre.Z - reach), Vector3.new(centre.X + reach, height + 8, centre.Z + reach))
+		:ExpandToGrid(VOXEL)
+	local terrain = workspace.Terrain
+	local materials, occupancies = terrain:ReadVoxels(region, VOXEL)
+	local size = region.Size / VOXEL
+	local origin = region.CFrame.Position - region.Size / 2
+	local ground = MapTerrain._padGround or Enum.Material.Ground
+	local changed = 0
+	local function inside(list, x, z, grow)
+		for _, b in ipairs(list) do
+			if x >= b[1] - grow and x <= b[2] + grow and z >= b[3] - grow and z <= b[4] + grow then
+				return true
+			end
+		end
+		return false
+	end
+	for ix = 1, math.floor(size.X + 0.5) do
+		local x = origin.X + (ix - 0.5) * VOXEL
+		for iz = 1, math.floor(size.Z + 0.5) do
+			local z = origin.Z + (iz - 0.5) * VOXEL
+			local r = Vector3.new(x - centre.X, 0, z - centre.Z).Magnitude
+			if (r <= TeamBattleground.RoadEnd or inside(clearedBoxes, x, z, 0)) and not inside(keptBoxes, x, z, 1) then
+				for iy = 1, math.floor(size.Y + 0.5) do
+					if materials[ix][iy][iz] == Enum.Material.Pavement then
+						materials[ix][iy][iz] = ground
+						changed += 1
 					end
 				end
 			end
 		end
 	end
-	return cleared, trimmed, kept
+	if changed > 0 then
+		terrain:WriteVoxels(region, VOXEL, materials, occupancies)
+	end
+	return changed
+end
+
+-- The top-level map folder `part` is in (its ancestor straight under the map), and whether it is in a
+-- town.
+local function placeOf(part, map)
+	local node, town = part, false
+	while node.Parent and node.Parent ~= map do
+		if node:GetAttribute("TownName") ~= nil then
+			town = true
+		end
+		node = node.Parent
+	end
+	if node:GetAttribute("TownName") ~= nil then
+		town = true
+	end
+	return node.Parent == map and node or nil, town
+end
+
+-- The parts sharing `part`'s tag group ("Lamp:D12": one street lamp's post, arm and lamp), itself
+-- included; anything else is itself.
+local function groupOf(part)
+	local tag = part:GetAttribute("Destructible")
+	if type(tag) == "string" and string.find(tag, ":") and part.Parent then
+		local group = {}
+		for _, other in ipairs(part.Parent:GetChildren()) do
+			if other:IsA("BasePart") and other:GetAttribute("Destructible") == tag then
+				table.insert(group, other)
+			end
+		end
+		return group
+	end
+	return { part }
+end
+
+-- Clears the site and ends the roads at it (the note above): every map thing whose footprint reaches
+-- into the disc or its apron and is no bigger than ClearableSpan goes, queryable or not (buildings,
+-- parked cars, trees, props, street furniture, the square), whole (a model, a tag group); the roads
+-- and streets reaching the disc are cut square at RoadEnd and finished; the loot lying there goes too.
+-- Bigger things stay (the landmarks; a long flat one reaching into the disc is cut back to its edge),
+-- and so does anything in KEEP or either team's base.
+-- Returns cleared, trimmed (road and flat pieces cut), kept (the widest thing it had to leave), and the
+-- road ends' model (unparented: Build puts it in the battleground).
+function TeamBattleground.ClearSite(site, map)
+	if not map then
+		return 0, 0, 0, nil
+	end
+	local frame = flatFrame(site)
+	local centre = frame.Position
+	local outer = TeamBattleground.RoadEnd
+	local cut = TeamBattleground.Radius + TeamBattleground.Margin + 2
+	local cleared, trimmed, kept = 0, 0, 0
+	local stretches, odd, furniture = {}, {}, {}
+	local items, itemOrder = {}, {}
+	for _, part in ipairs(map:GetDescendants()) do
+		if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") and not part:GetAttribute("TeamBattleground") then
+			local x0, x1, z0, z1 = footprintOf(part)
+			local near = nearestTo(x0, x1, z0, z1, centre)
+			if near <= outer + 60 then
+				local place, town = placeOf(part, map)
+				local placeName = place and place.Name
+				if placeName and KEEP[placeName] and placeName ~= "Roads" then
+					-- The river, the ziplines, the bases and their vehicles: never touched.
+				elseif ROAD_PIECES[part.Name] and (placeName == "Roads" or town) then
+					local stretch = stretchOf(part)
+					if stretch then
+						table.insert(stretches, stretch)
+					else
+						table.insert(odd, { part = part, near = near, box = { x0, x1, z0, z1 } })
+					end
+				elseif placeName == "Roads" then
+					table.insert(furniture, { part = part, near = near, box = { x0, x1, z0, z1 } })
+				elseif near <= outer then
+					local item = itemOf(part, map)
+					if item and not items[item] then
+						items[item] = true
+						table.insert(itemOrder, { item = item, part = part })
+					end
+				end
+			end
+		end
+	end
+
+	-- The roads: those reaching the disc cut square at the apron's edge, the cut on the terrain's grid.
+	local removed, keptBoxes, clearedBoxes = {}, {}, {}
+	local ends = {}
+	for _, road in ipairs(roadsOf(stretches)) do
+		local cl = road.axis == "x" and centre.Z or centre.X
+		local ca = road.axis == "x" and centre.X or centre.Z
+		local lateral = (road.l0 <= cl and cl <= road.l1) and 0 or math.min(math.abs(road.l0 - cl), math.abs(road.l1 - cl))
+		local along = math.clamp(ca, road.a0, road.a1) - ca
+		-- A road reaching the disc, or one that stops inside the apron (a road out of town whose street
+		-- in to the square went with the site, or a street's closed end): cut and finished at the edge.
+		local stopsInside = false
+		for _, a in ipairs({ road.a0, road.a1 }) do
+			if math.sqrt((a - ca) ^ 2 + lateral * lateral) < outer - 0.5 then
+				stopsInside = true
+			end
+		end
+		if math.sqrt(along * along + lateral * lateral) <= TeamBattleground.RoadReach or stopsInside then
+			local u = lateral < outer and math.sqrt(outer * outer - lateral * lateral) or 0
+			local low = math.floor((ca - u) / VOXEL) * VOXEL
+			local high = math.ceil((ca + u) / VOXEL) * VOXEL
+			table.insert(removed, road.axis == "x" and { low, high, road.l0, road.l1 } or { road.l0, road.l1, low, high })
+			local survivors = {}
+			for _, stretch in ipairs(road.stretches) do
+				local part = stretch.part
+				local a0, a1 = stretch.a0, stretch.a1
+				local pieces = {}
+				if a0 < low - 0.01 then
+					table.insert(pieces, { a0, math.min(a1, low) })
+				end
+				if a1 > high + 0.01 then
+					table.insert(pieces, { math.max(a0, high), a1 })
+				end
+				local whole = #pieces == 1 and pieces[1][1] == a0 and pieces[1][2] == a1
+				if whole then
+					table.insert(survivors, stretch)
+				elseif #pieces == 0 or ROAD_MARKS[part.Name] then
+					part:Destroy()
+					trimmed += 1
+				else
+					trimmed += 1
+					-- Both halves from the whole piece: the copy is taken before either is cut.
+					local targets = { stretch }
+					for index = 2, #pieces do
+						local copy = part:Clone()
+						copy.Parent = part.Parent
+						targets[index] = { part = copy, axis = stretch.axis, useX = stretch.useX, a0 = stretch.a0, a1 = stretch.a1, l0 = stretch.l0, l1 = stretch.l1 }
+					end
+					for index, piece in ipairs(pieces) do
+						local target = targets[index]
+						if cutStretch(target, piece[1], piece[2]) then
+							table.insert(survivors, target)
+						else
+							target.part:Destroy()
+						end
+					end
+				end
+			end
+			road.stretches = survivors
+			if road.a0 < low - 2 then
+				table.insert(ends, { road = road, cut = low, outward = -1 })
+			end
+			if road.a1 > high + 2 then
+				table.insert(ends, { road = road, cut = high, outward = 1 })
+			end
+		end
+		for _, stretch in ipairs(road.stretches) do
+			if stretch.part.Parent then
+				local x0, x1, z0, z1 = footprintOf(stretch.part)
+				table.insert(keptBoxes, { x0, x1, z0, z1 })
+			end
+		end
+	end
+	local function inRemoved(b, grow)
+		for _, r in ipairs(removed) do
+			if b[1] <= r[2] + grow and b[2] >= r[1] - grow and b[3] <= r[4] + grow and b[4] >= r[3] - grow then
+				return true
+			end
+		end
+		return false
+	end
+	-- Road pieces with no line (junction squares, curve wedges, tapers) and the roads' furniture (lamps,
+	-- fingerposts, signals): gone when in the disc or on a stretch of road that went.
+	for _, piece in ipairs(odd) do
+		if piece.part.Parent and (piece.near <= TeamBattleground.RoadReach or inRemoved(piece.box, 0.5)) then
+			piece.part:Destroy()
+			trimmed += 1
+		elseif piece.part.Parent then
+			table.insert(keptBoxes, piece.box)
+		end
+	end
+	for _, piece in ipairs(furniture) do
+		if piece.part.Parent and (piece.near <= TeamBattleground.RoadReach or inRemoved(piece.box, 7)) then
+			for _, member in ipairs(groupOf(piece.part)) do
+				if member.Parent then
+					member:Destroy()
+					cleared += 1
+				end
+			end
+		end
+	end
+
+	-- Everything else on the site, whole.
+	for _, entry in ipairs(itemOrder) do
+		local item = entry.item
+		if item.Parent then
+			local span = spanOf(item)
+			if span <= TeamBattleground.ClearableSpan then
+				local members = item:IsA("BasePart") and groupOf(item) or { item }
+				for _, member in ipairs(members) do
+					if member.Parent then
+						if member:IsA("BasePart") then
+							local x0, x1, z0, z1 = footprintOf(member)
+							table.insert(clearedBoxes, { x0, x1, z0, z1 })
+						else
+							local ok, cf, size = pcall(function()
+								return member:GetBoundingBox()
+							end)
+							if ok and cf then
+								local half = math.max(size.X, size.Z) / 2
+								table.insert(clearedBoxes, { cf.Position.X - half, cf.Position.X + half, cf.Position.Z - half, cf.Position.Z + half })
+							end
+						end
+						member:Destroy()
+					end
+				end
+				cleared += 1
+			elseif item:IsA("BasePart") and trimPart(item, centre, cut) ~= 1 then
+				trimmed += 1
+			else
+				kept = math.max(kept, span)
+			end
+		end
+	end
+
+	-- The loot lying on the site.
+	local loot = workspace:FindFirstChild("Loot")
+	if loot then
+		for _, pickup in ipairs(loot:GetChildren()) do
+			local ok, position = pcall(function()
+				return pickup:IsA("BasePart") and pickup.Position or pickup:GetPivot().Position
+			end)
+			if ok and position and Vector3.new(position.X - centre.X, 0, position.Z - centre.Z).Magnitude <= outer then
+				pickup:Destroy()
+			end
+		end
+	end
+
+	-- The ends, finished, and the paint.
+	local model = Instance.new("Model")
+	model.Name = "RoadEnds"
+	model:SetAttribute("Destructible", false)
+	for _, spec in ipairs(ends) do
+		local built = roadEnd(model, spec.road, spec.cut, spec.outward, centre)
+		if built then
+			built:SetAttribute("RoadAxis", spec.road.axis)
+		end
+	end
+	pcall(repaint, centre, site.Position.Y, clearedBoxes, keptBoxes)
+	return cleared, trimmed, kept, model
 end
 
 -- Why the battleground cannot go here, or nil: the river through the disc (a pad never writes over
@@ -1947,6 +2590,75 @@ function TeamBattleground.SiteRefusal(site, mapInfo)
 		end
 	end
 	return nil
+end
+
+-- THE GROUND'S COLOURS. FlattenPad paints the whole disc one brown (Ground), and between the set pieces
+-- that read as a site nobody finished. Each lane gets its own ground instead, painted into the terrain
+-- under the parts (no parts at all): the vehicle cut tarmac (Asphalt), and so is the apron all round the
+-- outside out to where the roads now end, a ring road every road end runs straight onto; the market's
+-- yard and the processional way up to the keep warm sandstone (limestone glared near-white under the
+-- sky), the tram approach to the pit trodden mud, the rest the brown it was. Only materials whose surface lies exactly where the voxels put
+-- it (RoadNetwork.SmoothMaterials): a rough one would lift or sink the ground under the paving, and grass
+-- would grow its blades up through it. Both halves the same, the lane polyline mirrored.
+local PAINT = Enum.Material
+local function laneDistance(x, z)
+	local best = math.huge
+	for index = 1, #LANE - 1 do
+		local a, b = LANE[index], LANE[index + 1]
+		local dx, dz = b.X - a.X, b.Z - a.Z
+		local t = math.clamp(((x - a.X) * dx + (z - a.Z) * dz) / (dx * dx + dz * dz), 0, 1)
+		best = math.min(best, math.sqrt((x - a.X - dx * t) ^ 2 + (z - a.Z - dz * t) ^ 2))
+	end
+	return best
+end
+
+-- The material at a local point (x, z) of the half toward team 1 (z <= 0).
+function TeamBattleground.GroundMaterial(x, z)
+	local r = math.sqrt(x * x + z * z)
+	if laneDistance(x, z) <= TeamBattleground.LaneHalfWidth + 2 or r >= TeamBattleground.Radius - 2 then
+		return PAINT.Asphalt
+	elseif x >= 33 and x <= 66 and z >= -58 and z <= -6 then
+		return PAINT.Sandstone
+	elseif math.abs(x) <= 26 and z <= -22 and z >= -122 then
+		return PAINT.Sandstone
+	elseif x <= -30 and x >= -112 and z <= -28 then
+		return PAINT.Mud
+	end
+	return PAINT.Ground
+end
+
+-- Paints the disc's surface voxels by GroundMaterial (materials only: the ground's height is untouched).
+function TeamBattleground.PaintGround(frame, height)
+	local reach = TeamBattleground.RoadEnd + VOXEL
+	local centre = frame.Position
+	local region = Region3.new(Vector3.new(centre.X - reach, height - 12, centre.Z - reach), Vector3.new(centre.X + reach, height + 8, centre.Z + reach))
+		:ExpandToGrid(VOXEL)
+	local terrain = workspace.Terrain
+	local materials, occupancies = terrain:ReadVoxels(region, VOXEL)
+	local size = region.Size / VOXEL
+	local origin = region.CFrame.Position - region.Size / 2
+	local painted = 0
+	for ix = 1, math.floor(size.X + 0.5) do
+		local x = origin.X + (ix - 0.5) * VOXEL
+		for iz = 1, math.floor(size.Z + 0.5) do
+			local z = origin.Z + (iz - 0.5) * VOXEL
+			local here = frame:PointToObjectSpace(Vector3.new(x, height, z))
+			if here.X * here.X + here.Z * here.Z <= (TeamBattleground.RoadEnd - 1) ^ 2 then
+				local material = TeamBattleground.GroundMaterial(here.X, -math.abs(here.Z))
+				for iy = 1, math.floor(size.Y + 0.5) do
+					local was = materials[ix][iy][iz]
+					if occupancies[ix][iy][iz] > 0 and was ~= Enum.Material.Water and was ~= Enum.Material.Air and was ~= material then
+						materials[ix][iy][iz] = material
+						painted += 1
+					end
+				end
+			end
+		end
+	end
+	if painted > 0 then
+		terrain:WriteVoxels(region, VOXEL, materials, occupancies)
+	end
+	return painted
 end
 
 -- The level the town's own pads stand at under the disc (all at the town's height), or nil.
@@ -1987,7 +2699,16 @@ function TeamBattleground.Build(centre, mapInfo, seed)
 	if refusal then
 		return nil, refusal
 	end
-	TeamBattleground.ClearSite(site, map)
+	local _, _, _, roadEnds = TeamBattleground.ClearSite(site, map)
+	-- The road ends belong to the map's roads whatever happens next: if the battleground is not built
+	-- after all, they still finish the roads the clearing cut.
+	local function strand(reason)
+		if roadEnds then
+			roadEnds.Parent = map
+			ZFight.Fix({ roadEnds })
+		end
+		return nil, reason
+	end
 	local size = Vector3.new(TeamBattleground.Radius * 2, 0, TeamBattleground.Radius * 2)
 	local options = { shape = "round", height = "mid", margin = TeamBattleground.Margin, material = Enum.Material.Ground }
 	local height, why = MapTerrain.FlattenPad(site, size, options)
@@ -2001,7 +2722,7 @@ function TeamBattleground.Build(centre, mapInfo, seed)
 	if not height then
 		local low, high = MapTerrain.PadCost(site, size, { shape = "round", margin = TeamBattleground.Margin })
 		if not low or high - low > 1.5 then
-			return nil, "ground not levelled: " .. tostring(why)
+			return strand("ground not levelled: " .. tostring(why))
 		end
 		height = (low + high) / 2
 		warn(string.format("TeamBattleground: ground not levelled (%s); built on it as it stands, %.2f to %.2f", tostring(why), low, high))
@@ -2009,6 +2730,10 @@ function TeamBattleground.Build(centre, mapInfo, seed)
 	local position = site.Position
 	local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)
 	local model, info = TeamBattleground.Layout(frame, seed)
+	if roadEnds then
+		roadEnds.Parent = model
+	end
+	info.roadEnds = roadEnds
 	for _, part in ipairs(model:GetDescendants()) do
 		if part:IsA("BasePart") then
 			part:SetAttribute("TeamBattleground", true)
@@ -2016,6 +2741,11 @@ function TeamBattleground.Build(centre, mapInfo, seed)
 	end
 	model.Parent = map
 	ZFight.Fix({ model })
+	-- The ground's own colours (costs no parts; a failure costs only the colour).
+	local painted, paintProblem = pcall(TeamBattleground.PaintGround, frame, height)
+	if not painted then
+		warn("TeamBattleground: ground not painted: " .. tostring(paintProblem))
+	end
 
 	-- The ziplines, after the z-fight pass (they are ZiplineService's own geometry). A failure costs the
 	-- battleground a zipline, never the match its battleground.

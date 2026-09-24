@@ -1,26 +1,34 @@
 -- The team-base compounds (TeamBaseRuins), built the way a team match builds them and photographed.
 --
---   powershell -ExecutionPolicy Bypass -File tools/gallery.ps1 -Gallery tools/team_base_ruins_gallery.lua -OutDir <folder> -TimeoutSeconds 900
+--   powershell -ExecutionPolicy Bypass -File tools/gallery.ps1 -Gallery tools/team_base_ruins_gallery.lua -OutDir <folder> -TimeoutSeconds 1500
 --
 -- Oliver, 2026-09-24: "design a ruined base with very high quality for both team spawns so that all the
--- item chests and cars aren't just sitting in random fields". tools/team_base_ruins_check.py has
--- measured the geometry offline (no coplanar faces, nothing floating, walkable, bays level and clear,
--- both bases identical); what it cannot say is how the thing LOOKS, or how it sits on a real map's
--- ground. This builds a real map (RotRidge, the roughest ground of the five), runs the real
--- ModeTeams.Setup for a Team Deathmatch (so the site choice, the terrain levelling, the site clearing,
--- the base vehicles in their bays), seeds each base's chests through the real ModeTeams.BaseLootSpots
--- and LootService.SeedAt, and then frames each part of the compound.
+-- item chests and cars aren't just sitting in random fields", then "the team bases are on a platform
+-- that's raised up and needs a ramp for the players and vehicles, or it needs to be made more flush to
+-- the ground". tools/team_base_ruins_check.py has measured the geometry offline (no coplanar faces,
+-- nothing floating, walkable, bays level and clear, both bases identical) and Build on a hillside (flush,
+-- banks at 1 in 3, gate ramps at 1 in 8, scenery on moved ground cleared); what it cannot say is how the
+-- thing LOOKS, or how it sits on a real map's ground. This builds a real map (RotRidge, the roughest
+-- ground of the five), runs the real ModeTeams.Setup for a Team Deathmatch (so the site choice, the
+-- terrain levelling and grading, the site clearing, the base vehicles in their bays), seeds each base's
+-- chests through the real ModeTeams.BaseLootSpots and LootService.SeedAt, and then frames the compound
+-- and the ground round it.
 --
--- The notes are the probe. Per base: parts, the height it stands at, whether it fell back to a plinth,
--- pads, chests actually standing on the named chest spots, vehicles actually in the bays, ZFight.Scan
--- over the placed model (terrain pairs included, which the offline check cannot see), and the ground
--- under every paving slab and wall panel read by raycast: a slab whose underside is above the terrain
--- is floating, and the count must be 0. Planted: the same ground test run on a slab lifted 1 stud must
--- report it.
+-- The notes are the probe. THE GROUND IS READ FROM THE VOXELS (MapTerrain.PadCost over a column), and a
+-- terrain ray is trusted only where it agrees with them to 1.5 studs (a rough material draws its surface
+-- up to 1.1 off its voxels): a terrain ray straight after Terrain:WriteVoxels still reads the ground as
+-- it was before the write, and that is what put the compounds on plinths and made this gallery report
+-- "61 of 61 slabs/panels floating". Per base: parts, the floor, the ground work (columns moved, the
+-- highest bank), FLUSH (the ground two studs outside every wall against the floor's ground: want under
+-- 0.5), the gate ramps (the steepest grade out of each vehicle gate: want 1 in 8 or gentler) and the
+-- banks (want 1 in 3), pads, chests on their spots, vehicles in their bays and overlapping, ZFight.Scan
+-- over the placed model, slabs/panels floating over the ground, and map scenery hovering round the
+-- compound (named). Planted: a slab lifted 1 stud must read floating.
 --
--- Views: 01 overview (team 1), 02 the other base (team 2, same compound turned), 03 the front at eye
--- level from the arena, 04 the spawn shelter, 05 the collapsed corner, 06 the vehicle yard (six bays), 06b the east gate from outside, 07 the
--- supply room, 08 the courtyard from the watchtower, 09 the compound at dusk with its lamps lit.
+-- Views: 01-02 the two compounds from high; 03-06 team 1's from outside at eye level (on the ground
+-- there) on every side; 07-08 each vehicle gate's ramp with a vehicle on it; 09 the ground round the
+-- compound from high on the downhill side; 10 team 2's front at eye level; 11-14 inside (spawn shelter,
+-- vehicle yard, supply room, courtyard from the tower); 15 dusk.
 
 local MAP_ID, SEED = "RotRidge", 101
 
@@ -48,14 +56,35 @@ local terrainParams = RaycastParams.new()
 terrainParams.FilterType = Enum.RaycastFilterType.Include
 terrainParams.IgnoreWater = true
 
-local function terrainUnder(position)
+-- The ground at (x, z): the voxels' (the columns within 2.9, averaged), or the terrain ray's where it
+-- agrees with them to 1.5 (the drawn surface, which a rough material puts up to 1.1 off its voxels).
+local function groundAt(x, z)
+	local ok, _, _, mean = pcall(state.MapTerrain.PadCost, CFrame.new(x, 0, z), Vector3.zero, { shape = "round", margin = 2.9 })
 	terrainParams.FilterDescendantsInstances = { workspace.Terrain }
-	local hit = workspace:Raycast(position + Vector3.new(0, 50, 0), Vector3.new(0, -200, 0), terrainParams)
-	return hit and hit.Position.Y or nil
+	local hit = workspace:Raycast(Vector3.new(x, 900, z), Vector3.new(0, -1800, 0), terrainParams)
+	local ray = hit and hit.Position.Y or nil
+	if ok and mean and (not ray or math.abs(mean - ray) > 1.5) then
+		return mean
+	end
+	return ray
+end
+
+-- The ground in team `team`'s frame, at a local point.
+local function groundLocal(team, x, z)
+	local p = at(team, x, 0, z)
+	return groundAt(p.X, p.Z)
+end
+
+-- The ground's SHAPE at a local point: the voxels' alone (a rough material's drawn surface is not the
+-- grade a wheel climbs over a few studs).
+local function shapeLocal(team, x, z)
+	local p = at(team, x, 0, z)
+	local ok, _, _, mean = pcall(state.MapTerrain.PadCost, CFrame.new(p.X, 0, p.Z), Vector3.zero, { shape = "round", margin = 2.9 })
+	return ok and mean or nil
 end
 
 -- Slabs and panels that should be sitting in the ground: how many have their underside clear of the
--- terrain at any corner (floating) or no terrain at all under them.
+-- ground at any corner (floating) or no ground at all under them.
 local function groundGaps(parts)
 	local floating, examined = 0, 0
 	for _, part in ipairs(parts) do
@@ -63,7 +92,7 @@ local function groundGaps(parts)
 		local half = part.Size / 2
 		for _, corner in ipairs({ Vector3.new(1, -1, 1), Vector3.new(-1, -1, 1), Vector3.new(1, -1, -1), Vector3.new(-1, -1, -1) }) do
 			local point = part.CFrame * (half * corner * Vector3.new(0.95, 1, 0.95))
-			local ground = terrainUnder(point)
+			local ground = groundAt(point.X, point.Z)
 			if not ground or point.Y > ground + 0.05 then
 				floating += 1
 				break
@@ -86,6 +115,27 @@ local function grounded(model, height)
 	return list
 end
 
+-- The steepest grade of the ground's shape along a local line from `from` (over 4 studs, a voxel column,
+-- sampled every 2), and the height it ends at over the floor's ground.
+local function steepest(team, from, dir, length)
+	local worst, at, heights = 0, 0, {}
+	local base = state.ruins[team].height
+	for k = 0, length, 2 do
+		local p = from + dir * k
+		heights[#heights + 1] = shapeLocal(team, p.X, p.Z)
+	end
+	for index = 3, #heights do
+		if heights[index] and heights[index - 2] then
+			local grade = math.abs(heights[index] - heights[index - 2]) / 4
+			if grade > worst then
+				worst, at = grade, (index - 2) * 2
+			end
+		end
+	end
+	local last = heights[#heights]
+	return worst, last and last - base or 0, at
+end
+
 local function setup()
 	if state.ready then
 		return
@@ -96,6 +146,8 @@ local function setup()
 	local MapGenerator = require(modules:WaitForChild("MapGenerator"))
 	local ModeTeams = require(modules:WaitForChild("ModeTeams"))
 	local LootService = require(modules:WaitForChild("LootService"))
+	state.MapTerrain = require(modules:WaitForChild("MapTerrain"))
+	state.TeamBaseRuins = require(modules:WaitForChild("TeamBaseRuins"))
 	local ZFight = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("ZFight"))
 	local GameModes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("GameModes"))
 
@@ -132,6 +184,7 @@ local function setup()
 	task.wait(0.5)
 
 	local loot = workspace:FindFirstChild("Loot")
+	local folder = ModeTeams.BaseVehicleFolder()
 	for team = 1, 2 do
 		local ruin = state.ruins[team]
 		local model = ruin.model
@@ -139,12 +192,6 @@ local function setup()
 		for _, part in ipairs(model:GetDescendants()) do
 			if part:IsA("BasePart") then
 				parts += 1
-			end
-		end
-		local plinth = false
-		for _, child in ipairs(model:GetChildren()) do
-			if child.Name == "Foundation" and child:IsA("BasePart") then
-				plinth = true
 			end
 		end
 		local chestsOn = 0
@@ -157,7 +204,6 @@ local function setup()
 			end
 		end
 		local vehiclesIn = 0
-		local folder = ModeTeams.BaseVehicleFolder()
 		for _, bay in ipairs(ruin.vehicleBays) do
 			for _, vehicle in ipairs(folder and folder:GetChildren() or {}) do
 				if vehicle:IsA("Model") and (vehicle:GetPivot().Position * Vector3.new(1, 0, 1) - bay.Position * Vector3.new(1, 0, 1)).Magnitude < 1 then
@@ -166,10 +212,6 @@ local function setup()
 				end
 			end
 		end
-		-- Oliver's playtest (2026-09-24): "the vehicles ... piled together" and "many floating items
-		-- and props". After 3 s of physics (the gallery runs in edit mode, so this is the placement
-		-- itself): any two base vehicles whose boxes overlap in plan, and any map scenery within the
-		-- ground work's reach standing more than 0.3 over the terrain under its lowest point.
 		local vehicles = {}
 		for _, vehicle in ipairs(folder and folder:GetChildren() or {}) do
 			if vehicle:IsA("Model") then
@@ -187,27 +229,102 @@ local function setup()
 				end
 			end
 		end
-		local hovering, looked = 0, 0
-		local centre = ruin.frame.Position
+
+		-- FLUSH: the ground two studs outside each wall, seven points a side, against the floor's ground.
+		local floorGround = ruin.height
+		local worst, sides = 0, {}
+		for _, side in ipairs({ { "front", 0, -1 }, { "east", 1, 0 }, { "back", 0, 1 }, { "west", -1, 0 } }) do
+			local sideWorst = 0
+			for t = -0.9, 0.91, 0.3 do
+				local x = side[2] ~= 0 and side[2] * 48 or t * 44
+				local z = side[3] ~= 0 and side[3] * 44 or t * 40
+				local g = groundLocal(team, x, z)
+				if g then
+					sideWorst = math.max(sideWorst, math.abs(g - floorGround))
+				end
+			end
+			worst = math.max(worst, sideWorst)
+			table.insert(sides, string.format("%s %.2f", side[1], sideWorst))
+		end
+		note(string.format("team %d FLUSH: the ground 2 outside the walls is at most %.2f off the floor's ground (%s; want under 0.5)",
+			team, worst, table.concat(sides, ", ")))
+		-- The ramps out of the vehicle gates and the banks on the other sides.
+		-- Out of each gate along its middle, from 6 past the wall to 124 past the pad's flat edge (the work
+		-- reaches 136 past it and meets the ground as it stands there); the banks on the other sides out to 48.
+		local frontRamp, frontEnd, frontAt = steepest(team, Vector3.new(24, 0, -48), Vector3.new(0, 0, -1), 130)
+		local eastRamp, eastEnd, eastAt = steepest(team, Vector3.new(52, 0, 4), Vector3.new(1, 0, 0), 130)
+		local banks, bankAt = 0, ""
+		for _, line in ipairs({ { -30, 46, 0, 1 }, { 20, 46, 0, 1 }, { -50, -20, -1, 0 }, { -50, 20, -1, 0 }, { -30, -46, 0, -1 } }) do
+			local grade, _, where = steepest(team, Vector3.new(line[1], 0, line[2]), Vector3.new(line[3], 0, line[4]), 48)
+			if grade > banks then
+				banks, bankAt = grade, string.format("%d out from (%d, %d)", where, line[1], line[2])
+			end
+		end
+		local graded = ruin.graded or {}
+		note(string.format("team %d ground work: %s columns moved, the most by %.1f, banks up to %.1f off the floor; %s scenery cleared off moved ground",
+			team, tostring(graded.moved), graded.most or -1, graded.bank or -1, tostring(graded.cleared)))
+		note(string.format("team %d RAMPS: main gate steepest 1 in %.1f (%d out; ground %+.1f at 130); east gate 1 in %.1f (%d out; %+.1f); banks elsewhere steepest 1 in %.1f (%s)",
+			team, frontRamp > 0 and 1 / frontRamp or math.huge, frontAt, frontEnd, eastRamp > 0 and 1 / eastRamp or math.huge, eastAt, eastEnd,
+			banks > 0 and 1 / banks or math.huge, bankAt))
+
+		-- Map scenery round the compound hovering over the ground under it (named).
+		local hovering, looked, named, onMoved = 0, 0, {}, 0
+		local restParams = RaycastParams.new()
+		restParams.FilterType = Enum.RaycastFilterType.Exclude
+		local centreFlat = ruin.frame.Position * Vector3.new(1, 0, 1)
+		local function meantToFloat(part)
+			local node = part
+			while node and node ~= workspace.Map do
+				if node:GetAttribute("IntentionalFloat") then
+					return true
+				end
+				node = node.Parent
+			end
+			return false
+		end
 		for _, part in ipairs(workspace.Map:GetDescendants()) do
-			if part:IsA("BasePart") and not part:IsDescendantOf(model) and part.Anchored
-				and (part.Position * Vector3.new(1, 0, 1) - centre * Vector3.new(1, 0, 1)).Magnitude < 90 then
+			if part:IsA("BasePart") and not part:IsDescendantOf(model) and part.Anchored and not meantToFloat(part)
+				and not part:FindFirstAncestor("TeamBaseVehicles")
+				and (part.Position * Vector3.new(1, 0, 1) - centreFlat).Magnitude < 140 then
 				local bottom = part.Position.Y - part.Size.Y / 2
-				local ground = terrainUnder(part.Position)
+				local ground = groundAt(part.Position.X, part.Position.Z)
 				if ground and bottom < ground + 6 then
 					looked += 1
-					if bottom > ground + 0.3 then
+					-- Resting on another part (a road's marking on its slab, a landmark's piece on its
+					-- platform) is not hovering: a short ray down from just inside its underside.
+					restParams.FilterDescendantsInstances = { part, workspace.Terrain }
+					local under = workspace:Raycast(Vector3.new(part.Position.X, bottom + 0.3, part.Position.Z), Vector3.new(0, -0.9, 0), restParams)
+					local moved = state.TeamBaseRuins.MovedAt(ruin.graded, part.Position.X, part.Position.Z)
+					if bottom > ground + 0.3 and not under then
 						hovering += 1
+						if moved and math.abs(moved) > 0.3 then
+							onMoved += 1
+						end
+						if #named < 10 or (moved and math.abs(moved) > 0.3) then
+							local top = part
+							while top.Parent and top.Parent ~= workspace.Map do
+								top = top.Parent
+							end
+							local l = ruin.frame:PointToObjectSpace(part.Position)
+							table.insert(named, (moved and math.abs(moved) > 0.3) and 1 or #named + 1, string.format("%s/%s %.1f up at (%.0f, %.0f)%s, ground %s", top.Name, part.Name, bottom - ground, l.X, l.Z,
+								part.CanCollide and "" or " non-collidable", moved and string.format("moved %+.1f", moved) or "not graded"))
+						end
 					end
 				end
 			end
 		end
-		note(string.format("team %d: %d base vehicles, %d overlapping pairs (want 0); map scenery within 90: %d near the ground, %d hovering over 0.3 (want 0)",
-			team, #vehicles, overlaps, looked, hovering))
+		note(string.format("team %d: %d base vehicles, %d overlapping pairs (want 0); map scenery within 140: %d near the ground, %d hovering over 0.3 with nothing under it, %d of them on ground the base's work moved (want 0)%s",
+			team, #vehicles, overlaps, looked, hovering, onMoved, #named > 0 and (": " .. table.concat(named, ", ")) or ""))
 		local pairsFound = ZFight.Scan({ model })
 		local floating, examined = groundGaps(grounded(model, ruin.height))
+		local plinth = false
+		for _, child in ipairs(model:GetChildren()) do
+			if child.Name == "Foundation" and child:IsA("BasePart") then
+				plinth = true
+			end
+		end
 		note(string.format("team %d (%s): %d parts, floor at %.2f, %s; %d pads, %d of %d chest spots with a chest, %d of %d bays with a vehicle; ZFight.Scan %d pairs; ground: %d of %d slabs/panels floating",
-			team, ruin.model.Name, parts, ruin.height, plinth and "ON A PLINTH (ground not levelled)" or "on levelled ground",
+			team, ruin.model.Name, parts, ruin.height, plinth and "ON A PLINTH" or "flush on levelled ground",
 			#ruin.pads, chestsOn, #ruin.chestSpots, vehiclesIn, #ruin.vehicleBays, #pairsFound, floating, examined))
 		for index, pair in ipairs(pairsFound) do
 			if index > 6 then
@@ -233,7 +350,61 @@ local function setup()
 		note("planted: a paving slab lifted 1 stud reads " .. (floating == 1 and "FLOATING (caught)" or "grounded (MISSED)"))
 		copy:Destroy()
 	end
+
+	-- A vehicle for the ramp views: the biggest of team 1's, copied.
+	local biggest, biggestSize = nil, 0
+	for _, vehicle in ipairs(folder and folder:GetChildren() or {}) do
+		if vehicle:IsA("Model") then
+			local _, size = vehicle:GetBoundingBox()
+			if size.X * size.Z > biggestSize then
+				biggest, biggestSize = vehicle, size.X * size.Z
+			end
+		end
+	end
+	state.vehicle = biggest
 	state.ready = true
+end
+
+-- A copy of the biggest base vehicle stood on team 1's ground at local (x, z), nose along `dir`,
+-- pitched to the ground's grade there.
+local function standVehicle(x, z, dir)
+	if state.shown then
+		state.shown:Destroy()
+		state.shown = nil
+	end
+	if not state.vehicle then
+		return
+	end
+	local copy = state.vehicle:Clone()
+	local pivot = copy:GetPivot()
+	local box, size = copy:GetBoundingBox()
+	local drop = pivot.Position.Y - (box.Position.Y - size.Y / 2)
+	local ahead, behind = Vector3.new(x, 0, z) + dir * 5, Vector3.new(x, 0, z) - dir * 5
+	local g1, g2 = groundLocal(1, ahead.X, ahead.Z), groundLocal(1, behind.X, behind.Z)
+	local mid = at(1, x, 0, z)
+	local y = ((g1 or 0) + (g2 or 0)) / 2
+	local worldDir = (at(1, ahead.X, 0, ahead.Z) - at(1, behind.X, 0, behind.Z)) * Vector3.new(1, 0, 1)
+	local rise = (g1 or 0) - (g2 or 0)
+	local forward = (worldDir + Vector3.new(0, rise, 0)).Unit
+	copy:PivotTo(CFrame.lookAt(Vector3.new(mid.X, y + drop + 0.1, mid.Z), Vector3.new(mid.X, y + drop + 0.1, mid.Z) + forward))
+	copy.Parent = workspace
+	state.shown = copy
+end
+
+-- An eye-level view from outside team 1's compound: the camera 5.2 over the ground at local (x, z),
+-- looking at local (tx, ty over the floor, tz).
+local function outside(name, x, z, tx, ty, tz, fov)
+	return {
+		name = name,
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			Lighting.ClockTime = 14.5
+			local g = groundLocal(1, x, z) or state.ruins[1].height
+			local from = at(1, x, 0, z)
+			look(camera, Vector3.new(from.X, g + 5.2, from.Z), at(1, tx, ty, tz), fov or 65)
+		end,
+	}
 end
 
 local views = {
@@ -242,7 +413,7 @@ local views = {
 		settle = 4,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 70, 70, -95), at(1, 0, 0, 0), 55)
+			look(camera, at(1, 90, 90, -130), at(1, 0, 0, 0), 55)
 		end,
 	},
 	{
@@ -250,19 +421,59 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(2, 70, 70, -95), at(2, 0, 0, 0), 55)
+			look(camera, at(2, 90, 90, -130), at(2, 0, 0, 0), 55)
 		end,
 	},
+	outside("03_front_from_the_arena_eye_level", 10, -100, 10, 5, 0),
+	outside("04_east_side_eye_level", 105, -10, 0, 5, 0),
+	outside("05_back_eye_level", -10, 100, 0, 5, 0),
+	outside("06_west_side_eye_level", -105, 10, 0, 5, 0),
 	{
-		name = "03_front_from_the_arena_eye_level",
+		name = "07_main_gate_ramp_with_a_vehicle",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 10, 5.5, -95), at(1, 0, 5, 0), 60)
+			standVehicle(24, -70, Vector3.new(0, 0, -1))
+			local g = groundLocal(1, 58, -118) or state.ruins[1].height
+			local from = at(1, 58, 0, -118)
+			look(camera, Vector3.new(from.X, g + 16, from.Z), at(1, 24, 0, -62), 65)
 		end,
 	},
 	{
-		name = "04_spawn_shelter",
+		name = "08_east_gate_ramp_with_a_vehicle",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			standVehicle(76, 4, Vector3.new(1, 0, 0))
+			local g = groundLocal(1, 118, 44) or state.ruins[1].height
+			local from = at(1, 118, 0, 44)
+			look(camera, Vector3.new(from.X, g + 16, from.Z), at(1, 62, 0, 4), 65)
+		end,
+	},
+	{
+		name = "09_the_ground_round_it_from_high",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			if state.shown then
+				state.shown:Destroy()
+				state.shown = nil
+			end
+			look(camera, at(1, 150, 120, 120), at(1, 0, 0, 0), 55)
+		end,
+	},
+	{
+		name = "10_team2_front_eye_level",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			local p = at(2, 10, 0, -100)
+			local g = groundAt(p.X, p.Z) or state.ruins[2].height
+			look(camera, Vector3.new(p.X, g + 5.2, p.Z), at(2, 10, 5, 0), 65)
+		end,
+	},
+	{
+		name = "11_spawn_shelter",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
@@ -271,33 +482,15 @@ local views = {
 		end,
 	},
 	{
-		name = "05_collapsed_corner",
+		name = "12_vehicle_yard",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, -12, 6, 26), at(1, 0, 3, 13), 65)
-		end,
-	},
-	{
-		name = "06_vehicle_yard",
-		settle = 3,
-		setup = function(_, camera)
-			setup()
-			-- From above the workbench corner, over both rows of parked vehicles: the back row (bays
-			-- 4-6) facing the east gate, the front row (1-3) facing the main gate.
 			look(camera, at(1, 8, 14, 18), at(1, 30, 1, -16), 70)
 		end,
 	},
 	{
-		name = "06b_east_gate_from_outside",
-		settle = 3,
-		setup = function(_, camera)
-			setup()
-			look(camera, at(1, 78, 6, 4), at(1, 32, 3, 4), 60)
-		end,
-	},
-	{
-		name = "07_supply_room",
+		name = "13_supply_room",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
@@ -305,7 +498,7 @@ local views = {
 		end,
 	},
 	{
-		name = "08_courtyard_from_the_tower",
+		name = "14_courtyard_from_the_tower",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
@@ -313,7 +506,7 @@ local views = {
 		end,
 	},
 	{
-		name = "09_dusk_lamps",
+		name = "15_dusk_lamps",
 		settle = 4,
 		setup = function(_, camera)
 			setup()

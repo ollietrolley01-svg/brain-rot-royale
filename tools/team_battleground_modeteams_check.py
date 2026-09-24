@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from team_vehicles_check import PRELUDE, read, region, vehicle_models  # noqa: E402
-from team_base_ruins_modeteams_check import STUB as RUIN_STUB, luau_to_lua  # noqa: E402
+from team_base_ruins_modeteams_check import STUB as RUIN_STUB, chest_stock, luau_to_lua  # noqa: E402
 import objective_zone_check as OZ  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
@@ -183,6 +183,9 @@ def run(root, plant=None, seeds=6):
         R = lua.eval("{}")
         R.models = lua.table_from([lua.table_from(list(m[:2]) + [int(m[2])]) for m in models])
         R.mounts = lua.table_from(mounts)
+        # The compound stub needs the chest stock; without it every compound failed to build, which
+        # this check never noticed until ModeTeams began retrying other sites (it counts the builds).
+        R.chestStock = chest_stock(root)
         lua.execute("math.randomseed(%d)" % seed)
         lua.globals()._R = R
         lua.execute(PRELUDE.replace("local R = ...", "local R = _R"))
