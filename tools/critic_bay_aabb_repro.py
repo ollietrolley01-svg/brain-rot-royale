@@ -10,8 +10,9 @@ ModeTeams.lua) and whether its real box does too.
     python3 tools/critic_bay_aabb_repro.py [repo]     exit 1 while any bay is taken by an AABB-only hit
     python3 tools/critic_bay_aabb_repro.py [repo] --exact   the same, counting only real overlaps (the fix)
 
-Until ModeTeams confirms each hit exactly (the fix in critic_findings.md C2), the first form fails; the
-second must pass today (0 real overlaps), which is the invariant the fix relies on.
+The first form shows what the raw GetPartBoundsInBox query returns, and it always reports those hits:
+that is why ModeTeams must confirm each hit exactly (landed in 0e339d8). The second form is the
+invariant that fix relies on, that no bay really overlaps the compound, and it must pass.
 """
 import math
 import re
