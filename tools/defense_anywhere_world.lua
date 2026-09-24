@@ -332,8 +332,15 @@ end
 moduleInstance("DefensePreview", playerScripts)
 
 W.dropped, W.notes = {}, {}
-stubs.Remotes = { Event = function() return { FireAllClients = function() end, FireClient = function() end } end,
-	Function = function() return {} end }
+W.fired = {}
+local remoteEvents = {}
+stubs.Remotes = { Event = function(name)
+	if not remoteEvents[name] then
+		W.fired[name] = {}
+		remoteEvents[name] = { FireAllClients = function(_, info) table.insert(W.fired[name], info) end, FireClient = function() end }
+	end
+	return remoteEvents[name]
+end, Function = function() return {} end }
 stubs.CombatService = { ConfirmHit = function() end }
 stubs.HazardService = { Mine = function() return nil end }
 stubs.DestructibleService = { OnPartBroken = function() end, RestingOn = function() return {} end, SettleDown = function() end }
@@ -814,20 +821,28 @@ scene("objective_centre", "objective", function()
 	objective.Parent = hill
 	return V(0, 0, 0), NORTH
 end)
+-- A team base's bay and its way out, as TeamBaseRuins now marks them: an invisible NoBuildLane part
+-- tagged NoBuild (tools/defense_anywhere_check.py checks the real base's parts cover every lane).
+local function lane(x0, x1, z0, z1)
+	local zone = block("NoBuildLane", V(x1 - x0, 20, z1 - z0), V((x0 + x1) / 2, 4, (z0 + z1) / 2))
+	zone.Transparency = 1
+	zone.CanCollide = false
+	zone.CanQuery = false
+	zone.CanTouch = false
+	zone:SetAttribute("NoBuildReason", DefensePlacement.Refusals.lane)
+	W.tagged.NoBuild = W.tagged.NoBuild or {}
+	table.insert(W.tagged.NoBuild, zone)
+	return zone
+end
 scene("vehicle_lane", "lane", function()
-	local base = Instance.new("Model")
-	base.Name = "TeamBaseBlue"
-	base.Parent = mapFolder
-	local yard = Instance.new("Model")
-	yard.Name = "VehicleYard"
-	yard.Parent = base
-	for _, x in ipairs({ 12.5, 25, 37.5 }) do
-		local line = block("BayLine", V(0.3, 0.05, 22), V(x - 6.25, 0.03, -26), yard)
-		line.CanCollide = false
-	end
-	block("WheelStop", V(4.4, 0.5, 0.6), V(25, 0.25, -15), yard)
-	-- In the lane between the bays and the gate, clear of the yard's own parts.
-	return V(25, 0, -40), NORTH
+	lane(19.6, 30.4, -62, -14.37)
+	-- In the lane between the bay and the gate.
+	return V(25, 0, -36), NORTH
+end)
+scene("beside_vehicle_lane", "build", function()
+	lane(19.6, 30.4, -62, -14.37)
+	-- The rest of the yard is buildable: 12 studs clear of the lane's side.
+	return V(4, 0, -36), NORTH
 end)
 scene("covered_passage", { "door", "room" }, function()
 	-- A 14-wide tunnel, 60 long: nothing fits across it without shutting it.
@@ -999,11 +1014,47 @@ function W.runAll(only)
 				local site = DefensePreview.Site(character, id, aim, { camera })
 				preview:Update(character, id, aim, { camera })
 				counts.throws = counts.throws + 1
+				local flights = #W.fired.DefenseKitFlight
 				local okThrow, thrown = pcall(WeaponService.DefenseEffect, owner, id, aim)
 				if not okThrow then
 					problem("error", sc.name, id, "throw: " .. tostring(thrown))
 				else
-					mock.advance(6, 1 / 30)
+					-- The kit in flight is the clients' (critic C10): the server sends the arc and puts no
+					-- kit in the world; a client flies it and it arrives on the spot the ghost showed.
+					local info = W.fired.DefenseKitFlight[flights + 1]
+					local serverKit = false
+					for _, d in ipairs(workspace:GetDescendants()) do
+						if d.Name == id .. "Kit" then
+							serverKit = true
+						end
+					end
+					if serverKit or not info then
+						problem("flight", sc.name, id, serverKit and "the server put a kit in the world to move" or "no flight sent to clients")
+					end
+					local flownAt = time()
+					local kit = info and DefensePreview.FlyKit(info)
+					-- Every frame the client draws, the kit is where the server's own arc says (the
+					-- arc the server built from, recomputed here from the throw, not from the message).
+					local worstOff = 0
+					for _ = 1, 180 do
+						mock.advance(1 / 30, 1 / 30)
+						RunService.RenderStepped:Fire(1 / 30)
+						if kit and kit.Parent then
+							local t = time() - flownAt
+							local want = DefensePlacement.ArcPoint(site.from, site.velocity, t)
+							worstOff = math.max(worstOff, (kit:GetPivot().Position - want).Magnitude)
+						end
+					end
+					if kit and kit.Parent then
+						problem("flight", sc.name, id, "the flown kit is still in the air after it landed")
+					end
+					if info then
+						local arrive = DefensePlacement.ArcPoint(site.from, site.velocity, info.landTime)
+						local off = (arrive - site.target).Magnitude
+						if off > 0.2 or worstOff > 0.05 then
+							problem("flight", sc.name, id, string.format("the flown kit arrives %.2f from the ghost's landing, strays %.2f off the arc", off, worstOff))
+						end
+					end
 					local built = latest(id)
 					if site.origin and not built then
 						problem("preview", sc.name, id, "the ghost said it builds; the throw built nothing (" .. tostring(W.notes[#W.notes]) .. ")")

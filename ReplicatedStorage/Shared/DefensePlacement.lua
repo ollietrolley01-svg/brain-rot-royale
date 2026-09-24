@@ -23,8 +23,8 @@
 --   * against a wall or in a gap too small for it: slid to the nearest spot within SlideMax that is
 --     free, rather than refused.
 -- What it still refuses, because each one protects somebody: a player, bot or vehicle in the way;
--- a spawn (the pads, the team bunker), an objective's centre, a team base's vehicle yard and the way
--- out of it; a doorway or a covered passage the structure would seal; the lobby; nothing to stand on
+-- a spawn (the pads, the team bunker), an objective's centre, a team base's vehicle bays and their
+-- ways out (TeamBaseRuins tags those "NoBuild"); a doorway or a covered passage the structure would seal; the lobby; nothing to stand on
 -- at all (off the map, deep water); and anything tagged "NoBuild". The count cap stays in
 -- DefenseService. `defenses` is the folder built defenses live in, which never counts as ground;
 -- `extraExclude` lets the client leave out what only it has (the camera's viewmodel and preview,
@@ -163,7 +163,10 @@ function DefensePlacement.TraceThrow(from, velocity, flightTime, params, steps)
 		local point = from + velocity * t - Vector3.new(0, 0.5 * gravity * t * t, 0)
 		local hit = params and workspace:Raycast(previous, point - previous, params) or nil
 		if hit then
-			return hit.Position, true, t
+			-- The time the arc actually reaches the hit, not the end of the segment it is on: a kit
+			-- flown along the arc to this time arrives on the spot.
+			local before = flightTime * (index - 1) / steps
+			return hit.Position, true, before + (t - before) * hit.Distance / math.max((point - previous).Magnitude, 1e-6)
 		end
 		previous = point
 	end
@@ -195,7 +198,8 @@ function DefensePlacement.Landing(from, velocity, flightTime, params)
 		local next_ = DefensePlacement.ArcPoint(from, velocity, at)
 		local hit = params and workspace:Raycast(previous, next_ - previous, params) or nil
 		if hit then
-			return hit.Position, true, at
+			local before = flightTime + DefensePlacement.FallTime * (index - 1) / steps
+			return hit.Position, true, before + (at - before) * hit.Distance / math.max((next_ - previous).Magnitude, 1e-6)
 		end
 		previous = next_
 	end
@@ -273,7 +277,6 @@ DefensePlacement.LadderStep = 1.5
 -- The protected places.
 DefensePlacement.ObjectiveCentreShare = 0.35
 DefensePlacement.SpawnMargin = 4
-DefensePlacement.LaneMargin = 6
 DefensePlacement.NoBuildTag = "NoBuild"
 
 -- What each structure needs beyond its box: a wall tilts along its length; a door (the local spot
@@ -587,23 +590,12 @@ local function footprintDistance(frame, halfX, halfZ, x, z)
 	return math.sqrt(dx * dx + dz * dz)
 end
 
-local function teamBases()
-	local list = {}
-	for _, parent in ipairs({ workspace, workspace:FindFirstChild("Map") }) do
-		for _, child in ipairs(parent:GetChildren()) do
-			if string.sub(child.Name, 1, 8) == "TeamBase" and child:IsA("Model") then
-				table.insert(list, child)
-			end
-		end
-	end
-	return list
-end
-
 -- The protected places, from what the world itself shows (the client has to reach the same answer
 -- for its preview, so nothing here may come from a server-only table): an objective's centre (the
 -- Hill models' own HillX/HillZ/HillRadius), a spawn (any SpawnLocation, and a team base's "Spawn"
--- bunker), a team base's vehicle yard and the lane out of it, and anything tagged NoBuild -- the way
--- in for any other place that should be kept clear.
+-- bunker), and anything tagged NoBuild -- a team base's bays and their ways out (TeamBaseRuins'
+-- NoBuildLane parts, whose NoBuildReason says so), and the way in for any other place to keep clear.
+-- Tags replicate, so the client's preview sees the same zones.
 local function zoneRefusal(ctx, frame)
 	local R = DefensePlacement.Refusals
 	local box = frame * CFrame.new(0, ctx.size.Y / 2, 0)
@@ -625,16 +617,6 @@ local function zoneRefusal(ctx, frame)
 		end
 		if cf and DefensePlacement.BoxesOverlap(cf, size, box, ctx.size) then
 			return tagged:GetAttribute("NoBuildReason") or R.nobuild
-		end
-	end
-	for _, base in ipairs(teamBases()) do
-		local yard = base:FindFirstChild("VehicleYard")
-		if yard then
-			local cf, size = yard:GetBoundingBox()
-			local margin = 2 * DefensePlacement.LaneMargin
-			if DefensePlacement.BoxesOverlap(cf, size + Vector3.new(margin, margin, margin), box, ctx.size) then
-				return R.lane
-			end
 		end
 	end
 	local margin = 2 * DefensePlacement.SpawnMargin

@@ -10,6 +10,7 @@
 --   preview:Update(character, itemId, aimPoint)  -- or with an aim point (galleries, probes)
 --   preview:Hide()
 --   DefensePreview.Site(character, itemId, aimPoint)  -- the prediction alone, no drawing (probes)
+--   DefensePreview.FlyKit(info)                  -- a thrown structure kit, flown on this client
 --
 -- It predicts rather than guesses:
 --   * the aim is CombatClient's own crosshair point (AimState), the point the throw is sent with;
@@ -36,6 +37,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DefensePlacement = require(Shared:WaitForChild("DefensePlacement"))
 local ItemData = require(Shared:WaitForChild("ItemData"))
+local ItemModels = require(Shared:WaitForChild("ItemModels"))
+local RunService = game:GetService("RunService")
 
 local DefensePreview = {}
 DefensePreview.__index = DefensePreview
@@ -60,7 +63,8 @@ DefensePreview.InvalidColor = Color3.fromRGB(232, 92, 92)
 
 -- Workspace folders only a client has (effects drawn locally): never ground, never in the way. The
 -- server has none of them, so leaving them out keeps the client's checks the same as the server's.
-DefensePreview.ClientOnlyFolders = { "CompanionFx", "GlassFx", "LootFx", "StormWall", "BRR_GunFx", "BRR_Throwables", "BRR_DefensePreview" }
+DefensePreview.ClientOnlyFolders = { "CompanionFx", "GlassFx", "LootFx", "StormWall", "BRR_GunFx", "BRR_Throwables", "BRR_DefensePreview",
+	"BRR_DefenseKits" }
 
 local REFRESH = 1 / 20
 local ARC_DOTS = 36
@@ -567,6 +571,72 @@ function DefensePreview:Hide()
 	for _, bar in ipairs(self.aimCross) do
 		bar.Transparency = 1
 	end
+end
+
+--------------------------------------------------------------------------------
+-- Thrown kits, flown here
+--------------------------------------------------------------------------------
+
+-- The server decides where a structure kit lands and builds there when it arrives
+-- (DefenseService.throwStructure); the kit in flight is only a picture, so each client flies its own
+-- along the same arc (DefensePlacement.ArcPoint) every frame, instead of watching a server part step at
+-- replication rate (critic C10). `info` is { itemId, from, velocity, landTime, spin }. Returns the kit
+-- (probes), or nil for anything malformed.
+function DefensePreview.FlyKit(info)
+	if type(info) ~= "table" or typeof(info.from) ~= "Vector3" or typeof(info.velocity) ~= "Vector3"
+		or type(info.landTime) ~= "number" or info.landTime ~= info.landTime or info.landTime < 0 or info.landTime > 10 then
+		return nil
+	end
+	local kit = ItemModels.Build(info.itemId, { anchored = true, scale = 1.5, name = tostring(info.itemId) .. "Kit" })
+	if not kit then
+		return nil
+	end
+	for _, part in ipairs(kit:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+		end
+	end
+	local spin = typeof(info.spin) == "CFrame" and info.spin or CFrame.new()
+	local holder = workspace:FindFirstChild("BRR_DefenseKits")
+	if not holder then
+		holder = Instance.new("Folder")
+		holder.Name = "BRR_DefenseKits"
+		holder.Parent = workspace
+	end
+	local function place(t)
+		kit:PivotTo(CFrame.new(DefensePlacement.ArcPoint(info.from, info.velocity, t)) * spin * CFrame.Angles(t * 5, t * 3, 0))
+	end
+	place(0)
+	kit.Parent = holder
+	-- Game time, not os.clock (CPU time), for anything a player sees move.
+	local started = time()
+	local follow
+	follow = RunService.RenderStepped:Connect(function()
+		local t = time() - started
+		if t >= info.landTime or not kit.Parent then
+			follow:Disconnect()
+			kit:Destroy()
+			return
+		end
+		place(t)
+	end)
+	return kit
+end
+
+-- On a running client, every structure kit anyone throws is flown here. HudClient requires this module
+-- at start, so this listens from the first frame; tools that require it outside a game don't listen.
+if RunService:IsClient() and RunService:IsRunning() then
+	task.spawn(function()
+		local okRemotes, Remotes = pcall(require, Shared:WaitForChild("Remotes"))
+		if okRemotes and Remotes then
+			Remotes.Event("DefenseKitFlight").OnClientEvent:Connect(function(info)
+				pcall(DefensePreview.FlyKit, info)
+			end)
+		end
+	end)
 end
 
 function DefensePreview:Destroy()

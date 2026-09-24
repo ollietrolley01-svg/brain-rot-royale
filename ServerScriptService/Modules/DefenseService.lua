@@ -16,7 +16,6 @@
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -48,6 +47,8 @@ local COLLAPSE_LINGER = 3.5
 local THROW_TIMEOUT = 4
 
 local buildFx = Remotes.Event("PlaygroundFx")
+-- A structure kit's flight, for every client to draw (DefensePreview.FlyKit).
+local kitFlight = Remotes.Event("DefenseKitFlight")
 
 local IRON = Color3.fromRGB(58, 60, 68)
 local STEEL = Color3.fromRGB(160, 164, 172)
@@ -559,40 +560,18 @@ local function landKit(player, itemId, landed, facing)
 end
 
 -- A structure's kit: where it comes down is decided on the throw, on the very arc the preview walks
--- (DefensePlacement.Landing), and the kit flies that arc and deploys there. It used to be a physics
+-- (DefensePlacement.Landing), and it deploys there when the kit would arrive. It used to be a physics
 -- body that anchored on first contact (#128 A), which still left what it first touched to physics: a
 -- clipped corner, a glance off a post, a kit that rolled before Touched fired. Now nothing bounces it
--- anywhere, and the ghost and the build are the same spot by construction. The kit is anchored and
--- touches nothing; it is only the picture of the throw.
+-- anywhere, and the ghost and the build are the same spot by construction.
+-- The kit itself is only a picture, so the server doesn't move one: every client is sent the arc and
+-- flies its own kit along it (DefensePreview.FlyKit), smooth at the client's frame rate. A server kit
+-- PivotTo'd each Heartbeat reached other players as a part stepping along (critic C10).
 local function throwStructure(player, character, itemId, from, velocity, flightTime, facing, spin)
 	local landing, _struck, landTime = DefensePlacement.Landing(from, velocity, flightTime,
 		DefensePlacement.GroundParams(character, nil, nil))
-	local kit = ItemModels.Build(itemId, { anchored = true, scale = 1.5, name = itemId .. "Kit" })
-	if not kit then
-		return false
-	end
-	for _, part in ipairs(kit:GetDescendants()) do
-		if part:IsA("BasePart") then
-			part.Anchored = true
-			part.CanCollide = false
-			part.CanQuery = false
-			part.CanTouch = false
-		end
-	end
-	kit:PivotTo(CFrame.new(from) * spin)
-	kit.Parent = ensureFolder()
-	-- Game time, not os.clock (CPU time), for anything a player sees move.
-	local started = time()
-	local follow = RunService.Heartbeat:Connect(function()
-		if not kit.Parent then
-			return
-		end
-		local t = math.min(time() - started, landTime)
-		kit:PivotTo(CFrame.new(DefensePlacement.ArcPoint(from, velocity, t)) * spin * CFrame.Angles(t * 5, t * 3, 0))
-	end)
+	kitFlight:FireAllClients({ itemId = itemId, from = from, velocity = velocity, landTime = landTime, spin = spin })
 	task.delay(landTime, function()
-		follow:Disconnect()
-		kit:Destroy()
 		if not player.Parent then
 			LootService.DropItem(itemId, landing, 1)
 			return

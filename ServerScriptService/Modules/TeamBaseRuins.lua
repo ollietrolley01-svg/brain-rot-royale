@@ -1088,10 +1088,10 @@ local function buildYard(model)
 	-- back of each, a wheel stop behind.
 	for _, x in ipairs({ 6.25, 18.75, 31.25, 43.75 }) do
 		local line = groundMark(yard, "BayLine", x, FRONT_Z, 0.3, BAY_HALF_LENGTH * 2, 0, YELLOW_PAINT, MAT.SmoothPlastic, 0)
-		-- The yard's pivot turns with the compound (critic C8): DefensePlacement refuses a build inside
-		-- `VehicleYard:GetBoundingBox()`, and a Model with no PrimaryPart has its box on the WORLD axes,
-		-- so a compound turned 45 degrees refused a world-aligned square round its yard that took in
-		-- a third of the courtyard and the bunker's pads. A bay line is square to the compound's frame.
+		-- The yard's pivot turns with the compound (critic C8): a Model with no PrimaryPart has its
+		-- GetBoundingBox on the WORLD axes. DefensePlacement no longer reads the yard's box (the
+		-- NoBuildLane parts below replaced that), but anything that measures the yard still wants its
+		-- box square to the compound. A bay line is square to the compound's frame.
 		if not yard.PrimaryPart then
 			yard.PrimaryPart = line
 		end
@@ -1116,6 +1116,32 @@ local function buildYard(model)
 		groundDisc(yard, "OilStain", BACK_X + rnd(-3, 3), z + rnd(-1.5, 1.5), rnd(1.8, 2.8), SOOT, MAT.Slate, 0)
 	end
 	camoNet(yard, { -12.5, -1.5, 9.5, 20.5 }, BACK_X - 11.4, BACK_X + 11, true, nil)
+
+	-- Where a thrown defense may not go up: each bay and its straight way out through its gate, a
+	-- car's width and a stud either side, out to the DRIVE_OUT line tools/team_base_ruins_check.py
+	-- clears the lanes to (62 from the compound's middle). Invisible, and nothing else can meet them:
+	-- no collision, no queries, no touches. DefensePlacement reads the "NoBuild" tag. These replace a
+	-- rule that refused the yard's whole bounding box plus a 6-stud margin -- about 43% of the compound
+	-- -- so the courtyard, the supply side and the yard's edges are buildable again (#128, 09-24).
+	-- The ends sit off every real face (11.63, not the wheel stop's 11.6) so none shares a plane.
+	local CollectionService = game:GetService("CollectionService")
+	local laneHalf, reach, low, high = 5.4, 62, -5.95, 13.95
+	local function noBuild(x0, x1, z0, z1)
+		local part = box(yard, "NoBuildLane", x0, x1, low, high, z0, z1, CONCRETE_LIGHT, MAT.SmoothPlastic, { tag = false })
+		part.Transparency = 1
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.CastShadow = false
+		part:SetAttribute("NoBuildReason", "Keep the vehicle bays' way out clear.")
+		CollectionService:AddTag(part, "NoBuild")
+	end
+	for _, x in ipairs(FRONT_BAYS) do
+		noBuild(x - laneHalf, x + laneHalf, -reach, FRONT_Z + 11.63)
+	end
+	for _, z in ipairs(BACK_BAYS) do
+		noBuild(BACK_X - 11.63, reach, z - laneHalf, z + laneHalf)
+	end
 
 	-- A work lamp on the back row's inner pole, looking out over the bays.
 	box(yard, "WorkLampArm", 20.6, 21.8, 9.2, 9.6, 9.1, 9.9, STEEL_DARK, MAT.Metal, TRIM)
