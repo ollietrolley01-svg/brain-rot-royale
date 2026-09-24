@@ -280,7 +280,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   reads as the leading score and the gap. Render outstanding. — *HUD*
 - `[x]` **55. Improve the reloading sounds.** The 7 closing beats now carry a low layer; opening beats
   stay light; volumes untouched. **In the build — needs your ears.** — *audio*
-- `[ ]` **56. Make the whole map destructible.** Big design job, not started. — *destruction*
+- `[~]` **56. Make the whole map destructible.** Most of the map already breaks (walls, upper floors, roofs, props, trees, rocks, parked cars, terrain craters). 24 Sep: balconies, rails, railings, ridge caps, coping, stair soffits/headers, docks and bumpers now break, and solid pieces fall with the wall/roof/floor holding them instead of floating; town signs, fingerposts and stop signs break. Still fixed: roads, bridges, ground-floor slabs, traffic signals. — *destruction*
 - `[~]` **57. Roadkill with the cars.** Built — damage scales with speed, nothing below walking pace,
   never your own passengers. **IN THE BUILD BUT UNPROVEN.** You re-asked as #110, which means it is
   absent or silent for you — prove it fires before touching it. — *vehicles*
