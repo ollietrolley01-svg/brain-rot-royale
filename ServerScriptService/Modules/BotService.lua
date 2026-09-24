@@ -104,6 +104,259 @@ local BOT_WEAPON_HOLD = { BoomboxBassline = true }
 -- Mostly floor-tier guns, with the occasional good one so some fights bite harder.
 local WEAPON_ODDS = { Common = 44, Uncommon = 38, Rare = 15, Epic = 3, Legendary = 0 }
 
+--------------------------------------------------------------------------------
+-- BOT ARCHETYPES
+--------------------------------------------------------------------------------
+-- Every bot used to play the same way: nearest target, 55 studs, strafe, cover at 80% health. Thirty
+-- copies of one player read as thirty statues that move. Each bot is now dealt an ARCHETYPE at spawn
+-- (Oliver, 2026-09-24: "different kinds that have different strategies in fighting and looting"), a
+-- table of dials the fighting, looting and rotation code reads instead of one shared constant. The
+-- dials say how a bot COMMITS: what it fights, from how far, when it hides, when it leaves. They never
+-- touch how well it shoots. Aim is MatchConfig.BotAccuracy* and AIM_SETTLE_DELAY, and stays where
+-- Oliver put it (#40/#75/#81): aggression is commitment, not lethality. tools/bot_aggression_check.py
+-- fails if the hit chance at any range moves.
+--
+-- Layered on top is the WEAPON CLASS a bot happens to hold (WeaponData `style`): a shotgun wants to be
+-- at 12 studs and pushes corners, a sniper wants 130 and moves after every shot, an LMG sits and
+-- suppresses, a launcher never fires point-blank. ARCHETYPE_CLASS is the small table where the two
+-- meet (a Marksman with a shotgun still keeps more distance than a Rusher with one). The merged result
+-- for a bot's current gun is BotService.DialsOf(bot), rebuilt when its gun changes.
+--
+-- Reading the dials elsewhere:
+--   BotService.ArchetypeOf(bot)  -> the archetype table (has .name), nil for a token that isn't a bot
+--   BotService.DialsOf(bot)      -> archetype x weapon class, the table the fight code runs on
+--   BotService.Archetypes        -> name -> archetype, for probes and the mode mix
+--   BotService.WeaponClasses     -> style -> class dials
+--   BotService.AssignArchetype(bot, name) -> force one (probes, a mode that wants a set squad)
+-- Loot and rotation dials (lootGreed, preferredWeaponClasses, rotateEarly, chestPriority, healPriority)
+-- are DEFINED here so the whole personality is one table, and READ by the loot/rotation code.
+--
+-- Dial meanings (fighting):
+--   rangeScale         multiplies the weapon class's preferred engagement distance
+--   coverUse           0-1, how readily the bot takes cover when the fight rules say it may
+--   peek               peeks from cover: hides between bursts rather than standing in the gap
+--   repositionOnHit    0-1, chance a fresh hit makes it change position (and drop the current move)
+--   targetPick         "closest" | "weakest" | "threat" | "engaged": what the target score favours
+--   pushTargetBelow    pushes a target under this health share (the MatchConfig one is the floor)
+--   retreatHealth      absolute health under which it leaves a close fight (MatchConfig is the default)
+--   healBelow          health share under which it uses heals (MatchConfig is the default)
+--   grenadeAt          minimum enemies bunched round the target before a frag goes over
+--   smokeToMove        smokes the ground between itself and the target before repositioning
+--   thirdParty         holds off a target that is busy with someone else until it is hurt
+--   thirdPartyBelow    ...under this health share (or the wait runs out: thirdPartyWait seconds)
+--   avoidUnforced      fights only what shoots it, is close, or is on its objective
+--   flank              works round the side of the target rather than straight at it
+--   holdObjective      KOTH: stays on a hill the team already holds rather than pushing off it
+--   buildRate          0-1, how readily it puts a barricade up when a build rule fires
+--   buildFortify       builds at a held objective or building with nobody shooting yet
+--   buildToCross       builds a wall mid-field to cross open ground toward the target
+--   buildToBlock       builds behind itself to break a pursuer's line of sight while leaving
+--   cookFrags          skilled enough to cook a frag for an airburst
+-- One local for the whole section: this file is close to Luau's 200-local limit for a chunk.
+local ARCH = {}
+
+ARCH.Types = {
+	Rusher = {
+		rangeScale = 0.55, coverUse = 0.25, peek = false, repositionOnHit = 0.15, targetPick = "weakest",
+		pushTargetBelow = 0.7, pushHealthAbove = 0.3, retreatHealth = 8, healBelow = 0.45,
+		grenadeAt = 2, smokeToMove = false, thirdParty = false, avoidUnforced = false, flank = false,
+		holdObjective = false, buildRate = 0.15, buildFortify = false, buildToCross = false, buildToBlock = false,
+		cookFrags = false,
+		lootGreed = 0.4, preferredWeaponClasses = { "shotgun", "smg", "doublebarrel" }, rotateEarly = false,
+		chestPriority = 0.4, healPriority = 0.3,
+	},
+	Marksman = {
+		rangeScale = 1.6, coverUse = 0.8, peek = true, repositionOnHit = 0.7, targetPick = "closest",
+		pushTargetBelow = 0.3, pushHealthAbove = 0.7, retreatHealth = 30, healBelow = 0.7,
+		grenadeAt = 3, smokeToMove = true, thirdParty = false, avoidUnforced = false, flank = false,
+		holdObjective = false, buildRate = 0.6, buildFortify = true, buildToCross = false, buildToBlock = false,
+		cookFrags = true,
+		lootGreed = 0.6, preferredWeaponClasses = { "sniper", "dmr", "rifle" }, rotateEarly = true,
+		chestPriority = 0.6, healPriority = 0.6,
+	},
+	Flanker = {
+		rangeScale = 0.85, coverUse = 0.6, peek = false, repositionOnHit = 0.5, targetPick = "engaged",
+		pushTargetBelow = 0.6, pushHealthAbove = 0.4, retreatHealth = 25, healBelow = 0.55,
+		grenadeAt = 2, smokeToMove = true, thirdParty = false, avoidUnforced = false, flank = true,
+		holdObjective = false, buildRate = 0.35, buildFortify = false, buildToCross = true, buildToBlock = false,
+		cookFrags = true,
+		lootGreed = 0.5, preferredWeaponClasses = { "smg", "rifle", "shotgun" }, rotateEarly = false,
+		chestPriority = 0.5, healPriority = 0.5,
+	},
+	Anchor = {
+		rangeScale = 1.15, coverUse = 0.9, peek = true, repositionOnHit = 0.1, targetPick = "threat",
+		pushTargetBelow = 0.3, pushHealthAbove = 0.8, retreatHealth = 20, healBelow = 0.65,
+		grenadeAt = 2, smokeToMove = false, thirdParty = false, avoidUnforced = false, flank = false,
+		holdObjective = true, buildRate = 0.9, buildFortify = true, buildToCross = false, buildToBlock = false,
+		cookFrags = false,
+		lootGreed = 0.5, preferredWeaponClasses = { "lmg", "rifle", "dmr" }, rotateEarly = true,
+		chestPriority = 0.7, healPriority = 0.6,
+	},
+	Opportunist = {
+		rangeScale = 1.2, coverUse = 0.7, peek = false, repositionOnHit = 0.4, targetPick = "weakest",
+		pushTargetBelow = 0.6, pushHealthAbove = 0.5, retreatHealth = 30, healBelow = 0.6,
+		grenadeAt = 2, smokeToMove = false, thirdParty = true, thirdPartyBelow = 0.6, thirdPartyWait = 8,
+		avoidUnforced = false, flank = false,
+		holdObjective = false, buildRate = 0.3, buildFortify = false, buildToCross = false, buildToBlock = false,
+		cookFrags = true,
+		lootGreed = 0.8, preferredWeaponClasses = { "rifle", "dmr", "smg" }, rotateEarly = false,
+		chestPriority = 0.8, healPriority = 0.7,
+	},
+	Survivor = {
+		rangeScale = 1.3, coverUse = 0.9, peek = true, repositionOnHit = 0.6, targetPick = "threat",
+		pushTargetBelow = 0.25, pushHealthAbove = 0.9, retreatHealth = 35, healBelow = 0.75,
+		grenadeAt = 3, smokeToMove = true, thirdParty = false, avoidUnforced = true, flank = false,
+		holdObjective = true, buildRate = 0.7, buildFortify = false, buildToCross = false, buildToBlock = true,
+		cookFrags = false,
+		lootGreed = 0.7, preferredWeaponClasses = { "rifle", "dmr", "pistol" }, rotateEarly = true,
+		chestPriority = 0.6, healPriority = 0.9,
+	},
+}
+for name, archetype in pairs(ARCH.Types) do
+	archetype.name = name
+end
+BotService.Archetypes = ARCH.Types
+
+-- What each gun class asks of the bot holding it, whatever its personality (Oliver: "react differently
+-- depending on the gun they have"). `range` is the preferred engagement distance before the archetype
+-- scales it; `minRange` is where it opens distance instead of closing (a launcher's own blast, a
+-- sniper's dead zone). `peek` is the style of working a corner: "push" goes round it, "hold" waits
+-- behind it and steps out to fire, "suppress" stands its ground and fires long bursts, "strafe"
+-- keeps moving in the open, "lob" fires at feet and cover from range. `burst` is the shots in one
+-- burst; `restScale` stretches BotBurstRest so a longer burst does not mean more rounds a minute
+-- (throughput is a lethality dial and stays put). `repositionAfterShots` moves the bot after that many
+-- shots from one spot. `reloadUnder` reloads early, behind cover, once the magazine is under that
+-- share. `fragToFlush` frags a target it can't see out of cover before pushing; `smokeToCross` smokes
+-- its own approach; `noFrags` never wastes a throwable on what it can simply shoot.
+ARCH.Classes = {
+	pistol       = { range = 30, minRange = 4, peek = "strafe", burst = { 2, 4 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	revolver     = { range = 34, minRange = 4, peek = "hold", burst = { 1, 2 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.35, fragToFlush = false, smokeToCross = false, noFrags = false },
+	smg          = { range = 20, minRange = 3, peek = "strafe", burst = { 4, 7 }, restScale = 1.5, repositionAfterShots = 0, reloadUnder = 0.25, fragToFlush = false, smokeToCross = true, noFrags = false },
+	shotgun      = { range = 12, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.8, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = true, smokeToCross = true, noFrags = false },
+	doublebarrel = { range = 10, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.8, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = true, smokeToCross = true, noFrags = false },
+	rifle        = { range = 55, minRange = 8, peek = "strafe", burst = { 2, 5 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	dmr          = { range = 90, minRange = 20, peek = "hold", burst = { 1, 2 }, restScale = 0.7, repositionAfterShots = 3, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	sniper       = { range = 130, minRange = 35, peek = "hold", burst = { 1, 1 }, restScale = 0.6, repositionAfterShots = 1, reloadUnder = 0.4, fragToFlush = false, smokeToCross = false, noFrags = false },
+	lmg          = { range = 60, minRange = 10, peek = "suppress", burst = { 6, 10 }, restScale = 2.2, repositionAfterShots = 0, reloadUnder = 0.2, fragToFlush = false, smokeToCross = false, noFrags = true },
+	minigun      = { range = 45, minRange = 8, peek = "suppress", burst = { 8, 14 }, restScale = 2.6, repositionAfterShots = 0, reloadUnder = 0.15, fragToFlush = false, smokeToCross = false, noFrags = true },
+	launcher     = { range = 45, minRange = 18, peek = "lob", burst = { 1, 1 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
+	blaster      = { range = 28, minRange = 4, peek = "strafe", burst = { 3, 6 }, restScale = 1.3, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	crossbow     = { range = 70, minRange = 12, peek = "hold", burst = { 1, 1 }, restScale = 0.6, repositionAfterShots = 2, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
+	railgun      = { range = 110, minRange = 25, peek = "hold", burst = { 1, 1 }, restScale = 0.6, repositionAfterShots = 1, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
+	cannon       = { range = 50, minRange = 15, peek = "lob", burst = { 1, 2 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
+}
+ARCH.Classes.default = ARCH.Classes.rifle
+-- Empty-handed: the fight code never runs without a gun, but the dials must still exist.
+ARCH.Classes.none = { range = 20, minRange = 0, peek = "strafe", burst = { 2, 5 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false }
+for style, class in pairs(ARCH.Classes) do
+	class.style = class.style or style
+end
+BotService.WeaponClasses = ARCH.Classes
+
+-- Where personality and gun disagree: overrides applied last, archetype -> class -> dial.
+ARCH.Overrides = {
+	Rusher = {
+		sniper = { rangeScale = 0.8, repositionAfterShots = 0 }, -- a Rusher with a sniper still closes
+		dmr = { rangeScale = 0.75 },
+		lmg = { peekStyle = "strafe" },
+	},
+	Marksman = {
+		shotgun = { rangeScale = 2.2, peekStyle = "hold" }, -- keeps corners between it and the target
+		doublebarrel = { rangeScale = 2.2, peekStyle = "hold" },
+		smg = { rangeScale = 1.8 },
+	},
+	Anchor = {
+		shotgun = { peekStyle = "hold" }, -- holds the doorway rather than pushing through it
+		smg = { peekStyle = "hold" },
+	},
+	Survivor = {
+		shotgun = { rangeScale = 2 }, -- won't go looking for the knife fight
+	},
+	Flanker = {
+		sniper = { rangeScale = 0.7, repositionAfterShots = 1 },
+	},
+}
+
+-- The archetype x weapon-class table a bot fights by, rebuilt only when its gun changes.
+function ARCH.classOf(def)
+	if not def then
+		return ARCH.Classes.none
+	end
+	return ARCH.Classes[def.style] or ARCH.Classes.default
+end
+
+function ARCH.dialsOf(bot)
+	local archetype = bot.archetype or ARCH.Types.Rusher
+	local class = ARCH.classOf(bot.weapon)
+	local cached = bot.dials
+	if cached and cached.archetype == archetype and cached.class == class then
+		return cached
+	end
+	local dials = {}
+	for key, value in pairs(archetype) do
+		dials[key] = value
+	end
+	dials.archetype = archetype
+	dials.class = class
+	dials.peekStyle = class.peek
+	dials.burst = class.burst
+	dials.restScale = class.restScale
+	dials.repositionAfterShots = class.repositionAfterShots
+	dials.reloadUnder = class.reloadUnder
+	dials.fragToFlush = class.fragToFlush
+	dials.smokeToCross = class.smokeToCross
+	dials.noFrags = class.noFrags
+	dials.aimLow = class.aimLow == true
+	dials.minRange = class.minRange
+	local overrides = ARCH.Overrides[archetype.name]
+	overrides = overrides and overrides[class.style]
+	if overrides then
+		for key, value in pairs(overrides) do
+			dials[key] = value
+		end
+	end
+	-- The distance it wants between itself and the target: class range x personality, never past
+	-- what the gun reaches comfortably, never inside the class's dead zone.
+	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
+	dials.range = math.max(dials.minRange + 4, math.min(class.range * dials.rangeScale, reach * 0.6))
+	bot.dials = dials
+	return dials
+end
+
+-- How many of each archetype a mode wants, out of a hundred. Team modes want role balance PER TEAM
+-- (below); the hill wants bodies that stay on it.
+ARCH.Mix = {
+	BattleRoyale = { Rusher = 20, Marksman = 15, Flanker = 15, Anchor = 10, Opportunist = 15, Survivor = 25 },
+	TeamDeathmatch = { Rusher = 30, Marksman = 20, Flanker = 20, Anchor = 15, Opportunist = 10, Survivor = 5 },
+	KingOfTheHill = { Rusher = 20, Marksman = 15, Flanker = 15, Anchor = 35, Opportunist = 10, Survivor = 5 },
+}
+BotService.ArchetypeMix = ARCH.Mix
+
+-- Stable order for a deck: pairs() order is not.
+ARCH.Order = { "Rusher", "Marksman", "Flanker", "Anchor", "Opportunist", "Survivor" }
+
+function BotService.AssignArchetype(bot, name)
+	local archetype = type(name) == "table" and name or ARCH.Types[name]
+	if not archetype then
+		return nil
+	end
+	bot.archetype = archetype
+	bot.dials = nil
+	if bot.character then
+		-- Read by tools/bot_probe.lua and the nameplate/debug overlays; nothing gameplay keys off it.
+		bot.character:SetAttribute("Archetype", archetype.name)
+	end
+	return archetype
+end
+
+function BotService.ArchetypeOf(bot)
+	return type(bot) == "table" and bot.isBot and (bot.archetype or ARCH.Types.Rusher) or nil
+end
+
+function BotService.DialsOf(bot)
+	return type(bot) == "table" and bot.isBot and ARCH.dialsOf(bot) or nil
+end
+
 -- Roblox's stock R15 animations. These ship with the platform, so they resolve without
 -- uploading anything; swap the ids here if you want a different set.
 --
@@ -2578,6 +2831,86 @@ local function botVehicleThink(bot, humanoid, root, head, now)
 	return true
 end
 
+--------------------------------------------------------------------------------
+-- BOT ARCHETYPES, the dealing half (the dials are at the top of the file)
+--------------------------------------------------------------------------------
+
+-- GameMode requires this module while loading (its replacement bots), so it is reached lazily.
+function ARCH.modeIdNow()
+	local gameMode = lazy("GameMode")
+	local ok, current = pcall(function()
+		return gameMode and gameMode.Current and gameMode.Current() or nil
+	end)
+	return ok and current and current.id or "BattleRoyale"
+end
+
+-- A shuffled deck holding the mix exactly for `count` bots, dealt in pairs so a team mode's alternate
+-- dealing (ModeTeams.Assign puts each new bot on the smaller side) gives both teams the same roles.
+function ARCH.deck(count, mix)
+	local deck = {}
+	local total = 0
+	for _, name in ipairs(ARCH.Order) do
+		total += mix[name] or 0
+	end
+	local carry = 0
+	for _, name in ipairs(ARCH.Order) do
+		local share = (mix[name] or 0) / math.max(1, total) * count + carry
+		local n = math.floor(share + 0.5)
+		carry = share - n
+		for _ = 1, n do
+			table.insert(deck, name)
+		end
+	end
+	while #deck < count do
+		table.insert(deck, ARCH.Order[math.random(1, #ARCH.Order)])
+	end
+	-- Shuffle in pairs: positions 1-2 alike, 3-4 alike... so alternate teams get a matching role.
+	local pairsList = {}
+	table.sort(deck)
+	for index = 1, #deck, 2 do
+		table.insert(pairsList, { deck[index], deck[index + 1] or deck[index] })
+	end
+	for index = #pairsList, 2, -1 do
+		local j = math.random(1, index)
+		pairsList[index], pairsList[j] = pairsList[j], pairsList[index]
+	end
+	local dealt = {}
+	for _, pair in ipairs(pairsList) do
+		table.insert(dealt, pair[1])
+		table.insert(dealt, pair[2])
+	end
+	return dealt
+end
+
+-- Team modes: once a bot knows its team, the team's roles are counted and this bot swaps to whatever
+-- the mix says the team is shortest of, if it is itself one the team has too many of. Once per body:
+-- a replacement bot (spawned singly, so no deck) lands in the gap the death left.
+function ARCH.balance(bot, team, mix, teamOf)
+	local counts, total = {}, 0
+	for _, other in ipairs(bots) do
+		if other ~= bot and other.humanoid and other.humanoid.Health > 0 and teamOf(other) == team then
+			local name = (other.archetype or ARCH.Types.Rusher).name
+			counts[name] = (counts[name] or 0) + 1
+			total += 1
+		end
+	end
+	local mine = (bot.archetype or ARCH.Types.Rusher).name
+	local size = total + 1
+	local shortest, shortfall = nil, 0
+	for _, name in ipairs(ARCH.Order) do
+		local want = (mix[name] or 0) / 100 * size
+		local gap = want - (counts[name] or 0)
+		if gap > shortfall then
+			shortest, shortfall = name, gap
+		end
+	end
+	-- Only swap when this role is already covered: the deck put the right number on the team.
+	local wantMine = (mix[mine] or 0) / 100 * size
+	if shortest and shortest ~= mine and (counts[mine] or 0) + 1 > wantMine + 0.5 then
+		BotService.AssignArchetype(bot, shortest)
+	end
+end
+
 local function updateBot(bot)
 	local humanoid = bot.humanoid
 	if not humanoid or humanoid.Health <= 0 or not bot.character.Parent then
@@ -2660,6 +2993,18 @@ local function updateBot(bot)
 	forgetStale(bot, now)
 	finishReload(bot, now)
 	local pressure = stormPressure(root.Position)
+
+	-- BOT ARCHETYPES: a team bot checks its role against its side's once it knows which side that is.
+	if bot.archetypeBalancedFor ~= bot.character then
+		local state = BotService.ModeState(bot)
+		if state then
+			bot.archetypeBalancedFor = bot.character
+			local teams = lazy("ModeTeams")
+			if teams and teams.TeamOf then
+				ARCH.balance(bot, state.team, ARCH.Mix[ARCH.modeIdNow()] or ARCH.Mix.TeamDeathmatch, teams.TeamOf)
+			end
+		end
+	end
 
 	-- Nothing to shoot with means nothing counts as a target: an unarmed bot falls through to
 	-- looting (or running) instead of squaring up to someone empty-handed.
@@ -3109,6 +3454,10 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 
 	local names = shuffled(BOT_NAMES)
 	local spawned = {}
+	-- BOT ARCHETYPES: one deck for the batch holds the mode's mix exactly; a bot dealt singly (a
+	-- replacement) takes the top card of a one-card deck and is rebalanced against its team on its
+	-- first think (ARCH.balance).
+	local deck = ARCH.deck(count, ARCH.Mix[ARCH.modeIdNow()] or ARCH.Mix.BattleRoyale)
 
 	for index = 1, count do
 		local character = rig:Clone()
@@ -3203,9 +3552,16 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				sprinting = false,
 				crouching = false,
 				nextSlideAt = 0,
+				-- BOT ARCHETYPES (dealt below): the personality, and its dials merged with the gun held
+				archetype = nil,
+				dials = nil,
+				archetypeBalancedFor = nil,
+				shotsFromSpot = 0,
+				spotAt = 0,
 			}
 			nextSlot += 1
 			BotNav.Attach(bot)
+			BotService.AssignArchetype(bot, deck[index] or ARCH.Order[math.random(1, #ARCH.Order)])
 
 			-- Everything that doesn't need the rig in the world is set up before parenting, so the
 			-- bot replicates once, fully built, already at its spawn point. Parenting first sent
