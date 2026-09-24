@@ -1343,12 +1343,19 @@ function WeaponService.MountGun(character, model, receiver)
 	local facing = root.CFrame - root.CFrame.Position
 	model:PivotTo(CFrame.new(torso.Position) * facing * CFrame.new(HAND_OFFSET - gripOffset))
 
-	-- Weld before parenting: the gun then arrives already attached, instead of existing
-	-- unwelded on a live character for a replication step.
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = receiver
-	weld.Part1 = torso
-	weld.Parent = receiver
+	-- Joined before parenting: the gun then arrives already attached, instead of existing
+	-- unjoined on a live character for a replication step. A Motor6D rather than a weld (#13): at rest
+	-- (Transform identity) it holds exactly as the weld did, and GunPoseClient can raise the gun toward
+	-- the eye line of a body that is aiming by setting its Transform, which is local to each client --
+	-- the server's gun, and every shot origin, stay where they were. DeathFxService's ragdoll leaves it
+	-- alone (the receiver's parent is the HeldGun, not the character), so the gun stays in hand.
+	local mount = Instance.new("Motor6D")
+	mount.Name = "GunMount"
+	mount.Part0 = torso
+	mount.Part1 = receiver
+	mount.C0 = torso.CFrame:ToObjectSpace(receiver.CFrame)
+	mount.C1 = CFrame.identity
+	mount.Parent = receiver
 
 	model.Parent = character
 	return true
