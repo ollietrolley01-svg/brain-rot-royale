@@ -420,7 +420,7 @@ M.Setup({ id = "Other", teams = false }, { dropSpots = { Vector3.new(0, 0, 0) },
 if #R.vehicles ~= 0 then fail("vehicles parked in a mode without teams") end
 M.Teardown()
 
--- Bays: a provider hands over a pad-covered bay and a row of three at 10-stud spacing (tighter than
+-- Bays: a provider hands over a pad-covered bay and a row of three at 20-stud spacing (tighter than
 -- Gap, on purpose), pointed 0.7 rad off the centre line. The row is filled exactly; the pad bay never.
 R.vehicles = {}
 local rows = {}
@@ -433,13 +433,20 @@ M.BaseVehicleBays = function(team, base)
         local side = Vector3.new(-math.sin(a), 0, math.cos(a))
         local row, ok = {}, true
         for k = 0, 2 do
-            local at = first + side * (k * 10)
+            -- 20 apart: the cars stand 0.7 rad off the row's normal, so at 10 a 9-wide van overlapped
+            -- its neighbour, which ModeTeams' bay test (anything solid in the bay) now refuses.
+            local at = first + side * (k * 20)
             if not R.height(at.X, at.Z) or R.flat(at, centre) > radius - 60 then ok = false end
             for _, pad in ipairs(padList) do if R.flat(pad, at) < cfg.PadClearance + 2 then ok = false end end
             local toward = Vector3.new(-at.X, 0, -at.Z).Unit
             local yaw = math.atan2(-toward.X, -toward.Z) + 0.7
             local spread = R.footing(at, yaw, Vector3.new(8.9, 1, 16.6))
             if not spread or spread > 0.5 then ok = false end
+            -- And clear of the buildings, as a real bay is (ModeTeams refuses a bay with anything solid in it).
+            local frame = CFrame.new(at) * CFrame.Angles(0, yaw, 0)
+            for _, b in ipairs(R.features[team].buildings) do
+                if R.inBox(frame, Vector3.new(10, 8, 18.5), b.Position, b.r) then ok = false end
+            end
             table.insert(row, CFrame.new(Vector3.new(at.X, 10, at.Z)) * CFrame.Angles(0, yaw, 0))
         end
         if ok then
@@ -495,8 +502,8 @@ PLANTS = [
                                         "for _, modelId in ipairs(ModeTeams.RollBaseVehicleModels(Random.new(1))) do")),
     ("respawn ignores the delay", ("nowMs - slot.lostAt >= delayMs", "nowMs - slot.lostAt >= 0")),
     ("replacement never recorded (cap)", ("\t\t\t\tslot.model = model\n", "\t\t\t\tslot.model = slot.model\n")),
-    ("wreck left behind", ("\t\t\t\t\t\t\twreck:Destroy()", "\t\t\t\t\t\t\tlocal _ = wreck")),
-    ("no respawn at all", ("if parkSlot(team, slot) then\n\t\t\t\t\t\t-- The wreck", "if false then\n\t\t\t\t\t\t-- The wreck")),
+    ("wreck left behind", ("\t\t\t\t\t\twreck:Destroy()", "\t\t\t\t\t\tlocal _ = wreck")),
+    ("no respawn at all", ("\t\t\t\t\tif not parkSlot(team, slot) then", "\t\t\t\t\tif true then")),
     ("cleanup forgets the vehicles", ("\t\tbaseFolder:Destroy()\n", "\t\tlocal _ = baseFolder\n")),
     ("loop outlives the match", ("\tbaseGeneration += 1\n", "\tlocal _ = baseGeneration\n")),
     ("slope accepted", ("if spread <= VehicleService.FootingTolerance then", "if true then")),
@@ -504,7 +511,7 @@ PLANTS = [
     ("footprint not checked", ("\t\tif part.CanCollide then\n\t\t\treturn false", "\t\tif false then\n\t\t\treturn false")),
     ("bays ignored", ("local bayAt, bayYaw = baySpot(team, except)", "local bayAt, bayYaw = nil, nil")),
     ("bay on a pad accepted", ("local free = not ModeTeams.RefuseVehicleSpot(team, at, nil, true)", "local free = true")),
-    ("taken bay reused", ("if free and flatDistance(other, at) < BAY_TAKEN then", "if false then")),
+    ("taken bay reused", ("\t\t\tif free and taken() then", "\t\t\tif false then")),
     ("team guard dropped", ("if currentMode and currentMode.teams then", "if currentMode then")),
 ]
 CONFIG_PLANTS = [

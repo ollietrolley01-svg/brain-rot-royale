@@ -166,6 +166,44 @@ local function setup()
 				end
 			end
 		end
+		-- Oliver's playtest (2026-09-24): "the vehicles ... piled together" and "many floating items
+		-- and props". After 3 s of physics (the gallery runs in edit mode, so this is the placement
+		-- itself): any two base vehicles whose boxes overlap in plan, and any map scenery within the
+		-- ground work's reach standing more than 0.3 over the terrain under its lowest point.
+		local vehicles = {}
+		for _, vehicle in ipairs(folder and folder:GetChildren() or {}) do
+			if vehicle:IsA("Model") then
+				table.insert(vehicles, vehicle)
+			end
+		end
+		local overlaps = 0
+		for i = 1, #vehicles do
+			for j = i + 1, #vehicles do
+				local ca, sa = vehicles[i]:GetBoundingBox()
+				local cb, sb = vehicles[j]:GetBoundingBox()
+				local d = ca:PointToObjectSpace(cb.Position)
+				if math.abs(d.X) < (sa.X + sb.X) / 2 - 0.2 and math.abs(d.Z) < (sa.Z + sb.Z) / 2 - 0.2 then
+					overlaps += 1
+				end
+			end
+		end
+		local hovering, looked = 0, 0
+		local centre = ruin.frame.Position
+		for _, part in ipairs(workspace.Map:GetDescendants()) do
+			if part:IsA("BasePart") and not part:IsDescendantOf(model) and part.Anchored
+				and (part.Position * Vector3.new(1, 0, 1) - centre * Vector3.new(1, 0, 1)).Magnitude < 90 then
+				local bottom = part.Position.Y - part.Size.Y / 2
+				local ground = terrainUnder(part.Position)
+				if ground and bottom < ground + 6 then
+					looked += 1
+					if bottom > ground + 0.3 then
+						hovering += 1
+					end
+				end
+			end
+		end
+		note(string.format("team %d: %d base vehicles, %d overlapping pairs (want 0); map scenery within 90: %d near the ground, %d hovering over 0.3 (want 0)",
+			team, #vehicles, overlaps, looked, hovering))
 		local pairsFound = ZFight.Scan({ model })
 		local floating, examined = groundGaps(grounded(model, ruin.height))
 		note(string.format("team %d (%s): %d parts, floor at %.2f, %s; %d pads, %d of %d chest spots with a chest, %d of %d bays with a vehicle; ZFight.Scan %d pairs; ground: %d of %d slabs/panels floating",

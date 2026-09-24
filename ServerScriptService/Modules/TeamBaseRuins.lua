@@ -67,10 +67,22 @@ TeamBaseRuins.ClearableSpan = 70
 -- Named top-level map models ClearSite never touches: taking a road or river part out would leave
 -- a hole in something that runs far outside the base.
 local KEEP = { Roads = true, River = true, Ziplines = true, TeamBaseVehicles = true }
+-- How far past the footprint and margin FlattenPad can move the ground: its graded edge (24 at most)
+-- and the two voxel columns it keeps flat past the margin.
+local FLATTEN_REACH = 24 + 8
+-- The ground under a levelled site is sampled on this grid, and anything further than LEVEL_SLACK
+-- from the pad height means the pad did not level it all: the compound then goes on a plinth.
+local LEVEL_GRID = 4
+local LEVEL_SLACK = 0.35
 
 -- Heights, local: the flattened ground is 0; the paving tiles' top; the bunker and supply floors.
 local TILE_TOP = 0.3
 local ROOM_FLOOR = 0.8
+-- The foundation slab's top: under the paving (whose cracks show it), 0.1 clear of the ground so the
+-- z-fight pass never takes it for a face lying on the terrain.
+local FOUNDATION_TOP = 0.1
+-- The underside of the main gate's gantry.
+local GANTRY_Y = 12.5
 
 --------------------------------------------------------------------------------
 -- Palette
@@ -570,9 +582,19 @@ local function buildGround(model)
 	ground.Name = "Paving"
 	ground:SetAttribute("Destructible", false)
 	ground.Parent = model
-	-- The courtyard and the yard + lane; the bunker and the supply room have their own floors.
+	-- The foundation: one slab under the whole compound, walls and all, its top 0.1 over the levelled
+	-- ground. Wherever a ray goes down inside the walls -- a crack between slabs, the foot of a wall --
+	-- it finds concrete of the compound's own, never whatever the terrain happens to be doing there.
+	box(ground, "Foundation", -46, 46, -1.2, FOUNDATION_TOP, -42, 42, CONCRETE_DARK, MAT.Concrete, { tag = false })
+	-- The courtyard in cracked slabs; the yard and lane as ONE slab, so no wheel of a parked car and no
+	-- footing ray of VehicleService's stands over a crack.
 	paving(ground, -44.2, 4, -40.2, 8, 4, 4, { PAVING, CONCRETE_DARK, CONCRETE })
-	paving(ground, 4, 44.2, -40.2, 22, 3, 5, { PAVING, CONCRETE })
+	paving(ground, 4, 44.2, -40.2, 22, 1, 1, { PAVING })
+	-- Painted cracks on the yard slab, a level over the bay paint so the two never share a plane.
+	for _, at in ipairs({ { 12, -6 }, { 25, -35 }, { 9, 16 }, { 40, 11.5 }, { 18.5, -20 } }) do
+		groundMark(ground, "Crack", at[1], at[2], rnd(2.5, 4.5), 0.22,
+			B.rng:NextInteger(0, 1) * math.pi / 2 + rnd(0.15, math.pi / 2 - 0.15), SOOT, MAT.Slate, 1)
+	end
 
 	-- Cracks across the courtyard, at least 6 apart so no two cross, and two blast marks.
 	for _, at in ipairs({ { -37, -2 }, { -27, -26 }, { -14, -38 }, { -8, -12 }, { -21, 1 }, { -36, -33 }, { -13, -1 } }) do
@@ -616,26 +638,29 @@ local function buildPerimeter(model)
 	gate.Name = "Gate"
 	gate:SetAttribute("Destructible", false)
 	gate.Parent = model
-	box(gate, "GatePost", 2.2, 4.6, -1, 11.5, -42.2, -39.8, CONCRETE_DARK, MAT.Concrete)
-	box(gate, "GatePost", 43.4, 45.8, -1, 11.5, -42.2, -39.8, CONCRETE_DARK, MAT.Concrete)
-	box(gate, "Gantry", 2.2, 45.8, 11.5, 12.7, -41.6, -40.4, STEEL, MAT.Metal)
+	-- The gantries clear the tallest vehicle there is, the armed Sahur Van (10.3 with its gun), by a
+	-- stud and more: at 11.5 its gun drove into the beam.
+	box(gate, "GatePost", 2.2, 4.6, -1, GANTRY_Y, -42.2, -39.8, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "GatePost", 43.4, 45.8, -1, GANTRY_Y, -42.2, -39.8, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "Gantry", 2.2, 45.8, GANTRY_Y, GANTRY_Y + 1.2, -41.6, -40.4, STEEL, MAT.Metal)
 	-- The east gate, for the back row of bays: one post, and a gantry from it to the supply room's
 	-- roof beam, the team's banner over the way out.
-	box(gate, "GatePost", 43.4, 45.8, -1, 11.5, -14.6, -12.6, CONCRETE_DARK, MAT.Concrete)
-	box(gate, "Gantry", 43.9, 45.3, 11.5, 12.7, -14.6, 22.4, STEEL, MAT.Metal)
-	box(gate, "TeamGateBanner", 44.52, 44.68, 8.6, 12.0, 0.5, 7.5, B.team, MAT.Fabric, TRIM)
-	disc(gate, "GateEmblem", Vector3.new(44.6, 10.2, 4), Vector3.new(1, 0, 0), 0.14, 2.2, WHITE_PAINT, MAT.SmoothPlastic)
-	disc(gate, "GateEmblemEye", Vector3.new(44.6, 10.2, 4), Vector3.new(1, 0, 0), 0.22, 1.0, SOOT, MAT.SmoothPlastic)
+	-- Its far end rests on the supply room's corner cross beam (top 12.8).
+	box(gate, "GatePost", 43.4, 45.8, -1, 12.8, -14.6, -12.6, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "Gantry", 43.9, 45.3, 12.8, 14.0, -14.6, 23.0, STEEL, MAT.Metal)
+	box(gate, "TeamGateBanner", 44.52, 44.68, 9.9, 13.3, 0.5, 7.5, B.team, MAT.Fabric, TRIM)
+	disc(gate, "GateEmblem", Vector3.new(44.6, 11.5, 4), Vector3.new(1, 0, 0), 0.14, 2.2, WHITE_PAINT, MAT.SmoothPlastic)
+	disc(gate, "GateEmblemEye", Vector3.new(44.6, 11.5, 4), Vector3.new(1, 0, 0), 0.22, 1.0, SOOT, MAT.SmoothPlastic)
 	for x = 6, 42, 9 do
-		rod(gate, "GantryRivet", Vector3.new(x, 12.1, -41.7), Vector3.new(x, 12.1, -41.5), 0.3, STEEL_DARK, MAT.Metal, TRIM)
+		rod(gate, "GantryRivet", Vector3.new(x, GANTRY_Y + 0.6, -41.7), Vector3.new(x, GANTRY_Y + 0.6, -41.5), 0.3, STEEL_DARK, MAT.Metal, TRIM)
 	end
 	facePlate(gate, "TeamGatePaint", "z", -42.2, -1, PROUD_PAINT, 2.6, 4.2, 8.6, 10.6, B.team, MAT.SmoothPlastic)
 	facePlate(gate, "TeamGatePaint", "z", -42.2, -1, PROUD_PAINT, 43.8, 45.4, 8.6, 10.6, B.team, MAT.SmoothPlastic)
 	-- The banner hangs through the gantry's middle; it stops 8.6 up, over the tallest car.
-	box(gate, "TeamGateBanner", 20.5, 27.5, 8.6, 12.0, -41.08, -40.92, B.team, MAT.Fabric, TRIM)
-	disc(gate, "GateEmblem", Vector3.new(24, 10.2, -41.0), Vector3.new(0, 0, -1), 0.14, 2.2, WHITE_PAINT, MAT.SmoothPlastic)
-	disc(gate, "GateEmblemEye", Vector3.new(24, 10.2, -41.0), Vector3.new(0, 0, -1), 0.22, 1.0, SOOT, MAT.SmoothPlastic)
-	box(gate, "TeamBannerTatter", 25.2, 27.0, 8.0, 8.9, -41.17, -41.03, mix(B.team, SOOT, 0.3), MAT.Fabric, TRIM)
+	box(gate, "TeamGateBanner", 20.5, 27.5, GANTRY_Y - 2.9, GANTRY_Y + 0.5, -41.08, -40.92, B.team, MAT.Fabric, TRIM)
+	disc(gate, "GateEmblem", Vector3.new(24, GANTRY_Y - 1.3, -41.0), Vector3.new(0, 0, -1), 0.14, 2.2, WHITE_PAINT, MAT.SmoothPlastic)
+	disc(gate, "GateEmblemEye", Vector3.new(24, GANTRY_Y - 1.3, -41.0), Vector3.new(0, 0, -1), 0.22, 1.0, SOOT, MAT.SmoothPlastic)
+	box(gate, "TeamBannerTatter", 25.2, 27.0, GANTRY_Y - 3.5, GANTRY_Y - 2.6, -41.17, -41.03, mix(B.team, SOOT, 0.3), MAT.Fabric, TRIM)
 	-- A floodlight on the left post, looking in over the yard.
 	local head = box(gate, "GateLamp", 2.6, 4.2, 9.4, 10.4, -39.8, -38.9, STEEL_DARK, MAT.Metal, TRIM)
 	local _ = head
@@ -979,7 +1004,8 @@ local BAY_HALF_WIDTH, BAY_HALF_LENGTH = 6.25, 11
 -- back row) rather than Z. NOTHING over a bay may be queryable: VehicleService's footing ray starts
 -- 24 studs over the spot, and would park the car on the net.
 local function camoNet(yard, across, backAt, frontAt, alongX, torn)
-	local top, sag = 11.8, 10.1
+	-- High enough that the tallest vehicle's gun stays under the net, not through it.
+	local top, sag = 12.9, 11.3
 	local mid = (backAt + frontAt) / 2
 	local function at(a, y, u)
 		if alongX then
@@ -1093,12 +1119,13 @@ local function buildYard(model)
 	tyres(18.75, -24, 3, "tyresA")
 	tyres(31.25, -30, 2, "tyresB")
 	local drum = { tag = "Prop:drums" }
-	rod(yard, "Drum", Vector3.new(43.25, TILE_TOP, -26), Vector3.new(43.25, TILE_TOP + 2.8, -26), 1.8, mix(RUST, BRICK, 0.4), MAT.CorrodedMetal, drum)
-	rod(yard, "Drum", Vector3.new(43.25, TILE_TOP, -23.9), Vector3.new(43.25, TILE_TOP + 2.8, -23.9), 1.8, OLIVE, MAT.Metal, drum)
-	rod(yard, "Drum", Vector3.new(43.25, TILE_TOP + 0.9, -21.4), Vector3.new(43.25, TILE_TOP + 0.9, -18.6), 1.8, mix(RUST, OLIVE, 0.5), MAT.CorrodedMetal, drum)
+	-- The drums stand by the barriers, clear of bay 1: by the east wall they were inside bay 3 for
+	-- anything as wide as the Sahur Van.
+	rod(yard, "Drum", Vector3.new(6.1, TILE_TOP, -30.8), Vector3.new(6.1, TILE_TOP + 2.8, -30.8), 1.8, mix(RUST, BRICK, 0.4), MAT.CorrodedMetal, drum)
+	rod(yard, "Drum", Vector3.new(6.1, TILE_TOP, -28.7), Vector3.new(6.1, TILE_TOP + 2.8, -28.7), 1.8, OLIVE, MAT.Metal, drum)
 	-- The gate leaf, leaning on the wall: steel frame round a sagging mesh.
-	local lean = math.asin(1.5 / 6.5)
-	local leaf = CFrame.new(42.6, TILE_TOP, -33.3) * CFrame.Angles(0, 0, -lean)
+	local lean = math.asin(1.3 / 6.5)
+	local leaf = CFrame.new(42.85, TILE_TOP, -33.3) * CFrame.Angles(0, 0, -lean)
 	local leafOpts = { tag = "Prop:gateLeaf" }
 	put(yard, "GateLeaf", Vector3.new(0.3, 0.3, 6.8), leaf * CFrame.new(0, 0.15, 0), STEEL, MAT.Metal, leafOpts)
 	put(yard, "GateLeaf", Vector3.new(0.3, 0.3, 6.8), leaf * CFrame.new(0, 6.35, 0), STEEL, MAT.Metal, leafOpts)
@@ -1399,6 +1426,24 @@ local function itemOf(part, map)
 	return node
 end
 
+-- The pieces of `item` that go with it: a part tagged into a group ("Tree:12") takes its whole group
+-- (the trunk and the leaves of one tree share a parent with every other tree); anything else is itself.
+local function piecesOf(item)
+	if item:IsA("BasePart") then
+		local tag = item:GetAttribute("Destructible")
+		if type(tag) == "string" and string.find(tag, ":") and item.Parent then
+			local group = {}
+			for _, other in ipairs(item.Parent:GetChildren()) do
+				if other:IsA("BasePart") and other:GetAttribute("Destructible") == tag then
+					table.insert(group, other)
+				end
+			end
+			return group
+		end
+	end
+	return { item }
+end
+
 local function spanOf(item)
 	if item:IsA("BasePart") then
 		return math.max(item.Size.X, item.Size.Z)
@@ -1425,14 +1470,22 @@ function TeamBaseRuins.ClearSite(site, map)
 		table.insert(include, loot)
 	end
 	params.FilterDescendantsInstances = include
-	local size = Vector3.new(TeamBaseRuins.Footprint.X + TeamBaseRuins.Margin * 2, 600, TeamBaseRuins.Footprint.Z + TeamBaseRuins.Margin * 2)
+	-- Not just the footprint: FlattenPad grades the ground for up to FLATTEN_REACH beyond its flat, and
+	-- a tree, a rock or a pickup standing there is left in the air (or buried) once it has.
+	local reach = TeamBaseRuins.Margin + FLATTEN_REACH
+	local size = Vector3.new(TeamBaseRuins.Footprint.X + reach * 2, 600, TeamBaseRuins.Footprint.Z + reach * 2)
 	local cleared, kept = 0, 0
 	local seen = {}
 	for _, part in ipairs(workspace:GetPartBoundsInBox(frame * CFrame.new(0, 100, 0), size, params)) do
 		if loot and part:IsDescendantOf(loot) then
-			if not seen[part] then
-				seen[part] = true
-				part:Destroy()
+			-- The whole pickup (the loot folder's own child), not the one piece of it the query found.
+			local pickup = part
+			while pickup.Parent and pickup.Parent ~= loot do
+				pickup = pickup.Parent
+			end
+			if not seen[pickup] then
+				seen[pickup] = true
+				pickup:Destroy()
 			end
 		elseif not part:GetAttribute("TeamBaseRuin") then
 			local item = itemOf(part, map)
@@ -1440,7 +1493,10 @@ function TeamBaseRuins.ClearSite(site, map)
 				seen[item] = true
 				local span = spanOf(item)
 				if span <= TeamBaseRuins.ClearableSpan then
-					item:Destroy()
+					for _, piece in ipairs(piecesOf(item)) do
+						seen[piece] = true
+						piece:Destroy()
+					end
 					cleared += 1
 				else
 					kept = math.max(kept, span)
@@ -1503,32 +1559,123 @@ end
 -- came out at, puts it in the map and runs the z-fight pass. Where the ground cannot be levelled
 -- (a road or another pad in the way), it stands on a concrete plinth down to the lowest ground
 -- under it instead, so it is never left floating.
+-- The terrain's surface under (x, z), or nil.
+local groundParams = RaycastParams.new()
+groundParams.FilterType = Enum.RaycastFilterType.Include
+groundParams.IgnoreWater = true
+local function terrainAt(x, z, from)
+	groundParams.FilterDescendantsInstances = { workspace.Terrain }
+	local hit = workspace:Raycast(Vector3.new(x, from + 60, z), Vector3.new(0, -240, 0), groundParams)
+	return hit and hit.Position.Y or nil
+end
+
+-- The lowest and highest terrain under the foundation (the footprint), sampled on LEVEL_GRID in the
+-- site's frame, and how far the worst sample is from `height`. The margin round it only carries
+-- rubble, which settleOutside puts on whatever ground is really there.
+function TeamBaseRuins.GroundUnder(site, height)
+	local halfX = TeamBaseRuins.Footprint.X / 2
+	local halfZ = TeamBaseRuins.Footprint.Z / 2
+	local low, high, worst = math.huge, -math.huge, 0
+	for x = -halfX, halfX + 0.01, LEVEL_GRID do
+		for z = -halfZ, halfZ + 0.01, LEVEL_GRID do
+			local p = site * Vector3.new(x, 0, z)
+			local y = terrainAt(p.X, p.Z, height)
+			if y then
+				low, high = math.min(low, y), math.max(high, y)
+				worst = math.max(worst, math.abs(y - height))
+			end
+		end
+	end
+	if low == math.huge then
+		return nil
+	end
+	return low, high, worst
+end
+
+-- Every spot (pads, chests, loot, bays) put on the surface really under it: a ray down from 4 studs up
+-- into the compound's own parts. By construction that is where the layout put it; if the z-fight pass
+-- nudged a floor, or anything else moved, the spot follows the floor rather than the plan.
+function TeamBaseRuins.SnapSpots(model, list)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { model }
+	for index, spot in ipairs(list) do
+		local hit = workspace:Raycast(spot.Position + Vector3.new(0, 4, 0), Vector3.new(0, -8, 0), params)
+		if hit then
+			list[index] = spot + Vector3.new(0, hit.Position.Y - spot.Position.Y, 0)
+		end
+	end
+end
+
+-- Rubble lying outside the foundation stands on the ground itself: each chunk is moved to the ground
+-- really under it (the plinth where there is one, else the terrain), keeping how deep it was sunk.
+local function settleOutside(model, frame, plinth)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = plinth and { workspace.Terrain, plinth } or { workspace.Terrain }
+	params.IgnoreWater = true
+	local moved = 0
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name == "Rubble" then
+			local here = frame:Inverse() * part.Position
+			if math.abs(here.X) > 46 or math.abs(here.Z) > 42 then
+				local ground = frame * Vector3.new(here.X, 0, here.Z)
+				local hit = workspace:Raycast(ground + Vector3.new(0, 30, 0), Vector3.new(0, -90, 0), params)
+				if hit and math.abs(hit.Position.Y - ground.Y) > 0.01 then
+					part.CFrame = part.CFrame + Vector3.new(0, hit.Position.Y - ground.Y, 0)
+					moved += 1
+				end
+			end
+		end
+	end
+	return moved
+end
+
+-- Builds the compound for one team: clears the site (and the ring round it the ground work reaches),
+-- levels the ground with MapTerrain's FlattenPad, the same pad every building stands on, then MEASURES
+-- the ground under the whole footprint: a pad that was refused (a road or another pad in the way) or
+-- that did not level all of it puts the compound on a concrete plinth from the highest ground down to
+-- the lowest, so nothing is ever left floating or buried. Lays it out at that height, puts it in the
+-- map, runs the z-fight pass, settles the rubble outside onto the real ground and snaps every spot to
+-- the real floor under it.
 function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	local map = (mapInfo and mapInfo.map) or workspace:FindFirstChild("Map") or workspace
 	local site, yaw = flatFrame(baseCFrame)
 	TeamBaseRuins.ClearSite(site, map)
 
 	local height, why = MapTerrain.FlattenPad(site, TeamBaseRuins.Footprint, { height = "mid", margin = TeamBaseRuins.Margin })
+	local low, high, worst = TeamBaseRuins.GroundUnder(site, height or site.Position.Y)
 	local plinthBottom = nil
-	if not height then
-		local low, high = MapTerrain.PadCost(site, TeamBaseRuins.Footprint, { margin = TeamBaseRuins.Margin })
-		height = high or site.Position.Y
+	if not height or (worst and worst > LEVEL_SLACK) then
+		local padLow, padHigh = MapTerrain.PadCost(site, TeamBaseRuins.Footprint, { margin = TeamBaseRuins.Margin })
+		low = math.min(low or math.huge, padLow or math.huge)
+		high = math.max(high or -math.huge, padHigh or -math.huge)
+		if high == -math.huge then
+			high = site.Position.Y
+		end
+		if low == math.huge then
+			low = high
+		end
 		plinthBottom = low
-		warn(string.format("TeamBaseRuins: ground not levelled (%s); on a plinth from %.1f to %.1f", tostring(why),
-			low or height, height))
+		warn(string.format("TeamBaseRuins: ground not level (%s); on a plinth from %.1f to %.1f",
+			height and string.format("off by %.2f", worst) or tostring(why), low, high))
+		height = high
 	end
 	local position = site.Position
 	local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)
 	local model, info = TeamBaseRuins.Layout(frame, teamColor, seed)
-	if plinthBottom and height - plinthBottom > 0.2 then
+	local plinth = nil
+	if plinthBottom and height - plinthBottom > 0.05 then
+		-- The plinth's top is the ground the layout was drawn on (local 0), out to the edge of the
+		-- margin, so the rubble at the breaches lies on it; its foot is a stud under the lowest ground.
 		local halfX = TeamBaseRuins.Footprint.X / 2 + TeamBaseRuins.Margin
 		local halfZ = TeamBaseRuins.Footprint.Z / 2 + TeamBaseRuins.Margin
 		local depth = height - plinthBottom + 1
-		local plinth = Instance.new("Part")
+		plinth = Instance.new("Part")
 		plinth.Name = "Foundation"
 		plinth.Anchored = true
 		plinth.Size = Vector3.new(halfX * 2, depth, halfZ * 2)
-		plinth.CFrame = frame * CFrame.new(0, -0.2 - depth / 2, 0)
+		plinth.CFrame = frame * CFrame.new(0, -depth / 2, 0)
 		plinth.Color = CONCRETE_DARK
 		plinth.Material = MAT.Concrete
 		plinth:SetAttribute("Destructible", false)
@@ -1541,9 +1688,14 @@ function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	end
 	model.Parent = map
 	ZFight.Fix({ model })
+	settleOutside(model, frame, plinth)
+	for _, key in ipairs({ "pads", "chestSpots", "lootSpots", "vehicleBays" }) do
+		TeamBaseRuins.SnapSpots(model, info[key])
+	end
 
 	info.model = model
 	info.height = height
+	info.frame = frame
 	return info
 end
 

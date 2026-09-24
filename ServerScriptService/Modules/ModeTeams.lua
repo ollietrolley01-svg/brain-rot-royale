@@ -562,6 +562,32 @@ local BASE_VEHICLE_TRIES = 80
 local BASE_VEHICLE_RETRY_MS = 5000
 -- A bay with a base vehicle standing this close to its centre is taken.
 local BAY_TAKEN = 6
+-- The box over a bay that must be empty of anything solid before a vehicle is put in it: the biggest
+-- vehicle's footprint (Sahur Van 9.0 wide, Crocodilo Ranger 17.4 long, measured from VehicleModels by
+-- tools/team_base_ruins_check.py) with half a stud all round, 8 high, from 0.6 over the floor. A car
+-- put into a wreck, a driven-back car, a player or a deployable is two assemblies in one place, and
+-- the physics shoves them apart into a pile (Oliver's playtest, 2026-09-24: "the vehicles in the team
+-- bases are all messed up, like piled together").
+local BAY_CLEAR = Vector3.new(10, 8, 18.5)
+-- A vehicle put in a bay is held anchored this long, so nothing shoves it before it has settled.
+local BAY_SETTLE_SECONDS = 1.5
+
+local bayParams = OverlapParams.new()
+bayParams.FilterType = Enum.RaycastFilterType.Exclude
+bayParams.RespectCanCollide = true
+
+-- Anything solid standing in the bay.
+local function bayOccupied(bay)
+	bayParams.FilterDescendantsInstances = { workspace.Terrain }
+	local look = bay.LookVector
+	local frame = CFrame.new(bay.Position + Vector3.new(0, 0.6 + BAY_CLEAR.Y / 2, 0)) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0)
+	for _, part in ipairs(workspace:GetPartBoundsInBox(frame, BAY_CLEAR, bayParams)) do
+		if part.CanCollide then
+			return true
+		end
+	end
+	return false
+end
 
 -- baseSlots[team] = list of { modelId, kind, model, lostAt }; one live vehicle per slot at most.
 local baseSlots = {}
@@ -691,10 +717,17 @@ local function baySpot(team, except)
 		if typeof(bay) == "CFrame" then
 			local at = bay.Position
 			local free = not ModeTeams.RefuseVehicleSpot(team, at, nil, true)
-			for _, other in ipairs(others) do
-				if free and flatDistance(other, at) < BAY_TAKEN then
-					free = false
+			-- Taken: one of the team's base vehicles stands there, or anything solid at all does.
+			local function taken()
+				for _, other in ipairs(others) do
+					if flatDistance(other, at) < BAY_TAKEN then
+						return true
+					end
 				end
+				return bayOccupied(bay)
+			end
+			if free and taken() then
+				free = false
 			end
 			if free then
 				local look = bay.LookVector
@@ -717,6 +750,11 @@ function ModeTeams.BaseVehicleSpot(team, except)
 	local bayAt, bayYaw = baySpot(team, except)
 	if bayAt then
 		return bayAt, bayYaw, true
+	end
+	-- A compound's bays are where its vehicles go. With all of them taken, the slot waits and tries
+	-- again (BASE_VEHICLE_RETRY_MS) rather than dropping a car in a random spot round the walls.
+	if ModeTeams.BaseVehicleBays ~= nil and ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then
+		return nil
 	end
 	local config = MatchConfig.TeamBaseVehicles
 	local others = baseVehicleSpots(team, except)
@@ -750,8 +788,19 @@ local function parkSlot(team, slot)
 		if not at then
 			return nil
 		end
+		-- In a bay the spot is exact (its floor read by raycast when the compound was built), so it
+		-- is used as given: parkOn's step-aside would move the car off its bay onto the next one.
 		local model = VehicleService.Create(baseFolder, at, yaw, slot.kind,
-			{ model = slot.modelId, rng = Random.new(math.random(1, 2147483646)) })
+			{ model = slot.modelId, rng = Random.new(math.random(1, 2147483646)), exact = inBay or nil })
+		if model and inBay and model.PrimaryPart then
+			local chassis = model.PrimaryPart
+			chassis.Anchored = true
+			task.delay(BAY_SETTLE_SECONDS, function()
+				if chassis.Parent then
+					chassis.Anchored = false
+				end
+			end)
+		end
 		if model then
 			-- parkOn may have stepped a not-quite-level spot aside; one that went onto a pad or out
 			-- of the arena is taken back and another spot tried.
@@ -803,14 +852,14 @@ function ModeTeams.TickBaseVehicles(nowMs)
 			if not isLive(slot.model) then
 				slot.lostAt = slot.lostAt or nowMs
 				if nowMs - slot.lostAt >= delayMs and ModeTeams.LiveBaseVehicles(team) < #slots then
+					-- The wreck goes BEFORE its replacement is parked: it is still standing in its bay,
+					-- and the bay test skips this slot's own vehicle, so the replacement used to be
+					-- put into the wreck. Wrecking has already put everyone out of it.
 					local wreck = slot.model
-					if parkSlot(team, slot) then
-						-- The wreck goes as its replacement arrives, so a long match does not pile
-						-- them up round the base. Wrecking has already put everyone out of it.
-						if wreck and wreck.Parent then
-							wreck:Destroy()
-						end
-					else
+					if wreck and wreck.Parent then
+						wreck:Destroy()
+					end
+					if not parkSlot(team, slot) then
 						slot.lostAt = nowMs - delayMs + BASE_VEHICLE_RETRY_MS
 					end
 				end

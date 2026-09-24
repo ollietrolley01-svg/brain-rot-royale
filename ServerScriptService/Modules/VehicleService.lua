@@ -1,6 +1,7 @@
 -- Vehicles: drivable cars and motorbikes parked along the roads and around the towns.
 --
---   VehicleService.Create(parent, position, yaw, kind) -> model   kind "car" or "bike"
+--   VehicleService.Create(parent, position, yaw, kind, options) -> model   kind "car" or "bike";
+--       options: model, scheme, rng, inward, exact (stand exactly at `position`, no parkOn)
 --     (an optional fifth argument { model = "TralalaGT", scheme = 2 } picks both, for tests;
 --      { inward = Vector3 } says which way, and how far, level ground lies if the spot is not level)
 --   VehicleService.Start()                                         (once, from Bootstrap)
@@ -703,8 +704,14 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	if okExtents and typeof(extents) == "Vector3" then
 		footprint = Vector3.new(math.max(footprint.X, extents.X), footprint.Y, math.max(footprint.Z, extents.Z))
 	end
-	position, yaw = parkOn(parent, position, yaw, footprint, info.displayName,
-		type(options) == "table" and options.inward or nil)
+	-- `options.exact`: the caller has measured the spot (a team base's painted bay, its floor read by
+	-- raycast) and it must be used as given. parkOn's step-aside ring would otherwise move a car off
+	-- its bay whenever one footing ray fell in a crack or on a wheel stop -- onto the next bay, where
+	-- the next car then spawned into it -- and could lay hardstanding inside a building.
+	if not (type(options) == "table" and options.exact) then
+		position, yaw = parkOn(parent, position, yaw, footprint, info.displayName,
+			type(options) == "table" and options.inward or nil)
+	end
 	model:PivotTo(CFrame.new(position + Vector3.new(0, SPAWN_LIFT, 0)) * CFrame.Angles(0, yaw, 0))
 	local rig = VehicleDynamics.Rig(model)
 	if not rig then

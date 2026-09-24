@@ -52,8 +52,12 @@ FLAT_X, FLAT_Z = 50.0, 46.0
 DOOR_WIDTH, DOOR_HEIGHT = 4.0, 7.0
 CHEST_CLEAR = 2.4
 PAD_CHEST, PAD_BAY, PAD_LOOT, CHEST_LOOT = 7.0, 18.0, 6.0, 3.0
+# A bay must take the BIGGEST vehicle there is, with half a stud all round: its width and length, and
+# the height its way out must be clear to, are measured from VehicleModels' real builds at start
+# (vehicle_extents, tools/team_base_ruins_modeteams_check.py). These are the floor if that fails.
 CAR = (8.9, 16.6)
 CORRIDOR_HALF, CORRIDOR_HEIGHT = 4.8, 7.5
+CAR_MARGIN = 0.5
 # Past the compound's middle, along a bay's nose, that its way out must stay clear to: beyond every
 # wall (they stand at 41 and 45).
 DRIVE_OUT = 62
@@ -130,6 +134,8 @@ InstMeta.__index = function(i, k)
     return Inst(i, k)
 end
 task = { wait = function() end }
+RaycastParams = { new = function() return {} end }
+OverlapParams = { new = function() return {} end }
 math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 """
 
@@ -804,7 +810,20 @@ SEED = 20260924
 
 
 SMOKE = r"""
-function smoke(Ruins, flat)
+-- Terrain as a function of (x, z), and Raycast against it and against parts' boxes, the way the real
+-- one answers a straight-down ray: the highest surface under the start point.
+local function partTop(part, x, z, below)
+    if part.CanQuery == false then return nil end
+    local c, s = part.CFrame, part.Size
+    local ex = math.abs(c.r.X) * s.X / 2 + math.abs(c.u.X) * s.Y / 2 + math.abs(c.b.X) * s.Z / 2
+    local ey = math.abs(c.r.Y) * s.X / 2 + math.abs(c.u.Y) * s.Y / 2 + math.abs(c.b.Y) * s.Z / 2
+    local ez = math.abs(c.r.Z) * s.X / 2 + math.abs(c.u.Z) * s.Y / 2 + math.abs(c.b.Z) * s.Z / 2
+    if math.abs(x - c.p.X) > ex or math.abs(z - c.p.Z) > ez then return nil end
+    local top = c.p.Y + ey
+    if top > below then return nil end
+    return top
+end
+function smoke(Ruins, mode)
     local out = {}
     local function fail(msg) table.insert(out, msg) end
     local ws = Instance.new("Workspace")
@@ -814,70 +833,174 @@ function smoke(Ruins, flat)
     local map = Instance.new("Folder")
     map.Name = "Map"
     map.Parent = ws
-    local function item(folderName, name, extents)
+    local base = CFrame.new(100, 3, -50) * CFrame.Angles(0, 0.7, 0)
+    local centre = base.p
+    -- The ground: FlattenPad reports 12.5. "flat": it is, within a hair, all over (bumps of 0.2, as a
+    -- real pad's smooth-terrain surface is not a plane). "partial": only 30 studs round the centre is
+    -- levelled and the rest still climbs away, 0.08 a stud. "refused": FlattenPad says no (a road).
+    local function T(x, z)
+        local r = math.sqrt((x - centre.X) ^ 2 + (z - centre.Z) ^ 2)
+        local bump = 0.2 * math.sin(x * 0.7) * math.cos(z * 0.9)
+        if mode == "partial" and r > 30 then return 12.5 + 0.08 * (r - 30) + bump end
+        if mode == "refused" then return 8 + 0.05 * (x - centre.X + 60) end
+        -- Past the foundation the ground sags 0.8 (the pad's edge): no reason for a plinth, but what
+        -- lies out there must be put on the ground really there, not at the planned height.
+        local d = CFrame.new(centre) * CFrame.Angles(0, 0.7, 0)
+        local here = d:Inverse() * Vector3.new(x, 0, z)
+        if math.abs(here.X) > 46.5 or math.abs(here.Z) > 42.5 then return 12.5 - 0.8 + bump * 0.05 end
+        return 12.5 + bump
+    end
+    function ws:Raycast(origin, dir, params)
+        local best = nil
+        local below = origin.Y
+        for _, root in ipairs(params.FilterDescendantsInstances or {}) do
+            if root == terrain then
+                local y = T(origin.X, origin.Z)
+                if y <= below and y >= below + dir.Y and (not best or y > best) then best = y end
+            else
+                local list = root:GetDescendants()
+                table.insert(list, root)
+                for _, part in ipairs(list) do
+                    if part:IsA("BasePart") then
+                        local y = partTop(part, origin.X, origin.Z, below)
+                        if y and y >= below + dir.Y and (not best or y > best) then best = y end
+                    end
+                end
+            end
+        end
+        return best and { Position = Vector3.new(origin.X, best, origin.Z) } or nil
+    end
+    local function item(folderName, name, extents, offset, tag, count)
         local folder = map:FindFirstChild(folderName)
         if not folder then
             folder = Instance.new("Model")
             folder.Name = folderName
             folder.Parent = map
         end
-        local model = Instance.new("Model")
-        model.Name = name
-        rawget(model, "props").Extents = extents
-        model.Parent = folder
-        local part = Instance.new("Part")
-        part.Name = name .. "Part"
-        part.Size = Vector3.new(2, 2, 2)
-        part.CFrame = CFrame.new(0, 0, 0)
-        part.Parent = model
-        return model, part
+        local first
+        for index = 1, count or 1 do
+            local part = Instance.new("Part")
+            part.Name = name
+            part.Size = Vector3.new(2, 2, 2)
+            part.CFrame = base * CFrame.new(offset.X, 0, offset.Z)
+            if tag then part:SetAttribute("Destructible", tag) end
+            part.Parent = folder
+            first = first or part
+        end
+        return first, folder
     end
-    local tree, treePart = item("Props", "Tree", Vector3.new(8, 20, 8))
-    local tower, towerPart = item("Landmarks", "Tower", Vector3.new(120, 60, 90))
-    local road, roadPart = item("Roads", "Segment", Vector3.new(10, 1, 10))
+    -- A tree inside the footprint, one just outside the margin but where FlattenPad grades the ground,
+    -- a two-piece tree (trunk and leaves, a tag group sharing Props with everything else), a landmark
+    -- too big to clear, a road, and a loot pickup of two pieces.
+    local treeIn = item("Props", "TreeIn", nil, Vector3.new(10, 0, 10))
+    local treeOut = item("Props", "TreeOut", nil, Vector3.new(0, 0, 60))
+    local trunk = item("Props", "Trunk", nil, Vector3.new(-20, 0, -20), "Tree:9")
+    local leaves = item("Props", "Leaves", nil, Vector3.new(-20, 0, -20), "Tree:9")
+    local towerModel = Instance.new("Model")
+    towerModel.Name = "Tower"
+    rawget(towerModel, "props").Extents = Vector3.new(120, 60, 90)
+    local lm = Instance.new("Model"); lm.Name = "Landmarks"; lm.Parent = map
+    towerModel.Parent = lm
+    local towerPart = Instance.new("Part"); towerPart.Size = Vector3.new(2, 2, 2); towerPart.CFrame = base; towerPart.Parent = towerModel
+    local roadPart = item("Roads", "Segment", nil, Vector3.new(5, 0, 5))
     local loot = Instance.new("Folder")
     loot.Name = "Loot"
     loot.Parent = ws
     local pickup = Instance.new("Part")
     pickup.Name = "GroundWeapon"
     pickup.Parent = loot
-    function ws:GetPartBoundsInBox() return { treePart, towerPart, roadPart, pickup } end
-    function ws:Raycast() return nil end
+    local gunPiece = Instance.new("Part")
+    gunPiece.Name = "Gun"
+    gunPiece.Parent = pickup
+    function ws:GetPartBoundsInBox(cf, size)
+        -- What lies in the box, piece by piece: the trunk but not its leaves, the gun but not its pad.
+        local hits = {}
+        local function inside(part)
+            local d = cf:Inverse() * part.CFrame.p
+            return math.abs(d.X) <= size.X / 2 and math.abs(d.Z) <= size.Z / 2
+        end
+        for _, part in ipairs({ treeIn, treeOut, trunk, towerPart, roadPart }) do
+            if part.Parent and inside(part) then table.insert(hits, part) end
+        end
+        table.insert(hits, gunPiece)
+        return hits
+    end
     OverlapParams = { new = function() return {} end }
     RaycastParams = { new = function() return {} end }
-    MODULES.MapTerrain.FlattenPad = function() if flat then return 12.5 end return nil, "road" end
+    MODULES.MapTerrain.FlattenPad = function() if mode == "refused" then return nil, "road" end return 12.5 end
     MODULES.MapTerrain.PadCost = function() return 8, 14, 11 end
-    local base = CFrame.new(100, 3, -50) * CFrame.Angles(0, 0.7, 0)
     local info = Ruins.Build(base, Color3.fromRGB(255, 112, 36), { map = map }, 42)
     if info.model.Parent ~= map then fail("the compound is not in the map") end
-    if tree.Parent then fail("the tree on the site was left standing") end
-    if pickup.Parent then fail("loot on the site was left lying") end
-    if not tower.Parent then fail("a landmark too big to clear was removed") end
-    if not road.Parent then fail("a road piece was removed") end
-    local want = flat and 12.5 or 14
-    if math.abs(info.height - want) > 1e-6 then fail(("stands at %.2f, want %.2f"):format(info.height, want)) end
-    local frame = CFrame.new(100, want, -50) * CFrame.Angles(0, 0.7, 0)
-    local _, laid = Ruins.Layout(frame, Color3.fromRGB(255, 112, 36), 42)
-    for i, pad in ipairs(info.pads) do
-        local w = laid.pads[i].p
-        local d = pad.p - w
-        if d.Magnitude > 1e-6 then fail("pad " .. i .. " is not where Layout puts it in the site's frame") break end
+    if treeIn.Parent then fail("a tree on the site was left standing") end
+    if treeOut.Parent then fail("a tree where the ground is graded was left standing") end
+    if leaves.Parent then fail("a tree's leaves were left when its trunk went") end
+    if pickup.Parent then fail("a loot pickup on the site was left (only a piece of it went)") end
+    if not towerModel.Parent then fail("a landmark too big to clear was removed") end
+    if not roadPart.Parent then fail("a road piece was removed") end
+
+    -- The ground under the footprint, measured the way Build does it.
+    local frame = info.frame
+    local low, high = math.huge, -math.huge
+    -- Under the foundation (the footprint): the margin round it only carries rubble, settled apart.
+    for x = -46, 46, 2 do
+        for z = -42, 42, 2 do
+            local p = frame * Vector3.new(x, 0, z)
+            local y = T(p.X, p.Z)
+            low, high = math.min(low, y), math.max(high, y)
+        end
     end
     local plinth = nil
     for _, child in ipairs(info.model:GetChildren()) do
         if child.Name == "Foundation" and child.ClassName == "Part" then plinth = child end
     end
-    if flat and plinth then fail("a plinth on levelled ground") end
-    if not flat then
+    if mode == "flat" then
+        if plinth then fail("a plinth on levelled ground") end
+        if math.abs(info.frame.p.Y - 12.5) > 1e-6 then fail(("stands at %.2f, want 12.5"):format(info.frame.p.Y)) end
+    else
         if not plinth then
-            fail("no plinth where the ground could not be levelled")
+            fail("no plinth where the ground is not level")
         else
             local bottom = plinth.CFrame.p.Y - plinth.Size.Y / 2
             local top = plinth.CFrame.p.Y + plinth.Size.Y / 2
-            if bottom > 8 then fail(("plinth stops at %.2f, above the lowest ground 8"):format(bottom)) end
-            if top < 14 - 0.7 or top > 14 then fail(("plinth top %.2f is not under the paving"):format(top)) end
+            if bottom > low then fail(("plinth stops at %.2f, above the lowest ground %.2f"):format(bottom, low)) end
+            if top < high - 0.36 then fail(("plinth top %.2f under the highest ground %.2f: terrain shows through"):format(top, high)) end
         end
     end
+    -- Nothing outside the foundation hovers: every rubble chunk out there has its lowest corner at or
+    -- under the ground (or plinth) really beneath its centre.
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = plinth and { terrain, plinth } or { terrain }
+    local outside, floating = 0, 0
+    for _, part in ipairs(info.model:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name == "Rubble" then
+            local here = frame:Inverse() * part.CFrame.p
+            if math.abs(here.X) > 46 or math.abs(here.Z) > 42 then
+                outside = outside + 1
+                local c, s = part.CFrame, part.Size
+                local lowest = c.p.Y - (math.abs(c.r.Y) * s.X + math.abs(c.u.Y) * s.Y + math.abs(c.b.Y) * s.Z) / 2
+                local hit = ws:Raycast(c.p + Vector3.new(0, 30, 0), Vector3.new(0, -90, 0), params)
+                if not hit or lowest > hit.Position.Y + 0.02 then floating = floating + 1 end
+            end
+        end
+    end
+    if outside == 0 then fail("no rubble outside the foundation to measure") end
+    if floating > 0 then fail(floating .. " of " .. outside .. " rubble chunks outside the foundation float over the ground") end
+    -- Every spot is on a floor of the compound: a ray from 4 up lands exactly on it.
+    local own = RaycastParams.new()
+    own.FilterDescendantsInstances = { info.model }
+    for _, key in ipairs({ "pads", "chestSpots", "lootSpots", "vehicleBays" }) do
+        for i, spot in ipairs(info[key]) do
+            local hit = ws:Raycast(spot.p + Vector3.new(0, 4, 0), Vector3.new(0, -8, 0), own)
+            if not hit or math.abs(hit.Position.Y - spot.p.Y) > 0.01 then
+                fail(("%s %d is not on the floor under it"):format(key, i))
+                break
+            end
+        end
+    end
+    -- SnapSpots puts a spot that is off its floor back on it.
+    local moved = { info.chestSpots[1] + Vector3.new(0, 0.4, 0) }
+    Ruins.SnapSpots(info.model, moved)
+    if math.abs(moved[1].p.Y - info.chestSpots[1].p.Y) > 0.01 then fail("SnapSpots left a spot 0.4 off its floor") end
     local unmarked = 0
     for _, part in ipairs(info.model:GetDescendants()) do
         if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") then unmarked = unmarked + 1 end
@@ -891,13 +1014,13 @@ end
 
 def check_build(src, log):
     problems = []
-    for flat in (True, False):
+    for mode in ("flat", "partial", "refused"):
         b = Build(src)
         b.lua.execute(SMOKE)
-        found = b.lua.globals().smoke(b.ruins, flat)
+        found = b.lua.globals().smoke(b.ruins, mode)
         lines = [found[i] for i in range(1, len(found) + 1)]
-        problems += ["build (%s): %s" % ("levelled" if flat else "plinth", line) for line in lines]
-    log("build: levelled and plinth sites, %d problems" % len(problems))
+        problems += ["build (%s): %s" % (mode, line) for line in lines]
+    log("build: levelled, partly levelled and refused sites, %d problems" % len(problems))
     return problems
 
 
@@ -986,11 +1109,28 @@ PLANTS = [
      "identical"),
     ("unseeded wear", [("rng = Random.new(seed or 1),", "rng = Random.new((seed or 1) + math.random(1, 100000)),")], "seed"),
     ("over budget", [("paving(ground, -44.2, 4, -40.2, 8, 4, 4,", "paving(ground, -44.2, 4, -40.2, 8, 16, 16,")], "budget"),
-    ("scenery left on the site", [("if span <= TeamBaseRuins.ClearableSpan then", "if false then")], "build (levelled): the tree"),
-    ("no plinth on a refused site", [("if plinthBottom and height - plinthBottom > 0.2 then", "if false then")], "build (plinth): no plinth"),
+    ("scenery left on the site", [("if span <= TeamBaseRuins.ClearableSpan then", "if false then")], "build (flat): a tree on the site"),
+    ("clearing only the footprint", [("local reach = TeamBaseRuins.Margin + FLATTEN_REACH", "local reach = TeamBaseRuins.Margin")],
+     "build (flat): a tree where the ground is graded"),
+    ("half a tree cleared", [("\t\t\t\t\tfor _, piece in ipairs(piecesOf(item)) do", "\t\t\t\t\tfor _, piece in ipairs({ item }) do")],
+     "build (flat): a tree's leaves"),
+    ("a piece of a pickup cleared", [("\t\t\twhile pickup.Parent and pickup.Parent ~= loot do", "\t\t\twhile false do")],
+     "build (flat): a loot pickup"),
+    ("no plinth on a refused site", [("if plinthBottom and height - plinthBottom > 0.05 then", "if false then")], "build (refused): no plinth"),
+    ("levelling taken on trust", [("if not height or (worst and worst > LEVEL_SLACK) then", "if not height then")],
+     "build (partial): no plinth"),
+    ("rubble left at the planned height", [("\tsettleOutside(model, frame, plinth)\n", "\n")], "float over the ground"),
+    ("spots never snapped", [("\t\tlocal hit = workspace:Raycast(spot.Position + Vector3.new(0, 4, 0), Vector3.new(0, -8, 0), params)",
+                              "\t\tlocal hit = nil")], "SnapSpots left a spot"),
     ("built at the asked height", [("local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)",
                                     "local frame = CFrame.new(position.X, position.Y, position.Z) * CFrame.Angles(0, yaw, 0)")],
-     "build (levelled): pad 1 is not where"),
+     "build (flat): stands at"),
+    ("bays sized for the smallest car", [("local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32", "local BACK_BAYS, BACK_X = { -5, 4, 13 }, 32")],
+     "overlap"),
+    ("gantry under the tallest van", [("local GANTRY_Y = 12.5", "local GANTRY_Y = 11.5")], "drive-out blocked by Gantry"),
+    ("drums back by the east wall", [('rod(yard, "Drum", Vector3.new(6.1, TILE_TOP, -30.8), Vector3.new(6.1, TILE_TOP + 2.8, -30.8)',
+                                      'rod(yard, "Drum", Vector3.new(43.25, TILE_TOP, -26), Vector3.new(43.25, TILE_TOP + 2.8, -26)')],
+     "Bay3: queryable over the bay (Drum)"),
     ("a chest in bay 5's way", [('table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(16.5, TILE_TOP, 19.5) })',
                                  'table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(38, TILE_TOP, 4) })')],
      "is in Bay5's way out"),
@@ -1023,12 +1163,31 @@ def sweep_seeds(src, seeds, log):
 def main(argv):
     repo = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else "."
     plant = "--plant" in argv
-    global BAYS, CHESTS
+    global BAYS, CHESTS, CAR, CORRIDOR_HALF, CORRIDOR_HEIGHT
     BAYS = slot_count(repo)
     CHESTS = chest_stock(repo)
+    from team_base_ruins_modeteams_check import vehicle_extents
+    sizes = vehicle_extents(repo)
+    width = max(v[0] for v in sizes.values())
+    length = max(v[1] for v in sizes.values())
+    height = max(v[2] for v in sizes.values())
+    CAR = (width + 2 * CAR_MARGIN, length + 2 * CAR_MARGIN)
+    CORRIDOR_HALF = max(CORRIDOR_HALF, CAR[0] / 2)
+    CORRIDOR_HEIGHT = max(CORRIDOR_HEIGHT, height + 0.6 + 0.5)
+    print("vehicles: %d models, biggest %.2f wide, %.2f long, %.2f tall -> bay box %.2f x %.2f, way out %.2f wide x %.2f tall"
+          % (len(sizes), width, length, height, CAR[0], CAR[1], CORRIDOR_HALF * 2, CORRIDOR_HEIGHT))
+    # ModeTeams' bay-occupied box must cover the biggest vehicle too.
+    mt = (Path(repo) / "ServerScriptService/Modules/ModeTeams.lua").read_text()
+    clear = re.search(r"local BAY_CLEAR = Vector3\.new\(([\d.]+), ([\d.]+), ([\d.]+)\)", mt)
+    bay_clear_problem = None
+    if not clear or float(clear.group(1)) < width + 2 * CAR_MARGIN - 1e-6 or float(clear.group(3)) < length + 2 * CAR_MARGIN - 1e-6:
+        bay_clear_problem = "ModeTeams BAY_CLEAR %s is smaller than the biggest vehicle plus %.1f all round" % (
+            clear.group(0) if clear else "missing", CAR_MARGIN)
     src = sources(repo)
     problems = run(src, print)
     problems += sweep_seeds(src, range(1, 25), print)
+    if bay_clear_problem:
+        problems.append(bay_clear_problem)
     for line in problems:
         print("  FAIL " + line)
     print("team_base_ruins_check: %d problems" % len(problems))

@@ -12,7 +12,14 @@ records what it was asked for. Measured, per match:
   * the chest call GameMode makes today (no kind, gap 14) gets only the compound's free chest spots,
     never a field spot, in order, skipping any with loot lying on it; the same with kind "chest";
   * other pickups fill the compound's loot spots first, then the ground round it;
-  * the base vehicles are parked in the compound's bays, noses the bay's way;
+  * the base vehicles are parked in the compound's bays, noses the bay's way, and NO TWO OVERLAP
+    (Oliver's playtest, 2026-09-24: "the vehicles in the team bases are all messed up, like piled
+    together"). Vehicles here are boxes of their REAL size, each model's extents measured from
+    VehicleModels (tools/vehicle_models_axis_check.py's builder), and they are solid to the bay test.
+    Create is modelled with parkOn's step-aside: under a bay one footing ray lands in a crack or on a
+    wheel stop, so a car NOT placed exactly is stepped 8 studs onto the next bay (the pile-up);
+  * a wreck is replaced into a bay, the wreck gone first; a bay with anything solid in it (a stray
+    obstacle) is never parked into, and a slot with no free bay waits rather than going to a field;
   * a site on a road (SiteCost nil) turns the axis until both sites are usable;
   * one compound failing takes both down: open-ground pads for both, no bays handed out;
   * Teardown takes the compounds down and hands back BaseVehicleBays;
@@ -46,6 +53,37 @@ def clear_spot(root):
 
 STUB = r"""
 local R = _R
+-- Vehicles and obstacles as boxes: { centre, yaw, width, length }. Two boxes overlap by SAT in plan.
+local function corners(b)
+    local c, s = math.cos(b.yaw), math.sin(b.yaw)
+    local out = {}
+    for _, k in ipairs({ { 1, 1 }, { -1, 1 }, { -1, -1 }, { 1, -1 } }) do
+        local x, z = k[1] * b.w / 2, k[2] * b.l / 2
+        table.insert(out, { b.p.X + x * c + z * s, b.p.Z - x * s + z * c })
+    end
+    return out
+end
+function R.overlap(a, b)
+    local ca, cb = corners(a), corners(b)
+    for _, box in ipairs({ ca, cb }) do
+        for i = 1, 2 do
+            local p1, p2 = box[i], box[i + 1]
+            local ax, az = p2[2] - p1[2], p1[1] - p2[1]
+            local amin, amax, bmin, bmax = math.huge, -math.huge, math.huge, -math.huge
+            for _, q in ipairs(ca) do local d = q[1] * ax + q[2] * az; amin = math.min(amin, d); amax = math.max(amax, d) end
+            for _, q in ipairs(cb) do local d = q[1] * ax + q[2] * az; bmin = math.min(bmin, d); bmax = math.max(bmax, d) end
+            if amax <= bmin + 1e-6 or bmax <= amin + 1e-6 then return false end
+        end
+    end
+    return true
+end
+function R.boxOf(v)
+    local pivot = v.model:GetPivot()
+    local e = R.extents[v.modelId] or { 9, 17.5 }
+    return { p = pivot.p, yaw = pivot.yaw, w = e[1], l = e[2] }
+end
+R.obstacles = {}
+
 -- A compound levels its own ground, so the mock's hill and hole round each base are flattened here.
 function R.height() return 10 end
 local C = getmetatable(CFrame.new(Vector3.zero))
@@ -60,6 +98,50 @@ Combatants = { All = function() return R.bodies end }
 R.builds = {}
 R.badSites = {}
 R.failTeam = nil
+local function nearBay(position)
+    for team = 1, 2 do
+        local ruin = R.lastRuin and R.lastRuin[team]
+        for _, bay in ipairs(ruin and ruin.vehicleBays or {}) do
+            if R.flat(bay.Position, position) < 1 then return true end
+        end
+    end
+    return false
+end
+local baseCreate = VehicleService.Create
+VehicleService.Create = function(parent, position, yaw, kind, options)
+    if not options.exact and nearBay(position) then
+        -- parkOn: a footing ray in a crack or on a wheel stop reads 0.8 of spread, over the tolerance,
+        -- and the ring steps the car 8 studs aside.
+        position = position + Vector3.new(8, 0, 0)
+        R.relocated = (R.relocated or 0) + 1
+    end
+    return baseCreate(parent, position, yaw, kind, options)
+end
+local baseBounds = workspace.GetPartBoundsInBox
+function workspace:GetPartBoundsInBox(cf, size, params)
+    local hits = {}
+    for _, hit in ipairs(baseBounds(self, cf, size, params)) do
+        -- The mock's buildings round each base stand where a compound has cleared its site.
+        local cleared = false
+        if hit.r and hit.Position then
+            for team = 1, 2 do
+                local base = R.ModeTeams.BaseOf(team)
+                if base and R.ModeTeams.BaseRuin(team) and R.flat(hit.Position, base) < 70 then cleared = true end
+            end
+        end
+        if not cleared and not hit.vehicleProxy then table.insert(hits, hit) end
+    end
+    local probe = { p = cf.p, yaw = cf.yaw, w = size.X, l = size.Z }
+    for _, v in ipairs(R.vehicles) do
+        if v.model:IsDescendantOf(workspace) and R.overlap(probe, R.boxOf(v)) then
+            table.insert(hits, { CanCollide = true, vehicleProxy = true })
+        end
+    end
+    for _, o in ipairs(R.obstacles) do
+        if R.overlap(probe, o) then table.insert(hits, { CanCollide = true }) end
+    end
+    return hits
+end
 local function site(frame, x, z) return frame * CFrame.new(Vector3.new(x, 0, z)) end
 TeamBaseRuins = {
     SiteCost = function(frame, mapInfo)
@@ -124,6 +206,70 @@ for team = 1, 2 do
         end
     end
     if inBays ~= #ruin.vehicleBays then fail(("team %d: %d vehicles in its %d bays"):format(team, inBays, #ruin.vehicleBays)) end
+end
+-- No two vehicles (real sizes) overlap: two assemblies in one place is the pile-up.
+local function liveVehicles()
+    local list = {}
+    for _, v in ipairs(R.vehicles) do
+        if v.model:IsDescendantOf(workspace) and v.model:GetAttribute("Wrecked") ~= true then table.insert(list, v) end
+    end
+    return list
+end
+local function checkOverlap(when)
+    local live = liveVehicles()
+    for i = 1, #live do
+        for j = i + 1, #live do
+            if R.overlap(R.boxOf(live[i]), R.boxOf(live[j])) then
+                fail(("%s: %s and %s overlap (a pile-up)"):format(when, live[i].modelId, live[j].modelId))
+                return
+            end
+        end
+    end
+    for _, v in ipairs(live) do
+        for _, o in ipairs(R.obstacles) do
+            if R.overlap(R.boxOf(v), o) then fail(when .. ": a vehicle was put into an obstacle in its bay") return end
+        end
+    end
+end
+checkOverlap("after Setup")
+local function inABay(v)
+    for team = 1, 2 do
+        for _, bay in ipairs(M.BaseRuin(team).vehicleBays) do
+            if R.flat(v.model:GetPivot().p, bay.Position) < 0.01 then return true end
+        end
+    end
+    return false
+end
+-- A wreck in a bay is replaced into its bay, and the wreck is gone.
+local victim = nil
+for _, v in ipairs(liveVehicles()) do
+    if R.flat(v.model:GetPivot().p, M.BaseRuin(1).vehicleBays[1].Position) < 0.01 then victim = v end
+end
+if victim then
+    victim.model:SetAttribute("Wrecked", true)
+    local before = R.creates
+    M.TickBaseVehicles(R.clock)
+    M.TickBaseVehicles(R.clock + MatchConfig.TeamBaseVehicles.RespawnDelay * 1000)
+    if R.creates - before ~= 1 then fail("the wreck in bay 1 was not replaced") end
+    if victim.model:IsDescendantOf(workspace) then fail("the wreck was left standing") end
+    checkOverlap("after a replacement")
+    -- Something solid parked in bay 1 (a stray obstacle): wreck what is there; the replacement must
+    -- not go into it, and with every other bay full it waits rather than going to a field.
+    local bay = M.BaseRuin(1).vehicleBays[1]
+    local look = bay.LookVector
+    table.insert(R.obstacles, { p = bay.Position, yaw = math.atan2(-look.X, -look.Z), w = 3, l = 3 })
+    for _, v in ipairs(liveVehicles()) do
+        if R.flat(v.model:GetPivot().p, bay.Position) < 0.01 then v.model:SetAttribute("Wrecked", true) end
+    end
+    M.TickBaseVehicles(R.clock + 1)
+    M.TickBaseVehicles(R.clock + 1 + MatchConfig.TeamBaseVehicles.RespawnDelay * 1000)
+    checkOverlap("with an obstacle in bay 1")
+    for _, v in ipairs(liveVehicles()) do
+        if not inABay(v) then fail("a base vehicle stands outside the bays") break end
+    end
+    R.obstacles = {}
+else
+    fail("no vehicle in team 1's bay 1 to wreck")
 end
 
 -- Chests: GameMode's call today (no kind, gap 14), then with the kind named. The mock world's own
@@ -222,6 +368,12 @@ return out
 """
 
 PLANTS = [
+    ("bay parking through parkOn", ("exact = inBay or nil", "exact = nil")),
+    ("anything solid in a bay ignored", ("\t\t\t\treturn bayOccupied(bay)", "\t\t\t\treturn false")),
+    ("replacement parked beside the wreck", ("\t\t\t\t\tif wreck and wreck.Parent then\n\t\t\t\t\t\twreck:Destroy()",
+                                            "\t\t\t\t\tif false then\n\t\t\t\t\t\twreck:Destroy()")),
+    ("full bays spill into the field", ("\tif ModeTeams.BaseVehicleBays ~= nil and ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then\n\t\treturn nil",
+                                        "\tif false then\n\t\treturn nil")),
     ("field pads kept", ("\t\tif ruin then\n\t\t\tpads[team] = {}", "\t\tif false then\n\t\t\tpads[team] = {}")),
     ("chests left to the field", ("\t\tif kind == nil and gap >= RUIN_CHEST_GAP then", "\t\tif false then")),
     ("chests put in the loot spots", ('freeRuinSpots(kind == "chest" and ruin.chestSpots or ruin.lootSpots, count)', 'freeRuinSpots(ruin.lootSpots, count)')),
@@ -243,6 +395,28 @@ def chest_stock(root):
     return int(re.search(r"LootService\.BaseStock = \{[^}]*chest = (\d+)", text).group(1))
 
 
+def vehicle_extents(root):
+    """{modelId: (width, length, height)} of every VehicleModels model as built (armed), from its parts."""
+    import vehicle_models_axis_check as V
+    rt = V.Runtime(V.load_sources(root))
+    out = {}
+    for mid in rt.ids:
+        lo, hi = [1e9] * 3, [-1e9] * 3
+        for p in rt.build(mid, "armed"):
+            if p["transparency"] >= 1:
+                continue
+            h = [x / 2 for x in p["size"]]
+            for i in range(3):
+                e = sum(abs(p["cols"][k][i]) * h[k] for k in range(3))
+                lo[i] = min(lo[i], p["pos"][i] - e)
+                hi[i] = max(hi[i], p["pos"][i] + e)
+        out[mid] = (hi[0] - lo[0], hi[2] - lo[2], hi[1] - lo[1])
+    return out
+
+
+EXTENTS = {}
+
+
 def run(root, plant=None, seeds=6):
     models, mounts, pick = vehicle_models(root)
     body = region(root) + "\n" + clear_spot(root)
@@ -259,6 +433,9 @@ def run(root, plant=None, seeds=6):
         R.models = lua.table_from([lua.table_from(list(m[:2]) + [int(m[2])]) for m in models])
         R.mounts = lua.table_from(mounts)
         R.chestStock = chest_stock(root)
+        if not EXTENTS:
+            EXTENTS.update(vehicle_extents(root))
+        R.extents = lua.table_from({k: lua.table_from(list(v)) for k, v in EXTENTS.items()})
         lua.execute("math.randomseed(%d)" % seed)
         lua.globals()._R = R
         lua.execute(PRELUDE.replace("local R = ...", "local R = _R"))
