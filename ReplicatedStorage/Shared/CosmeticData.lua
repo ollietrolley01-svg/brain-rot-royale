@@ -435,6 +435,31 @@ CosmeticData.Items = {
 		description = "Cell Shop: 25,000 Brain Cells. Fires faster than you think. (It doesn't.)",
 	},
 
+	-- Team-mode exclusives (Oliver, 2026-09-24: "team gamemodes need better rewards!! make them worth
+	-- playing"). Unlocked by lifetime team-match wins (MatchConfig.TeamModeRewards.bonus.milestones,
+	-- RewardService.AwardTeamResult) and nothing else. `rankOnly` keeps them out of crates, the coin shop,
+	-- bot outfits and the Daily Spin exactly as the rank rewards are kept out; `teamOnly` says why.
+	TeamSquadStripeSkin = {
+		name = "Squad Stripe", kind = "GunSkin", rarity = "Rare", teamOnly = true,
+		color = Color3.fromRGB(255, 112, 36), material = Enum.Material.SmoothPlastic,
+		description = "Team modes: win 3 team matches. Ember on the barrel, teal in the heart.",
+	},
+	TeamRallyAura = {
+		name = "Rally Aura", kind = "Aura", rarity = "Epic", teamOnly = true,
+		color = Color3.fromRGB(40, 196, 190),
+		description = "Team modes: win 10 team matches. Your side can find you in a fight.",
+	},
+	TeamWarbannerSkin = {
+		name = "Warbanner", kind = "GunSkin", rarity = "Legendary", teamOnly = true,
+		color = Color3.fromRGB(230, 60, 60), material = Enum.Material.Foil,
+		description = "Team modes: win 25 team matches. Carried into every push.",
+	},
+	TeamCommanderAura = {
+		name = "Commander Aura", kind = "Aura", rarity = "Mythic", teamOnly = true,
+		color = Color3.fromRGB(255, 214, 80),
+		description = "Team modes: win 50 team matches. The one the whole lobby follows.",
+	},
+
 	-- Accessories. Every one has a rarity, which decides which crates can drop it. `crateOnly`
 	-- ones have no price at all: the only way to get one is to pull it.
 
@@ -1292,12 +1317,14 @@ function CosmeticData.Get(id)
 	return CosmeticData.Items[id]
 end
 
--- Sorted ids of one kind. Bundle exclusives and rank rewards are never included, since nothing but a
--- bundle or progression hands them out; `excludeCrateOnly` also leaves out the crate exclusives.
+-- Sorted ids of one kind. Bundle exclusives, rank rewards and team-mode rewards are never included, since
+-- nothing but a bundle, progression or team wins hands them out; `excludeCrateOnly` also leaves out the
+-- crate exclusives.
 function CosmeticData.OfKind(kind, excludeCrateOnly)
 	local ids = {}
 	for id, item in pairs(CosmeticData.Items) do
-		if item.kind == kind and not item.bundleOnly and not item.rankOnly and not (excludeCrateOnly and item.crateOnly) then
+		if item.kind == kind and not item.bundleOnly and not item.rankOnly and not item.teamOnly
+			and not (excludeCrateOnly and item.crateOnly) then
 			table.insert(ids, id)
 		end
 	end

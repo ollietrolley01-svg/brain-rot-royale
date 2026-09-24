@@ -12,8 +12,10 @@
 --     first two)
 --   * rewards as chips: crate in its rarity colour, coins, Pass XP, Rot Rank (nothing that is zero)
 --   * in the team modes, every line of the pay above the chips (result, kills, assists, multi-kills,
---     revenge, captures, time on the objective, defends, MVP, time played), each MVP by name, and one
---     row of stat tiles rather than two so the card still fits a phone
+--     revenge, captures, time on the objective, defends, time played, and the TEAM BONUS lines in gold:
+--     MVP, first win of the day, win streak, a team cosmetic unlocked), a TEAM BONUS chip with its total
+--     and the first win's crate, each MVP by name, and the match numbers as one line instead of tiles so
+--     the card still fits a phone
 --   * a countdown back to the lobby and a close button
 -- Confetti on a win. Scales down to fit a phone.
 --
@@ -51,11 +53,11 @@ local matchChanged = Remotes.Event("MatchChanged")
 local SHOW_FOR = 12 -- seconds; the server's results phase is 15
 local CARD_WIDTH = 580
 -- The crate tile, and the team modes' shorter one; the reward breakdown's row height, the most lines it
--- draws (RewardService.TeamBreakdown makes at most 11), and the width of its right-hand "paid" column.
+-- draws (RewardService.TeamBreakdown makes at most 14 with the 2x line), and the width of its right-hand "paid" column.
 -- Sized so the tallest team card fits a 640x360 phone at a scale of 0.5 or more, clear of fitScale's 0.45
 -- floor where the card would start to leave the screen (tools/team_rewards_layout_check.py).
 local CRATE_TILE, CRATE_TILE_TEAM = 92, 64
-local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 112
+local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 112
 local GOLD = C.Accent
 local CONFETTI_COLORS = { C.Accent, C.Green, C.Storm, C.Red, R.Info, Color3.fromRGB(255, 255, 255) }
 
@@ -476,27 +478,45 @@ local function render(result)
 	if (result.companionDamage or 0) > 0 then
 		table.insert(stats, { result.companionDamage, "Companion dmg", whole, C.Green })
 	end
-	-- Three to a row; two rows at most. One in a team mode, where the reward breakdown below needs the room
-	-- on a phone (tools/team_rewards_layout_check.py).
-	while #stats > (teamMode and 3 or 6) do
-		table.remove(stats)
-	end
-	local grid = create("Frame", {
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		BackgroundTransparency = 1,
-		LayoutOrder = 5,
-		Parent = card,
-	}, {
-		create("UIGridLayout", {
-			CellSize = UDim2.new(1 / 3, -6, 0, 64),
-			CellPadding = UDim2.fromOffset(9, 9),
-			HorizontalAlignment = Enum.HorizontalAlignment.Center,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
-	})
-	for index, stat in ipairs(stats) do
-		statTile(grid, stat[1], stat[2], stat[3], stat[4], index)
+	-- Three to a row; two rows at most. In a team mode the numbers go on one quiet line instead: the reward
+	-- breakdown below lists the eliminations and needs the room on a phone (tools/team_rewards_layout_check.py).
+	if teamMode then
+		local parts = {}
+		for index = 1, math.min(#stats, 3) do
+			local stat = stats[index]
+			table.insert(parts, stat[3](stat[1]) .. " " .. string.lower(stat[2]))
+		end
+		label({
+			Size = UDim2.new(1, 0, 0, 16),
+			Font = Enum.Font.GothamMedium,
+			TextSize = 13,
+			TextColor3 = R.TextMuted,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = table.concat(parts, "   •   "),
+			LayoutOrder = 5,
+			Parent = card,
+		})
+	else
+		while #stats > 6 do
+			table.remove(stats)
+		end
+		local grid = create("Frame", {
+			Size = UDim2.new(1, 0, 0, 0),
+			AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			LayoutOrder = 5,
+			Parent = card,
+		}, {
+			create("UIGridLayout", {
+				CellSize = UDim2.new(1 / 3, -6, 0, 64),
+				CellPadding = UDim2.fromOffset(9, 9),
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+		})
+		for index, stat in ipairs(stats) do
+			statTile(grid, stat[1], stat[2], stat[3], stat[4], index)
+		end
 	end
 
 	-- Extras on one quiet line: items, supply drops, bounties, easter eggs.
@@ -635,24 +655,30 @@ local function render(result)
 				paid = string.format("+%s  ·  %s XP", formatNumber(coins), formatNumber(xp))
 			elseif xp > 0 then
 				paid = string.format("+%s XP", formatNumber(xp))
+			elseif line.id == "unlock" then
+				paid = "NEW COSMETIC"
 			else
 				paid = "+" .. formatNumber(coins)
 			end
+			-- TEAM BONUS lines (what only the team modes pay) are gold-edged, so the extra is seen as extra.
 			local cell = create("Frame", {
-				BackgroundColor3 = R.Surface,
+				BackgroundColor3 = line.bonus and GOLD or R.Surface,
 				-- The grid sizes the cell; the same size written here keeps a measuring harness honest.
 				Size = UDim2.new(0.5, -5, 0, BREAKDOWN_ROW),
-				BackgroundTransparency = line.id == "result" and 0 or 0.4,
+				BackgroundTransparency = line.id == "result" and 0 or (line.bonus and 0.82 or 0.4),
 				BorderSizePixel = 0,
 				LayoutOrder = index,
 				Parent = breakdown,
-			}, { rounded(6) })
+			}, {
+				rounded(6),
+				line.bonus and create("UIStroke", { Color = GOLD, Thickness = 1, Transparency = 0.3 }) or nil,
+			})
 			label({
 				Position = UDim2.fromOffset(8, 0),
 				Size = UDim2.new(1, -(BREAKDOWN_PAID + 12), 1, 0),
 				Font = line.id == "result" and Enum.Font.GothamBlack or Enum.Font.GothamBold,
 				TextSize = 13,
-				TextColor3 = (line.id == "result" or line.id == "mvp") and headColor or R.Text,
+				TextColor3 = line.id == "result" and headColor or (line.bonus and GOLD or R.Text),
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextTruncate = Enum.TextTruncate.AtEnd,
 				Text = name,
@@ -676,6 +702,15 @@ local function render(result)
 	rewardRow:FindFirstChildOfClass("UIListLayout").Wraps = true
 	local any = false
 	if reward then
+		-- The team modes' extras, named: TEAM BONUS and its total, and the first win's Epic Crate.
+		if (tonumber(reward.bonusCoins) or 0) > 0 then
+			chip(rewardRow, "TEAM BONUS +" .. formatNumber(reward.bonusCoins), GOLD, 1)
+			any = true
+		end
+		if type(reward.bonusCrate) == "string" then
+			chip(rewardRow, "+1 " .. string.upper(reward.bonusCrate) .. " CRATE", Rarity.Color(reward.bonusCrate), 1)
+			any = true
+		end
 		if (reward.coins or 0) > 0 then
 			chip(rewardRow, "+" .. formatNumber(reward.coins) .. " COINS", GOLD, 2)
 			any = true

@@ -96,88 +96,104 @@ MatchConfig.CombatDamageScale = 0.92
 
 MatchConfig.CoinsPerKill = 75
 -- Team Deathmatch / Objective Capture payouts. Oliver, 2026-09-23 16:10: "theres no rewards for the team
--- gamemodes!", then 2026-09-24: "improve the rewards for team gamemodes too".
+-- gamemodes!", 2026-09-24: "improve the rewards for team gamemodes too", then on seeing a design held level
+-- with the battle royale: "team gamemodes need better rewards!! make them worth playing".
 --
--- THE YARDSTICK is the battle royale's pay per minute of play, lobby included (tools/economy_model.py,
--- ECONOMY.md s.2): a player who picks a team mode should earn about what the same player earns in the
--- battle royale over the same hour -- within 15%, never clearly more. The model checks every profile
--- ("loses only", "wins sometimes", "strong") for coins an hour AND Pass XP an hour, Team Deathmatch and
--- Objective Capture separately, and fails if any of the twelve numbers drifts outside that band.
+-- THE YARDSTICK is the battle royale's pay per minute of play, lobby included (tools/economy_model.py
+-- s.2b, ECONOMY.md s.2b). The team modes are meant to be CLEARLY BETTER: about 1.3-1.5x the same player's
+-- battle royale hour, in coins AND Pass XP, for every profile -- the player who always loses included, so
+-- a loss is still worth playing. The model checks all three profiles ("loses only", "wins sometimes",
+-- "strong") in Team Deathmatch and Objective Capture, and fails if any of the twelve ratios leaves 1.25-1.6.
+-- Why more and not level: a team match asks for 8 minutes where a battle royale loss can be over in one,
+-- and the battle royale keeps its own draw -- the 2,500-coin Legendary win -- which nothing here matches.
 --
 -- WHAT A MATCH PAYS, all of it at the end, on one itemised results card (RewardService.TeamBreakdown):
 --   the result      a crate, coins and XP for a win, a draw or a loss. A loss still pays a crate.
 --   performance     kills at the battle royale's own rate, assists, multi-kills, revenge, and in Objective
 --                   Capture captures, time on the objective and kills made defending it. Each is capped per
 --                   match, so a bot lobby cannot be farmed past a sensible match's worth.
---   MVP             the best performer on each team (performance value, before caps) gets a bonus.
 --   time played     coins and XP per minute ACTIVELY played (the PlaytimeService movement rule).
+--   TEAM BONUS      what the battle royale has no equivalent for, highlighted and totalled on the card:
+--                   the team MVP, the first team win of the day (an Epic Crate), a win streak across
+--                   consecutive team matches, and four team-only cosmetics for lifetime team wins.
 -- Everything goes through the 2x SahurCoins pass once, on the total. XP is Brainrot Pass XP, which feeds
 -- Rot Rank exactly as battle royale XP does (BattlePassService.OnXp). Wins here do NOT count as battle
 -- royale wins (Stats.wins, the global board).
 --
 -- AFK: a player active in fewer than `participation.minActiveShare` of the checks gets the `afk` line
--- and nothing else -- no crate, no win pay, no MVP. Riding a winning team while idle pays nothing.
---
--- Why the result spread is narrower than the battle royale's (2,500 for 1st, 90 for 31st+): the result is
--- shared by fifteen team-mates, so a big win bonus pays whoever was carried. The difference between a weak
--- and a strong player is made in the performance lines instead, which only that player earns.
+-- and nothing else -- no crate, no win pay, no MVP, no TEAM BONUS -- and their win streak ends.
 MatchConfig.TeamModeRewards = {
 	-- THE RESULT. A team match is ~9.3 minutes with the lobby (8 of play), so ~6.5 an hour against the
-	-- battle royale's 10-19. A loss still pays a crate and more than a bottom-half battle royale finish
-	-- (90-260), because it took three times as long. The win is not the battle royale's 2,500: it is
-	-- shared by the whole side, so most of the gap between players is made in the lines below instead.
-	win = { crate = "Rare", coins = 900, xp = 230 },
-	draw = { crate = "Uncommon", coins = 350, xp = 170 },
-	loss = { crate = "Uncommon", coins = 175, xp = 130 },
+	-- battle royale's 10-19. A loss pays a crate and several times a bottom-half battle royale finish
+	-- (90-260). The win is not the battle royale's 2,500: it is shared by the whole side, so much of the gap
+	-- between players is made in the performance lines, which only that player earns.
+	win = { crate = "Rare", coins = 1300, xp = 345 },
+	draw = { crate = "Rare", coins = 600, xp = 270 },
+	loss = { crate = "Uncommon", coins = 250, xp = 230 },
 	-- Idle for most of the match: this and nothing else.
 	afk = { coins = 25, xp = 20 },
 
-	-- MatchService's live kill path. Kills are paid on the results card now, so the live payment is 0; the
-	-- live call still counts the kill for Stats.kills, the kills quest and gun mastery, up to maxPaidKills.
+	-- MatchService's live kill path. Kills are paid on the results card, so the live payment is 0; the live
+	-- call still counts the kill for Stats.kills, the kills quest and gun mastery, up to maxPaidKills.
 	killScale = 0,
-	maxPaidKills = 30,
+	maxPaidKills = 40,
 
 	-- Kills pay the battle royale's own rate (CoinsPerKill / XpPerKill, the bot rates for a bot) for the
-	-- first `cap` of a match. A strong player makes ~20 against bots in 8 minutes of respawns, where a strong
-	-- battle royale player makes 5 in 6; paid in full, the kill XP alone would put a strong team-mode hour
-	-- 20% over the battle royale's. The kills past the cap still count for MVP, streaks and quests.
-	kill = { cap = 18 },
+	-- first `cap` of a match. 30 is past what a strong player makes against bots in 8 minutes (~20), so a
+	-- good player is never capped early; the cap is only there for a farmed bot lobby.
+	kill = { cap = 30 },
 	-- Damage on someone a team-mate then finished: at least `minDamage` in the last `windowSeconds`.
-	assist = { coins = 30, xp = 12, cap = 15, minDamage = 25, windowSeconds = 10 },
+	assist = { coins = 35, xp = 15, cap = 20, minDamage = 25, windowSeconds = 10 },
 	-- Killing whoever last killed you.
-	revenge = { coins = 40, xp = 10, cap = 5 },
+	revenge = { coins = 50, xp = 15, cap = 5 },
 	-- Multi-kills, the battle royale's streak (MatchService STREAK_WINDOW, 50 a step: 50 for a double up to
 	-- 200 for a rampage). tools/team_rewards_check.py fails if these drift from MatchService's. Coins only,
 	-- as in the battle royale.
-	streak = { windowSeconds = 8, coinsPerStep = 50, max = 5, cap = 400 },
+	streak = { windowSeconds = 8, coinsPerStep = 50, max = 5, cap = 600 },
 	-- Objective Capture only, standing in for the kills that mode does not score. A capture pays everyone of
 	-- the capturing team standing on it; time pays per second on an objective your team owns (contested
 	-- counts: that is defending it); a defend is a kill of an enemy standing on an objective your team owns,
 	-- paid on top of the kill. Sized so Objective Capture lands within a few % of Team Deathmatch.
-	capture = { coins = 60, xp = 25, cap = 8 },
-	hold = { coinsPerSecond = 1, xpPerSecond = 0.3, capSeconds = 240 },
-	defend = { coins = 30, xp = 12, cap = 10 },
-	-- The best on each team by performance value (uncapped), if it is at least `minCoins`. A bot can be
-	-- MVP; then nobody on that team gets the bonus. Never an AFK player. It is big on purpose: it is the
-	-- team modes' answer to the battle royale's win (2,500 and a Legendary Crate, whose 3,750 jackpot is
-	-- most of a strong player's hour), paid for carrying rather than for being carried. Coins, not XP:
-	-- the XP side was already level.
-	mvp = { coins = 1000, xp = 60, minCoins = 150 },
+	capture = { coins = 70, xp = 30, cap = 8 },
+	hold = { coinsPerSecond = 1.25, xpPerSecond = 0.4, capSeconds = 240 },
+	defend = { coins = 40, xp = 15, cap = 10 },
+	-- TEAM BONUS. The best on each team by performance value (uncapped), if it is at least `minCoins`. A bot
+	-- can be MVP; then nobody on that team gets the bonus. Never an AFK player. The team modes' answer to
+	-- the battle royale's win, paid for carrying rather than for being carried.
+	mvp = { coins = 2000, xp = 120, minCoins = 150 },
 	-- Paid per minute of ACTIVE play. Checked every `sampleSeconds`: active if the body moved
 	-- ProgressionData.Playtime.MoveStuds since the last check in the same life, or dealt damage, or took an
 	-- objective or stood on a contested one (a defender behind cover need not move); while dead
 	-- a check carries the last live one forward (a player who died mid-fight is still playing, an idle one
 	-- is still idle). A respawn is never movement.
-	participation = { coinsPerMinute = 10, xpPerMinute = 8, sampleSeconds = 15, minActiveShare = 0.5 },
+	participation = { coinsPerMinute = 15, xpPerMinute = 11, sampleSeconds = 15, minActiveShare = 0.5 },
+
+	-- More TEAM BONUS (RewardService.AwardTeamResult keeps the state):
+	--   firstWin     the first team win of each UTC day: an Epic Crate on top of the win's own, plus coins
+	--                and XP. Marked in the day's quest progress, so it is saved and resets at midnight.
+	--   winStreak    each consecutive team win after the first pays a step more, up to `maxSteps` steps
+	--                (a 5-win run pays 4 steps). A draw, a loss or an idle match ends the run.
+	--   milestones   lifetime team wins that unlock the team-only cosmetics (CosmeticData `teamOnly`: never
+	--                sold, never in a crate). One per match at most, the lowest not yet owned.
+	bonus = {
+		firstWin = { crate = "Epic", coins = 1500, xp = 500 },
+		winStreak = { coins = 250, xp = 60, maxSteps = 4 },
+		milestones = {
+			{ wins = 3, cosmetic = "TeamSquadStripeSkin" },
+			{ wins = 10, cosmetic = "TeamRallyAura" },
+			{ wins = 25, cosmetic = "TeamWarbannerSkin" },
+			{ wins = 50, cosmetic = "TeamCommanderAura" },
+		},
+	},
 }
--- What that comes to (tools/economy_model.py s.2b, 2026-09-24), coins an hour / XP an hour against the
--- same player's battle royale hour:
+-- What that comes to (tools/economy_model.py s.2b, 2026-09-24), coins an hour / XP an hour as a multiple
+-- of the same player's battle royale hour:
 --                    Team Deathmatch   Objective Capture
---   loses only         1.02 / 0.97       1.08 / 0.94
---   wins sometimes     0.91 / 0.93       0.96 / 0.89
---   strong             0.87 / 1.08       0.91 / 1.05
--- Crates are fewer an hour than in the battle royale (6.5 against 10-19), so selling every pull, a team
--- hour is worth less than a battle royale one: never more, which is the rule.
+--   loses only         1.35 / 1.43       1.45 / 1.42
+--   wins sometimes     1.41 / 1.31       1.50 / 1.30
+--   strong             1.38 / 1.50       1.43 / 1.45
+-- Not counted: the milestone cosmetics, and the crates' brainrots sold (a team hour holds fewer crates,
+-- 6.5 against 10-19, so selling everything narrows the lead; see ECONOMY.md s.2b).
 MatchConfig.XpPerKill = 60
 
 -- Vehicles parked at each team's base in the team modes (Oliver, 2026-09-24: "make vehicles spawn near

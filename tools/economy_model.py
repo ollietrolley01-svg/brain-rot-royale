@@ -80,9 +80,10 @@ TEAM_PROFILES = {
                        captures=4, hold=180, defends=3),
     },
 }
-# A team-mode hour may earn this much more or less than the same player's battle royale hour, coins
-# and Pass XP both. Outside it the report says so and the run exits 1.
-TEAM_BAND = 0.15
+# A team-mode hour must earn between these multiples of the same player's battle royale hour, coins and
+# Pass XP both (Oliver, 2026-09-24: "team gamemodes need better rewards!! make them worth playing"; aimed at
+# 1.3-1.5x). Outside it the report says so and the run exits 1.
+TEAM_BAND = (1.25, 1.6)
 HOURS_PER_DAY = 2          # hours played on a day they play; they play every day
 LOAD_SECONDS = 20          # map build plus the canopy descent: not measured, a guess
 MIN_ALIVE_SECONDS = 30     # even the first one out lasts this long
@@ -673,6 +674,18 @@ class TeamIncome(Income):
         hold = min(profile.get("hold", 0), t["hold"]["capSeconds"])
         line("hold", hold * t["hold"]["coinsPerSecond"], hold * t["hold"]["xpPerSecond"])
         line("mvp", profile["mvp"] * t["mvp"]["coins"], profile["mvp"] * t["mvp"]["xp"])
+        # TEAM BONUS. The first win of the day, spread over the day's matches: the chance a day of
+        # HOURS_PER_DAY holds at least one win, over the matches in it. Its Epic Crate counts when sold.
+        b = t["bonus"]
+        w = profile["win"]
+        per_day = self.mph * HOURS_PER_DAY
+        first = (1 - (1 - w) ** per_day) / per_day
+        line("firstWin", first * b["firstWin"]["coins"], first * b["firstWin"]["xp"])
+        crates[b["firstWin"]["crate"]] = crates.get(b["firstWin"]["crate"], 0) + first
+        # The win streak, wins independent: a win after k straight wins pays min(k, maxSteps) steps, and
+        # P(at least k straight wins before this one) is w^k.
+        steps = w * sum(w ** k for k in range(1, b["winStreak"]["maxSteps"] + 1))
+        line("winStreak", steps * b["winStreak"]["coins"], steps * b["winStreak"]["xp"])
         p = t["participation"]
         samples = math.floor(limit / p["sampleSeconds"] * profile["active"])
         minutes = samples * p["sampleSeconds"] / 60
@@ -700,7 +713,7 @@ def team_comparison(data, incomes):
             team, br = TeamIncome(data, mode, profile), incomes[name]
             coins = (team.match_cash + team.jackpot_per_match) * team.mph / ((br.match_cash + br.jackpot_per_match) * br.mph)
             xp = team.match_xp * team.mph / (br.match_xp * br.mph)
-            ok = abs(coins - 1) <= TEAM_BAND and abs(xp - 1) <= TEAM_BAND
+            ok = TEAM_BAND[0] <= coins <= TEAM_BAND[1] and TEAM_BAND[0] <= xp <= TEAM_BAND[1]
             rows.append((mode, name, team, coins, xp, ok))
     return rows
 
@@ -959,7 +972,7 @@ def report(data, n):
     print(f"  The battle royale's match coins a minute of play, which the team modes are held to (s.2b): "
           + ", ".join(f"{k} {(inc.match_cash + inc.jackpot_per_match) * inc.mph / 60:.0f}" for k, inc in incomes.items()) + ".")
     print()
-    print(f"2b. TEAM MODES AGAINST THE BATTLE ROYALE (MatchConfig.TeamModeRewards, {data.team_at}; band ±{TEAM_BAND * 100:.0f}%)")
+    print(f"2b. TEAM MODES AGAINST THE BATTLE ROYALE (MatchConfig.TeamModeRewards, {data.team_at}; band {TEAM_BAND[0]}-{TEAM_BAND[1]}x)")
     print(f"  {'mode':15} {'profile':15} {'match/h':>7} {'coins/h':>8} {'BR':>8} {'ratio':>6} {'XP/h':>7} {'BR':>7} {'ratio':>6}"
           f" {'cash/h':>8} {'if sold/h':>9}")
     rows = team_comparison(data, incomes)
@@ -1185,15 +1198,15 @@ def plant(root, n):
     check("odds drawn on the Robux Shop", planted.shop_draws_odds["renderRobuxShop"] and not base.shop_draws_odds["renderRobuxShop"],
           f"renderRobuxShop draws odds: before {base.shop_draws_odds['renderRobuxShop']}, after {planted.shop_draws_odds['renderRobuxShop']}")
 
-    # 6. The team modes are held to the battle royale's hour. A team win paying three times over must put
-    # somebody out of the band, and so must a loss paying four times over (the player who never wins), and
-    # the unplanted build must be inside it (the band is not simply always failing).
+    # 6. The team modes are held to 1.25-1.6x the battle royale's hour. A team win paying three times over
+    # must put somebody above the band, and a loss paying nothing must put the player who never wins below
+    # it; the unplanted build must be inside it (the band is not simply always failing).
     incomes = {k: Income(base, p, base_n) for k, p in PROFILES.items()}
     clean = [r for r in team_comparison(base, incomes) if not r[5]]
     for label, old, new in (("team win coins tripled", f"coins = {base.team['win']['coins']}, xp",
                              f"coins = {base.team['win']['coins'] * 3}, xp"),
-                            ("team loss coins quadrupled", f"coins = {base.team['loss']['coins']}, xp",
-                             f"coins = {base.team['loss']['coins'] * 4}, xp")):
+                            ("team loss pays no coins", f"loss = {{ crate = \"{base.team['loss']['crate']}\", coins = {base.team['loss']['coins']},",
+                             f"loss = {{ crate = \"{base.team['loss']['crate']}\", coins = 0,")):
         tmp = _copy(root)
         _edit(tmp, SHARED + "MatchConfig.lua", old, new)
         planted = Data(tmp)

@@ -54,19 +54,20 @@ def worst_lines(overrides=None):
     sources = {name: rewards.luau_to_lua((overrides or {}).get(path, rewards.read(path)))
                for name, path in rewards.FILES.items()}
     world = lua.execute(rewards.WORLD, lua.table_from(sources), 4)
-    lines, coins, xp = lua.execute(r"""
+    lines, coins, xp, crate, bonus = lua.execute(r"""
         local W = ...
-        local lines, coins, xp = W.RewardService.TeamBreakdown({ playerKills = 99, botKills = 99, assists = 99,
-            revenges = 99, streakCoins = 9999, captures = 99, holdSeconds = 9999, defends = 99, activeSamples = 32,
-            mvp = true }, "win", 1)
+        local lines, coins, xp, _, bonusCrate, bonusCoins = W.RewardService.TeamBreakdown({ playerKills = 99,
+            botKills = 99, assists = 99, revenges = 99, streakCoins = 9999, captures = 99, holdSeconds = 9999,
+            defends = 99, activeSamples = 32, mvp = true, firstWin = true, winStreak = 9,
+            unlock = "TeamCommanderAura", unlockName = "Commander Aura" }, "win", 1)
         table.insert(lines, { id = "coinPass", label = "2x SahurCoins", coins = coins, xp = 0 })
-        return lines, coins * 2, xp
+        return lines, coins * 2, xp, bonusCrate, bonusCoins
     """, world)
-    return [dict(line.items()) for line in lines.values()], coins, xp
+    return [dict(line.items()) for line in lines.values()], coins, xp, crate, bonus
 
 
 DRAW = r"""
-local M, lines, coins, xp, width, height, teamMode, FIT_FLOOR = ...
+local M, lines, coins, xp, width, height, teamMode, FIT_FLOOR, bonusCrate, bonusCoins = ...
 local out = { failures = {}, cells = 0, labels = 0 }
 M.setViewport(width, height)
 local payload
@@ -79,7 +80,8 @@ if teamMode then
 		combat = { shots = 300, hits = 150, headshots = 40, longestKill = 180, damageTaken = 900 },
 		modeResults = { scores = { 250, 249 }, teams = { "Ember Squad", "Teal Crew" }, winner = 1, target = 250,
 			mvps = { { team = 1, name = "SuperLongDisplayName_1234" }, { team = 2, name = "AnotherVeryLongName_99" } } },
-		reward = { rank = 1, crate = "Rare", coins = coins, xp = xp, outcome = "win", lines = list, mvp = true },
+		reward = { rank = 1, crate = "Rare", coins = coins, xp = xp, outcome = "win", lines = list, mvp = true,
+			bonusCrate = bonusCrate, bonusCoins = bonusCoins },
 		progression = { xp = xp, rank = 12, rankFrom = 11, prestige = 0, prestigeFrom = 0, cells = 40 },
 	}
 else
@@ -152,6 +154,14 @@ if teamMode then
 			table.insert(out.failures, "cell " .. i .. " does not say what it paid: " .. joined)
 		end
 	end
+	-- The TEAM BONUS chip, with its total, and the first win's crate.
+	local seen = {}
+	for _, inst in ipairs(card:GetDescendants()) do
+		if inst:IsA("TextLabel") then seen[inst.Text] = true end
+	end
+	local want = "TEAM BONUS +" .. M.requireClient("UiKit").formatNumber(bonusCoins)
+	if not seen[want] then table.insert(out.failures, "no '" .. want .. "' chip") end
+	if not seen["+1 " .. string.upper(bonusCrate) .. " CRATE"] then table.insert(out.failures, "no first-win crate chip") end
 elseif breakdown then
 	table.insert(out.failures, "battle royale card drew a team breakdown")
 end
@@ -161,7 +171,7 @@ return out
 
 def run(overrides=None):
     overrides = overrides or {}
-    lines, coins, xp = worst_lines(overrides)
+    lines, coins, xp, bonus_crate, bonus_coins = worst_lines(overrides)
     failures, report = [], []
     for team in (True, False):
         for name, width, height in SIZES:
@@ -174,7 +184,7 @@ def run(overrides=None):
             lua.execute("local M = ... M.setup({ 'Rarity', 'Remotes', 'GameModes', 'CrateModels' }, { 'UiKit', 'Sfx' }, {})", M)
             M.runClient("ResultsScreen")
             table = lua.table_from([lua.table_from(line) for line in lines])
-            out = lua.execute(DRAW, M, table, coins, xp, width, height, team, FIT_FLOOR)
+            out = lua.execute(DRAW, M, table, coins, xp, width, height, team, FIT_FLOOR, bonus_crate, bonus_coins)
             got = list(out.failures.values())
             failures += [f"{'team' if team else 'BR'} {name}: {g}" for g in got]
             warnings = [w for w in M.warnings.values()]
@@ -187,19 +197,21 @@ def run(overrides=None):
 RESULTS = "StarterPlayerScripts/ResultsScreen.client.lua"
 PLANTS = [
     ("breakdown rows 30 px tall (fits, phone)",
-     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 112",
-                                          "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 30, 12, 112")}),
-    ("two rows of stat tiles kept in a team mode (fits, phone)",
-     {RESULTS: menu.read(RESULTS).replace("while #stats > (teamMode and 3 or 6) do", "while #stats > 6 do")}),
+     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 112",
+                                          "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 30, 16, 112")}),
+    ("stat tiles kept in a team mode (fits, phone)",
+     {RESULTS: menu.read(RESULTS).replace("\tif teamMode then\n\t\tlocal parts = {}", "\tif false then\n\t\tlocal parts = {}")}),
+    ("TEAM BONUS chip dropped (bonus)",
+     {RESULTS: menu.read(RESULTS).replace("if (tonumber(reward.bonusCoins) or 0) > 0 then", "if false then")}),
     ("breakdown stops at five lines (lines)",
-     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 112",
+     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 112",
                                           "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 5, 112")}),
     ("paid column too narrow for '+1.0K  ·  60 XP' (inside)",
-     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 112",
-                                          "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 60")}),
+     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 112",
+                                          "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 60")}),
     ("names squeezed by a 200 px paid column (inside)",
-     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 112",
-                                          "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 200")}),
+     {RESULTS: menu.read(RESULTS).replace("local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 112",
+                                          "local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 16, 200")}),
 ]
 
 

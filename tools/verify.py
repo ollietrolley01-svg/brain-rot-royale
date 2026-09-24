@@ -154,7 +154,7 @@ for m in re.finditer(r"^\t(\w+) = \{\n(.*?)^\t\},", items_block, re.S | re.M):
     rar = re.search(r'rarity = "(\w+)"', body)
     if not rar: problems.append(f"cosmetic {item_id} has no rarity")
     elif rar.group(1) not in RARITIES: problems.append(f"cosmetic {item_id} bad rarity")
-    if "crateOnly = true" not in body and "bundleOnly = true" not in body and "rankOnly = true" not in body and "price =" not in body: problems.append(f"cosmetic {item_id} has no price and isn't crateOnly/bundleOnly/rankOnly")
+    if "crateOnly = true" not in body and "bundleOnly = true" not in body and "rankOnly = true" not in body and "teamOnly = true" not in body and "price =" not in body: problems.append(f"cosmetic {item_id} has no price and isn't crateOnly/bundleOnly/rankOnly/teamOnly")
 cosmetic_ids = set(re.findall(r"^\t(\w+) = \{\n", items_block, re.M))
 gp = read("ReplicatedStorage/Shared/GamepassConfig.lua")
 for cid in re.findall(r'kind = "Cosmetic", id = "(\w+)"', gp):

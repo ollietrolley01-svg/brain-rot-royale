@@ -6,6 +6,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BrainrotData = require(Shared:WaitForChild("BrainrotData"))
 local CosmeticData = require(Shared:WaitForChild("CosmeticData"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local QuestData = require(Shared:WaitForChild("QuestData"))
 local ShopRotation = require(Shared:WaitForChild("ShopRotation"))
 
 local BattlePassService = require(script.Parent:WaitForChild("BattlePassService"))
@@ -119,8 +120,13 @@ end
 -- XP totals, and the crate. Nothing is paid here, so a check can run it on any summary it likes.
 --
 -- summary = { playerKills, botKills, assists, revenges, streakCoins, captures, holdSeconds, defends,
---             activeSamples, mvp (bool), afk (bool) }; every field optional.
--- Each line is { id, label, count?, coins, xp }. Lines that pay nothing are left out, except the result.
+--             activeSamples, mvp (bool), afk (bool),
+--             and the TEAM BONUS inputs AwardTeamResult adds: firstWin (bool), winStreak (n), unlock (id) };
+--             every field optional.
+-- Each line is { id, label, count?, coins, xp, bonus? }. `bonus` marks the TEAM BONUS lines -- what only the
+-- team modes pay (MVP, first win of the day, win streak, a team cosmetic) -- which the card highlights and
+-- totals. Lines that pay nothing are left out, except the result and an unlock.
+-- Returns lines, coins, xp, crate, bonusCrate (the first win's), bonusCoins (the TEAM BONUS total).
 local RESULT_LABEL = { win = "Victory", draw = "Draw", loss = "Defeat" }
 
 function RewardService.TeamBreakdown(summary, outcome, multiplier)
@@ -131,10 +137,10 @@ function RewardService.TeamBreakdown(summary, outcome, multiplier)
 	local function n(value)
 		return math.max(0, math.floor(tonumber(value) or 0))
 	end
-	local function add(id, label, count, coins, xp)
+	local function add(id, label, count, coins, xp, bonus)
 		coins, xp = math.max(0, math.floor(coins)), math.max(0, math.floor(xp))
-		if id == "result" or coins > 0 or xp > 0 then
-			table.insert(lines, { id = id, label = label, count = count, coins = coins, xp = xp })
+		if id == "result" or id == "unlock" or coins > 0 or xp > 0 then
+			table.insert(lines, { id = id, label = label, count = count, coins = coins, xp = xp, bonus = bonus or nil })
 		end
 	end
 
@@ -142,7 +148,7 @@ function RewardService.TeamBreakdown(summary, outcome, multiplier)
 	if summary.afk then
 		local afk = rules.afk or {}
 		add("result", "Away from keyboard", nil, afk.coins or 0, afk.xp or 0)
-		return lines, lines[1].coins, lines[1].xp, nil
+		return lines, lines[1].coins, lines[1].xp, nil, nil, 0
 	end
 
 	local result = rules[outcome] or rules.loss or {}
@@ -174,22 +180,65 @@ function RewardService.TeamBreakdown(summary, outcome, multiplier)
 		add("hold", "On objective", seconds, seconds * (rules.hold.coinsPerSecond or 0), seconds * (rules.hold.xpPerSecond or 0))
 	end
 	counted("defends", "Defends", summary.defends, rules.defend)
-	if summary.mvp and rules.mvp then
-		add("mvp", "Team MVP", nil, rules.mvp.coins or 0, rules.mvp.xp or 0)
-	end
 	local participation = rules.participation
 	if participation then
 		local minutes = n(summary.activeSamples) * (participation.sampleSeconds or 15) / 60
 		add("time", "Time played", math.floor(minutes), minutes * (participation.coinsPerMinute or 0), minutes * (participation.xpPerMinute or 0))
 	end
 
-	local coins, xp = 0, 0
+	-- TEAM BONUS: what the battle royale does not pay at all.
+	local bonus = rules.bonus or {}
+	if summary.mvp and rules.mvp then
+		add("mvp", "Team MVP", nil, rules.mvp.coins or 0, rules.mvp.xp or 0, true)
+	end
+	local bonusCrate = nil
+	if summary.firstWin and bonus.firstWin then
+		add("firstWin", "First win today", nil, bonus.firstWin.coins or 0, bonus.firstWin.xp or 0, true)
+		bonusCrate = bonus.firstWin.crate
+	end
+	local streak = n(summary.winStreak)
+	if streak >= 2 and bonus.winStreak then
+		local steps = math.min(streak - 1, bonus.winStreak.maxSteps or 4)
+		add("winStreak", "Win streak", streak, steps * (bonus.winStreak.coins or 0), steps * (bonus.winStreak.xp or 0), true)
+	end
+	if type(summary.unlock) == "string" then
+		add("unlock", summary.unlockName or summary.unlock, nil, 0, 0, true)
+	end
+
+	local coins, xp, bonusCoins = 0, 0, 0
 	for _, line in ipairs(lines) do
 		coins += line.coins
 		xp += line.xp
+		if line.bonus then
+			bonusCoins += line.coins
+		end
 	end
-	return lines, coins, xp, result.crate
+	return lines, coins, xp, result.crate, bonusCrate, bonusCoins
 end
+
+-- A player's team-mode record: lifetime team wins and matches (the milestones that unlock the team
+-- cosmetics) and the current run of consecutive team wins. Kept on the profile as `TeamRewards`, made here
+-- the first time it is needed. PERSISTENCE NEEDS PlayerData TO KNOW THE FIELD (its reconcile keeps only what
+-- defaultData declares): until it does, the record lasts one visit. Cosmetics already unlocked are in
+-- Cosmetics.owned and persist either way, so nothing earned is ever taken back.
+function RewardService.TeamRecord(data)
+	local record = data.TeamRewards
+	if type(record) ~= "table" then
+		record = {}
+		data.TeamRewards = record
+	end
+	for _, key in ipairs({ "wins", "matches", "streak" }) do
+		if type(record[key]) ~= "number" then
+			record[key] = 0
+		end
+	end
+	return record
+end
+
+-- The first team win of the UTC day is marked in the day's quest progress under this key, not a quest id:
+-- QuestData.Ensure clears that table at midnight, so the marker is saved today (Quests.progress keeps any
+-- string -> number) and gone tomorrow with no timestamp to compare. The menu only reads progress by quest id.
+RewardService.FirstTeamWinKey = "teamFirstWin"
 
 -- What a match was worth before any cap: how GameMode ranks a team's MVP. The same rates TeamBreakdown
 -- pays, so the MVP is whoever the card would have paid most for what they did.
@@ -218,9 +267,44 @@ function RewardService.AwardTeamResult(player, outcome, rank, summary)
 	data.Stats.matches += 1
 	QuestService.Progress(player, "matches", 1)
 
-	local lines, coins, xp, crate = RewardService.TeamBreakdown(summary, outcome, RewardService.PlacementMultiplier)
+	-- TEAM BONUS state: first win of the day, the win streak, the milestone cosmetics. An idle player earns
+	-- none of it, and breaks a streak.
+	local rules = MatchConfig.TeamModeRewards or {}
+	local bonus = rules.bonus or {}
+	local record = RewardService.TeamRecord(data)
+	summary = table.clone(summary)
+	if summary.afk then
+		record.streak = 0
+	else
+		record.matches += 1
+		if outcome == "win" then
+			record.wins += 1
+			record.streak += 1
+			summary.winStreak = record.streak
+			local quests = QuestData.Ensure(data.Quests, StateSync.CurrentDay())
+			if not quests.progress[RewardService.FirstTeamWinKey] then
+				quests.progress[RewardService.FirstTeamWinKey] = 1
+				summary.firstWin = true
+			end
+		else
+			record.streak = 0
+		end
+		for _, milestone in ipairs(bonus.milestones or {}) do
+			local item = CosmeticData.Get(milestone.cosmetic)
+			if item and record.wins >= milestone.wins and not data.Cosmetics.owned[milestone.cosmetic] then
+				data.Cosmetics.owned[milestone.cosmetic] = true
+				summary.unlock, summary.unlockName = milestone.cosmetic, item.name
+				break
+			end
+		end
+	end
+
+	local lines, coins, xp, crate, bonusCrate, bonusCoins = RewardService.TeamBreakdown(summary, outcome, RewardService.PlacementMultiplier)
 	if crate then
 		CrateService.Give(player, crate, 1)
+	end
+	if bonusCrate then
+		CrateService.Give(player, bonusCrate, 1)
 	end
 	local granted = RewardService.AddCoins(player, coins)
 	if granted > coins then
@@ -251,6 +335,9 @@ function RewardService.AwardTeamResult(player, outcome, rank, summary)
 		lines = lines,
 		mvp = summary.mvp == true,
 		afk = summary.afk == true,
+		bonusCrate = bonusCrate,
+		bonusCoins = bonusCoins,
+		winStreak = summary.winStreak,
 	}
 end
 

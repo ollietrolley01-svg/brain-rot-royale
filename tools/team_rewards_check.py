@@ -25,6 +25,10 @@ Matches it plays, and what it holds the code to (every one an invariant the code
           down before the payout (MatchService pays after StopWorld).
   live    MatchService's live kill call (RewardService.AwardKill at killScale) pays nothing and still counts.
   streak  the team streak's window, step pay and labels are MatchService's own.
+  bonus   TEAM BONUS across a run of matches: the first win of the day pays once (Epic Crate included) and
+          again the next UTC day; consecutive wins pay a growing win streak, capped at maxSteps, ended by a
+          loss and by an idle match; the milestone cosmetics unlock at their win counts, once each, never
+          sold (no price, left out of CosmeticData.OfKind); bonusCoins is the sum of the gold lines.
 
 Not covered: the real MatchService calling in (its finishMatch reads RankOf before StopWorld and AwardResult
 after, which is what this replays), CombatService.DealDamage's order of Died and the damage listeners (the
@@ -40,6 +44,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FILES = {
     "MatchConfig": "ReplicatedStorage/Shared/MatchConfig.lua",
+    "QuestData": "ReplicatedStorage/Shared/QuestData.lua",
+    "CosmeticData": "ReplicatedStorage/Shared/CosmeticData.lua",
     "RewardService": "ServerScriptService/Modules/RewardService.lua",
     "GameMode": "ServerScriptService/Modules/GameMode.lua",
     "ModeKingOfTheHill": "ServerScriptService/Modules/ModeKingOfTheHill.lua",
@@ -161,7 +167,8 @@ W.character = character
 local players = {}
 function W.player(name, team, position, coinPass)
 	local p = { kind = "player", Name = name, Parent = true, coinPass = coinPass, xp = 0,
-		data = { Stats = { matches = 0, kills = 0, wins = 0 }, SahurCoins = 0 } }
+		data = { Stats = { matches = 0, kills = 0, wins = 0 }, SahurCoins = 0, Cosmetics = { owned = {} },
+			Quests = { progress = {}, done = {}, weekProgress = {}, weekDone = {} } } }
 	p.Character = character(position or vec(0, 0, 0))
 	function p:SetAttribute() end
 	function p:LoadCharacter() end
@@ -216,7 +223,6 @@ mocks.ObjectiveZone = {
 }
 mocks.ZFight = { FixTolerance = 0.01 }
 mocks.BrainrotData = { CollectionBonus = {} }
-mocks.CosmeticData = {}
 mocks.ShopRotation = {}
 mocks.BotService = { Spawn = function() end }
 local damageListeners = {}
@@ -260,7 +266,8 @@ mocks.ModeTeams = {
 }
 mocks.LootService = { CountNear = function() return {} end, BaseStock = {}, BaseRadius = 40, SeedAt = function() end }
 mocks.StormService = { Stop = function() end, Start = function() end }
-mocks.StateSync = { Notify = function() end, Push = function() end }
+W.day = 20000
+mocks.StateSync = { Notify = function() end, Push = function() end, CurrentDay = function() return W.day end }
 mocks.QuestService = { Progress = function(p, stat, amount)
 	if type(amount) ~= "number" or amount <= 0 then return end
 	W.quests[p] = W.quests[p] or {}
@@ -304,6 +311,7 @@ W.MatchConfig = load_("MatchConfig")
 W.RewardService = load_("RewardService")
 W.GameMode = load_("GameMode")
 W.KOTH = load_("ModeKingOfTheHill")
+W.CosmeticData = load_("CosmeticData")
 W.GameMode.Bind({
 	Finish = function() W.finished = true end,
 	IsParticipant = function(p) return W.participants[p] == true end,
@@ -382,14 +390,14 @@ do
 	local a = W.bot("AssistMe", 2); W.damage(p1, a, 30); W.advance(3); mode.OnDeath(a, mate, "Gun")
 	local b = W.bot("Scratch", 2); W.damage(p1, b, 10); W.advance(1); mode.OnDeath(b, mate, "Gun")
 	local c = W.bot("Stale", 2); W.damage(p1, c, 40); W.advance(12); mode.OnDeath(c, mate, "Gun")
-	-- Seventeen more bot kills, 20 s apart (no streaks): 21 kills, 20 of them bots, past the cap.
-	for i = 1, 17 do W.advance(20); walk(p1); W.move(enemy, vec(-200, 0, i * 10)); killBot(mode, p1, 2) end
+	-- More bot kills, 10 s apart (inside the 8-minute limit) (no streaks), to one past the cap: cap bots and the one player.
+	for i = 1, T.kill.cap - 3 do W.advance(10); walk(p1); W.move(enemy, vec(-200, 0, i * 10)); killBot(mode, p1, 2) end
 	-- Idle: killed once and respawned somewhere else. The teleport must not read as moving.
 	mode.OnDeath(p2, enemy, "Gun"); p2.downed = nil
 	W.advance(6); mode.OnRespawn(p2, p2.Character); W.move(p2, vec(400, 0, -400))
 	W.advance(60)
 	local L1 = I.ledgers[p1]
-	check(L1.playerKills == 1 and L1.botKills == 20, string.format("Ace's kills %d player + %d bot, want 1 + 20", L1.playerKills, L1.botKills))
+	check(L1.playerKills == 1 and L1.botKills == T.kill.cap, string.format("Ace's kills %d player + %d bot, want 1 + %d", L1.playerKills, L1.botKills, T.kill.cap))
 	check(L1.assists == 1, "assists: want exactly the 30-damage one, got " .. tostring(L1.assists))
 	check(L1.revenges == 1, "revenge: want 1, got " .. tostring(L1.revenges))
 	check(L1.streakCoins == 150, "multi-kills: a double and a triple pay 150, got " .. tostring(L1.streakCoins))
@@ -538,6 +546,68 @@ do
 	end
 	for k in pairs(I.streakLabels) do check(streakLabels[k] ~= nil, "no streak label MatchService lacks") end
 end
+-- ======================================================================== TEAM BONUS across matches
+do
+	local B = T.bonus
+	local p = W.player("Runner", 1, vec(0, 0, 0))
+	local function play(outcome, idle)
+		local summary = { botKills = 3, activeSamples = idle and 0 or 30, samples = 30, afk = idle == true }
+		local before = p.data.SahurCoins
+		p.xp = 0
+		W.crates[p] = nil
+		local reward = RS.AwardTeamResult(p, outcome, outcome == "win" and 1 or 2, summary)
+		p.data.SahurCoins = p.data.SahurCoins - before -- so sums() compares this match alone
+		sums(reward, "Runner " .. outcome, p)
+		p.data.SahurCoins = before + reward.coins
+		local bonus = 0
+		for _, line in ipairs(reward.lines) do if line.bonus then bonus = bonus + line.coins end end
+		check(bonus == (reward.bonusCoins or 0), "bonusCoins is the sum of the TEAM BONUS lines")
+		return reward
+	end
+	local r1 = play("win")
+	check(lineOf(r1, "firstWin") ~= nil and r1.bonusCrate == B.firstWin.crate, "the day's first team win pays the first-win bonus and its crate")
+	local given = table.concat(W.crates[p] or {}, ",")
+	check(given == T.win.crate .. "," .. B.firstWin.crate, "the win's crate and the first win's both land: " .. given)
+	check(lineOf(r1, "winStreak") == nil, "one win is not a streak")
+	local r2 = play("win")
+	check(lineOf(r2, "firstWin") == nil and r2.bonusCrate == nil, "the second win of the day is not the first")
+	local s2 = lineOf(r2, "winStreak")
+	check(s2 and s2.count == 2 and s2.coins == B.winStreak.coins, "two in a row: a one-step streak")
+	local r3 = play("win")
+	check(r3.lines and lineOf(r3, "unlock") ~= nil and p.data.Cosmetics.owned[B.milestones[1].cosmetic] == true,
+		"the third team win unlocks " .. B.milestones[1].cosmetic)
+	for _ = 1, 5 do play("win") end
+	local r9 = play("win")
+	local s9 = lineOf(r9, "winStreak")
+	check(s9 and s9.count == 9 and s9.coins == B.winStreak.maxSteps * B.winStreak.coins, "a nine-win run pays maxSteps steps, no more")
+	check(lineOf(r9, "unlock") == nil, "no cosmetic between milestones")
+	local rl = play("loss")
+	check(lineOf(rl, "winStreak") == nil and RS.TeamRecord(p.data).streak == 0, "a loss ends the run")
+	play("win"); play("win")
+	local ri = play("win", true)
+	check(#ri.lines == 1 and ri.bonusCrate == nil and RS.TeamRecord(p.data).streak == 0, "an idle win pays no bonus and ends the run")
+	local rn = play("win")
+	check(lineOf(rn, "winStreak") == nil, "after an idle match the run starts again")
+	p.data.Cosmetics.owned[B.milestones[2].cosmetic] = nil
+	RS.TeamRecord(p.data).wins = B.milestones[2].wins - 1
+	local r10 = play("win")
+	check(lineOf(r10, "unlock") ~= nil and p.data.Cosmetics.owned[B.milestones[2].cosmetic], "win " .. B.milestones[2].wins .. " unlocks " .. B.milestones[2].cosmetic)
+	local unlocks = 0
+	for _ = 1, 3 do if lineOf(play("win"), "unlock") then unlocks = unlocks + 1 end end
+	check(unlocks == 0, "an owned cosmetic is never unlocked again")
+	W.day = W.day + 1
+	local nd = play("win")
+	check(lineOf(nd, "firstWin") ~= nil, "the next UTC day's first win pays again")
+	-- The team cosmetics are real, priceless and out of every OfKind pool (crates, shop, bots, spin).
+	local CD = W.CosmeticData
+	for _, m in ipairs(B.milestones) do
+		local item = CD.Get(m.cosmetic)
+		check(item ~= nil and item.teamOnly == true and item.price == nil, m.cosmetic .. " is a priceless teamOnly cosmetic")
+		if item then
+			for _, id in ipairs(CD.OfKind(item.kind)) do check(id ~= m.cosmetic, m.cosmetic .. " is not in OfKind") end
+		end
+	end
+end
 return out
 """
 
@@ -574,7 +644,17 @@ PLANTS = [
     ("the kill cap ignored",
      plant(RS, "local playerKills = math.min(n(summary.playerKills), cap)", "local playerKills = n(summary.playerKills)")),
     ("an idle player paid like everyone else",
-     plant(RS, "\tif summary.afk then\n", "\tif false then\n")),
+     plant(RS, "\tif summary.afk then\n\t\tlocal afk = rules.afk", "\tif false then\n\t\tlocal afk = rules.afk")),
+    ("the first-win bonus paid on every win",
+     plant(RS, "\t\t\tif not quests.progress[RewardService.FirstTeamWinKey] then", "\t\t\tif true then")),
+    ("a loss leaves the win streak running",
+     plant(RS, "\t\telse\n\t\t\trecord.streak = 0\n\t\tend", "\t\tend")),
+    ("the win streak uncapped",
+     plant(RS, "local steps = math.min(streak - 1, bonus.winStreak.maxSteps or 4)", "local steps = streak - 1")),
+    ("a team cosmetic unlocked again when owned",
+     plant(RS, "and not data.Cosmetics.owned[milestone.cosmetic] then", "then")),
+    ("team cosmetics left in the crate / shop pools",
+     plant("ReplicatedStorage/Shared/CosmeticData.lua", "and not item.rankOnly and not item.teamOnly", "and not item.rankOnly")),
     ("the MVP is the worst on the side",
      plant(GM, "if not holder or value > holder.value", "if not holder or value < holder.value")),
     ("the 2x pass left off the breakdown",
