@@ -252,6 +252,7 @@ RunService.RenderStepped:Connect(function(dt)
 
 		if firing and now - lastShotAt >= 1 / spec.fireRate then
 			lastShotAt = now
+			lastAimAt = now -- the server takes the aim from the shot too
 			fireRemote:FireServer(target)
 		elseif now - lastAimAt >= AIM_SEND_EVERY then
 			lastAimAt = now
