@@ -5,15 +5,18 @@
 -- (CombatService calls in here), and at zero it collapses — every part unanchored, tumbling,
 -- gone a few seconds later.
 --
--- The landing spot is checked before anything is built: there has to be ground under the whole
--- footprint, it can't be too steep, and nothing solid (walls, players, another fort) may already
--- be in the box. If it can't go up there, the kit lies where it landed as a pickup, so a bad
--- throw costs a walk rather than the item. Each player keeps at most MAX_PER_PLAYER standing;
+-- It goes up where the kit lands -- "anywhere" (#128): on a slope, a roof, rubble or in shallow
+-- water it stands level on posts down to the ground (a barricade tilts to follow it), and against a
+-- wall it slides to the nearest free spot. DefensePlacement.Plan works that out and the preview shows
+-- the same plan. What still refuses: a player, bot or vehicle in the way, a spawn, an objective's
+-- centre, a team base's vehicle lane, a doorway it would shut, the lobby, and nothing to stand on at
+-- all. Then the kit lies where it landed as a pickup, so a bad throw costs a walk rather than the item. Each player keeps at most MAX_PER_PLAYER standing;
 -- building past that knocks their oldest down. Everything is cleared with the match.
 
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -255,14 +258,37 @@ local MINES = { RotMine = true }
 -- Placement
 --------------------------------------------------------------------------------
 
--- The site rules (and the ground raycast's filter) live in Shared/DefensePlacement, moved there
--- unchanged, so the client's preview runs the very same checks. Built defenses in this module's folder
--- never count as ground.
+-- The site rules (and the ground raycast's filter) live in Shared/DefensePlacement, so the client's
+-- preview runs the very same checks. Built defenses in this module's folder never count as ground.
 
 -- Whether a structure can stand centred on `centre` with its front toward `flat` (a unit
--- direction on the ground plane): the ground-level origin to build at, or nil and why not.
+-- direction on the ground plane): the origin to build at and the plan (its footings), or nil and why
+-- not.
 local function findSite(character, spec, centre, flat)
 	return DefensePlacement.FindSite(character, spec.size, centre, flat, ensureFolder())
+end
+
+-- The footings a plan stands on (posts, a sill, floats, a ladder), built into the structure's model so
+-- they rise, take damage and collapse with it. Straight from DefensePlacement.Footings, the list the
+-- preview draws, and added AFTER the z-fight pass so nothing moves them off the plan: they are laid
+-- out to share no face with the structure (every post ends inside the pad or the sill).
+local function buildFootings(model, plan)
+	for _, footing in ipairs(plan and plan.footings or {}) do
+		local part
+		if footing.class == "TrussPart" then
+			part = Instance.new("TrussPart")
+			part.Size = footing.size
+			part.CFrame = footing.cframe
+			part.Color = footing.color
+			part.Material = footing.material
+			part.Anchored = true
+			part.Parent = model
+		else
+			part = piece(model, footing.size, footing.cframe, footing.color, footing.material, footing.shape)
+		end
+		part.Name = "Footing"
+		part:SetAttribute("Footing", footing.kind)
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -403,8 +429,9 @@ function DefenseService.OwnerOf(model)
 end
 
 -- nil for one nobody owns) and returns the model. Deploying goes through here after the
--- placement checks; it's also how anything else can put a defense in the world.
-function DefenseService.Build(itemId, origin, owner)
+-- placement checks; it's also how anything else can put a defense in the world. `plan` (optional,
+-- from DefensePlacement.FindSite) adds the footings it stands on.
+function DefenseService.Build(itemId, origin, owner, plan)
 	local spec = STRUCTURES[itemId]
 	local item = ItemData.Get(itemId)
 	if not spec or not item then
@@ -421,6 +448,7 @@ function DefenseService.Build(itemId, origin, owner)
 	spec.build(model, origin, item.color)
 	-- Before the rise tween takes its targets: no two faces left flush.
 	ZFight.Fix({ model }, { all = true })
+	buildFootings(model, plan)
 
 	-- An invisible core at the top carries the health bar and marks the centre for splash checks.
 	local core = Instance.new("Part")
@@ -461,7 +489,7 @@ function DefenseService.Deploy(owner, character, itemId, centre, facing)
 	if not spec or not item then
 		return nil, "Unknown defense."
 	end
-	local origin, reason = findSite(character, spec, centre, facing)
+	local origin, reason, plan = findSite(character, spec, centre, facing)
 	if not origin then
 		return nil, reason
 	end
@@ -485,13 +513,24 @@ function DefenseService.Deploy(owner, character, itemId, centre, facing)
 		end
 	end
 
-	local model = DefenseService.Build(itemId, origin, owner)
+	local model = DefenseService.Build(itemId, origin, owner, plan)
 	if not model then
 		return nil, "Couldn't build that."
 	end
 	table.insert(mine, model)
 	buildFx:FireAllClients({ kind = "build", position = origin.Position + Vector3.new(0, 3, 0), color = item.color })
 	return model
+end
+
+-- Whether `itemId` could go up for `character` centred on `centre` facing `facing`, without building
+-- anything: the origin, nil and the plan, or nil and why not. Exactly the check Deploy makes, so a bot
+-- asking first gets the answer Deploy would give.
+function DefenseService.CheckSite(character, itemId, centre, facing)
+	local spec = STRUCTURES[itemId]
+	if not spec then
+		return nil, "Unknown defense."
+	end
+	return findSite(character, spec, centre, facing)
 end
 
 -- The kit has landed: build there, facing the way the thrower was looking, or leave it lying as
@@ -510,13 +549,57 @@ local function landKit(player, itemId, landed, facing)
 		return
 	end
 
-	local model, reason = DefenseService.Deploy(player, player.Character, itemId, landed + Vector3.new(0, 1, 0), facing)
+	local model, reason = DefenseService.Deploy(player, player.Character, itemId, landed + Vector3.new(0, DefensePlacement.LandLift, 0), facing)
 	if not model then
 		LootService.DropItem(itemId, landed, 1)
 		StateSync.Notify(player, (reason or "No room to build there.") .. "  The kit's on the ground where it landed.", true)
 		return
 	end
 	QuestService.Progress(player, "builds", 1)
+end
+
+-- A structure's kit: where it comes down is decided on the throw, on the very arc the preview walks
+-- (DefensePlacement.Landing), and the kit flies that arc and deploys there. It used to be a physics
+-- body that anchored on first contact (#128 A), which still left what it first touched to physics: a
+-- clipped corner, a glance off a post, a kit that rolled before Touched fired. Now nothing bounces it
+-- anywhere, and the ghost and the build are the same spot by construction. The kit is anchored and
+-- touches nothing; it is only the picture of the throw.
+local function throwStructure(player, character, itemId, from, velocity, flightTime, facing, spin)
+	local landing, _struck, landTime = DefensePlacement.Landing(from, velocity, flightTime,
+		DefensePlacement.GroundParams(character, nil, nil))
+	local kit = ItemModels.Build(itemId, { anchored = true, scale = 1.5, name = itemId .. "Kit" })
+	if not kit then
+		return false
+	end
+	for _, part in ipairs(kit:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+		end
+	end
+	kit:PivotTo(CFrame.new(from) * spin)
+	kit.Parent = ensureFolder()
+	-- Game time, not os.clock (CPU time), for anything a player sees move.
+	local started = time()
+	local follow = RunService.Heartbeat:Connect(function()
+		if not kit.Parent then
+			return
+		end
+		local t = math.min(time() - started, landTime)
+		kit:PivotTo(CFrame.new(DefensePlacement.ArcPoint(from, velocity, t)) * spin * CFrame.Angles(t * 5, t * 3, 0))
+	end)
+	task.delay(landTime, function()
+		follow:Disconnect()
+		kit:Destroy()
+		if not player.Parent then
+			LootService.DropItem(itemId, landing, 1)
+			return
+		end
+		landKit(player, itemId, landing, facing)
+	end)
+	return true
 end
 
 -- The click: throw the kit along the aim in an arc and watch it until it comes to rest. Spending
@@ -543,8 +626,12 @@ local function throwKit(player, itemId, aimPoint)
 	-- Clamped to the throw range, facing the way you're looking, and lobbed to land on the aim point:
 	-- all of it in DefensePlacement, so the client's preview can walk the very same arc to show where
 	-- the kit will really arrive (it is thrown flat enough to clip a hill on the way).
-	local velocity, _flightTime, _target, facing = DefensePlacement.ThrowArc(from, look, target)
+	local velocity, flightTime, _target, facing = DefensePlacement.ThrowArc(from, look, target)
+	if spec then
+		return throwStructure(player, character, itemId, from, velocity, flightTime, facing, root.CFrame.Rotation)
+	end
 
+	-- A mine is still a physics throw: it arms wherever it stops (HazardService owns it from there).
 	local kit, body = ItemModels.Build(itemId, { anchored = false, scale = 1.5, name = itemId .. "Kit" })
 	if not kit then
 		return false
@@ -560,7 +647,7 @@ local function throwKit(player, itemId, aimPoint)
 	body.AssemblyLinearVelocity = velocity
 	body.AssemblyAngularVelocity = Vector3.new(math.random(-6, 6), math.random(-6, 6), math.random(-6, 6))
 
-	-- It builds where the kit FIRST TOUCHES, not where it finishes rolling. Measured over 72 throws on
+	-- It arms where the kit FIRST TOUCHES, not where it finishes rolling. Measured over 72 throws on
 	-- a real map, the roll from first contact to rest is mean 5.6, p90 11.9 studs -- a lottery between
 	-- the site you aimed at and one somewhere downhill, and the reason "place it anywhere" reads as
 	-- broken (Oliver, #128). The arc is still the server's, so nothing about where it MAY land changed;

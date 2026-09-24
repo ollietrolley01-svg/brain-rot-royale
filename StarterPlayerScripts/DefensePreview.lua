@@ -19,15 +19,16 @@
 --     with the same size, leaving out only what exists on this client alone (the camera's viewmodel
 --     and this ghost, client-side effects);
 --   * the ghost is the server's: a clone of the structure DefenseService builds with its own builders
---     into ReplicatedStorage.DefenseTemplates.
--- Two things it can't simply assume. The kit does not arrive where you aimed: it is lobbed on an arc
--- (DefensePlacement.ThrowArc) flat enough to clip a rising hill, and measured on a real map the arc meets
--- the ground a median 10 studs from the aim point. So the preview walks that same arc with a raycast per
--- segment (DefensePlacement.TraceThrow) and puts the ghost where the throw will actually land, says how
--- far short of your aim that is when it matters, and stops the dotted lob there rather than drawing
--- through the hillside. And once down, the kit still rolls, which nothing can predict: the ring round the
--- landing spot is how far it typically ends up from there (DefensePreview.LandingSpread), so the ghost
--- reads as "about here, facing this way" and not as a promise. The Rot Mine builds nothing: arc and ring.
+--     into ReplicatedStorage.DefenseTemplates, set on the plan's origin (level, or tilted along a
+--     barricade's length), with the plan's footings -- posts, sill, floats, ladder -- drawn from the
+--     same DefensePlacement.Footings list DefenseService builds them from.
+-- The kit does not arrive where you aimed: it is lobbed on an arc (DefensePlacement.ThrowArc) flat enough
+-- to clip a rising hill, and measured on a real map the arc meets the ground a median 10 studs from the
+-- aim point. So the preview walks that same arc (DefensePlacement.Landing, the function the server now
+-- builds from) and puts the ghost where the throw will actually land, marks your aim when that is far
+-- off, and stops the dotted lob there rather than drawing through the hillside. A structure's kit no
+-- longer rolls (#128, 09-24: it deploys where the arc lands), so the ghost is a promise, not "about
+-- here"; only the Rot Mine, still a physics throw, keeps the ring of how far it may roll.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -47,6 +48,12 @@ DefensePreview.__index = DefensePreview
 -- put the first contact a median 19.6 studs from the aim and 13 studs SHORT of it -- the flight, not the
 -- roll, and the traced arc is what answers that.) Re-run `grip` if the throw or the kit models change.
 DefensePreview.LandingSpread = 5
+-- A structure lands exactly where the arc does: its ring is a marker, not a spread.
+DefensePreview.StructureMark = 1
+-- The site is worked out again when the landing moves this far, the facing turns, or this long passes
+-- (the world changes under a ghost that is held still: someone walks into it).
+DefensePreview.ReplanMove = 0.1
+DefensePreview.ReplanAge = 0.25
 
 DefensePreview.ValidColor = Color3.fromRGB(94, 214, 122)
 DefensePreview.InvalidColor = Color3.fromRGB(232, 92, 92)
@@ -125,8 +132,11 @@ end
 --   centre                                            where the site checks start (target + LandLift)
 --   size                                              the structure's box, or nil for a mine
 --   origin                                            the build frame when the site is good
+--   plan                                              and its plan, footings included
 --   reason                                            why not, when it isn't
-function DefensePreview.Site(character, itemId, aimPoint, extraExclude)
+-- `cache` (optional, a table the caller keeps) reuses the last plan while the landing and facing hold
+-- still, so a held ghost doesn't re-sample the ground twenty times a second.
+function DefensePreview.Site(character, itemId, aimPoint, extraExclude, cache)
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if not root then
 		return nil
@@ -144,7 +154,7 @@ function DefensePreview.Site(character, itemId, aimPoint, extraExclude)
 	-- the difference between a ghost that lies and one that points at the hillside it will hit.
 	-- The same filter the ground check uses, except that standing defenses are NOT left out: a kit
 	-- thrown at your own bunker hits the bunker, and the arc should stop there like it will.
-	local landing, struck, landTime = DefensePlacement.TraceThrow(from, velocity, flightTime,
+	local landing, struck, landTime = DefensePlacement.Landing(from, velocity, flightTime,
 		DefensePlacement.GroundParams(character, nil, exclude))
 
 	local result = {
@@ -165,8 +175,19 @@ function DefensePreview.Site(character, itemId, aimPoint, extraExclude)
 	result.target = landing
 	result.centre = landing + Vector3.new(0, DefensePlacement.LandLift, 0)
 	if result.size then
-		result.origin, result.reason = DefensePlacement.FindSite(character, result.size, result.centre, facing,
-			workspace:FindFirstChild("Defenses"), exclude)
+		-- Game time: os.clock is CPU time, not the clock the world changes on.
+		local now = time()
+		if cache and cache.itemId == itemId and cache.centre and (cache.centre - result.centre).Magnitude < DefensePreview.ReplanMove
+			and cache.facing:Dot(facing) > 0.9999 and now - cache.at < DefensePreview.ReplanAge then
+			result.origin, result.reason, result.plan = cache.origin, cache.reason, cache.plan
+		else
+			result.origin, result.reason, result.plan = DefensePlacement.FindSite(character, result.size, result.centre, facing,
+				workspace:FindFirstChild("Defenses"), exclude)
+			if cache then
+				cache.itemId, cache.centre, cache.facing, cache.at = itemId, result.centre, facing, now
+				cache.origin, cache.reason, cache.plan = result.origin, result.reason, result.plan
+			end
+		end
 	end
 	return result
 end
@@ -202,6 +223,9 @@ function DefensePreview.new()
 	self.ghostParts = {}
 	self.lastRefresh = 0
 	self.shown = false
+	self.siteCache = {}
+	-- The footings' ghosts: one pooled part per footing, remade when the footing's shape changes.
+	self.footParts = {}
 
 	local root = folder()
 	self.root = root
@@ -344,6 +368,37 @@ function DefensePreview:_paintGhost(origin, valid)
 	end
 end
 
+-- The plan's footings as ghosts: the same list, sizes and frames DefenseService builds them from.
+function DefensePreview:_drawFootings(footings, valid)
+	local tint = valid and DefensePreview.ValidColor or DefensePreview.InvalidColor
+	for index, footing in ipairs(footings) do
+		local part = self.footParts[index]
+		local class = footing.class or "Part"
+		if part and (part.ClassName ~= class or (footing.shape and part.Shape ~= footing.shape)) then
+			part:Destroy()
+			part = nil
+		end
+		if not part then
+			part = inert(Instance.new(class))
+			part.Name = "GhostFooting"
+			if footing.shape then
+				part.Shape = footing.shape
+			end
+			part.Material = Enum.Material.SmoothPlastic
+			part.Parent = self.root
+			self.footParts[index] = part
+		end
+		part.Size = footing.size
+		part.CFrame = footing.cframe
+		part.Color = footing.color:Lerp(tint, 0.5)
+		part.Transparency = 0.62
+	end
+	for index = #self.footParts, #footings + 1, -1 do
+		self.footParts[index]:Destroy()
+		self.footParts[index] = nil
+	end
+end
+
 function DefensePreview:_drawArc(site, color)
 	local g = workspace.Gravity
 	local steps = 24
@@ -390,7 +445,7 @@ function DefensePreview:Update(character, itemId, aimPoint, extraExclude)
 		return
 	end
 	self.lastRefresh = now
-	local site = DefensePreview.Site(character, itemId, aimPoint or DefensePreview.Aim(character), extraExclude)
+	local site = DefensePreview.Site(character, itemId, aimPoint or DefensePreview.Aim(character), extraExclude, self.siteCache)
 	if not site then
 		self:Hide()
 		return
@@ -404,8 +459,9 @@ function DefensePreview:Update(character, itemId, aimPoint, extraExclude)
 
 	local landing = groundBelow(site.target, character)
 	self.ring.CFrame = CFrame.new(landing + UP * 0.1) * CFrame.Angles(math.pi / 2, 0, 0)
-	self.ring.Radius = DefensePreview.LandingSpread
-	self.ring.InnerRadius = math.max(0, DefensePreview.LandingSpread - 0.5)
+	local spread = site.size and DefensePreview.StructureMark or DefensePreview.LandingSpread
+	self.ring.Radius = spread
+	self.ring.InnerRadius = math.max(0, spread - 0.5)
 	self.ring.Color3 = site.size and tint or item.color
 	self.ring.Visible = true
 
@@ -423,6 +479,7 @@ function DefensePreview:Update(character, itemId, aimPoint, extraExclude)
 	if ghost then
 		self:_paintGhost(origin, valid)
 	end
+	self:_drawFootings(site.plan and site.plan.footings or {}, valid)
 
 	local size = site.size
 	self.footprint.Size = Vector3.new(size.X, 0.05, size.Z)
@@ -490,6 +547,7 @@ function DefensePreview:_hideStructure()
 	for _, bar in ipairs(self.front) do
 		bar.Transparency = 1
 	end
+	self:_drawFootings({}, false)
 end
 
 function DefensePreview:Hide()
