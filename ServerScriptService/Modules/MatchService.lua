@@ -64,7 +64,8 @@ local leftSpectate = {}
 
 -- The battle royale's AFK rule, the team modes' participation check (GameMode.sampleActivity) applied to
 -- a placement: every `every` seconds of a running match each living player is checked for having moved
--- MoveStuds or hurt someone since the last check. One active in fewer than minActiveShare of their checks
+-- MoveStuds, hurt someone, been hurt, fired, reloaded or used an item since the last check (findings C2:
+-- moving and hurting alone called a camper holding an angle, a looter and a healer idle). One active in fewer than minActiveShare of their checks
 -- is paid the team modes' `afk` line instead of their placement -- a Ready player who never touches the
 -- keyboard used to drop in, stand still and collect a placement crate and coins every match. A dead or
 -- spectating player is not checked (their placement is already fixed), nor is anyone before their first
@@ -125,12 +126,21 @@ function afk.award(player, rank)
 	}
 end
 
--- Hurting someone is playing, even standing still (a camper holding an angle is not AFK).
-CombatService.OnDamage(function(attacker, _, dealt)
-	if state == "InProgress" and participants[attacker] and (dealt or 0) > 0 and Combatants.IsPlayer(attacker) then
-		afk.record(attacker).busy = true
+-- Hurting someone is playing, even standing still (a camper holding an angle is not AFK); so is being
+-- hurt by someone, and firing, reloading or using an item (WeaponService.NoteActivity).
+function afk.busy(token)
+	if state == "InProgress" and token ~= nil and participants[token] and Combatants.IsPlayer(token) then
+		afk.record(token).busy = true
+	end
+end
+CombatService.OnDamage(function(attacker, victim, dealt)
+	-- Someone else's hit: not the storm (no attacker) and not your own splash.
+	if (dealt or 0) > 0 and attacker ~= nil and attacker ~= victim then
+		afk.busy(attacker)
+		afk.busy(victim)
 	end
 end)
+WeaponService.OnActivity = afk.busy
 
 -- Players' out-of-combat regen, the bots' own rule (BotService: MatchConfig.BotRegenDelay seconds with no
 -- damage taken or dealt, then BotRegenPerSecond, up to MaxHealth). Roblox's default character "Health"
