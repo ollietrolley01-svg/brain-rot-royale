@@ -70,6 +70,12 @@ MatchConfig.StormPhases = {
 	{ holdTime = 22, shrinkTime = 28, radiusScale = 0.12, damagePerSecond = 7 },
 	{ holdTime = 18, shrinkTime = 22, radiusScale = 0.03, damagePerSecond = 12 },
 }
+-- Sudden death, after the last circle: it holds for `holdTime`, then closes to nothing over `shrinkTime`
+-- and everyone left is in the storm, at a rate no heal keeps up with (a Med Kit is 100 health over 5 s).
+-- Without it two campers inside the last circle could hold a match open forever: the battle royale has
+-- no time limit. StormService runs it as one more circle, so the HUD counts "Circle 6 of 6" and bots
+-- read it like any other.
+MatchConfig.StormSuddenDeath = { holdTime = 15, shrinkTime = 30, radiusScale = 0, damagePerSecond = 25 }
 
 MatchConfig.VoteCandidates = 3
 
