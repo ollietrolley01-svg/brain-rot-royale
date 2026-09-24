@@ -907,7 +907,7 @@ end
 -- or 28` is a genuine fallback for a mode argument that failed to carry one; this had no such excuse,
 -- since KingOfTheHill.hillRadius always exists. A future resize (#121, bigger maps) now reaches the
 -- bots' fan-out automatically instead of silently drifting the ring away from the real hill radius.
-local HILL_RADIUS = (GameModes.Modes.KingOfTheHill and GameModes.Modes.KingOfTheHill.hillRadius) or 28
+local HILL_RADIUS = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("ObjectiveZone")).Radius(GameModes.Modes.KingOfTheHill) -- one source with the drawn ring, #93
 local HILL_SPREAD = 0.55 -- bots stand this share of the hill radius out from its centre, spread round it
 local RALLY_RANGE = 80 -- friendlies this close count as the squad
 local RALLY_GAP = 40 -- further than this from the squad, go to it before pushing
