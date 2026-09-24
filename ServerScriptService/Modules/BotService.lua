@@ -1135,12 +1135,20 @@ local function startReload(bot, now)
 		return
 	end
 	bot.reloadUntil = now + (def.reloadTime or 1.5)
+	-- #13: players see a bot's reload on its body (GunPoseClient reads these, as for a player).
+	if bot.character then
+		bot.character:SetAttribute("Reloading", def.reloadTime or 1.5)
+		bot.character:SetAttribute("ReloadEmpty", (bot.mag or 0) <= 0)
+	end
 	STATS.reloads += 1
 end
 
 local function finishReload(bot, now)
 	if bot.reloadUntil and now >= bot.reloadUntil then
 		bot.reloadUntil = nil
+		if bot.character then
+			bot.character:SetAttribute("Reloading", nil)
+		end
 		local size = magazineOf(bot.weapon)
 		if size then
 			bot.mag = size
@@ -2112,6 +2120,9 @@ local function holdLoot(bot, humanoid, root, now)
 		bot.magWeapon = def.id
 		bot.mag = magazineOf(def)
 		bot.reloadUntil = nil
+		if bot.character then
+			bot.character:SetAttribute("Reloading", nil)
+		end
 		giveBotGun(bot.character, def)
 		claimPhysics(bot.character)
 	end
