@@ -194,6 +194,8 @@ end
 -- the part the Inspect prompt hangs on.
 --------------------------------------------------------------------------------
 
+local BUTTERFLIES = { Color3.fromRGB(255, 150, 200), Color3.fromRGB(150, 210, 255), Color3.fromRGB(255, 226, 90) }
+
 -- Garden-growing is everywhere on Roblox. This one got out of hand.
 local function giantCarrot(model, origin)
 	local plank = Color3.fromRGB(128, 92, 58)
@@ -225,9 +227,42 @@ local function giantCarrot(model, origin)
 	column(model, 1.6, 7, origin * CFrame.new(0, 8.8, 0), orange)
 	for index = 1, 3 do
 		local yaw = index / 3 * math.pi * 2
-		decor(piece(model, Vector3.new(1.2, 7, 1.2),
+		-- Each leaf on its own phase, so the top rustles rather than bouncing as one lump.
+		bob(decor(piece(model, Vector3.new(1.2, 7, 1.2),
 			origin * CFrame.new(0, 9.6, 0) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(22), 0, 0) * CFrame.new(0, 3.5, 0),
-			leaf, Enum.Material.Grass))
+			leaf, Enum.Material.Grass)), 0.18, 1.3, index * 1.9)
+	end
+	-- #42: growth rings round the root, a shade darker and a tenth proud, so it reads as a carrot and
+	-- not as three orange drums stacked up.
+	local ringTone = orange:Lerp(Color3.new(0, 0, 0), 0.18)
+	for _, ring in ipairs({ { 2.6, 4.7 }, { 4.6, 6.7 }, { 5.8, 6.7 }, { 7.0, 6.7 } }) do
+		decor(column(model, 0.3, ring[2], origin * CFrame.new(0, ring[1], 0), ringTone))
+	end
+
+	-- Somebody watered it anyway. The can lies on its side where it was dropped (a cylinder's length is
+	-- its X axis, so an unturned one already lies down), with the puddle it left and a shovel that
+	-- was clearly not up to the job. Parts are sized so no two faces share a plane.
+	local can = origin * CFrame.new(5.7, 1.9, -3.3) * CFrame.Angles(0, math.rad(25), 0)
+	local canTone = Color3.fromRGB(70, 132, 96)
+	decor(piece(model, Vector3.new(2.2, 1.8, 1.8), can, canTone, Enum.Material.Metal, Enum.PartType.Cylinder))
+	decor(piece(model, Vector3.new(0.3, 0.3, 2.0), can * CFrame.new(0.6, 0, -1.7), canTone, Enum.Material.Metal))
+	decor(sphere(model, Vector3.new(0.7, 0.7, 0.4), can * CFrame.new(0.6, 0, -2.75), canTone:Lerp(Color3.new(1, 1, 1), 0.2), Enum.Material.Metal))
+	decor(piece(model, Vector3.new(1.4, 0.25, 0.25), can * CFrame.new(0, 1.25, 0), canTone, Enum.Material.Metal))
+	for _, x in ipairs({ -0.5, 0.5 }) do
+		decor(piece(model, Vector3.new(0.25, 0.5, 0.16), can * CFrame.new(x, 1.0, 0), canTone, Enum.Material.Metal))
+	end
+	local puddle = decor(column(model, 0.06, 4.5, origin * CFrame.new(5.2, 1.03, -5.4), Color3.fromRGB(110, 170, 220), Enum.Material.Glass))
+	puddle.Transparency = 0.35
+	local shovel = origin * CFrame.new(-13.2, 0, 3.2) * CFrame.Angles(0, 0, math.rad(12))
+	decor(piece(model, Vector3.new(1.4, 1.8, 0.2), shovel * CFrame.new(0, 1.1, 0), Color3.fromRGB(150, 154, 160), Enum.Material.Metal))
+	decor(piece(model, Vector3.new(0.3, 4.6, 0.3), shovel * CFrame.new(0, 4.3, 0), plank, Enum.Material.Wood))
+	decor(piece(model, Vector3.new(1.2, 0.3, 0.36), shovel * CFrame.new(0, 6.6, 0), plank, Enum.Material.Wood))
+
+	-- Butterflies over the sprouts: the one thing in the bed that isn't a vegetable.
+	for index, spot in ipairs({ Vector3.new(-6, 3.4, 5), Vector3.new(5, 4.2, 6.5), Vector3.new(-3, 3.8, -6) }) do
+		local wings = decor(piece(model, Vector3.new(0.7, 0.1, 0.5), origin * CFrame.new(spot) * CFrame.Angles(0, index * 1.3, 0),
+			BUTTERFLIES[index], Enum.Material.Neon))
+		bob(wings, 0.6, 1.8 + index * 0.35, index * 1.1)
 	end
 
 	piece(model, Vector3.new(0.5, 6, 0.5), origin * CFrame.new(11, 3, -9), plank, Enum.Material.Wood)
@@ -286,25 +321,29 @@ local function survivalCamp(model, origin)
 			origin * CFrame.new(math.cos(angle) * 2.2, 3.6, math.sin(angle) * 2.2) * CFrame.Angles(0, -angle, math.rad(17)),
 			wood, Enum.Material.Wood)
 	end
-	decor(piece(model, Vector3.new(0.12, 1.6, 0.12), origin * CFrame.new(0, 6.4, 0), Color3.fromRGB(60, 58, 56), Enum.Material.Metal))
-	local pot = piece(model, Vector3.new(2.6, 2, 2.6), origin * CFrame.new(0, 4.6, 0), Color3.fromRGB(48, 48, 52), Enum.Material.Metal)
-	decor(piece(model, Vector3.new(2.9, 0.3, 2.9), origin * CFrame.new(0, 5.5, 0), Color3.fromRGB(70, 70, 76), Enum.Material.Metal))
+	-- The pot hangs clear of the flames' tops, and its chain runs from the rim up to the tripod's
+	-- apex. (Its base used to lie in the plane of the top flame's base: z-fighting.)
+	decor(piece(model, Vector3.new(0.12, 1.15, 0.12), origin * CFrame.new(0, 6.725, 0), Color3.fromRGB(60, 58, 56), Enum.Material.Metal))
+	local pot = piece(model, Vector3.new(2.6, 2, 2.6), origin * CFrame.new(0, 5.2, 0), Color3.fromRGB(48, 48, 52), Enum.Material.Metal)
+	decor(piece(model, Vector3.new(2.9, 0.3, 2.9), origin * CFrame.new(0, 6.1, 0), Color3.fromRGB(70, 70, 76), Enum.Material.Metal))
 	bob(decor(pot), 0.1, 1.1, 0)
 
-	-- A-frame tent, with a door flap open on the fire side, a ridge pole and pegged guy ropes.
+	-- A-frame tent, with a door flap open on the fire side, a ridge pole and pegged guy ropes. At 12.4
+	-- rather than 14, so the back pegs stay inside the 19-stud site (they reached 20.6).
 	local canvas = Color3.fromRGB(96, 120, 76)
+	local tentZ = 12.4
 	for _, side in ipairs({ -1, 1 }) do
-		piece(model, Vector3.new(6, 0.3, 8), origin * CFrame.new(side * 1.93, 2.3, 14) * CFrame.Angles(0, 0, -side * math.rad(50)),
+		piece(model, Vector3.new(6, 0.3, 8), origin * CFrame.new(side * 1.93, 2.3, tentZ) * CFrame.Angles(0, 0, -side * math.rad(50)),
 			canvas, Enum.Material.Fabric)
 	end
-	piece(model, Vector3.new(0.4, 0.4, 8.4), origin * CFrame.new(0, 4.5, 14), wood, Enum.Material.Wood)
-	piece(model, Vector3.new(5.6, 0.25, 4.4), origin * CFrame.new(-1.1, 2.6, 10.3) * CFrame.Angles(math.rad(-24), math.rad(-14), math.rad(-46)),
+	piece(model, Vector3.new(0.4, 0.4, 8.4), origin * CFrame.new(0, 4.5, tentZ), wood, Enum.Material.Wood)
+	piece(model, Vector3.new(5.6, 0.25, 4.4), origin * CFrame.new(-1.1, 2.6, tentZ - 3.7) * CFrame.Angles(math.rad(-24), math.rad(-14), math.rad(-46)),
 		canvas:Lerp(Color3.new(0, 0, 0), 0.12), Enum.Material.Fabric)
-	decor(piece(model, Vector3.new(4.6, 0.3, 5.6), origin * CFrame.new(0, 0.22, 14), Color3.fromRGB(150, 128, 92), Enum.Material.Fabric))
-	decor(sphere(model, Vector3.new(4, 1.6, 5), origin * CFrame.new(0, 0.9, 15.4), Color3.fromRGB(180, 76, 68), Enum.Material.Fabric))
+	decor(piece(model, Vector3.new(4.6, 0.3, 5.6), origin * CFrame.new(0, 0.22, tentZ), Color3.fromRGB(150, 128, 92), Enum.Material.Fabric))
+	decor(sphere(model, Vector3.new(4, 1.6, 5), origin * CFrame.new(0, 0.9, tentZ + 1.4), Color3.fromRGB(180, 76, 68), Enum.Material.Fabric))
 	for _, corner in ipairs({ { -1, 1 }, { 1, 1 }, { -1, -1 }, { 1, -1 } }) do
-		local pegAt = Vector3.new(corner[1] * 5.6, 0.35, 14 + corner[2] * 5.4)
-		local ridgeAt = Vector3.new(corner[1] * 2.1, 4.3, 14 + corner[2] * 4.1)
+		local pegAt = Vector3.new(corner[1] * 5.6, 0.35, tentZ + corner[2] * 5.4)
+		local ridgeAt = Vector3.new(corner[1] * 2.1, 4.3, tentZ + corner[2] * 4.1)
 		decor(piece(model, Vector3.new(0.25, 1.3, 0.25),
 			origin * CFrame.new(pegAt) * CFrame.Angles(math.rad(corner[2] * -18), 0, math.rad(corner[1] * 18)), wood, Enum.Material.Wood))
 		decor(piece(model, Vector3.new(0.1, 0.1, (ridgeAt - pegAt).Magnitude),
@@ -326,20 +365,27 @@ local function survivalCamp(model, origin)
 	local board = piece(model, Vector3.new(6, 2.6, 0.3), origin * CFrame.new(-9, 5.2, 6),
 		Color3.fromRGB(200, 184, 150), Enum.Material.WoodPlanks)
 	sign(board, "NIGHTS SURVIVED: 97", Color3.fromRGB(60, 40, 30))
-	-- A lantern hung off the signpost, so the camp has a second light at its edge.
-	decor(piece(model, Vector3.new(1.6, 0.16, 0.16), origin * CFrame.new(-8.2, 6.6, 6), Color3.fromRGB(60, 58, 56), Enum.Material.Metal))
-	local lantern = piece(model, Vector3.new(1.1, 1.5, 1.1), origin * CFrame.new(-7.5, 5.9, 6), Color3.fromRGB(255, 226, 150), Enum.Material.Neon)
+	-- A lantern hung off an arm that reaches out past the board's end, so the camp has a second light
+	-- at its edge. (It used to hang half inside the board, its top in the plane of the arm's.)
+	decor(piece(model, Vector3.new(2.2, 0.16, 0.16), origin * CFrame.new(-5.3, 6.6, 6), Color3.fromRGB(60, 58, 56), Enum.Material.Metal))
+	local lantern = piece(model, Vector3.new(1.1, 1.5, 1.1), origin * CFrame.new(-4.9, 5.8, 6), Color3.fromRGB(255, 226, 150), Enum.Material.Neon)
 	decor(lantern)
 	light(lantern, Color3.fromRGB(255, 214, 150), 16, 1.2)
 	bob(lantern, 0.12, 1.4, 1.2)
-	-- Tally scratches under the count: five bundles of five, then two, because 97 is a lot of nights.
+	-- Tally scratches on a plank of their own under the count: five bundles of five, then two, because
+	-- 97 is a lot of nights. Marks, strikes and plank are three different depths, so no two faces share
+	-- a plane (they used to: every strike z-fought the four marks it crossed).
+	local tallyTone = Color3.fromRGB(70, 48, 36)
+	piece(model, Vector3.new(5.8, 0.9, 0.24), origin * CFrame.new(-9, 3.35, 6), Color3.fromRGB(186, 168, 132), Enum.Material.WoodPlanks)
 	for index = 0, 4 do
 		for mark = 0, 3 do
-			decor(piece(model, Vector3.new(0.1, 0.7, 0.36), origin * CFrame.new(-11 + index * 1.05 + mark * 0.2, 4.1, 5.9),
-				Color3.fromRGB(70, 48, 36)))
+			decor(piece(model, Vector3.new(0.1, 0.6, 0.36), origin * CFrame.new(-11.6 + index * 1.05 + mark * 0.2, 3.35, 6), tallyTone))
 		end
-		decor(piece(model, Vector3.new(1, 0.1, 0.36), origin * CFrame.new(-10.7 + index * 1.05, 4.1, 5.9)
-			* CFrame.Angles(0, 0, math.rad(22)), Color3.fromRGB(70, 48, 36)))
+		decor(piece(model, Vector3.new(1, 0.1, 0.44), origin * CFrame.new(-11.3 + index * 1.05, 3.35, 6)
+			* CFrame.Angles(0, 0, math.rad(22)), tallyTone))
+	end
+	for mark = 0, 1 do
+		decor(piece(model, Vector3.new(0.1, 0.6, 0.36), origin * CFrame.new(-6.5 + mark * 0.2, 3.35, 6), tallyTone))
 	end
 
 	return logs
@@ -361,7 +407,7 @@ local function lostGuest(model, origin)
 		piece(model, Vector3.new(1.9, 4, 1.9), origin * CFrame.new(x, 6, 0), stone, Enum.Material.Marble)
 		piece(model, Vector3.new(1.9, 4, 1.9), origin * CFrame.new(x * 2.95, 10, 0), stone, Enum.Material.Marble)
 		-- Shoes, and a hand shading the eyes on one side while the other holds the strap.
-		decor(piece(model, Vector3.new(2.1, 0.8, 3), origin * CFrame.new(x, 4.4, -0.5), stone:Lerp(Color3.new(0, 0, 0), 0.18),
+		decor(piece(model, Vector3.new(2.1, 0.8, 3), origin * CFrame.new(x, 4.35, -0.5), stone:Lerp(Color3.new(0, 0, 0), 0.18),
 			Enum.Material.Marble))
 		decor(piece(model, Vector3.new(1.7, 1.7, 1.7), origin * CFrame.new(x * 2.95, 8.1, 0), stone, Enum.Material.Marble))
 	end
@@ -381,7 +427,9 @@ local function lostGuest(model, origin)
 	decor(sphere(model, Vector3.new(0.8, 0.8, 0.8), origin * CFrame.new(0.7, 15.7, -0.5), Color3.fromRGB(132, 138, 152)))
 	decor(piece(model, Vector3.new(0.5, 0.2, 0.2), origin * CFrame.new(0.7, 15.65, -1.05), Color3.fromRGB(230, 160, 60)))
 
-	piece(model, Vector3.new(0.4, 9, 0.4), origin * CFrame.new(4.6, 8.5, -1.2), Color3.fromRGB(110, 80, 52), Enum.Material.Wood)
+	-- The post stands in the moulding (it used to stop 0.7 above it) and behind the board rather than
+	-- through it, so the two no longer share their front and back faces.
+	piece(model, Vector3.new(0.4, 9.8, 0.4), origin * CFrame.new(4.6, 8.1, -0.85), Color3.fromRGB(110, 80, 52), Enum.Material.Wood)
 	local board = piece(model, Vector3.new(6, 3, 0.4), origin * CFrame.new(4.6, 13.5, -1.2),
 		Color3.fromRGB(240, 236, 220), Enum.Material.WoodPlanks)
 	sign(board, "where is my spawn??", Color3.fromRGB(40, 40, 50))
@@ -486,7 +534,8 @@ local function livingRoom(model, origin)
 	decor(piece(model, Vector3.new(18, 0.2, 14), origin * CFrame.new(0, 0.1, 0), Color3.fromRGB(150, 44, 52), Enum.Material.Fabric))
 
 	piece(model, Vector3.new(10, 2, 4), origin * CFrame.new(0, 1.2, 4), fabric, Enum.Material.Fabric)
-	piece(model, Vector3.new(10, 3.2, 1.2), origin * CFrame.new(0, 3.2, 5.6), fabric, Enum.Material.Fabric)
+	-- The back runs into the arms rather than ending in the plane of the seat's ends.
+	piece(model, Vector3.new(10.4, 3.2, 1.2), origin * CFrame.new(0, 3.2, 5.6), fabric, Enum.Material.Fabric)
 	for _, x in ipairs({ -5.4, 5.4 }) do
 		piece(model, Vector3.new(1.2, 2.8, 4.6), origin * CFrame.new(x, 1.6, 4.3), fabric, Enum.Material.Fabric)
 	end
@@ -550,6 +599,9 @@ local function livingRoom(model, origin)
 	return tv
 end
 
+local MAGNETS = { Color3.fromRGB(230, 70, 70), Color3.fromRGB(70, 150, 240), Color3.fromRGB(250, 200, 60),
+	Color3.fromRGB(90, 200, 110), Color3.fromRGB(200, 110, 220) }
+
 local function fridgehenge(model, origin)
 	local white = Color3.fromRGB(236, 238, 240)
 	local count, radius = 7, 12
@@ -562,8 +614,14 @@ local function fridgehenge(model, origin)
 
 		-- Doors face the altar.
 		local fridge = piece(model, Vector3.new(4, 9, 3.4), origin * CFrame.lookAt(position, Vector3.new(0, 4.5, 0)), white)
-		decor(piece(model, Vector3.new(0.3, 3, 0.3), fridge.CFrame * CFrame.new(1.4, 1, -1.85), Color3.fromRGB(170, 176, 184), Enum.Material.Metal))
-		decor(piece(model, Vector3.new(3.9, 0.1, 0.1), fridge.CFrame * CFrame.new(0, 2.2, -1.72), Color3.fromRGB(150, 154, 160)))
+		-- Handle, door seam and magnets at different depths off the door, so none shares a face.
+		decor(piece(model, Vector3.new(0.3, 3, 0.3), fridge.CFrame * CFrame.new(1.4, 1, -1.8), Color3.fromRGB(170, 176, 184), Enum.Material.Metal))
+		decor(piece(model, Vector3.new(3.9, 0.1, 0.1), fridge.CFrame * CFrame.new(0, 2.2, -1.76), Color3.fromRGB(150, 154, 160)))
+		-- #42: every fridge has magnets. These ones are offerings.
+		for m, spot in ipairs({ { -1.1, 0.3 }, { -0.3, -0.5 }, { 0.5, 0.4 }, { -0.7, -1.5 } }) do
+			decor(piece(model, Vector3.new(0.5, 0.5, 0.12), fridge.CFrame * CFrame.new(spot[1], spot[2], -1.76),
+				MAGNETS[(index + m) % #MAGNETS + 1]))
+		end
 	end
 
 	for _, pair in ipairs({ { 1, 2 }, { 3, 4 }, { 5, 6 } }) do
@@ -583,6 +641,14 @@ local function fridgehenge(model, origin)
 		{ Vector3.new(3, 0.5, 3), 4.75, Color3.fromRGB(222, 184, 120) },
 	}) do
 		spin(decor(piece(model, layer[1], origin * CFrame.new(0, layer[2], 0), layer[3])), 40)
+	end
+	-- Four candles on the altar's corners, clear of the turning sandwich (its corners sweep 2.33 from
+	-- the middle; these stand 2.5 out), each with a flickering flame.
+	for index, corner in ipairs({ { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } }) do
+		decor(column(model, 0.9, 0.4, origin * CFrame.new(corner[1] * 2.2, 3.45, corner[2] * 1.6), Color3.fromRGB(246, 240, 222)))
+		local flame = decor(piece(model, Vector3.new(0.22, 0.4, 0.22), origin * CFrame.new(corner[1] * 2.2, 4.12, corner[2] * 1.6),
+			Color3.fromRGB(255, 190, 80), Enum.Material.Neon))
+		bob(flame, 0.05, 8 + index, index)
 	end
 
 	return altar
@@ -634,7 +700,7 @@ local function bigSqueak(model, origin)
 		head,
 		-- The bill: an upper and a lower, with a nostril, instead of one flat slab.
 		piece(model, Vector3.new(4.2, 1.5, 4.4), origin * CFrame.new(0, 8.1, -10.7), Color3.fromRGB(255, 140, 34)),
-		piece(model, Vector3.new(3.4, 0.9, 3.4), origin * CFrame.new(0, 7.2, -10.2), Color3.fromRGB(226, 108, 24)),
+		piece(model, Vector3.new(3.4, 0.9, 3.4), origin * CFrame.new(0, 7.2, -10.3), Color3.fromRGB(226, 108, 24)),
 		sphere(model, Vector3.new(0.7, 0.5, 0.7), origin * CFrame.new(-0.9, 8.7, -12.2), Color3.fromRGB(196, 92, 20)),
 		sphere(model, Vector3.new(0.7, 0.5, 0.7), origin * CFrame.new(0.9, 8.7, -12.2), Color3.fromRGB(196, 92, 20)),
 		-- Tail, and a wing tucked along each flank.
@@ -656,7 +722,8 @@ local function bigSqueak(model, origin)
 	sway(model, parts, 0.45, 1.6, 0)
 
 	-- Ripples spreading off the hull, and reeds standing in the shallows.
-	for index, ring in ipairs({ { 15, 0.35 }, { 19, 0.28 }, { 23, 0.2 } }) do
+	-- Inside the 22-stud site: the outer ring used to reach 23.
+	for index, ring in ipairs({ { 13, 0.35 }, { 16.5, 0.28 }, { 20, 0.2 } }) do
 		local ripple = decor(column(model, 0.2, ring[1] * 2, origin * CFrame.new(0, 0.05 + index * 0.11, 0),
 			Color3.fromRGB(180, 226, 240), Enum.Material.Glass))
 		ripple.Transparency = 1 - ring[2]
@@ -665,7 +732,7 @@ local function bigSqueak(model, origin)
 
 	for index = 1, 10 do
 		local angle = index / 10 * math.pi * 2 + math.random() * 0.3
-		local distance = 20 + math.random() * 2
+		local distance = 18.5 + math.random() * 2
 		decor(column(model, 4 + math.random() * 2, 0.3, origin * CFrame.new(math.cos(angle) * distance, 2, math.sin(angle) * distance),
 			Color3.fromRGB(90, 130, 60), Enum.Material.Grass))
 	end
@@ -701,7 +768,7 @@ local function obbyTower(model, origin)
 		-- to the pole so the steps read as a staircase rather than as floating tiles.
 		sign(step, tostring(index), Color3.fromRGB(20, 20, 26), nil, { Enum.NormalId.Top })
 		decor(piece(model, Vector3.new(0.6, 0.6, radius - 2.4),
-			origin * CFrame.new(math.cos(angle) * radius / 2, 1 + index * rise - 0.7, math.sin(angle) * radius / 2)
+			origin * CFrame.new(math.cos(angle) * radius / 2, 1 + index * rise - 0.8, math.sin(angle) * radius / 2)
 				* CFrame.Angles(0, -angle + math.pi / 2, 0),
 			Color3.fromRGB(70, 72, 84), Enum.Material.Metal))
 	end
@@ -729,8 +796,9 @@ local function obbyTower(model, origin)
 		bob(decor(part), 0.3, 2.2, 0)
 	end
 
-	for _, x in ipairs({ -4.5, 4.5 }) do
-		piece(model, Vector3.new(0.5, 5, 0.5), origin * CFrame.new(x, 3.5, -11.6), Color3.fromRGB(40, 40, 48), Enum.Material.Metal)
+	-- Posts at the board's ends, thicker than it, so the board is framed rather than sharing their faces.
+	for _, x in ipairs({ -5.1, 5.1 }) do
+		piece(model, Vector3.new(0.6, 5, 0.6), origin * CFrame.new(x, 3.5, -11.6), Color3.fromRGB(40, 40, 48), Enum.Material.Metal)
 	end
 	local board = piece(model, Vector3.new(10, 2.6, 0.5), origin * CFrame.new(0, 5, -11.6), Color3.fromRGB(26, 24, 34))
 	sign(board, "OBBY OF ROT - CLIMB!", Color3.fromRGB(255, 226, 60), Color3.fromRGB(26, 24, 34))
@@ -839,8 +907,9 @@ local function sweaterArrest(model, origin)
 	end
 
 	-- A patch of street, so the car makes sense wherever the map drops the scene.
-	piece(model, Vector3.new(38, 0.6, 10), origin * CFrame.new(0, 0.12, -13), Color3.fromRGB(68, 68, 72), Enum.Material.Asphalt)
-	decor(piece(model, Vector3.new(34, 0.12, 0.5), origin * CFrame.new(0, 0.44, -13), Color3.fromRGB(226, 220, 190), Enum.Material.SmoothPlastic))
+	-- 34 long (it was 38), so its far corners stay on the levelled site.
+	piece(model, Vector3.new(34, 0.6, 10), origin * CFrame.new(0, 0.12, -13), Color3.fromRGB(68, 68, 72), Enum.Material.Asphalt)
+	decor(piece(model, Vector3.new(30, 0.12, 0.5), origin * CFrame.new(0, 0.44, -13), Color3.fromRGB(226, 220, 190), Enum.Material.SmoothPlastic))
 
 	-- The patrol car, pulled up at an angle on the street with its near door swung open. Its front
 	-- is +X, and its frame's origin is the street's surface, so it stands on its wheels.
@@ -1032,7 +1101,7 @@ local function sweaterArrest(model, origin)
 end
 
 local EGGS = {
-	{ id = "Carrot", title = "The Absolute Unit Carrot", build = giantCarrot, footprint = 19,
+	{ id = "Carrot", title = "The Absolute Unit Carrot", build = giantCarrot, footprint = 20,
 		line = "It's been growing since the last update. Nobody remembers planting it." },
 	{ id = "Camp", title = "Night Counter Camp", build = survivalCamp, footprint = 19,
 		line = "Someone survived 97 nights out here. Night 98 was apparently a bit much." },
@@ -1059,7 +1128,10 @@ local OBBY = {
 -- arrest is the one Oliver wants everywhere.
 local ALWAYS = {
 	-- "The Sweaty Incident" is Oliver's name for it (list item 41), not a typo for the sweater.
-	{ id = "Arrest", title = "The Sweaty Incident", build = sweaterArrest, footprint = 20, reach = 24,
+	-- footprint 25: the scene (house behind, street in front) measures 25.0 from its centre, and the
+	-- site levelled for it is footprint + SITE_MARGIN. At 20 its roof and street stood out on the
+	-- levelled pad's rounded lip (tools/eggs_storm_check.py asserts every egg inside its footprint).
+	{ id = "Arrest", title = "The Sweaty Incident", build = sweaterArrest, footprint = 25, reach = 24,
 		line = "Nobody will say what he did. The sweater is saying plenty." },
 }
 
