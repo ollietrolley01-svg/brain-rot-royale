@@ -240,21 +240,23 @@ local function attachPrompt(crate, def, beam, landing)
 		crate:SetAttribute("Claimed", true)
 		prompt.Enabled = false
 
-		local ok, message, replaced = WeaponService.GiveWeapon(player, def.id)
-		if ok then
-			WeaponService.GiveAmmo(player, 1)
-			-- A full loadout swaps out whatever is held; leave it by the crate rather than delete it.
-			if replaced then
-				LootService.DropSlot(replaced, crate.Position)
-			end
-			-- The recovery that doesn't fit stays by the crate too.
-			LootService.GiveOrDrop(player, "MedKit", 1, crate.Position)
-			LootService.GiveOrDrop(player, "ShieldPotion", 1, crate.Position)
-			-- Somewhere to hold what you just fought for.
-			LootService.GiveOrDrop(player, "PopupBunker", 1, crate.Position)
-			QuestService.Progress(player, "supply", 1)
-			StateSync.Notify(player, "Supply drop: " .. message)
-		end
+		-- The crate spills onto the ground the way a chest does (#85, Oliver 2026-09-22: "chests and
+		-- supply drops should drop contents on the ground, not into inventory"): the gun, the
+		-- recovery and the bunker land in front of the crate, toward whoever opened it, and are
+		-- picked up the normal way, so a full loadout is the opener's choice rather than a swap. Seven
+		-- studs out, not a chest's four: the crate is nine wide and stands for a moment yet.
+		-- Ammo still goes straight to the opener: there is no ground pickup for ammo.
+		local opener = player.Character and player.Character.PrimaryPart
+		local toward = opener and (opener.Position - crate.Position) * Vector3.new(1, 0, 1) or Vector3.zero
+		local spill = crate.Position + (toward.Magnitude > 0.1 and toward.Unit * 7 or Vector3.new(0, 0, 7))
+		LootService.DropWeapon(def.id, spill, nil, crate.Position)
+		LootService.DropItem("MedKit", spill, 1, crate.Position)
+		LootService.DropItem("ShieldPotion", spill, 1, crate.Position)
+		-- Somewhere to hold what you just fought for.
+		LootService.DropItem("PopupBunker", spill, 1, crate.Position)
+		WeaponService.GiveAmmo(player, 1)
+		QuestService.Progress(player, "supply", 1)
+		StateSync.Notify(player, "Supply drop: " .. def.name .. " and supplies on the ground")
 
 		finishCrate(crate)
 	end)

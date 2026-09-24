@@ -369,6 +369,9 @@ RunService.RenderStepped:Connect(function()
 			for _, part in ipairs(model:GetDescendants()) do
 				if part:IsA("BasePart") then
 					part.LocalTransparencyModifier = hide
+				elseif part:IsA("SurfaceGui") then
+					-- A SurfaceGui keeps drawing when its part is hidden: the floating gun text, #72.
+					part.Enabled = hide == 0
 				end
 			end
 		end
@@ -1741,9 +1744,13 @@ RunService:BindToRenderStep("BRR_ItemViewmodel", Enum.RenderPriority.Camera.Valu
 	local useTarget
 	local leftExtra = Vector3.zero
 	if DRINKS[id] then
+		-- Tipped towards the face with the neck at the lips, low in the middle of the screen. The old pose
+		-- (0.62 up, 1.05 back, 66 degrees) put the grip level with the eye and the neck behind it: the tall
+		-- Shield Potion's seal ended 0.58 studs behind the camera and the glass passed through the view (#7).
+		-- This one keeps every drink at least half a stud in front of the eye (tools/fps_drink_check.py).
 		local tip = smooth(progress / 0.25)
-		useTarget = CFrame.new(-0.6 * tip, 0.62 * tip + math.sin(now * 13) * 0.025 * tip, 1.05 * tip)
-			* CFrame.Angles(1.15 * tip, 0, 0.35 * tip)
+		useTarget = CFrame.new(-0.6 * tip, -0.35 * tip + math.sin(now * 13) * 0.025 * tip, 0.05 * tip)
+			* CFrame.Angles(1.0 * tip, 0, 0.35 * tip)
 	elseif id == "Bandage" then
 		local wind = now * 8
 		useTarget = CFrame.new(-0.45 + math.cos(wind) * 0.08, 0.25 + math.sin(wind) * 0.06, 0.2) * CFrame.Angles(0, 0, wind * 0.5)

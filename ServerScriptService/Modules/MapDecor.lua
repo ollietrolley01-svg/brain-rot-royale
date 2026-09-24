@@ -14,12 +14,37 @@ local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local BrainrotModels = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("BrainrotModels"))
+local VehicleModels = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleModels"))
 
 local MapDecor = {}
 
 -- What the parts being built right now are called (Asphalt, Kerb, Paving…), so the build
 -- check's reports name the piece rather than saying "Part". Builders set it.
 local currentName = "Part"
+
+-- The thing being built right now, when it can be shot apart (#56): every part it makes is tagged
+-- `Destructible = "Kind:D<n>"`, which makes them one pool for DestructibleService, sized off the
+-- parts themselves. `grouped` wraps a builder so everything it makes is one such thing; a builder
+-- called from inside another keeps the outer one's group. Roads, bridges, signs, signals and the
+-- square are never wrapped: they are the ground people stand on or steer by.
+local currentGroup = nil
+local groupSerial = 0
+
+local function grouped(kind, build)
+	return function(...)
+		if currentGroup then
+			return build(...)
+		end
+		groupSerial += 1
+		currentGroup = kind .. ":D" .. groupSerial
+		local results = table.pack(pcall(build, ...))
+		currentGroup = nil
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
+	end
+end
 
 local function makePart(parent, size, cframe, color, material, shape)
 	local part = Instance.new("Part")
@@ -34,6 +59,9 @@ local function makePart(parent, size, cframe, color, material, shape)
 	part.Anchored = true
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
+	if currentGroup then
+		part:SetAttribute("Destructible", currentGroup)
+	end
 	part.Parent = parent
 	return part
 end
@@ -170,6 +198,7 @@ local function streetLamp(parent, position, facing)
 	clutter(makePart(parent, Vector3.new(1.8, 0.5, 1.4), look * CFrame.new(0, -0.35, -3.3), LAMP_GLOW, Enum.Material.Neon))
 	currentName = "Part"
 end
+streetLamp = grouped("Lamp", streetLamp)
 MapDecor.StreetLamp = streetLamp
 
 local function bench(parent, position, yaw)
@@ -181,11 +210,13 @@ local function bench(parent, position, yaw)
 		makePart(parent, Vector3.new(0.4, 2, 1.8), cf * CFrame.new(x, 1, 0), METAL_DARK, Enum.Material.Metal)
 	end
 end
+bench = grouped("Bench", bench)
 
 local function bin(parent, position)
 	column(parent, 3.4, 2.4, position, Color3.fromRGB(54, 92, 64), Enum.Material.Metal)
 	column(parent, 0.3, 2.7, position + Vector3.new(0, 3.4, 0), Color3.fromRGB(40, 70, 48), Enum.Material.Metal)
 end
+bin = grouped("Bin", bin)
 
 local function hydrant(parent, position)
 	local red = Color3.fromRGB(206, 44, 40)
@@ -195,6 +226,7 @@ local function hydrant(parent, position)
 	clutter(makePart(parent, Vector3.new(2, 0.5, 0.5), CFrame.new(position + Vector3.new(0, 1.6, 0)),
 		Color3.fromRGB(230, 220, 90), Enum.Material.Metal, Enum.PartType.Cylinder))
 end
+hydrant = grouped("Hydrant", hydrant)
 
 local FLOWER_COLORS = {
 	Color3.fromRGB(255, 96, 140), Color3.fromRGB(255, 214, 70), Color3.fromRGB(170, 120, 255),
@@ -212,6 +244,7 @@ local function planter(parent, position, yaw)
 			pick(FLOWER_COLORS), Enum.Material.SmoothPlastic, Enum.PartType.Ball))
 	end
 end
+planter = grouped("Planter", planter)
 
 local UMBRELLA_COLORS = {
 	Color3.fromRGB(240, 80, 80), Color3.fromRGB(70, 170, 240), Color3.fromRGB(255, 210, 70),
@@ -226,6 +259,7 @@ local function beachUmbrella(parent, position)
 	clutter(makePart(parent, Vector3.new(3, 0.2, 6), CFrame.new(position + Vector3.new(2.5, 0.1, 0)),
 		pick(UMBRELLA_COLORS), Enum.Material.Fabric))
 end
+beachUmbrella = grouped("Umbrella", beachUmbrella)
 
 local CAR_COLORS = {
 	Color3.fromRGB(196, 50, 50), Color3.fromRGB(50, 96, 196), Color3.fromRGB(230, 230, 226),
@@ -233,11 +267,10 @@ local CAR_COLORS = {
 	Color3.fromRGB(240, 130, 190),
 }
 
--- Solid, waist-high and about the length of a sprint stride: proper cover in the street.
-local function parkedCar(parent, position, yaw)
-	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
-	local paint = pick(CAR_COLORS)
-
+-- The plain car: a body, a glass cabin, four wheels and four lamps, eleven parts. Solid, waist-high
+-- and about the length of a sprint stride: proper cover in the street. Kept for the kerbside cars
+-- past a town's DETAILED_CARS_PER_TOWN, where the part budget can't pay for another real design.
+local function boxCar(parent, cf, paint)
 	makePart(parent, Vector3.new(6.4, 2.6, 12.6), cf * CFrame.new(0, 2.1, 0), paint, Enum.Material.SmoothPlastic)
 	local cabin = makePart(parent, Vector3.new(5.8, 2.3, 6.6), cf * CFrame.new(0, 4.55, 0.8),
 		Color3.fromRGB(40, 56, 72), Enum.Material.Glass)
@@ -258,6 +291,78 @@ local function parkedCar(parent, position, yaw)
 			Color3.fromRGB(220, 40, 40), Enum.Material.Neon))
 	end
 end
+
+-- How many of a town's kerbside cars are real designs; the rest are the plain car. A design built
+-- static is 200 to 290 parts against the plain car's 11 (tools/parked_car_check.py prints them),
+-- and the biggest map is already past its part budget (#121), so this is the knob: each step up
+-- costs roughly 225 parts a town, 900 to 1,600 a map. Oliver 09-24: every kerbside car is a real
+-- design (up to count("cars", 4) a town, so about 900 parts a town); the plain car is only the
+-- fallback if a design can't be built.
+local DETAILED_CARS_PER_TOWN = math.huge
+
+-- Length (along the nose) and width over everything, mirrors included, about the point the car is
+-- placed by (the middle of the wheelbase, which is not the middle of a van: its body runs a stud
+-- further back than forward, so it counts as twice its longer end). The plain car's is fixed; a
+-- real design's is measured once per server off a static build.
+local PLAIN_FOOTPRINT = { length = 12.9, width = 7.3 }
+local footprints = {}
+
+local function footprintOf(modelId)
+	if not footprints[modelId] then
+		local probe = VehicleModels.BuildStatic(modelId, Random.new(1), CFrame.new())
+		local box, size = probe:GetBoundingBox()
+		probe:Destroy()
+		footprints[modelId] = {
+			length = 2 * (math.abs(box.Position.Z) + size.Z / 2),
+			width = 2 * (math.abs(box.Position.X) + size.X / 2),
+		}
+	end
+	return footprints[modelId]
+end
+
+-- What the next kerbside car will be, before a spot is looked for, so the spot fits it: `id` and
+-- `rng` for a real design (nil for the plain car), and the claim it needs. The claim is two circles
+-- `reach` either side of the centre, `radius` wide, which fits a car's long shape far better than
+-- one big circle; the plain car's is the 3.6 / 3.2 it always had, a longer or wider design's grows.
+-- A real design takes exactly one global roll here (its seed); the plain car takes its one (the
+-- paint) in parkedCar. Either way the decor built after it lands where it always did.
+local function parkedCarDesign(detailed)
+	local design = { footprint = PLAIN_FOOTPRINT }
+	if detailed then
+		design.rng = Random.new(math.random(1, 2 ^ 30))
+		design.id = VehicleModels.Pick("car", design.rng)
+		design.footprint = footprintOf(design.id)
+	end
+	design.halfWidth = design.footprint.width / 2
+	design.radius, design.reach = 3.6, 3.2
+	if design.id then
+		design.radius = math.max(3.6, design.halfWidth)
+		design.reach = math.max(3.2, design.footprint.length / 2 - design.radius)
+	end
+	return design
+end
+
+-- A parked car at the kerb (#16 / #94). A real design is built through VehicleModels.BuildStatic:
+-- anchored, no seat, no joints, no scripts, nothing that makes it a vehicle, and cut to what reads
+-- from the street. Otherwise the plain car above.
+local function parkedCar(parent, position, yaw, design)
+	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
+	local car
+	if design and design.id then
+		car = VehicleModels.BuildStatic(design.id, design.rng, cf)
+	else
+		car = Instance.new("Model")
+		boxCar(car, cf, pick(CAR_COLORS))
+	end
+	-- One Model, one health pool (DestructibleService reads the attribute): shot apart as a car, #51.
+	car.Name = "ParkedCar"
+	car:SetAttribute("DestructibleHealth", 240)
+	car.Parent = parent
+	return car
+end
+-- The harnesses (tools/parked_car_check.py) build one on its own.
+MapDecor.ParkedCarDesign = parkedCarDesign
+MapDecor.ParkedCar = parkedCar
 
 local function townSign(parent, position, facing, name)
 	local look = CFrame.lookAt(position, position + facing)
@@ -1168,19 +1273,27 @@ function MapDecor.Town(town, center, preset, spread, streets, townName, groundHe
 		bin(town, position)
 	end)
 
-	-- Cars parked along the edge of the street, facing the way traffic would go. Checked as two
-	-- circles along the car's length, which fits its long shape far better than one big circle.
+	-- Cars parked along the edge of the street, facing the way traffic would go. The first few are
+	-- real designs (DETAILED_CARS_PER_TOWN). Each is chosen before its spot is looked for, so the
+	-- claim fits it, and it stands as far in from the asphalt's edge as its own width needs: the
+	-- outer side 0.25 past the edge, where the plain car's wheels always were.
+	local detailedLeft = DETAILED_CARS_PER_TOWN
 	for _ = 1, #streets > 0 and count("cars", 4) or 0 do
+		local design = parkedCarDesign(detailedLeft > 0)
+		local radius, reach = design.radius, design.reach
 		for _ = 1, 16 do
-			local flat, direction, side, entry, surface = besideStreet(-5.9)
+			local flat, direction, side, entry, surface = besideStreet(-(design.halfWidth + 2.25))
 			if flat then
-				local front, back = flat + direction * 3.2, flat - direction * 3.2
-				if space:IsFree(front.X, front.Z, 3.6, entry) and space:IsFree(back.X, back.Z, 3.6, entry) then
-					space:AddCircle(front.X, front.Z, 3.6)
-					space:AddCircle(back.X, back.Z, 3.6)
+				local front, back = flat + direction * reach, flat - direction * reach
+				if space:IsFree(front.X, front.Z, radius, entry) and space:IsFree(back.X, back.Z, radius, entry) then
+					space:AddCircle(front.X, front.Z, radius)
+					space:AddCircle(back.X, back.Z, radius)
 					local position = Vector3.new(flat.X, groundHeightAt(flat.X, flat.Z) + surface, flat.Z)
-					parkedCar(town, position, yawFacing(direction))
-					table.insert(spots, position + side * 4.8)
+					parkedCar(town, position, yawFacing(direction), design)
+					if design.id then
+						detailedLeft -= 1
+					end
+					table.insert(spots, position + side * (design.halfWidth + 1.15))
 					break
 				end
 			end
@@ -1256,6 +1369,7 @@ local function roundTree(parent, position)
 			Enum.Material.Grass, Enum.PartType.Ball)
 	end
 end
+roundTree = grouped("Tree", roundTree)
 
 local function pineTree(parent, position, scale)
 	column(parent, 6 * scale + SINK, 1.8 * scale, position - Vector3.new(0, SINK, 0), TRUNK, Enum.Material.Wood)
@@ -1267,6 +1381,7 @@ local function pineTree(parent, position, scale)
 		y += tier[2] * scale * 0.8
 	end
 end
+pineTree = grouped("Tree", pineTree)
 
 local function palmTree(parent, position)
 	local trunk = Color3.fromRGB(150, 116, 78)
@@ -1294,6 +1409,7 @@ local function palmTree(parent, position)
 			Color3.fromRGB(96, 66, 40), Enum.Material.Wood, Enum.PartType.Ball))
 	end
 end
+palmTree = grouped("Palm", palmTree)
 
 local function cactus(parent, position)
 	local green = Color3.fromRGB(78, 138, 72)
@@ -1313,6 +1429,7 @@ local function cactus(parent, position)
 		end
 	end
 end
+cactus = grouped("Cactus", cactus)
 
 -- Pieces set off to the side of a prop's spot find their own ground (a slope can be studs
 -- higher three studs over), when the caller gave us a way to ask.
@@ -1331,6 +1448,7 @@ local function bush(parent, position, groundAt)
 			green, Enum.Material.Grass, Enum.PartType.Ball)
 	end
 end
+bush = grouped("Bush", bush)
 
 local function hayBales(parent, position)
 	local hay = Color3.fromRGB(214, 180, 96)
@@ -1343,6 +1461,7 @@ local function hayBales(parent, position)
 		makePart(parent, Vector3.new(4, 5, 5), cf * CFrame.new(0, 6.37, 0), hay, Enum.Material.Grass, Enum.PartType.Cylinder)
 	end
 end
+hayBales = grouped("HayBales", hayBales)
 
 local function rock(parent, position, size, groundAt)
 	makePart(parent, Vector3.new(size, size * 0.8, size * 1.1),
@@ -1355,6 +1474,7 @@ local function rock(parent, position, size, groundAt)
 			Color3.fromRGB(132, 126, 118), Enum.Material.Rock, Enum.PartType.Ball)
 	end
 end
+rock = grouped("Rock", rock)
 
 -- One piece of open-ground scenery, chosen to suit the map's terrain, if `space` has room for
 -- it. Claims its footprint and returns true when placed. `groundAt(x, z)`, if given, lets

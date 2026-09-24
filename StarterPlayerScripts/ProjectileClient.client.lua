@@ -481,6 +481,10 @@ local function onStuck(info)
 		return
 	end
 	entry.stuck = { part = info.part, localPosition = info.position, localNormal = info.normal }
+	-- Its timer lights now, not before: unlit, the one in your hand isn't mistaken for a detonator.
+	if entry.model then
+		entry.glows = ThrowableModels.Arm(entry.model)
+	end
 	entry.body.resting = true
 	entry.body.velocity = Vector3.zero
 	entry.smooth = Vector3.zero
@@ -617,6 +621,34 @@ end
 -- { slot, item, spec, index, startedAt, ticks } while a frag's pin is out in our hand.
 local cook = nil
 
+-- The arc preview goes the moment a throw leaves the hand (#63). Without this it stayed drawn until
+-- the server's LoadoutChanged came back -- a whole round trip, arc, ring and sticky ghost still up
+-- while the thing flew -- and for a stack it never visibly went at all. So: hidden for a beat after
+-- every throw, and past that beat for as long as the loadout it answers hasn't arrived, up to a
+-- second (a refused throw sends no loadout, and must not blind the preview for good). Wall time,
+-- not os.clock (CPU time on a client). The block between the markers is what
+-- tools/throwable_preview_check.py runs.
+-- BEGIN throwGate
+local throwGate = {}
+do
+	local HIDE_MIN = 0.3
+	local HIDE_MAX = 1
+	local thrownAt = -math.huge
+	local waiting = false
+	function throwGate.Thrown(now)
+		thrownAt = now
+		waiting = true
+	end
+	function throwGate.LoadoutArrived()
+		waiting = false
+	end
+	function throwGate.Hidden(now)
+		local since = now - thrownAt
+		return since < HIDE_MIN or (waiting and since < HIDE_MAX)
+	end
+end
+-- END throwGate
+
 local function stopCook()
 	cook = nil
 	screen.fuseBack.Visible = false
@@ -633,6 +665,7 @@ end
 
 local function throwNow()
 	useRemote:FireServer(aimPoint())
+	throwGate.Thrown(serverNow())
 	stopCook()
 end
 
@@ -666,6 +699,7 @@ local function onThrowInput(_, inputState)
 			startCook(slot, item, spec)
 		else
 			useRemote:FireServer(aimPoint())
+			throwGate.Thrown(serverNow())
 		end
 		return Enum.ContextActionResult.Sink
 	elseif inputState == Enum.UserInputState.End then
@@ -772,7 +806,13 @@ do
 	end
 
 	local shown = false
+	local nextSimAt = 0
 	local function hide()
+		-- The ghost goes whatever `shown` says: it is placed before `shown` is set, so an error in
+		-- between would otherwise leave it standing for good.
+		StickyPreview.Hide()
+		-- Re-simulated on the first frame it comes back, not up to a 30th later from a stale arc.
+		nextSimAt = 0
 		if not shown then
 			return
 		end
@@ -783,7 +823,6 @@ do
 		for _, dot in ipairs(dots) do
 			dot.Transparency = 1
 		end
-		StickyPreview.Hide()
 	end
 
 	-- Where a ring should sit: on the ground under `position`, or at the position itself in the air.
@@ -805,13 +844,12 @@ do
 
 	-- The arc is re-simulated thirty times a second, not every frame: ninety sweeps a pass is plenty
 	-- at that rate and nothing about it changes faster.
-	local nextSimAt = 0
 	function preview.update()
 		local slot, item, spec = throwableInHand()
 		local character = player.Character
 		local head = character and character:FindFirstChild("Head")
 		local root = character and character:FindFirstChild("HumanoidRootPart")
-		if not slot or not head or not root or not inCombat() then
+		if not slot or not head or not root or not inCombat() or throwGate.Hidden(serverNow()) then
 			hide()
 			return
 		end
@@ -1184,6 +1222,7 @@ end)
 
 loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	loadout = newLoadout
+	throwGate.LoadoutArrived()
 	if newLoadout and newLoadout.equipReadyIn then
 		newLoadout.equipReadyAt = os.clock() + newLoadout.equipReadyIn
 	end

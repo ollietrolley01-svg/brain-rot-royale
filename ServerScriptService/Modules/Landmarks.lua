@@ -76,8 +76,18 @@ local FLAME = Color3.fromRGB(255, 150, 50)
 -- Building helpers
 --------------------------------------------------------------------------------
 
+-- The thing being built right now, when it can be shot apart (#56): every part made is tagged
+-- `Destructible = "Kind:L<n>"`, one pool for DestructibleService. Only free-standing pieces are
+-- grouped (the docks' lone closed containers): a landmark's towers, platforms, ladders and
+-- ziplines are what people climb and stand on, so they never break.
+local currentGroup = nil
+local groupSerial = 0
+
 local function piece(parent, size, cframe, color, material, shape)
 	local part = Instance.new("Part")
+	if currentGroup then
+		part:SetAttribute("Destructible", currentGroup)
+	end
 	if shape then
 		part.Shape = shape
 	end
@@ -478,7 +488,15 @@ local function rotDocks(model, origin, ctx)
 			local open = (row + slot) % 5 == 0
 			local base = origin * CFrame.new(x - 10, 1, z) * CFrame.Angles(0, 0, 0)
 			local color = nextColor()
+			-- A closed container with nothing stacked on it, other than the first (a truss climbs that
+			-- one), can be shot apart; the loot some carry on top settles when it goes.
+			local stacked = not open and (row * 3 + slot) % 4 == 1
+			if not open and not stacked and #stackTops > 0 then
+				groupSerial += 1
+				currentGroup = "Container:L" .. groupSerial
+			end
 			container(model, base, color, open)
+			currentGroup = nil
 			if open then
 				chestAt(ctx, base * CFrame.new(0, 1, 4))
 				lootAt(ctx, "heal", (base * CFrame.new(0, 1, -4)).Position)

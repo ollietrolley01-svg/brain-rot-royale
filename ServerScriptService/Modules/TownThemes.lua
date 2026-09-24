@@ -27,8 +27,9 @@
 -- nor stops a bullet. None of it is loot: themes add no chest or pickup spots.
 --
 -- Part names never reuse DestructibleService's table (Wall, Floor, Roof, Crate...), so nothing here
--- can be shot apart by accident. Anything meant to hang in the air carries IntentionalFloat = true,
--- so the floating-parts audit can skip it.
+-- can be shot apart by accident; the street props are made breakable on purpose, each one whole,
+-- by the Destructible tag on their Model (placeProps). Set pieces never break. Anything meant to
+-- hang in the air carries IntentionalFloat = true, so the floating-parts audit can skip it.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -4674,6 +4675,8 @@ local function placeProps(ctx, theme, parent)
 						local built, err = pcall(kind.build, propKit, ctx)
 						if built then
 							footing(propModel, frame, low, kind.radius * 2, kind.radius * 2)
+							-- Street props can be shot apart, each one whole (DestructibleService, #56).
+							propModel:SetAttribute("Destructible", "Prop")
 						else
 							propModel:Destroy()
 							warn(string.format("[TownThemes] %s prop %s failed: %s", theme.id, kind.id, tostring(err)))

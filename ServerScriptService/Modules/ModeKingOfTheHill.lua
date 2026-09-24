@@ -13,6 +13,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local GameModes = require(Shared:WaitForChild("GameModes"))
+local ObjectiveZone = require(Shared:WaitForChild("ObjectiveZone"))
 local ZFight = require(Shared:WaitForChild("ZFight"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
@@ -50,12 +51,13 @@ function ModeKingOfTheHill.Holder(insideTeamOne, insideTeamTwo)
 	return nil, "Open"
 end
 
+-- The ring's size and the capture test both come from ObjectiveZone (#93), so they cannot disagree.
 local function radius()
-	return (mode and mode.hillRadius) or 28
+	return ObjectiveZone.Radius(mode)
 end
 
 local function height()
-	return (mode and mode.hillHeight) or 22
+	return ObjectiveZone.Height(mode)
 end
 
 -- Live combatants of each team on the objective at `point` (objective A when nil).
@@ -71,9 +73,7 @@ function ModeKingOfTheHill.Occupancy(point)
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
-				local offset = root.Position - point
-				local flat = Vector3.new(offset.X, 0, offset.Z).Magnitude
-				if flat <= radius() and offset.Y >= -6 and offset.Y <= height() then
+				if ObjectiveZone.Contains(mode, point, root.Position) then
 					counts[team] = counts[team] + 1
 				end
 			end
@@ -119,8 +119,8 @@ local function buildObjective(index, position)
 
 	local ring = part("HillRing", folder)
 	ring.Shape = Enum.PartType.Cylinder
-	ring.Size = Vector3.new(0.4, radius() * 2, radius() * 2)
-	ring.CFrame = CFrame.new(position + Vector3.new(0, STEP * 3, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+	ring.Size = ObjectiveZone.RingSize(mode)
+	ring.CFrame = ObjectiveZone.RingCFrame(position)
 	ring.Transparency = 0.35
 	ring.Color = NEUTRAL
 

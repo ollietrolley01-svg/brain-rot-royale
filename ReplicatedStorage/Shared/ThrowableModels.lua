@@ -9,6 +9,7 @@
 --
 --   ThrowableModels.Build(id, options)   (model, body) for a throwable item id, or nil.
 --                                        options: scale (1), anchored (true), name ("HeldItem")
+--   ThrowableModels.Arm(model)          lights a built throwable's "Glow" parts (an armed crumpet)
 --   ThrowableModels.Round(kind, scale)   the model of a round in flight for ANY kind in
 --                                        Ballistics.Rounds, nose along -Z, anchored, nothing
 --                                        collides or queries. Never nil for a registered kind.
@@ -377,8 +378,13 @@ end
 
 -- A sticky bomb baked as a crumpet: a golden toasted disc pocked with bubble holes on top, a fat
 -- blob of jam underneath that oozes past the rim (the sticky face), and a brass timer screwed into
--- the middle of the top with a neon ring round its crown and a button cap: the "Glow", pulsed
--- faster and faster while it's armed. Origin at the disc's centre; the jam's underside is
+-- the middle of the top with a ring round its crown and a button cap: the "Glow", pulsed faster
+-- and faster while it's armed.
+--
+-- The ring and cap are UNLIT until it sticks (ThrowableModels.Arm lights them). Lit all the time, a
+-- brass post with a glowing red button on top, held timer-up in the hand, is a remote detonator:
+-- that is what Oliver saw still in his hand after a throw (#69) -- the next crumpet of the stack.
+-- There is no detonator; its fuse starts when it sticks, so only then does the light come on. Origin at the disc's centre; the jam's underside is
 -- stickOffset (0.2) below it, which is what the stuck frame and the placement ghost stand on.
 --
 -- Nothing here shares a plane with anything it overlaps: the holes stand 0.07 proud of the top
@@ -387,7 +393,8 @@ end
 local function buildCrumpet(b, color)
 	local TOAST = Color3.fromRGB(232, 186, 104)
 	local TOAST_DARK = Color3.fromRGB(168, 118, 60)
-	local EMBER = Color3.fromRGB(255, 70, 60)
+	-- The unlit ember: the colour ThrowableModels.Arm swaps for neon once it has stuck.
+	local EMBER_DARK = Color3.fromRGB(96, 34, 30)
 	local body = b.column("Body", 0.22, 0.8, V(0, 0, 0), TOAST, Enum.Material.Sand)
 	-- Bubble holes: wide, flat, dark discs on the top, 0.07 proud (past the z-fight pass's 0.055),
 	-- bottoms on the top face where only opposite-facing planes meet, each clear of its neighbours
@@ -406,8 +413,8 @@ local function buildCrumpet(b, color)
 		blob.Reflectance = 0.22
 	end
 	b.column("Timer", 0.1, 0.3, V(0, 0.16, 0), BRASS, Enum.Material.Metal)
-	b.ring("Glow", CF(0, 0.21, 0) * ANG(math.pi / 2, 0, 0), 0.12, 0.03, 12, EMBER, Enum.Material.Neon)
-	b.ball("Glow", 0.09, V(0, 0.22, 0), EMBER, Enum.Material.Neon)
+	b.ring("Glow", CF(0, 0.21, 0) * ANG(math.pi / 2, 0, 0), 0.12, 0.03, 12, EMBER_DARK, Enum.Material.SmoothPlastic)
+	b.ball("Glow", 0.09, V(0, 0.22, 0), EMBER_DARK, Enum.Material.SmoothPlastic)
 	-- Held by the rim, timer up.
 	b.piece("Grip", V(0.2, 0.2, 0.2), V(0, 0, 0.28), TOAST, nil, nil, 1)
 	return body
@@ -420,6 +427,21 @@ local BUILDERS = {
 	ClingyCrumpet = buildCrumpet,
 }
 ThrowableModels.Builders = BUILDERS
+
+-- Lights a built throwable's "Glow" parts as neon: an armed Clingy Crumpet (the only one built
+-- unlit, see buildCrumpet). Returns the parts it lit, so a caller can go on to blink them.
+ThrowableModels.ArmedColor = Color3.fromRGB(255, 70, 60)
+function ThrowableModels.Arm(model)
+	local lit = {}
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name == "Glow" then
+			part.Material = Enum.Material.Neon
+			part.Color = ThrowableModels.ArmedColor
+			table.insert(lit, part)
+		end
+	end
+	return lit
+end
 
 function ThrowableModels.Build(id, options)
 	options = options or {}

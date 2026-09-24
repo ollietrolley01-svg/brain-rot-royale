@@ -7,6 +7,10 @@
 -- credits its owner exactly like a gun kill. Visuals are drawn by CompanionFxClient from one
 -- broadcast per attack. Bots' companions use their move on their own whenever it's ready.
 --
+-- On top of its move, most brainrots have a style (BrainrotData.AbilityStyles, resolved into the
+-- stats): a slow, a daze, a burn or poison, a heal for the owner, a wider splash, a quicker recharge,
+-- longer reach or an extra fork. Styles land only on a hit that did damage (applyStyle).
+--
 -- Companions can be shot. One that runs out of health is downed for the rest of the match and
 -- comes back when the match ends, ready for the next one.
 --
@@ -74,6 +78,14 @@ local WINDUP = CompanionAnimations.Windup
 local MAX_HIT_MARKS = 4
 -- Target speeds above this are a teleport or a launch, not something to lead.
 local MAX_LEAD_SPEED = 60
+
+-- The cooldown clock. os.clock() is process CPU time in Roblox, not wall time (COORDINATION
+-- "Instruments that lie"), so on a mostly idle server a 3 s cooldown measured with it ran longer than
+-- 3 s -- the HUD showed the move ready while the server still refused it. Server time is wall time,
+-- and is the clock a client reads back if a cooldown is ever shown from it.
+local function clockNow()
+	return workspace:GetServerTimeNow()
+end
 -- A Lob leads its target through the windup AND its flight, but never by more than this: a runner
 -- who turns around mid-flight shouldn't find the splash further off than they could have gone.
 local LOB_MAX_LEAD = 14
@@ -140,19 +152,36 @@ end
 local lastCondition = {}
 
 local function despawn(owner)
-	-- The boon goes with the companion, always, whatever took it away: unequipped, sold, downed,
-	-- character gone, match over. Every one of those paths reaches here.
-	CompanionBoons.Clear(owner)
+	-- Out of the tables FIRST, then everything that can throw. The boon's Clear reaches into the
+	-- owner's humanoid and MatchService, and it used to run before the entry was removed: a Clear that
+	-- threw inside down() left the companion in the table at 0 health, and a companion in the table
+	-- can use its move -- the same 0-HP-fights-all-match bug by a second door.
 	local entry = companions[owner]
 	companions[owner] = nil
+	if entry then
+		owners[entry.model] = nil
+	end
 	if entry and entry.maxHealth and entry.maxHealth > 0 then
 		lastCondition[owner] = { fraction = entry.health / entry.maxHealth, lastAttackAt = entry.lastAttackAt }
 	end
+	-- The boon goes with the companion, always, whatever took it away: unequipped, sold, downed,
+	-- character gone, match over. Every one of those paths reaches here.
+	local ok, err = pcall(CompanionBoons.Clear, owner)
+	if not ok then
+		warn("[CompanionService] boon clear failed: " .. tostring(err))
+	end
 	if entry then
-		owners[entry.model] = nil
 		entry.model:Destroy()
 		entry.anchor:Destroy()
 	end
+end
+
+-- Whether a companion may use its move at all. A companion at 0 health is downed, and down() takes it
+-- out of the table; this is the belt to that braces, checked at every door a move goes through (the
+-- hotkey, the bots' loop, and a move whose windup is still running), so a 0-HP companion cannot fight
+-- even if some future path leaves one behind.
+local function canAct(entry)
+	return entry ~= nil and type(entry.health) == "number" and entry.health > 0
 end
 
 local function setFallen(owner, value)
@@ -572,29 +601,75 @@ local function awardXp(player, dealt)
 	end
 end
 
--- `report` (optional) collects where damage landed, for one CompanionHit broadcast per attack.
-local function hit(player, token, amount, tag, report)
-	if Combatants.IsAlive(token) then
-		local dealt = CombatService.DealDamage(player, token, amount, tag)
-		if dealt and dealt > 0 then
-			damageDealt[player] = (damageDealt[player] or 0) + dealt
-			awardXp(player, dealt)
-			if report then
-				local root = Combatants.GetRoot(token)
-				if root and #report.positions < MAX_HIT_MARKS then
-					table.insert(report.positions, root.Position)
-				end
-				report.killed = report.killed or not Combatants.IsAlive(token)
-			end
+-- MatchService owns walk speed (SetStatusSpeed), and requiring it at the top is a cycle (MatchService
+-- requires BotService, which requires this). Resolved on first use, the way CompanionBoons reaches it.
+local matchService
+local function slowTarget(token, factor, duration)
+	if matchService == nil then
+		local ok, mod = pcall(require, script.Parent:WaitForChild("MatchService"))
+		matchService = ok and type(mod) == "table" and mod or false
+	end
+	if matchService and matchService.SetStatusSpeed then
+		local ok, err = pcall(matchService.SetStatusSpeed, token, "CompanionSlow", factor, duration)
+		if not ok then
+			warn("[CompanionService] slow failed: " .. tostring(err))
 		end
 	end
-	-- Venom rides the hit rather than replacing it: the bite still does its damage, and the poison is
-	-- what the boon adds. Refreshes on a second bite (CompanionBoons), it does not stack.
+end
+
+-- What a move's style adds once a hit has landed `dealt` on `token` (BrainrotData.AbilityStyles):
+-- a slow, a DoT, or a heal for the owner. Only ever after real damage, so a teammate the mode protects
+-- (dealt 0) is never slowed or poisoned by a move that did not hurt them.
+local function applyStyle(player, entry, token, dealt, tag)
+	local stats = entry.stats
+	if stats.slow and stats.slowTime and Combatants.IsAlive(token) then
+		slowTarget(token, stats.slow, stats.slowTime)
+	end
+	-- Rides CompanionBoons' venom ticker: one slot per victim, refreshed rather than stacked, and a
+	-- kill by the tick is credited to the owner as this brainrot. A venom-boon brainrot never carries a
+	-- DoT style (the check refuses it), so the two never fight over the slot.
+	if stats.dot and stats.dotTime and Combatants.IsAlive(token) then
+		CompanionBoons.StartVenom(player, token, { damage = dealt * stats.dot, duration = stats.dotTime }, tag)
+	end
+	if stats.leech then
+		local character = Combatants.GetCharacter(player)
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 and humanoid.Health < humanoid.MaxHealth then
+			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + dealt * stats.leech)
+		end
+	end
+end
+
+-- `report` (optional) collects where damage landed, for one CompanionHit broadcast per attack.
+local function hit(player, token, amount, tag, report)
+	if not Combatants.IsAlive(token) then
+		return
+	end
+	local dealt = CombatService.DealDamage(player, token, amount, tag)
+	if not dealt or dealt <= 0 then
+		return
+	end
+	damageDealt[player] = (damageDealt[player] or 0) + dealt
+	awardXp(player, dealt)
+	if report then
+		local root = Combatants.GetRoot(token)
+		if root and #report.positions < MAX_HIT_MARKS then
+			table.insert(report.positions, root.Position)
+		end
+		report.killed = report.killed or not Combatants.IsAlive(token)
+	end
 	local entry = companions[player]
-	local venom = entry and CompanionBoons.VenomOf(entry.def)
+	if not entry then
+		return
+	end
+	-- Venom rides the hit rather than replacing it: the bite still does its damage, and the poison is
+	-- what the boon adds. Refreshes on a second bite (CompanionBoons), it does not stack. Only on a hit
+	-- that hurt: it used to start on a teammate the mode had just refused to damage.
+	local venom = CompanionBoons.VenomOf(entry.def)
 	if venom then
 		CompanionBoons.StartVenom(player, token, venom, "Companion:" .. entry.def.name)
 	end
+	applyStyle(player, entry, token, dealt, tag)
 end
 
 -- Where a splash is cast from: half a stud back toward where the move came from. A glob that
@@ -634,13 +709,13 @@ end
 -- The enemy a Chain forks on to: the nearest other enemy within CHAIN_RADIUS of the first that
 -- the first can see (the fork used to land through walls) and that the mode lets the owner hurt
 -- (a beam drawn to a teammate who then took 0 was the tell).
-local function chainTarget(player, token, targetRoot, tag)
+local function chainTarget(player, token, targetRoot, tag, exclude)
 	local at = targetRoot.Position
 	local targetCharacter = Combatants.GetCharacter(token)
 	local ownerCharacter = Combatants.GetCharacter(player)
 	local best, bestDistance = nil, math.huge
 	for _, target in ipairs(CombatService.InRadius(at, CHAIN_RADIUS, player)) do
-		if target.token ~= token then
+		if target.token ~= token and not (exclude and exclude[target.token]) then
 			local distance = (target.root.Position - at).Magnitude
 			if distance < bestDistance then
 				local vetoed = CombatService.DamageVeto ~= nil and CombatService.DamageVeto(player, target.token, tag) == true
@@ -652,6 +727,33 @@ local function chainTarget(player, token, targetRoot, tag)
 		end
 	end
 	return best
+end
+
+-- The enemies a beam jumps on to after `token`, `count` of them, each from the one before and never
+-- back to one already struck: a Chain forks once, a Forking style adds one more (BrainrotData forks).
+local function forkTargets(player, token, targetRoot, tag, count)
+	local forks, struck = {}, { [token] = true }
+	local fromToken, fromRoot = token, targetRoot
+	for _ = 1, count or 0 do
+		local nextTarget = chainTarget(player, fromToken, fromRoot, tag, struck)
+		if not nextTarget then
+			break
+		end
+		table.insert(forks, nextTarget)
+		struck[nextTarget.token] = true
+		fromToken, fromRoot = nextTarget.token, nextTarget.root
+	end
+	return forks
+end
+
+-- Each fork lands at 60% of the one before it, as a Chain's single fork always did.
+local FORK_FALLOFF = 0.6
+local function hitForks(player, forks, damage, tag, report)
+	local amount = damage
+	for _, fork in ipairs(forks) do
+		amount *= FORK_FALLOFF
+		hit(player, fork.token, amount, tag, report)
+	end
 end
 
 -- The living enemy nearest along a beam from `from` to `to` whose root lies within
@@ -686,6 +788,7 @@ local function reportHits(entry, report)
 			positions = report.positions,
 			killed = report.killed == true,
 			color = entry.stats.color,
+			style = entry.stats.style,
 		})
 	end
 end
@@ -693,7 +796,7 @@ end
 -- Whether a companion is still out to finish a move it started: not downed, despawned or
 -- replaced during the windup.
 local function stillOut(player, entry)
-	return companions[player] == entry and entry.model.Parent ~= nil
+	return companions[player] == entry and canAct(entry) and entry.model.Parent ~= nil
 end
 
 -- Where a target will be `seconds` from now (the windup, by default) at the speed it's moving
@@ -716,6 +819,12 @@ local function travelTime(kind, from, to)
 	return (kind == "Lob" and LOB_TIME) or (kind == "Bonk" and BONK_TIME) or (to - from).Magnitude / SPIT_SPEED
 end
 
+-- The fork points for the client's beams: `to2` and `to3`, the same two fields a Chain always sent.
+local function forkPoints(payload, forks)
+	payload.to2 = forks[1] and lead(forks[1].root) or nil
+	payload.to3 = forks[2] and lead(forks[2].root) or nil
+end
+
 local function basePayload(player, entry, to)
 	local stats = entry.stats
 	return {
@@ -728,6 +837,8 @@ local function basePayload(player, entry, to)
 		color = stats.color,
 		range = stats.range,
 		splash = stats.splash,
+		-- The move's style (BrainrotData.AbilityStyles), for the client's style cue. Nil for a plain move.
+		style = stats.style,
 		-- The model to animate, and how long its windup runs before the move connects.
 		companion = entry.model,
 		windup = WINDUP,
@@ -755,22 +866,14 @@ local function attack(player, entry, token, targetRoot)
 				reportHits(entry, report)
 			end
 		end)
-	elseif kind == "Zap" then
+	elseif kind == "Zap" or kind == "Chain" then
+		-- A plain Zap has no forks; a Chain has one; a Forking style adds one more to either.
+		local forks = forkTargets(player, token, targetRoot, tag, stats.forks)
+		forkPoints(payload, forks)
 		task.delay(WINDUP, function()
 			if CombatService.IsEnabled() and stillOut(player, entry) then
 				hit(player, token, stats.damage, tag, report)
-				reportHits(entry, report)
-			end
-		end)
-	elseif kind == "Chain" then
-		local second = chainTarget(player, token, targetRoot, tag)
-		payload.to2 = second and lead(second.root) or nil
-		task.delay(WINDUP, function()
-			if CombatService.IsEnabled() and stillOut(player, entry) then
-				hit(player, token, stats.damage, tag, report)
-				if second then
-					hit(player, second.token, stats.damage * 0.6, tag, report)
-				end
+				hitForks(player, forks, stats.damage, tag, report)
 				reportHits(entry, report)
 			end
 		end)
@@ -844,14 +947,12 @@ local function attackPoint(player, entry, to)
 		end)
 	elseif kind == "Zap" or kind == "Chain" then
 		local token, root = onBeam(player, entry, from, to)
-		local second = (token and kind == "Chain") and chainTarget(player, token, root, tag) or nil
-		payload.to2 = second and lead(second.root) or nil
+		local forks = token and forkTargets(player, token, root, tag, stats.forks) or {}
+		forkPoints(payload, forks)
 		task.delay(WINDUP, function()
 			if token and CombatService.IsEnabled() and stillOut(player, entry) then
 				hit(player, token, stats.damage, tag, report)
-				if second then
-					hit(player, second.token, stats.damage * 0.6, tag, report)
-				end
+				hitForks(player, forks, stats.damage, tag, report)
 				reportHits(entry, report)
 			end
 		end)
@@ -909,18 +1010,28 @@ local function practice(player, entry, aimPoint)
 	payload.practice = true
 	payload.travel = travelTime(kind, from, to)
 
-	-- The fork: the nearest other dummy to the target, for the beam and the second hit.
-	local second = nil
-	if kind == "Chain" and target then
-		local targetBody = PracticeDummy.BodyOf(target)
-		local best = CHAIN_RADIUS
-		for _, part in ipairs(dummiesNear(PracticeDummy, to, CHAIN_RADIUS)) do
-			local away = (part.Position - to).Magnitude
-			if PracticeDummy.BodyOf(part) ~= targetBody and away < best then
-				second, best = part, away
+	-- The forks: each the nearest dummy not yet struck to the one before, for the beams and the hits.
+	local forks = {}
+	if (kind == "Zap" or kind == "Chain") and target then
+		local struck = { [PracticeDummy.BodyOf(target)] = true }
+		local at = to
+		for _ = 1, stats.forks or 0 do
+			local nextPart, best = nil, CHAIN_RADIUS
+			for _, part in ipairs(dummiesNear(PracticeDummy, at, CHAIN_RADIUS)) do
+				local away = (part.Position - at).Magnitude
+				if not struck[PracticeDummy.BodyOf(part)] and away < best then
+					nextPart, best = part, away
+				end
 			end
+			if not nextPart then
+				break
+			end
+			table.insert(forks, nextPart)
+			struck[PracticeDummy.BodyOf(nextPart)] = true
+			at = nextPart.Position
 		end
-		payload.to2 = second and second.Position or nil
+		payload.to2 = forks[1] and forks[1].Position or nil
+		payload.to3 = forks[2] and forks[2].Position or nil
 	end
 
 	local lands = WINDUP + ((kind == "Zap" or kind == "Chain") and 0 or payload.travel)
@@ -944,9 +1055,12 @@ local function practice(player, entry, aimPoint)
 			end
 		elseif target then
 			strike(target, stats.damage)
-			if kind == "Chain" and second then
-				strike(second, stats.damage * 0.6)
-			elseif kind == "Bonk" then
+			local amount = stats.damage
+			for _, part in ipairs(forks) do
+				amount *= FORK_FALLOFF
+				strike(part, amount)
+			end
+			if kind == "Bonk" then
 				local targetBody = PracticeDummy.BodyOf(target)
 				for _, part in ipairs(dummiesNear(PracticeDummy, to, stats.splash)) do
 					if PracticeDummy.BodyOf(part) ~= targetBody then
@@ -1003,10 +1117,10 @@ end
 
 function CompanionService.UseAbility(owner, aimPoint)
 	local entry = companions[owner]
-	if not entry then
+	if not canAct(entry) then
 		return false
 	end
-	local now = os.clock()
+	local now = clockNow()
 	if now - entry.lastAttackAt < entry.stats.cooldown then
 		return false
 	end
@@ -1161,21 +1275,39 @@ function CompanionService.Start()
 		lastCondition[player] = nil
 	end)
 
-	local accumulated = 0
+	-- The boons tick every THINK_INTERVAL as before; the companions themselves take turns in
+	-- THINK_SLICES groups, one group a slice, so each still thinks once an interval but they no
+	-- longer all think in the same frame. A bot's companion with nobody in sight casts a ray at
+	-- every enemy in range (pickTarget), so with them all in one frame, 15 companions in a 50-bot
+	-- crowd could cast ~700 rays in a single frame every 0.2 s (#126/#131; tools/perf_bot_cost.py).
+	local THINK_SLICES = 4
+	local accumulated, sliceAccumulated, slice, nextSlot = 0, 0, 0, 0
 	RunService.Heartbeat:Connect(function(delta)
 		accumulated += delta
-		if accumulated < THINK_INTERVAL then
+		sliceAccumulated += delta
+		if accumulated >= THINK_INTERVAL then
+			accumulated = 0
+			for owner in pairs(companions) do
+				CompanionBoons.Tick(owner, THINK_INTERVAL)
+			end
+			CompanionBoons.TickVenom(THINK_INTERVAL)
+		end
+		if sliceAccumulated < THINK_INTERVAL / THINK_SLICES then
 			return
 		end
-		accumulated = 0
+		sliceAccumulated = 0
+		local current = slice
+		slice = (slice + 1) % THINK_SLICES
 
-		local now = os.clock()
-		for owner in pairs(companions) do
-			CompanionBoons.Tick(owner, THINK_INTERVAL)
-		end
-		CompanionBoons.TickVenom(THINK_INTERVAL)
+		local now = clockNow()
 		for owner, entry in pairs(companions) do
-			if not entry.model.Parent or not entry.anchor.Parent then
+			if entry.slot == nil then
+				entry.slot = nextSlot
+				nextSlot = (nextSlot + 1) % THINK_SLICES
+			end
+			if entry.slot ~= current then
+				-- Another slice's turn.
+			elseif not entry.model.Parent or not entry.anchor.Parent then
 				despawn(owner)
 			else
 				local anchorPosition = entry.anchor.WorldPosition
@@ -1187,7 +1319,7 @@ function CompanionService.Start()
 				entry.gui.Enabled = fighting
 
 				-- Bots have no hotkey: theirs fight on their own whenever the move is ready.
-				if fighting and Combatants.IsBot(owner) and now - entry.lastAttackAt >= entry.stats.cooldown then
+				if fighting and Combatants.IsBot(owner) and canAct(entry) and now - entry.lastAttackAt >= entry.stats.cooldown then
 					local token, targetRoot = pickTarget(owner, entry, nil)
 					if token then
 						entry.lastAttackAt = now

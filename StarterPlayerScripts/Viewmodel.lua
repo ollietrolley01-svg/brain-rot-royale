@@ -52,6 +52,20 @@ local function localOnly(part)
 end
 Viewmodel.LocalOnly = localOnly
 
+-- Hides or shows a gun part. A SurfaceGui draws whatever its host's transparency is, so the lettering
+-- stamped on a slide or magazine (ArsenalFinish) went on showing with the part hidden: hanging in
+-- mid-air where the magazine was during a reload, and over the scope picture when the whole gun is
+-- hidden behind it (#72). Its guis go with it.
+local function veil(part, hidden)
+	part.LocalTransparencyModifier = hidden and 1 or 0
+	for _, child in ipairs(part:GetChildren()) do
+		if child:IsA("SurfaceGui") then
+			child.Enabled = not hidden
+		end
+	end
+end
+Viewmodel.Veil = veil
+
 --------------------------------------------------------------------------------
 -- Arms
 --
@@ -1466,7 +1480,7 @@ function Viewmodel:SetHidden(hidden)
 	-- Everything: the gun, both arms and whatever the hand is holding. Behind a full-screen scope not a
 	-- knuckle may show.
 	for _, part in ipairs(self.parts) do
-		part.LocalTransparencyModifier = hidden and 1 or 0
+		veil(part, hidden)
 	end
 	self.arms:SetHidden(hidden)
 	for _, prop in pairs(self.props) do
@@ -1869,7 +1883,7 @@ function Viewmodel:Update(dt, input)
 		self.visibilityDirty = false
 		for group, shown in pairs(visibility) do
 			for _, part in ipairs(self.groupParts[group] or {}) do
-				part.LocalTransparencyModifier = (self.hidden or not shown) and 1 or 0
+				veil(part, self.hidden or not shown)
 			end
 		end
 	end
@@ -1943,7 +1957,7 @@ function Viewmodel:handleEvent(event)
 		copy.Name = "BRR_Dropped"
 		for _, part in ipairs(self.groupParts[group] or {}) do
 			local clone = part:Clone()
-			clone.LocalTransparencyModifier = 0
+			veil(clone, false)
 			clone:SetAttribute("Anim", nil)
 			clone.Parent = copy
 		end

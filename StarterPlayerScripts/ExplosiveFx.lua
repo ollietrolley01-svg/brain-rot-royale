@@ -57,7 +57,8 @@ local TEXTURE = {
 
 local GRAVITY = 196.2
 local MAX_DEBRIS = 60
-local MAX_SCORCH = 30
+-- A scorch is nine patches now (see scorch), so fewer are kept.
+local MAX_SCORCH = 20
 -- A splat is about 24 parts now (halo, blot, tongues, droplets, runs), so fewer are kept at once.
 local MAX_SPLATS = 30
 
@@ -65,7 +66,8 @@ local MAX_SPLATS = 30
 --   balls     fireballs; scale, how big the whole thing is against the radius
 --   light     the flash's PointLight range
 --   smoke, sparks, embers   particle counts
---   debris    chunks thrown out; scorch, the mark left, as a share of the radius (0 for none)
+--   debris    chunks thrown out; scorch, the mark left, its width as a share of the radius (0 for
+--             none; never wider than SCORCH_WIDEST)
 --   column    seconds of rising smoke after the fireball
 local KIND = {
 	rocket = { balls = 9, scale = 1.0, light = 70, smoke = 26, sparks = 44, embers = 24, debris = 10, scorch = 0.55, column = 1.4 },
@@ -348,88 +350,6 @@ end
 -- Explosions
 --------------------------------------------------------------------------------
 
-local scorches = {}
-local rng = Random.new()
-
--- A mark that lies on a surface stays with that surface: re-placed from the part's frame every
--- frame (a scorch on a truck drives off with it, on a lift it goes up with it) and gone the frame
--- the part is destroyed (a floor the blast itself broke can't leave its mark hanging in the air,
--- which would be Oliver's black circle from a different cause: "what about when it's on the second
--- story of a building and destroys the floor under it", 2026-09-18). Terrain is the world, static
--- and never destroyed, so marks on it need no rider. MarksFollow = false plants the old behaviour
--- for the probe's self-test.
-ExplosiveFx.MarksFollow = true
-
-local function rider(surface, instance)
-	if not ExplosiveFx.MarksFollow or not surface or surface:IsA("Terrain") then
-		return nil
-	end
-	return { part = surface, offset = surface.CFrame:ToObjectSpace(instance.CFrame) }
-end
-
--- Keeps `instance` on its rider's part. False once the part is gone.
-local function ride(r, instance)
-	if not r then
-		return true
-	end
-	local part = r.part
-	if not part.Parent then
-		return false
-	end
-	instance.CFrame = part.CFrame * r.offset
-	return true
-end
-
-local function scorch(position, normal, diameter, surface)
-	local frame = surfaceFrame(position + normal * 0.04, normal) * ALONG_NORMAL
-	local mark = part("Scorch", V(0.06, diameter, diameter), frame, Color3.fromRGB(26, 24, 22), Enum.Material.Slate, 0.12, Enum.PartType.Cylinder)
-	local onSurface = rider(surface, mark)
-	table.insert(scorches, mark)
-	if #scorches > MAX_SCORCH then
-		local oldest = table.remove(scorches, 1)
-		if oldest.Parent then
-			oldest:Destroy()
-		end
-	end
-	add({
-		life = 28,
-		parts = { mark },
-		update = function(entry, age)
-			if not ride(onSurface, mark) then
-				mark:Destroy()
-				entry.life = 0
-				return
-			end
-			if age > 25 then
-				mark.Transparency = 0.12 + (age - 25) / 3 * 0.88
-			end
-		end,
-		destroy = destroyParts,
-	})
-end
-
-local function throwDebris(position, normal, count, speed, size, color, material)
-	for _ = 1, count do
-		if #debris >= MAX_DEBRIS then
-			local oldest = table.remove(debris, 1)
-			oldest.part:Destroy()
-		end
-		local chunk = part("Debris", V(size * rng:NextNumber(0.6, 1.4), size * rng:NextNumber(0.4, 1), size * rng:NextNumber(0.6, 1.4)),
-			CFrame.new(position), color, material)
-		local direction = (V(rng:NextNumber(-1, 1), rng:NextNumber(0.2, 1), rng:NextNumber(-1, 1)).Unit + normal * 0.8).Unit
-		table.insert(debris, {
-			part = chunk,
-			position = position + normal * 0.3,
-			velocity = direction * speed * rng:NextNumber(0.5, 1.1),
-			spin = V(rng:NextNumber(-12, 12), rng:NextNumber(-12, 12), rng:NextNumber(-12, 12)),
-			rotation = CFrame.Angles(rng:NextNumber(0, 6), rng:NextNumber(0, 6), rng:NextNumber(0, 6)),
-			radius = size * 0.5,
-			age = 0,
-			life = rng:NextNumber(2.5, 4),
-		})
-	end
-end
-
 -- Where the blast meets a surface, if it does: the point and normal its ground-bound marks (shock
 -- ring, dust, scorch) are drawn on. The server's `normal` says what the round struck, and that can
 -- be a body, a lamp post or a branch at chest height; a scorch drawn there stood in the air as a
@@ -471,6 +391,170 @@ local function castSurface(origin, direction, span)
 		table.insert(filter, hit.Instance)
 	end
 	return nil
+end
+
+local scorches = {}
+local rng = Random.new()
+
+-- A mark that lies on a surface stays with that surface: re-placed from the part's frame every
+-- frame (a scorch on a truck drives off with it, on a lift it goes up with it) and gone the frame
+-- the part is destroyed (a floor the blast itself broke can't leave its mark hanging in the air,
+-- which would be Oliver's black circle from a different cause: "what about when it's on the second
+-- story of a building and destroys the floor under it", 2026-09-18). Terrain is the world, static
+-- and never destroyed, so marks on it need no rider. MarksFollow = false plants the old behaviour
+-- for the probe's self-test.
+ExplosiveFx.MarksFollow = true
+
+local function rider(surface, instance)
+	if not ExplosiveFx.MarksFollow or not surface or surface:IsA("Terrain") then
+		return nil
+	end
+	return { part = surface, offset = surface.CFrame:ToObjectSpace(instance.CFrame) }
+end
+
+-- Keeps `instance` on its rider's part. False once the part is gone.
+local function ride(r, instance)
+	if not r then
+		return true
+	end
+	local part = r.part
+	if not part.Parent then
+		return false
+	end
+	instance.CFrame = part.CFrame * r.offset
+	return true
+end
+
+-- A scorch is a cluster of patches, a middle one and a ring round it, each cast onto the surface
+-- itself and lying on whatever it found. One flat disc can only be right on a flat, lasting
+-- surface: half of it hung in the air off the edge of a floor, and on the ground it was a lid
+-- over the crater the same blast dug a moment later (#29, #70). A patch that finds nothing under it
+-- isn't drawn. The crater comes from the server after the effect has started, so patches on the
+-- ground are laid again a few times over the first seconds and follow the ground down into the
+-- hole. Patches on a part ride it and go with it when it breaks.
+local SCORCH_WIDEST = 7 -- studs across at most: the old 14-stud rocket mark read as a black pool
+local SCORCH_RING = 8
+local SCORCH_SHADE = 0.12
+local SCORCH_RELAY = { 0.3, 1, 2.5, 5 }
+-- How far below the mark's plane a patch may land: on the ground, a crater's depth (DestructibleService
+-- digs at most 4.5); on a part, a bevel or a step, never the storey below.
+local SCORCH_SINK, SCORCH_LIP = 5, 0.6
+ExplosiveFx.ScorchWidest = SCORCH_WIDEST
+
+local function layPatch(patch, centre, normal, flat)
+	local mark = patch.mark
+	if flat then
+		mark.CFrame = surfaceFrame(centre + patch.offset + normal * 0.04, normal) * ALONG_NORMAL
+		mark.Transparency = SCORCH_SHADE
+		patch.laid = true
+		return
+	end
+	local reach = patch.ground and SCORCH_SINK or SCORCH_LIP
+	local hit = castSurface(centre + patch.offset + normal, -normal * (1 + reach), patch.size * 0.5)
+	if not hit then
+		mark.Transparency = 1
+		patch.laid, patch.rides = false, nil
+		return
+	end
+	mark.CFrame = surfaceFrame(hit.Position + hit.Normal * 0.04, hit.Normal) * ALONG_NORMAL
+	mark.Transparency = SCORCH_SHADE
+	patch.laid = true
+	patch.rides = rider(hit.Instance, mark)
+end
+
+local function scorch(position, normal, diameter, surface)
+	diameter = math.min(diameter, SCORCH_WIDEST)
+	local frame = surfaceFrame(position, normal)
+	-- No surface part: the gallery's TrustNormal "before", drawn flat where it was told.
+	local flat = surface == nil
+	local ground = surface ~= nil and surface:IsA("Terrain")
+	local patches = {}
+	local function patchAt(name, offset, size)
+		local mark = part(name, V(0.06, size, size), frame * ALONG_NORMAL, Color3.fromRGB(26, 24, 22), Enum.Material.Slate, SCORCH_SHADE, Enum.PartType.Cylinder)
+		local patch = { mark = mark, offset = offset, size = size, ground = ground }
+		layPatch(patch, position, normal, flat)
+		table.insert(patches, patch)
+	end
+	patchAt("Scorch", Vector3.zero, diameter * 0.42)
+	local turn = rng:NextNumber(0, math.pi * 2)
+	for index = 1, SCORCH_RING do
+		local angle = turn + index / SCORCH_RING * math.pi * 2
+		local out = diameter * 0.3 * rng:NextNumber(0.85, 1.1)
+		local offset = frame.RightVector * (math.cos(angle) * out) + frame.UpVector * (math.sin(angle) * out)
+		patchAt("ScorchEdge", offset, diameter * 0.32 * rng:NextNumber(0.85, 1.15))
+	end
+
+	local parts = {}
+	for _, patch in ipairs(patches) do
+		table.insert(parts, patch.mark)
+	end
+	local mark = { parts = parts }
+	table.insert(scorches, mark)
+	if #scorches > MAX_SCORCH then
+		destroyParts(table.remove(scorches, 1))
+	end
+	local relays = 1
+	add({
+		life = 28,
+		parts = parts,
+		update = function(entry, age)
+			local relay = ExplosiveFx.MarksFollow and not flat and SCORCH_RELAY[relays] ~= nil and age >= SCORCH_RELAY[relays]
+			if relay then
+				relays += 1
+			end
+			local left = 0
+			for _, patch in ipairs(patches) do
+				local piece = patch.mark
+				if piece.Parent then
+					if patch.rides and not ride(patch.rides, piece) then
+						-- Its part broke. On a floor it goes with it; on the ground (rubble it
+						-- lay on) it waits for the next lay.
+						patch.rides, patch.laid = nil, false
+						if patch.ground then
+							piece.Transparency = 1
+						else
+							piece:Destroy()
+						end
+					end
+					if relay and patch.ground and piece.Parent then
+						layPatch(patch, position, normal, false)
+					end
+				end
+				if piece.Parent then
+					left += 1
+					if patch.laid and age > 25 then
+						piece.Transparency = SCORCH_SHADE + (age - 25) / 3 * (1 - SCORCH_SHADE)
+					end
+				end
+			end
+			if left == 0 then
+				entry.life = 0
+			end
+		end,
+		destroy = destroyParts,
+	})
+end
+
+local function throwDebris(position, normal, count, speed, size, color, material)
+	for _ = 1, count do
+		if #debris >= MAX_DEBRIS then
+			local oldest = table.remove(debris, 1)
+			oldest.part:Destroy()
+		end
+		local chunk = part("Debris", V(size * rng:NextNumber(0.6, 1.4), size * rng:NextNumber(0.4, 1), size * rng:NextNumber(0.6, 1.4)),
+			CFrame.new(position), color, material)
+		local direction = (V(rng:NextNumber(-1, 1), rng:NextNumber(0.2, 1), rng:NextNumber(-1, 1)).Unit + normal * 0.8).Unit
+		table.insert(debris, {
+			part = chunk,
+			position = position + normal * 0.3,
+			velocity = direction * speed * rng:NextNumber(0.5, 1.1),
+			spin = V(rng:NextNumber(-12, 12), rng:NextNumber(-12, 12), rng:NextNumber(-12, 12)),
+			rotation = CFrame.Angles(rng:NextNumber(0, 6), rng:NextNumber(0, 6), rng:NextNumber(0, 6)),
+			radius = size * 0.5,
+			age = 0,
+			life = rng:NextNumber(2.5, 4),
+		})
+	end
 end
 
 -- Returns the surface point, its normal and the part it belongs to (nil for none).
@@ -616,7 +700,7 @@ function ExplosiveFx.Explosion(position, normal, kind, radius)
 		throwDebris(position, up, spec.debris, r * 3, math.clamp(r * 0.06, 0.25, 0.7), Color3.fromRGB(70, 62, 56), Enum.Material.Slate)
 	end
 	if onSurface and spec.scorch > 0 then
-		scorch(ground, up, r * spec.scorch * 2, surfacePart)
+		scorch(ground, up, r * spec.scorch, surfacePart)
 	end
 
 	add({

@@ -8,10 +8,24 @@
 -- Doing it here also means a shrinking storm costs no replication, and it can smooth between
 -- the server's half-second radius updates instead of stepping.
 
+-- #45: the storm is brainrot now. The wall is a deep rot purple (the HUD's storm purple, so the
+-- vignette and the wall still read as one thing), the eye-level band is brain pink, and slow
+-- swirls of pink-to-lime rot drift up off the band. The swirls are deliberately few: an emitter on
+-- every fourth band segment, and only the ones near the camera run at all (#131, lag). Nothing
+-- here changes where the edge is or how solid it looks from inside; the band is still the
+-- brightest thing at eye level, which is what tells you where the storm starts.
+--
+-- Sound: crossing out into the storm plays the "StormEnter" cue and crossing back plays
+-- "StormLeave" (both in SoundConfig).
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
-local Remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
+local Sfx = require(script.Parent:WaitForChild("Sfx"))
 
 local stormChanged = Remotes.Event("StormChanged")
 
@@ -21,10 +35,18 @@ local WALL_BOTTOM, WALL_TOP = -60, 900
 -- A brighter strip low down marks the edge at eye level.
 local BAND_BOTTOM, BAND_TOP = -20, 45
 
-local WALL_COLOR = Color3.fromRGB(158, 96, 255)
-local BAND_COLOR = Color3.fromRGB(198, 150, 255)
-local WALL_TRANSPARENCY = 0.86
-local BAND_TRANSPARENCY = 0.55
+local WALL_COLOR = Color3.fromRGB(140, 74, 236)
+local BAND_COLOR = Color3.fromRGB(255, 112, 206)
+local WALL_TRANSPARENCY = 0.84
+local BAND_TRANSPARENCY = 0.5
+
+-- The rot swirls: one emitter per EMIT_EVERY band segments, running only within EMIT_RANGE of the
+-- camera. At the rate and lifetime below one emitter holds at most about 10 particles, so even a
+-- final circle small enough to bring all 24 in range stays near 240 in the whole ring.
+local EMIT_EVERY = 4
+local EMIT_RANGE = 320
+local EMIT_RATE = 2
+local SWIRL_TEXTURE = "rbxasset://textures/particles/smoke_main.dds"
 
 local folder = Instance.new("Folder")
 folder.Name = "StormWall"
@@ -44,10 +66,43 @@ local function segment(color, transparency)
 	return part
 end
 
-local walls, bands = {}, {}
+-- Pink curling up into rot green: brain matter going off. Sized in studs, and spun both ways so
+-- the wall looks like it is churning rather than steaming.
+local function swirl(host)
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "RotSwirl"
+	emitter.Texture = SWIRL_TEXTURE
+	emitter.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 130, 214)),
+		ColorSequenceKeypoint.new(0.6, Color3.fromRGB(196, 110, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 255, 90)),
+	})
+	emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3), NumberSequenceKeypoint.new(1, 9) })
+	emitter.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.2, 0.45),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	emitter.LightEmission = 0.35
+	emitter.Lifetime = NumberRange.new(3.5, 5)
+	emitter.Rate = EMIT_RATE
+	emitter.Speed = NumberRange.new(1.5, 4)
+	emitter.SpreadAngle = Vector2.new(40, 40)
+	emitter.Acceleration = Vector3.new(0, 2.5, 0)
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-70, 70)
+	emitter.Enabled = false
+	emitter.Parent = host
+	return emitter
+end
+
+local walls, bands, swirls = {}, {}, {}
 for index = 1, SEGMENTS do
 	walls[index] = segment(WALL_COLOR, WALL_TRANSPARENCY)
 	bands[index] = segment(BAND_COLOR, BAND_TRANSPARENCY)
+	if index % EMIT_EVERY == 0 then
+		swirls[index] = swirl(bands[index])
+	end
 end
 
 local target = nil
@@ -69,14 +124,50 @@ local function layout(center, radius)
 		walls[index].Size = Vector3.new(length, WALL_TOP - WALL_BOTTOM, 1.5)
 		walls[index].CFrame = look + Vector3.new(0, (WALL_TOP + WALL_BOTTOM) / 2, 0)
 
-		bands[index].Size = Vector3.new(length, BAND_TOP - BAND_BOTTOM, 2)
+		-- A tenth longer than the wall, so the two never share an end face.
+		bands[index].Size = Vector3.new(length + 0.1, BAND_TOP - BAND_BOTTOM, 2)
 		bands[index].CFrame = look + Vector3.new(0, (BAND_TOP + BAND_BOTTOM) / 2, 0)
 	end
+end
+
+-- Swirls near the camera run; the rest of the ring's are switched off. Re-judged a few times a
+-- second rather than every frame: the camera cannot cross an emitter's worth of range that fast.
+local swirlClock = 0
+local function gateSwirls(force)
+	local camera = workspace.CurrentCamera
+	local eye = camera and camera.CFrame.Position
+	for index, emitter in pairs(swirls) do
+		local wanted = false
+		if eye and target then
+			local offset = bands[index].Position - eye
+			wanted = Vector3.new(offset.X, 0, offset.Z).Magnitude < EMIT_RANGE
+		end
+		if force or emitter.Enabled ~= wanted then
+			emitter.Enabled = wanted
+		end
+	end
+end
+
+-- Whether the local player's body is out in the storm, for the enter/leave cues. A body at lobby
+-- height is not in the match (a spectator stands on the pier at MatchConfig.LobbyPosition), so it
+-- counts as not outside whatever the circle does.
+local wasOutside = false
+local function outsideNow()
+	local player = Players.LocalPlayer
+	local character = player and player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not target or root.Position.Y > MatchConfig.LobbyPosition.Y - 100 then
+		return false
+	end
+	local flat = Vector3.new(root.Position.X - target.center.X, 0, root.Position.Z - target.center.Z)
+	return flat.Magnitude > target.radius
 end
 
 stormChanged.OnClientEvent:Connect(function(info)
 	if not info or info.status == "Idle" or not info.radius or info.radius < 2 then
 		target = nil
+		wasOutside = false
+		gateSwirls(true)
 		folder.Parent = nil
 		return
 	end
@@ -103,6 +194,17 @@ RunService.RenderStepped:Connect(function(delta)
 	if not drawnRadius or math.abs(drawnRadius - shownRadius) > 0.05 or (drawnCenter - shownCenter).Magnitude > 0.05 then
 		drawnCenter, drawnRadius = shownCenter, shownRadius
 		layout(shownCenter, math.max(shownRadius, 2))
+	end
+
+	swirlClock += delta
+	if swirlClock >= 0.4 then
+		swirlClock = 0
+		gateSwirls(false)
+		local outside = outsideNow()
+		if outside ~= wasOutside then
+			wasOutside = outside
+			Sfx.Play(outside and "StormEnter" or "StormLeave")
+		end
 	end
 
 	-- The band pulses while the circle is closing.

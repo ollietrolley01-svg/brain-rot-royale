@@ -230,9 +230,14 @@ function BattlePassService.ClaimDaily(player)
 	local prize = applySpinPrize(player, data, segment)
 	local multiplier = DailySpinData.StreakMultiplier(data.Daily.streak)
 
+	-- The login streak's own prize (#77), on top of the wheel: day N of the seven-day table, then
+	-- round again. StateSync's nextIndex already names the one this lands on.
+	local dayIndex = (data.Daily.streak - 1) % BattlePassData.DailyCycle + 1
+	local streakPrize = applyReward(player, data, BattlePassData.DailyRewards[dayIndex])
+
 	StateSync.Push(player)
-	return true, string.format("Daily Spin: %s   (day %d streak%s)", prize, data.Daily.streak,
-		multiplier > 1 and string.format(", coins x%.1f", multiplier) or ""), index
+	return true, string.format("Daily Spin: %s   (day %d streak%s)   •   Day %d bonus: %s", prize, data.Daily.streak,
+		multiplier > 1 and string.format(", coins x%.1f", multiplier) or "", dayIndex, streakPrize), index
 end
 
 return BattlePassService

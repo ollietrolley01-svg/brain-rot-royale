@@ -124,6 +124,8 @@ local SAMPLES = { 0, SWEEP, -SWEEP }
 local BUMP_EXTRA = 0.45          -- how far past full travel a step can push before the body takes it
 local PRELOAD_RAMP = 0.12        -- the weight share fades in over this much compression
 local MAX_LOAD_G = 2.5           -- one wheel never pushes harder than this many of its weight share
+local MIN_HOLD = 1 / 60          -- s: a force set in Step is held at least one 60 Hz physics step
+local WALL_DOT = 0.5             -- a hit whose face leans more than 60 degrees off the strut is a side, not ground
 local LATERAL_RESPONSE = 20      -- 1/s, how quickly sideways slip is taken out within the grip
 local HOLD_SPEED = 2.5           -- below this with no input, brakes hold the vehicle on a slope
 local HOLD_RESPONSE = 8          -- 1/s
@@ -552,28 +554,56 @@ function VehicleDynamics.Step(rig, input, dt)
 		castUp = CFrame.fromAxisAngle(bodyForward, -leanNow):VectorToWorldSpace(bodyUp)
 	end
 
+	-- #84/#109: how long a force set now is actually held. A frame can be shorter than the physics
+	-- step that follows it (a 120 or 144 Hz screen, with the engine stepping this assembly at 60 Hz),
+	-- and every "held for too long" limit below must be sized for the step, not the frame.
+	local heldFor = math.max(dt, MIN_HOLD)
+
 	-- Pass 1: contact, compression and spring loads.
 	local travel = h.travelUp + h.travelDown
 	local omega = 2 * math.pi * h.springHz
 	-- A spring or damper held for a long frame overshoots; past these limits they're softened.
-	local k = wheelMass * math.min(omega * omega, 2.5 / (dt * dt))
-	local damper = wheelMass * math.min(2 * h.dampingRatio * omega, 1.5 / dt)
+	local k = wheelMass * math.min(omega * omega, 2.5 / (heldFor * heldFor))
+	local damper = wheelMass * math.min(2 * h.dampingRatio * omega, 1.5 / heldFor)
 	local maxLoad = wheelMass * gravity * MAX_LOAD_G
 	local groundedCount = 0
 	local normalSum = Vector3.zero
 	for _, wheel in ipairs(wheels) do
 		local extension, hit = contact(rig, wheel, frame, castUp, bodyForward, travel)
-		local previous = wheel.compression
 		if hit then
+			-- A ray tilted by pitch or roll can meet the SIDE of a road slab, kerb or deck edge. That
+			-- face is not what the tyre rolls on: taken as the ground, it turned drive and grip
+			-- toward the vertical and tipped groundUp over. The strut's own axis stands in for it.
+			local normal = hit.Normal
+			if normal:Dot(castUp) < WALL_DOT then
+				normal = castUp
+			end
 			wheel.compression = clamp(travel - extension, 0, travel + BUMP_EXTRA)
 			wheel.grounded = true
-			wheel.normal = hit.Normal
+			wheel.normal = normal
 			wheel.contactPoint = hit.Position
 			wheel.surface = surfaceGrip(hit.Material, h.offroad)
 			wheel.material = hit.Material
 			groundedCount += 1
-			normalSum += hit.Normal
-			local compressionSpeed = clamp((wheel.compression - previous) / dt, -16, 16)
+			normalSum += normal
+			-- #84/#109: the damper reads how fast the body is closing on the ground from VELOCITY,
+			-- not from the change in ray length since the last frame. The difference was the bounce:
+			--   * on a frame with no physics step under it (a fast screen, the engine stepping this
+			--     assembly at 60 Hz) the rays saw nothing move, so the damper read zero, and the next
+			--     frame saw a whole step's movement divided by a short frame. The damper stopped
+			--     damping and the car pogoed: tools/vehicle_stability_sim.py puts a TralalaGT
+			--     airborne on a flat road at 120 fps over 60 Hz physics.
+			--   * a slab edge, a stop line or a seam arrives in one frame, and differencing turned
+			--     every such step into a damper kick; a wheel that had just missed (compression 0)
+			--     read its first hit back as a slam.
+			-- Velocity along the contact normal is the same number wherever the ground is smooth
+			-- and has none of those faults. The ground's own velocity counts when it moves.
+			local closing = chassis:GetVelocityAtPosition(frame:PointToWorldSpace(wheel.mount))
+			local ground = hit.Instance
+			if ground:IsA("BasePart") and not ground.Anchored then
+				closing -= ground:GetVelocityAtPosition(hit.Position)
+			end
+			local compressionSpeed = clamp(-closing:Dot(normal) / math.max(normal:Dot(castUp), WALL_DOT), -16, 16)
 			local preload = wheelMass * gravity * clamp(wheel.compression / PRELOAD_RAMP, 0, 1)
 			local load = preload + k * (wheel.compression - h.travelDown) + damper * compressionSpeed
 			if wheel.compression > travel - 0.05 then
@@ -673,7 +703,7 @@ function VehicleDynamics.Step(rig, input, dt)
 
 			-- Sideways: take out the slip, and hold against the slope.
 			local slipForce = -lateralSpeed * wheelMass * LATERAL_RESPONSE
-			local slipCap = math.abs(lateralSpeed) * wheelMass / (2 * dt)
+			local slipCap = math.abs(lateralSpeed) * wheelMass / (2 * heldFor)
 			local lateral = clamp(slipForce, -slipCap, slipCap) + wheelMass * gravity * right.Y
 
 			-- Along the heading.
@@ -681,7 +711,7 @@ function VehicleDynamics.Step(rig, input, dt)
 			if wheel.drive and driveAccel ~= 0 and drivenGrounded > 0 then
 				long += mass * driveAccel / drivenGrounded
 			end
-			local stopCap = math.abs(longSpeed) * wheelMass / (2 * dt)
+			local stopCap = math.abs(longSpeed) * wheelMass / (2 * heldFor)
 			local resist = brakeAccel + coastAccel + governorAccel
 			if handbrake and rear then
 				resist = math.max(resist, h.brake * 0.8)
@@ -819,6 +849,24 @@ function VehicleDynamics.Step(rig, input, dt)
 			rig.balance.CFrame = CFrame.fromMatrix(Vector3.zero, targetUp, flatForward)
 		end
 		rig.balance.MaxTorque = mass * BALANCE_TORQUE
+
+		-- Oliver: "the bikes fall over when you drive them". The tyre forces go in at the hubs, about
+		-- a stud below the chassis's centre of mass, and a bike's body is a stud wide, so it has next
+		-- to no roll inertia to resist them. The first frame of a turn, before the lean has caught up,
+		-- the sideways grip at the hubs is a roll torque many times what the Balance constraint holds
+		-- at a sensible angle, and it rolled the bike OUT of the turn and onto its side in about a
+		-- tenth of a second (tools/bike_balance_sim.py: every bike, every turn). On a real bike the
+		-- rider's countersteer puts the lean in first; here the lean is the constraint's job alone,
+		-- so the part of the tyre forces that would roll the body is taken back out and the Balance
+		-- is left to set the lean on its own. Pitch (squat, dive, bumps) is left as it is. The
+		-- chassis is the only part of a vehicle with mass (VehicleModels' Builder:hull, and riders
+		-- are made Massless), so its position is the centre of mass.
+		local roll = 0
+		for _, wheel in ipairs(wheels) do
+			local arm = frame:PointToWorldSpace(wheel.mount) - chassis.Position
+			roll += arm:Cross(wheel.force.Force):Dot(bodyForward)
+		end
+		torque -= bodyForward * roll
 	end
 
 	rig.torque.Torque = torque

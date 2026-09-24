@@ -1191,7 +1191,14 @@ VehicleModels.Models.CrocodiloRanger = {
 			-- headlamps, nothing like a grille guard. Replaced with ONE continuous, thicker member
 			-- per side straight from the bumper corner to the top rail (no bend), so it reads as a
 			-- frame, not scattered rods.
-			b:pipe("BullFrame" .. n, { V(s * 3.5, 2.45, -7.8), V(s * 1.9, 4.15, -8.05) }, 0.42, "trim")
+			-- #61 / #116 again: that one member still ran corner-to-top on a 44 degree diagonal, from the
+			-- bumper's outer corner in to the top rail, and at 0.42 across a thick rod leaning across the
+			-- grin is exactly what "bat parts sideways" describes -- it was the thickening that turned a
+			-- thin pole into a bat. A grille guard's uprights stand straight: each now rises plumb from
+			-- the bumper to the end of the top rail (the ball there closes the corner). It starts 0.25
+			-- inside the bumper so its end disc is buried rather than lying in the bumper's top face.
+			-- tools/vehicle_models_axis_check.py holds every rod on the car to a world axis.
+			b:tube("BullFrame" .. n, V(s * 1.9, 2.2, -8.05), V(s * 1.9, 4.15, -8.05), 0.42, "trim")
 			b:cylZ("SpotHousing" .. n, 0.3, 0.8, V(s * 1.0, 4.55, -8.0), "mesh")
 			b:cylZ("Spot" .. n, 0.3, 0.6, V(s * 1.0, 4.55, -8.08), "lamp")
 			b:tube("SpotMount" .. n, V(s * 1.0, 4.15, -8.05), V(s * 1.0, 4.4, -8.0), 0.12, "trim")
@@ -1625,17 +1632,31 @@ VehicleModels.Models.SahurVan = {
 		-- roof by the drum. Raised so the lowest point (BatKnob's underside) clears the roof by about
 		-- 0.16 studs, matching the ~0.15-0.2 stud margins used elsewhere in this file; nothing about
 		-- the rotation (A(-15, 13, 0)) changed.
-		local batX, batY = -1.4, roofY + 1.35
-		local bat = CF(V(batX, batY, -0.4)) * A(-15, 13, 0)
+		--
+		-- #116 again (Oliver, after the fix above: "bat parts still sideways"): measured by
+		-- tools/vehicle_models_axis_check.py, the bat ran 21 degrees off the van's length -- the 13
+		-- degree turn plus the 15 degree rake put its barrel 3.1 studs above the roof, the highest point
+		-- on the van, with nothing under it -- and it was not even straight: the lifts on the taper,
+		-- throat and barrel bent each piece off the bat's own line by up to 4.5 degrees. So: one straight
+		-- line, pointing along the van like the rack rails, and resting ON the rack. The rake left is the
+		-- one a real bat takes lying on a rack: handle on the front bar, barrel on the middle-rear bar,
+		-- so the axis climbs by the difference between the two radii over the gap between the bars.
+		local barTop = roofY + 0.65 + 0.06 -- the cross bars' tops (0.12 across, at roofY + 0.65)
+		local batX, batZ = -1.4, -0.4
+		local handleBar, barrelBar = -3.5, 1.5 -- the cross bars the handle and the barrel lie on
+		local handleR, barrelR = 0.15, 0.49
+		local rake = math.deg(math.atan((barrelR - handleR) / (barrelBar - handleBar)))
+		local batY = barTop + handleR + (batZ - handleBar) * (barrelR - handleR) / (barrelBar - handleBar)
+		local bat = CF(V(batX, batY, batZ)) * A(-rake, 0, 0)
 		local function batAt(z, lift)
 			return (bat * CF(0, lift or 0, z)).Position
 		end
 		b:ball("BatKnob", 0.46, batAt(-3.8), "wood")
-		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), 0.3, "wood")
-		b:tube("BatTaper", batAt(-1.6), batAt(0.7, 0.1), 0.56, "wood")
-		b:tube("BatThroat", batAt(0.7, 0.1), batAt(1.6, 0.2), 0.78, "wood")
-		b:tube("BatBarrel", batAt(1.6, 0.2), batAt(4.0, 0.25), 0.98, "wood")
-		b:cyl("BatEnd", 0.16, 0.9, CF(batAt(4.06, 0.25)) * (bat - bat.Position) * A(0, 90, 0), "wood")
+		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), handleR * 2, "wood")
+		b:tube("BatTaper", batAt(-1.6), batAt(0.7), 0.56, "wood")
+		b:tube("BatThroat", batAt(0.7), batAt(1.6), 0.78, "wood")
+		b:tube("BatBarrel", batAt(1.6), batAt(4.0), barrelR * 2, "wood")
+		b:cyl("BatEnd", 0.16, 0.9, CF(batAt(4.06)) * (bat - bat.Position) * A(0, 90, 0), "wood")
 		for index, z in ipairs({ -1.0, 1.5 }) do
 			-- The straps follow the bat, or they would hold thin air where it used to lie.
 			b:box("BatStrap" .. index, V(0.9, 0.12, 0.2), CF(batAt(z, -0.3)) * (bat - bat.Position), "accent")
@@ -2037,6 +2058,93 @@ VehicleModels.Models.BrrStreetfighter = {
 }
 
 --------------------------------------------------------------------------------
+-- Mounted weapons (Oliver: "vehicles with different guns and explosive weapons on them")
+--------------------------------------------------------------------------------
+-- What each armed model's weapon DOES lives in Shared/VehicleWeaponData; this is only the metal.
+-- Every mount has the same contract, so VehicleWeapons and VehicleWeaponClient never guess:
+--   TurretYaw     pivot (Pivot "TurretYaw") on the chassis; turns about its own Y
+--   TurretPitch   pivot (Pivot "TurretPitch") hung from TurretYaw, straight above it so yawing
+--                 never moves it; tips about its own X, positive is up
+--   TurretMuzzle  invisible marker welded to TurretPitch at the barrel's mouth
+-- Both pivots are built square to the chassis and facing the front (-Z), so a Transform of
+-- CFrame.Angles(0, yaw, 0) and CFrame.Angles(pitch, 0, 0) is the whole of aiming.
+-- Two-wheelers carry none.
+VehicleModels.Mounts = {
+	-- A pintle gun on the hatch roof, clear of the roof panel, behind the driver's head.
+	Rotster = { style = "gun", base = V(0, 6.0, 2.0) },
+	-- A rocket pod on a tall pedestal in the bed, high enough to fire forward over the cab.
+	CrocodiloRanger = { style = "pod", base = V(0, 3.1, 4.9), column = 3.9 },
+	-- A mortar on a plinth at the back of the roof rack, between the last rack bar and the rail ends.
+	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.4 },
+}
+
+local function buildMount(b, mount)
+	local base = mount.base
+	local column = mount.column or 0
+	if column > 0 then
+		if mount.style == "pod" then
+			b:tube("TurretColumn", base, base + V(0, column, 0), 0.5, "trim")
+			b:box("TurretFoot", V(1.6, 0.2, 1.6), base + V(0, 0.1 + 0.02, 0), "trim")
+		else
+			b:box("TurretPlinth", V(1.4, column, 1.2), base + V(0, column / 2, 0), "trim")
+		end
+	end
+	local top = base + V(0, column, 0)
+	local ringDiameter = mount.style == "pod" and 2.0 or 1.6
+	b:cyl("TurretRing", 0.24, ringDiameter, CF(top + V(0, 0.12 + 0.02, 0)) * A(0, 0, 90), "trim")
+
+	local yawAt = top + V(0, 0.28, 0)
+	local pitchAt = yawAt + V(0, ({ gun = 0.6, pod = 0.95, mortar = 0.85 })[mount.style], 0)
+	local yaw = b:pivot("TurretYaw", CF(yawAt), "TurretYaw")
+	local pitch = b:pivot("TurretPitch", CF(pitchAt), "TurretPitch", yaw)
+	local muzzleZ
+
+	b:with(yaw, function()
+		local spread = mount.style == "pod" and 1.8 or 0.8
+		b:box("TurretYoke", V(spread + 0.3, 0.2, 0.9), yawAt + V(0, 0.1, 0), "accent")
+		for _, s in ipairs({ -1, 1 }) do
+			b:box(s < 0 and "TurretCheekL" or "TurretCheekR", V(0.16, pitchAt.Y - yawAt.Y + 0.25, 0.7),
+				V(s * (spread / 2 + 0.08 + 0.02), (yawAt.Y + pitchAt.Y + 0.25) / 2, yawAt.Z), "accent")
+		end
+	end)
+
+	b:with(pitch, function()
+		local at = pitchAt
+		if mount.style == "gun" then
+			b:box("GunReceiver", V(0.5, 0.55, 1.6), at + V(0, 0, 0.2), "trim")
+			b:tube("GunBarrel", at + V(0, 0.05, -0.6), at + V(0, 0.05, -2.8), 0.2, "mesh")
+			b:tube("GunJacket", at + V(0, 0.05, -0.6), at + V(0, 0.05, -1.7), 0.34, "trim")
+			b:tube("GunFlashHider", at + V(0, 0.05, -2.6), at + V(0, 0.05, -3.0), 0.3, "mesh")
+			b:box("GunAmmoBox", V(0.45, 0.5, 0.7), at + V(0.85, -0.05, 0.25), "stripe")
+			b:box("GunShield", V(1.5, 0.9, 0.12), at + V(0, 0.2, -0.75), "accent")
+			muzzleZ = -3.05
+		elseif mount.style == "pod" then
+			b:box("PodBody", V(1.7, 1.1, 1.9), at, "accent")
+			b:box("PodBand", V(1.74, 0.2, 1.4), at + V(0, 0.2, 0.1), "stripe")
+			for row = 0, 1 do
+				for col = 0, 1 do
+					local x, y = (col - 0.5) * 0.8, (row - 0.5) * 0.5
+					-- A dark bore set back inside a mouth that stands proud of the face.
+					b:cylZ(string.format("PodTube%d%d", row, col), 0.2, 0.44, at + V(x, y, -0.95 - 0.1 + 0.02), "trim")
+					b:cylZ(string.format("PodBore%d%d", row, col), 0.1, 0.3, at + V(x, y, -0.95 - 0.07), "mesh")
+				end
+			end
+			muzzleZ = -1.25
+		else
+			b:ball("MortarBreech", 0.8, at + V(0, 0, 0.35), "trim")
+			b:tube("MortarTube", at + V(0, 0, 0.3), at + V(0, 0, -2.0), 0.7, "trim")
+			b:tube("MortarLip", at + V(0, 0, -1.8), at + V(0, 0, -2.1), 0.84, "stripe")
+			b:tube("MortarBore", at + V(0, 0, -1.7), at + V(0, 0, -2.04), 0.5, "mesh")
+			muzzleZ = -2.2
+		end
+	end)
+
+	local muzzle = invisible("TurretMuzzle", CF(pitchAt + V(0, 0, muzzleZ)), b.model)
+	b.anchors[muzzle] = pitch
+	return yaw, pitch, muzzle
+end
+
+--------------------------------------------------------------------------------
 -- Rider poses
 --------------------------------------------------------------------------------
 
@@ -2156,6 +2264,14 @@ function VehicleModels.Build(modelId, rng, opts)
 	local b = newBuilder(model, scheme)
 	local layout = def.build(b)
 	assert(b.chassis, modelId .. " built no Chassis")
+	-- An armed model's weapon mount (see Mounted weapons above); bikes have none.
+	-- opts.unarmed leaves the mount off: BuildStatic's parked cars are scenery, not something to man.
+	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" and not opts.unarmed then
+		buildMount(b, VehicleModels.Mounts[modelId])
+		model:SetAttribute("Armed", true)
+		-- VehicleWeapons finds empty armed vehicles for bots by this tag.
+		game:GetService("CollectionService"):AddTag(model, "ArmedVehicle")
+	end
 	-- A part under workspace.Map with a breakable name would be shot to pieces (see the header).
 	for _, part in ipairs(model:GetChildren()) do
 		if RESERVED_NAMES[part.Name] then
@@ -2226,6 +2342,84 @@ function VehicleModels.Build(modelId, rng, opts)
 		pose = layout.pose,
 		zfight = zfight,
 	}
+end
+
+--------------------------------------------------------------------------------
+-- Static builds: the same designs as map scenery (#16 / #94)
+--------------------------------------------------------------------------------
+
+-- A static car is the real design, built by Build above, with the cost cut down to what reads from
+-- the street: a parked car is looked at from ten studs off, not sat in. Left out:
+--   * every joint and weld, and the invisible hubs and pivots they hung from (nothing moves)
+--   * all of each wheel but its tyre, rim lip and centre disc (a wheel is sixteen to forty parts,
+--     most of them wall, barrel, spokes and nuts that only show on a wheel you can turn)
+--   * the wheel-arch lips (a ring of ten or twelve trim segments per arch; the arch panels, which
+--     are the body round the wheel, all stay, so no hole opens in the side)
+--   * the steering wheel's rim segments and the gauges, which are inside behind glass
+-- The Chassis and Hull_* colliders stay: they are what you take cover behind and what a shot hits.
+local STATIC_DROP = { "^SteeringWheel", "^Lip[FR][LR]", "^Gauge" }
+local STATIC_WHEEL_KEEP = { Tyre = true, Lip = true, Disc = true }
+
+local function staticKeeps(part, hubs)
+	if part.Name == "Chassis" or string.sub(part.Name, 1, 5) == "Hull_" then
+		return true
+	end
+	if part.Transparency >= 1 then
+		return false
+	end
+	local hub, piece = string.match(part.Name, "^(Wheel_%a+)_(.+)$")
+	if hub and hubs[hub] then
+		return STATIC_WHEEL_KEEP[piece] == true
+	end
+	for _, pattern in ipairs(STATIC_DROP) do
+		if string.find(part.Name, pattern) then
+			return false
+		end
+	end
+	return true
+end
+
+-- Builds `modelId` as an anchored, jointless, seatless prop standing at `cframe` (the ground under
+-- the middle of the wheelbase, nose along its LookVector) and returns it with Build's info. It
+-- carries none of the attributes or tags that make a model a vehicle (VehicleModel, Lamp, Radius,
+-- ArmedVehicle), so VehicleClient never rigs it and bots never try to man it.
+function VehicleModels.BuildStatic(modelId, rng, cframe, opts)
+	opts = opts or {}
+	local model, info = VehicleModels.Build(modelId, rng, { scheme = opts.scheme, unarmed = true })
+	local hubs = {}
+	for _, hub in ipairs(info.wheels) do
+		hubs[hub.Name] = true
+	end
+	for _, child in ipairs(model:GetChildren()) do
+		if child:IsA("BasePart") and not staticKeeps(child, hubs) then
+			child:Destroy()
+		end
+	end
+	local parts = 0
+	for _, part in ipairs(model:GetChildren()) do
+		if part:IsA("BasePart") then
+			parts += 1
+			-- Welds and joints live under the part they hold; anchored, the part needs neither. (Only
+			-- those: a number plate's SurfaceGui lives there too.)
+			for _, joint in ipairs(part:GetChildren()) do
+				if joint:IsA("JointInstance") or joint:IsA("WeldConstraint") then
+					joint:Destroy()
+				end
+			end
+			part.Anchored = true
+			part.CanTouch = false
+			for key in pairs(part:GetAttributes()) do
+				part:SetAttribute(key, nil)
+			end
+		end
+	end
+	for key in pairs(model:GetAttributes()) do
+		model:SetAttribute(key, nil)
+	end
+	model.Name = "StaticVehicle"
+	model:PivotTo(cframe)
+	info.parts = parts
+	return model, info
 end
 
 return VehicleModels

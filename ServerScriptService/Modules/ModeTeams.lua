@@ -211,7 +211,8 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	-- boundary circle drawn over a map that is already built at full size, so this is free. Bases
 	-- sit BASE_FRACTION apart, so the longest crossing (BombardiroBay) goes 936 -> 1181 studs,
 	-- about 52 s -> 66 s at MatchConfig.BaseWalkSpeed, which is a respawn mode's to absorb.
-	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.72, 650, 950)
+	-- Oliver 09-24 (#5): "slightly" smaller than 0.72 / 650..950: about 8% less radius, 16% less area.
+	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.66, 600, 875)
 
 	-- Two bases on opposite sides of the centre, on an axis rolled per match so the same map does
 	-- not always play along the same street.

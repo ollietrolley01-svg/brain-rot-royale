@@ -621,6 +621,8 @@ local function applySpeed(player)
 		speed *= SLIDE.PeakMultiplier
 	end
 	humanoid.WalkSpeed = speed
+	-- Other players see the run (#89): GunPoseClient reads the Sprinting attribute.
+	MovementService.SetSprintPose(humanoid, not down and not sliding and sprinting[player] ~= nil and not (entry and entry.exhausted))
 end
 
 -- A bounded number of calls per second per token and kind, for the movement remotes.
@@ -1948,6 +1950,8 @@ function MatchService.Start()
 							participants, alive, placements = {}, {}, {}
 							aliveCount = 0
 							state = "Waiting"
+							-- A throw before VoteService.Close() leaves the vote open with no countdown; close it here. #107
+							VoteService.Close()
 							for _, player in ipairs(Players:GetPlayers()) do
 								WeaponService.Clear(player)
 								pcall(function()

@@ -22,7 +22,8 @@
 -- This module also runs ledge climbs and vaults for bots on the server (CanParkour / TryParkour,
 -- through Shared/Parkour, the same rules a player's client uses), takes a player's word that they
 -- climbed or vaulted (ClientParkour: charges stamina, poses them for everyone else), and owns the
--- character attribute `Parkour` ("slide" | "mantle" | "vault") that other clients pose from.
+-- character attribute `Parkour` ("slide" | "mantle" | "vault") that other clients pose from, and
+-- publishes MatchService's sprint as attribute `Sprinting` (SetSprintPose) for the same reason.
 
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
@@ -478,6 +479,17 @@ end
 local GLASS_REACH = MovementConfig.Parkour.VaultMaxDepth + 2.5
 local GLASS_BAND_BOTTOM = MovementConfig.Parkour.VaultMinRise
 local GLASS_BAND_TOP = MovementConfig.Parkour.VaultMaxRise + MovementConfig.Parkour.VaultClearance
+-- THE BODY WE SEE IS LATE (#132 "glass doesn't always break"). The client starts a vault with its face at
+-- most Reach + halfDepth (2.9) ahead, the pane 0.7 behind that face, so 3.6 studs out; but what reaches
+-- us is where the body was a ping ago, and at a sprint (26 studs/s) 0.1 s of that is 2.6 studs more. At
+-- 5.7 the box ran out before the pane at any lag over ~80 ms. So the reach grows by how far the body's
+-- replicated run carries it in GLASS_LAG (only ever toward the wall, and capped); the cap at the face
+-- found plus VaultMaxDepth still stops it reaching a window behind a fence. The other way round — the
+-- client already through by the time we look (its velocity reads zero while a move runs) — the box also
+-- starts GLASS_BACK behind the root, so a pane the body is straddling or has just left is still in it.
+local GLASS_LAG = 0.25
+local GLASS_MAX_LEAD = 7
+local GLASS_BACK = 1.2
 local warnedUnwired = false
 
 -- The window panes in the band in front of `root`, nearest first.
@@ -510,13 +522,15 @@ local function panesAhead(character, root)
 	rayParams.FilterType = Enum.RaycastFilterType.Include
 	rayParams.FilterDescendantsInstances = { map }
 	rayParams.RespectCanCollide = true
-	local face = workspace:Blockcast(CFrame.lookAt(at, at + look), Vector3.new(width, height, 0.2), look * GLASS_REACH, rayParams)
+	local run = root.AssemblyLinearVelocity
+	local lead = math.clamp(Vector3.new(run.X, 0, run.Z):Dot(look) * GLASS_LAG, 0, GLASS_MAX_LEAD)
+	local face = workspace:Blockcast(CFrame.lookAt(at, at + look), Vector3.new(width, height, 0.2), look * (GLASS_REACH + lead), rayParams)
 	-- The box reaches no further than the obstacle the body is vaulting can be deep: a pane sits at most
 	-- 0.7 behind its wall's face, while a window standing behind a fence the body vaults is not on the
 	-- path and must stand (measured: with the full reach a fence 3 studs before a window took the pane).
-	local reach = GLASS_REACH
+	local reach = GLASS_REACH + lead
 	if face then
-		reach = math.min(GLASS_REACH, face.Distance + MovementConfig.Parkour.VaultMaxDepth + 0.5)
+		reach = math.min(GLASS_REACH + lead, face.Distance + MovementConfig.Parkour.VaultMaxDepth + 0.5)
 		if math.abs(face.Normal.Y) < MovementConfig.Parkour.WallNormal then
 			local square = Vector3.new(-face.Normal.X, 0, -face.Normal.Z)
 			if square.Magnitude > 0.2 and square.Unit:Dot(look) > math.cos(math.rad(60)) then
@@ -524,12 +538,12 @@ local function panesAhead(character, root)
 			end
 		end
 	end
-	local centre = at + forward * (reach / 2)
+	local centre = at + forward * ((reach - GLASS_BACK) / 2)
 	local overlap = OverlapParams.new()
 	overlap.FilterType = Enum.RaycastFilterType.Include
 	overlap.FilterDescendantsInstances = { map }
 	local panes = {}
-	local found = workspace:GetPartBoundsInBox(CFrame.lookAt(centre, centre + forward), Vector3.new(width, height, reach), overlap)
+	local found = workspace:GetPartBoundsInBox(CFrame.lookAt(centre, centre + forward), Vector3.new(width, height, reach + GLASS_BACK), overlap)
 	for _, part in ipairs(found) do
 		if Parkour.IsBreakable(part) then
 			table.insert(panes, part)
@@ -729,6 +743,74 @@ function MovementService.Clear()
 		folder:Destroy()
 		folder = nil
 	end
+end
+
+--------------------------------------------------------------------------------
+-- Sprinting, for everyone else to see
+--------------------------------------------------------------------------------
+
+-- MatchService owns the sprint (it is a factor in walk speed, and the stamina ledger can take it off),
+-- but until now nothing about it left the server: other clients saw a body running a little faster
+-- and nothing else (#89). applySpeed, which is where every sprint, crouch, slide and exhaustion change
+-- ends up, hands its verdict here, and this publishes it as character attribute `Sprinting` (true or
+-- absent) for GunPoseClient to lower the gun from, the way the first-person gun dips (#13).
+--
+-- The attribute must never outlive the sprint on a body that can't be sprinting: dead, or sat in a seat
+-- (every vehicle seats you). applySpeed returns early for a dead humanoid, so it can't be trusted to clear
+-- it then — the humanoid's own Died and Seated signals do, from the moment the attribute is first set.
+-- Keyed strongly (a weak key would drop a live humanoid) and let go when the humanoid dies or leaves.
+local sprintWatched = {}
+
+-- Pure: whether a body sprinting by MatchService's account should be drawn sprinting.
+function MovementService.SprintPoseWanted(humanoid, sprinting)
+	return sprinting == true and humanoid ~= nil and humanoid.Health > 0 and not humanoid.Sit
+end
+
+local function clearSprintPose(humanoid)
+	local character = humanoid.Parent
+	if character and character:GetAttribute("Sprinting") ~= nil then
+		character:SetAttribute("Sprinting", nil)
+	end
+end
+
+local function unwatchSprint(humanoid)
+	local connections = sprintWatched[humanoid]
+	sprintWatched[humanoid] = nil
+	for _, connection in ipairs(connections or {}) do
+		connection:Disconnect()
+	end
+end
+
+-- Returns whether the body is now drawn sprinting. Writes the attribute only when it changes, since
+-- applySpeed runs on every boost, toggle and exhaustion flip.
+function MovementService.SetSprintPose(humanoid, sprinting)
+	local character = humanoid and humanoid.Parent
+	if not character then
+		return false
+	end
+	local wanted = MovementService.SprintPoseWanted(humanoid, sprinting)
+	if (character:GetAttribute("Sprinting") == true) ~= wanted then
+		character:SetAttribute("Sprinting", wanted or nil)
+	end
+	if wanted and not sprintWatched[humanoid] then
+		sprintWatched[humanoid] = {
+			humanoid.Died:Connect(function()
+				clearSprintPose(humanoid)
+				unwatchSprint(humanoid)
+			end),
+			humanoid.Seated:Connect(function(active)
+				if active then
+					clearSprintPose(humanoid)
+				end
+			end),
+			humanoid.AncestryChanged:Connect(function()
+				if not humanoid:IsDescendantOf(game) then
+					unwatchSprint(humanoid)
+				end
+			end),
+		}
+	end
+	return wanted
 end
 
 --------------------------------------------------------------------------------

@@ -81,7 +81,7 @@ for _, key in ipairs({
 	"reloads", "flees", "hunts", "searches", "coverSearches", "coverFound", "coverReached",
 	"lootBlacklisted", "combatReplans", "badMoves", "sprints", "slides", "dangerDodges", "coverRouted",
 	"launcherShots", "launcherMisses", "coverUnreachable", "crouches", "lootIgnored", "lootFarReach",
-	"coverShots",
+	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate",
 }) do
 	STATS[key] = STATS[key] or 0
 end
@@ -587,8 +587,8 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 end
 
 -- The living combatants, looked up once per think tick for every bot to share: token, character, root,
--- humanoid and the root's position at the time. Positions are at most one half-tick (0.125 s) old;
--- line of sight always uses the live root.
+-- humanoid and the root's position at the time. Positions are at most one think slice old
+-- (BotThinkInterval / THINK_SLICES); line of sight always uses the live root.
 local combatantList = {}
 
 local function refreshCombatants()
@@ -620,14 +620,18 @@ local FRONT_CONE_COS = math.cos(math.rad(75))
 -- How long being shot marks the shooter as the threat that outranks everything else.
 local THREAT_WINDOW = 3
 
+-- Returns visible, computed, entry: `entry` is the cache row, which findTarget also uses to keep
+-- the barricade test (coverBetween) on the same cadence as the sight ray it follows.
 local function sightOf(bot, head, token, character, now)
 	local entry = bot.sight[token]
 	if entry and not entry.visible and now - entry.at < SIGHT_CACHE_SECONDS then
-		return false, false
+		return false, false, entry
 	end
+	STATS.sightChecks += 1
 	local visible = hasLineOfSight(head, character, bot.character)
-	bot.sight[token] = { at = now, visible = visible }
-	return visible, true
+	entry = { at = now, visible = visible }
+	bot.sight[token] = entry
+	return visible, true, entry
 end
 
 -- A player's bullet does not pass through a barricade: it takes a bite out of it and stops
@@ -640,6 +644,7 @@ local function coverBetween(bot, head, targetRoot)
 	if not (CombatService.StructureFromPart and CombatService.DamageStructure) then
 		return nil
 	end
+	STATS.coverChecks += 1
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { bot.character }
@@ -711,14 +716,27 @@ local function findTarget(bot, root, head, now)
 	local look = flatLook(root)
 	local fresh = 0
 	for _, candidate in ipairs(candidates) do
-		local visible, computed = sightOf(bot, head, candidate.token, candidate.character, now)
+		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now)
 		if computed then
 			fresh += 1
 		end
 		if not visible and candidate.distance <= 120 then
 			-- Hidden by a barricade rather than by the world: engage, and the shots go into the cover.
-			local structure = coverBetween(bot, head, candidate.root)
-			if structure then
+			-- The barricade ray is cast when the sight ray is (or once, for a row made while the
+			-- target was out past 120), and its answer kept on the sight row for as long as that
+			-- "can't see them" is (SIGHT_CACHE_SECONDS). It used to be cast again for every
+			-- cached hidden candidate the loop passed, outside the LOS_CHECKS_PER_THINK budget: in a
+			-- crowd (#126) up to 12 rays a think (3 sight, 3 barricade, 6 cached rows), now at most 6.
+			-- tools/perf_bot_cost.py counts it (7.5 -> 6.0 a think on average, all hidden).
+			local structure
+			if computed or entry.cover == nil then
+				structure = coverBetween(bot, head, candidate.root)
+				entry.cover = structure or false
+			else
+				structure = entry.cover
+			end
+			-- A cached barricade that has since been shot down no longer hides anyone.
+			if structure and structure.Parent then
 				candidate.throughCover = structure
 				visible = true
 			end
@@ -889,7 +907,7 @@ end
 -- or 28` is a genuine fallback for a mode argument that failed to carry one; this had no such excuse,
 -- since KingOfTheHill.hillRadius always exists. A future resize (#121, bigger maps) now reaches the
 -- bots' fan-out automatically instead of silently drifting the ring away from the real hill radius.
-local HILL_RADIUS = (GameModes.Modes.KingOfTheHill and GameModes.Modes.KingOfTheHill.hillRadius) or 28
+local HILL_RADIUS = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("ObjectiveZone")).Radius(GameModes.Modes.KingOfTheHill) -- one source with the drawn ring, #93
 local HILL_SPREAD = 0.55 -- bots stand this share of the hill radius out from its centre, spread round it
 local RALLY_RANGE = 80 -- friendlies this close count as the squad
 local RALLY_GAP = 40 -- further than this from the squad, go to it before pushing
@@ -2352,6 +2370,134 @@ local function isUnderArmed(bot)
 end
 BotService.IsUnderArmed = isUnderArmed
 
+--------------------------------------------------------------------------------
+-- BOT VEHICLES (armed vehicles: VehicleWeapons, Shared/VehicleWeaponData)
+--------------------------------------------------------------------------------
+-- Bots never drove. Now a few may: a bot already in a fight that finds an empty armed vehicle close
+-- by walks to it and gets in, then drives at its target (circling once it is close) and fires the
+-- mount through VehicleWeapons.Fire, the very function a player's trigger reaches, with the same
+-- driver, rate, ammo and team checks. The target is findTarget's, so line of sight is the one
+-- every bot already uses. While a bot drives, updateBot stops at the hook; once it gets out (nobody to
+-- shoot for a while, or the vehicle wrecked) it carries on as a bot on foot. The server steps a
+-- vehicle with no player at the wheel from its seat's ThrottleFloat/SteerFloat (VehicleService.step).
+
+local BOT_DRIVERS_MAX = 3        -- bots behind a wheel at once, across the match
+local BOT_BOARD_SEEK = 45        -- an armed vehicle this close may be taken
+local BOT_BOARD_CHANCE = 0.35    -- chance, every BOT_BOARD_EVERY seconds of a fight, that a bot looks
+local BOT_BOARD_EVERY = 3
+local BOT_BOARD_WALK = 7         -- seconds walking to the vehicle before giving up on it
+local BOT_DRIVE_IDLE = 10        -- seconds with nobody to shoot before getting out
+local BOT_DRIVE_CIRCLE = 45      -- closer than this, circle the target rather than drive at it
+local BOT_STEER_FULL = math.rad(35)
+
+-- Bot record -> true while it drives. STRONG keys; pruned by botDriverCount as bots get out or die.
+local botDrivers = {}
+
+local function botDriverCount()
+	local count = 0
+	for driver in pairs(botDrivers) do
+		local humanoid = driver.humanoid
+		if humanoid and humanoid.Health > 0 and humanoid.SeatPart then
+			count += 1
+		else
+			botDrivers[driver] = nil
+		end
+	end
+	return count
+end
+
+local function leaveVehicle(bot, humanoid, seat)
+	if seat:IsA("VehicleSeat") then
+		seat.ThrottleFloat = 0
+		seat.SteerFloat = 0
+	end
+	humanoid.Sit = false
+	botDrivers[bot] = nil
+end
+
+-- Returns true when this think was spent in (or getting into) an armed vehicle.
+local function botVehicleThink(bot, humanoid, root, head, now)
+	local VehicleWeapons = lazy("VehicleWeapons")
+	if not VehicleWeapons then
+		return false
+	end
+	local seat = humanoid.SeatPart
+	if seat then
+		local vehicle = VehicleWeapons.DrivenBy(bot)
+		if not vehicle or vehicle:GetAttribute("Wrecked") or not vehicle.PrimaryPart then
+			leaveVehicle(bot, humanoid, seat)
+			return false
+		end
+		botDrivers[bot] = true
+		local candidate = findTarget(bot, root, head, now)
+		if candidate then
+			bot.driveSeenAt = now
+			bot.driveGoal = nil
+			VehicleWeapons.Fire(bot, candidate.root.Position)
+		elseif now - (bot.driveSeenAt or now) > BOT_DRIVE_IDLE then
+			leaveVehicle(bot, humanoid, seat)
+			return false
+		end
+		local chassis = vehicle.PrimaryPart
+		local goal = candidate and candidate.root.Position or bot.driveGoal
+		if not goal or flatDistance(goal, chassis.Position) < 20 then
+			goal = stormGoal(chassis.Position)
+			bot.driveGoal = goal
+		end
+		local localGoal = chassis.CFrame:PointToObjectSpace(goal)
+		local distance = math.sqrt(localGoal.X * localGoal.X + localGoal.Z * localGoal.Z)
+		-- Positive is to the left, as the mount's yaw.
+		local heading = math.atan2(-localGoal.X, -localGoal.Z)
+		if candidate and distance < BOT_DRIVE_CIRCLE then
+			-- Keep them off to one side and keep moving: a parked car is the easiest thing to hit.
+			heading -= bot.strafeDir * math.rad(80)
+		end
+		local throttle = distance < 15 and 0.4 or 1
+		local steer = math.clamp(-heading / BOT_STEER_FULL, -1, 1)
+		if math.abs(heading) > math.rad(125) and not candidate then
+			-- Behind: back round rather than drive a wide loop.
+			throttle, steer = -0.6, -steer
+		end
+		seat.ThrottleFloat = throttle
+		seat.SteerFloat = steer
+		return true
+	end
+
+	botDrivers[bot] = nil
+	local boarding = bot.boarding
+	if boarding then
+		if now > boarding.giveUpAt or boarding.seat.Occupant or not boarding.seat:IsDescendantOf(workspace) then
+			bot.boarding = nil
+			return false
+		end
+		if VehicleWeapons.BotBoard(humanoid, boarding.seat) then
+			bot.boarding = nil
+			bot.driveSeenAt = now
+			botDrivers[bot] = true
+			return true
+		end
+		humanoid:MoveTo(boarding.seat.Position)
+		return true
+	end
+
+	-- Only in a fight, only now and then, and only while there's room behind a wheel.
+	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	if not fighting or now < (bot.boardCheckAt or 0) then
+		return false
+	end
+	bot.boardCheckAt = now + BOT_BOARD_EVERY
+	if math.random() > BOT_BOARD_CHANCE or botDriverCount() >= BOT_DRIVERS_MAX then
+		return false
+	end
+	local _, freeSeat = VehicleWeapons.FreeArmedNear(root.Position, BOT_BOARD_SEEK)
+	if not freeSeat then
+		return false
+	end
+	bot.boarding = { seat = freeSeat, giveUpAt = now + BOT_BOARD_WALK }
+	humanoid:MoveTo(freeSeat.Position)
+	return true
+end
+
 local function updateBot(bot)
 	local humanoid = bot.humanoid
 	if not humanoid or humanoid.Health <= 0 or not bot.character.Parent then
@@ -2412,6 +2558,11 @@ local function updateBot(bot)
 		end
 	end
 	bot.lastHealth = humanoid.Health
+
+	-- BOT VEHICLES (section above): at the wheel of an armed vehicle, or walking to one.
+	if botVehicleThink(bot, humanoid, root, head, now) then
+		return
+	end
 
 	-- Slow out-of-combat regen: the fallback for a bot with no heal items left.
 	if humanoid.Health < humanoid.MaxHealth and now - bot.lastCombatAt > MatchConfig.BotRegenDelay then
@@ -3096,8 +3247,15 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 	return spawned
 end
 
--- Bots think every BotThinkInterval, but not all in the same frame: they are split into two halves
--- that take turns every half interval, which halves the worst frame without slowing anyone down.
+-- Bots think every BotThinkInterval, but not all in the same frame: they are split into
+-- THINK_SLICES groups that take turns, one group every BotThinkInterval / THINK_SLICES, so each bot
+-- still thinks once an interval and the worst frame carries 1/THINK_SLICES of the bots. It was two
+-- halves (#113/#126/#131): at 50 bots that put 25 thinks in one frame, now 13; at 30, 15 -> 8.
+-- tools/perf_bot_cost.py runs this loop and counts thinks per frame; tools/perf_tick_probe.lua
+-- measures the worst frame in Studio.
+local THINK_SLICES = 4
+BotService.ThinkSlices = THINK_SLICES
+
 function BotService.Start()
 	if running then
 		return
@@ -3107,18 +3265,19 @@ function BotService.Start()
 	local generation = loopGeneration
 
 	task.spawn(function()
-		local half = 0
+		local slice = 0
 		while running and generation == loopGeneration do
-			task.wait(MatchConfig.BotThinkInterval / 2)
+			task.wait(MatchConfig.BotThinkInterval / THINK_SLICES)
 			if not running or generation ~= loopGeneration then
 				break
 			end
 			local started = os.clock()
+			local startedWall = tick()
 			BotNav.Pump()
 			refreshCombatants()
 			local updated = 0
 			for index, bot in ipairs(bots) do
-				if index % 2 == half then
+				if index % THINK_SLICES == slice then
 					updated += 1
 					bot.branch = "idle"
 					local began = os.clock()
@@ -3126,17 +3285,27 @@ function BotService.Start()
 					if not ok then
 						warn("[BotService] Bot update failed: " .. tostring(err))
 					end
-					-- Where the think time goes, for tools/bot_probe.lua.
+					-- Where the think time goes, for tools/bot_probe.lua; the slowest single think and
+					-- its branch, for tools/perf_tick_probe.lua (the 42.6 ms tick is still unexplained).
+					local took = os.clock() - began
 					local key = "time_" .. bot.branch
-					STATS[key] = (STATS[key] or 0) + (os.clock() - began)
+					STATS[key] = (STATS[key] or 0) + took
+					if took > STATS.maxBotUpdate then
+						STATS.maxBotUpdate = took
+						-- Not in STATS: bot_probe subtracts every STATS value, so it holds numbers only.
+						BotService.MaxBotBranch = bot.branch
+					end
 				end
 			end
-			half = 1 - half
+			slice = (slice + 1) % THINK_SLICES
 			local spent = os.clock() - started
 			STATS.thinkTime += spent
 			STATS.thinkTicks += 1
 			STATS.updates += updated
 			STATS.maxTick = math.max(STATS.maxTick, spent)
+			-- os.clock() is CPU time in Roblox (COORDINATION.md); the wall-clock figure beside it says
+			-- whether a long tick was work or a yield inside a think.
+			STATS.maxTickWall = math.max(STATS.maxTickWall, tick() - startedWall)
 		end
 	end)
 end

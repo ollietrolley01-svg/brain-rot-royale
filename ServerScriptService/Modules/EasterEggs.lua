@@ -395,15 +395,41 @@ local DIGITS = {
 	["7"] = { "#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..." },
 }
 
+-- #42. This used to be a scoreboard on two poles: the digits and nothing else to look at. Now it is
+-- a monument: a stepped plinth with a plaque, the board framed, lit so it carries at night, and in
+-- front of it the joke itself, a pair of big cartoon gloves on pedestals weighing the air out of
+-- step with each other. The whole thing stays inside the 14-stud footprint it always had.
 local function sixSeven(model, origin)
 	local pixel = 2.2
 	local lime = Color3.fromRGB(150, 255, 90)
-	local boardY = 16
+	local dark = Color3.fromRGB(26, 28, 34)
+	local metal = Color3.fromRGB(60, 60, 66)
+	local stone = Color3.fromRGB(150, 148, 142)
+	local glove = Color3.fromRGB(246, 246, 250)
+	-- Two studs higher than it was, so the gloves in front never cover the digits from head height.
+	local boardY = 18
 
-	for _, x in ipairs({ -12, 12 }) do
-		piece(model, Vector3.new(1.4, boardY, 1.4), origin * CFrame.new(x, boardY / 2, 0.6), Color3.fromRGB(60, 60, 66), Enum.Material.Metal)
+	-- The plinth: two steps, the lower one wide enough to carry the pedestals out front.
+	piece(model, Vector3.new(24, 1.2, 11), origin * CFrame.new(0, 0.6, -1.5), stone:Lerp(Color3.new(0, 0, 0), 0.15), Enum.Material.Concrete)
+	piece(model, Vector3.new(22, 0.8, 9), origin * CFrame.new(0, 1.6, -1.5), stone, Enum.Material.Concrete)
+	local plaque = decor(piece(model, Vector3.new(8, 0.9, 0.3), origin * CFrame.new(0, 0.6, -7.1), Color3.fromRGB(180, 150, 90), Enum.Material.Metal))
+	sign(plaque, "SIX SEVEN", Color3.fromRGB(60, 46, 20), nil, { Enum.NormalId.Front })
+
+	for _, x in ipairs({ -10, 10 }) do
+		piece(model, Vector3.new(1.4, boardY - 1.8, 1.4), origin * CFrame.new(x, 1.8 + (boardY - 1.8) / 2, 0.6), metal, Enum.Material.Metal)
 	end
-	local board = piece(model, Vector3.new(28, 19, 1), origin * CFrame.new(0, boardY, 0), Color3.fromRGB(26, 28, 34))
+	local board = piece(model, Vector3.new(27.6, 19, 1), origin * CFrame.new(0, boardY, 0), dark)
+	light(board, lime, 22, 1.3)
+	-- The frame stands proud of the board front and back. Top and bottom rails run a fifth past the
+	-- board's ends (the board lost that much width to keep the frame inside the footprint); the side
+	-- rails stop inside them, a tenth in from the board's edge and a fifth shallower, so no rail
+	-- shares a face with another or with the board.
+	for _, y in ipairs({ boardY - 9.5, boardY + 9.5 }) do
+		piece(model, Vector3.new(28, 1, 1.8), origin * CFrame.new(0, y, -0.2), metal, Enum.Material.Metal)
+	end
+	for _, x in ipairs({ -13.45, 13.45 }) do
+		piece(model, Vector3.new(0.9, 18.8, 1.6), origin * CFrame.new(x, boardY, -0.2), metal, Enum.Material.Metal)
+	end
 
 	for digitIndex, digit in ipairs({ "6", "7" }) do
 		local offsetX = (digitIndex == 1 and -1 or 1) * 6.6
@@ -415,6 +441,37 @@ local function sixSeven(model, origin)
 						lime, Enum.Material.Neon))
 				end
 			end
+		end
+	end
+
+	-- The gloves, palms up, one over each pedestal. Each sways as a unit (see `sway`) and the two are
+	-- half a beat apart, so one rises as the other drops. At rest a glove's cuff hangs 1.35 over its
+	-- pedestal's cap and it bobs 0.8, so it never dips into it.
+	for _, side in ipairs({ -1, 1 }) do
+		local x = side * 6
+		column(model, 1.6, 2.6, origin * CFrame.new(x, 2.8, -3.5), stone, Enum.Material.Concrete)
+		decor(column(model, 0.35, 2.9, origin * CFrame.new(x, 3.675, -3.5), lime, Enum.Material.Neon))
+
+		local hand = origin * CFrame.new(x, 6.75, -3.5)
+		local parts = {
+			piece(model, Vector3.new(3.4, 1, 3), hand, glove),
+		}
+		for index, fx in ipairs({ -1.2, -0.4, 0.4, 1.2 }) do
+			-- Fingers curl up a little, the middle two longest, so the palm reads as a cupped hand.
+			local reach = (index == 2 or index == 3) and 2.1 or 1.8
+			table.insert(parts, piece(model, Vector3.new(0.72, 0.8, reach), hand * CFrame.new(fx, 0.12, -1.5 - reach / 2 + 0.35) * CFrame.Angles(math.rad(16), 0, 0),
+				glove))
+		end
+		table.insert(parts, piece(model, Vector3.new(0.8, 0.8, 1.7), hand * CFrame.new(-side * 1.9, 0.2, -0.6) * CFrame.Angles(math.rad(10), side * math.rad(35), 0), glove))
+		-- The cuff, a round collar at the wrist, clearly wider than the palm is thick.
+		table.insert(parts, piece(model, Vector3.new(1.1, 3.1, 3.1), hand * CFrame.new(0, 0, 1.95) * CFrame.Angles(0, math.pi / 2, 0),
+			glove:Lerp(Color3.new(0, 0, 0), 0.08), nil, Enum.PartType.Cylinder))
+		local hull = sway(model, parts, 0.8, 2.4, side == 1 and math.pi or 0)
+		if hull then
+			hull:SetAttribute("IntentionalFloat", true)
+		end
+		for _, part in ipairs(parts) do
+			part:SetAttribute("IntentionalFloat", true)
 		end
 	end
 
@@ -770,8 +827,11 @@ local function sweaterArrest(model, origin)
 		end
 		local pane = piece(model, Vector3.new(2.6, 2.8, 0.3), house * CFrame.new(cx, cy, F + 0.05), glass, Enum.Material.Glass)
 		pane.Transparency = 0.3
-		decor(piece(model, Vector3.new(0.24, 2.8, 0.4), house * CFrame.new(cx, cy, F - 0.25), trim, Enum.Material.Wood))
-		decor(piece(model, Vector3.new(2.6, 0.24, 0.2), house * CFrame.new(cx, cy, F - 0.15), trim, Enum.Material.Wood))
+		-- The cross bar stands in front of the glass rather than into it (it used to reach 0.05 into
+		-- the pane, sharing the pane's top, bottom and end faces), and the rail sits a clear 0.06
+		-- behind the upright's back so the two never share a face where they cross.
+		decor(piece(model, Vector3.new(0.24, 2.8, 0.4), house * CFrame.new(cx, cy, F - 0.3), trim, Enum.Material.Wood))
+		decor(piece(model, Vector3.new(2.6, 0.24, 0.2), house * CFrame.new(cx, cy, F - 0.26), trim, Enum.Material.Wood))
 		piece(model, Vector3.new(3.8, 0.4, 0.9), house * CFrame.new(cx, cy - 2.0, F - 0.2), cream:Lerp(Color3.new(0, 0, 0), 0.25), Enum.Material.Concrete)
 		for _, side in ipairs({ -1, 1 }) do
 			decor(piece(model, Vector3.new(0.8, 3.2, 0.35), house * CFrame.new(cx + side * 2.15, cy, F - 0.225), Color3.fromRGB(60, 90, 110), Enum.Material.Wood))
@@ -805,7 +865,9 @@ local function sweaterArrest(model, origin)
 	end
 	local door = piece(model, Vector3.new(4.4, 2.6, 0.4), carAt * CFrame.new(-0.6, 2.4, -3.4) * CFrame.Angles(0, math.rad(-58), 0), squad)
 	decor(piece(model, Vector3.new(4.2, 0.6, 0.6), door.CFrame * CFrame.new(0, -0.05, 0), navy))
-	decor(piece(model, Vector3.new(2.2, 1.1, 0.6), door.CFrame * CFrame.new(0.3, 0.6, 0), Color3.fromRGB(120, 160, 190), Enum.Material.Glass))
+	-- The window stops a clear 0.055 above the stripe and under the door's top: it used to overlap
+	-- the stripe, and the two, both 0.6 deep, shared their front and back faces there.
+	decor(piece(model, Vector3.new(2.2, 0.95, 0.6), door.CFrame * CFrame.new(0.3, 0.78, 0), Color3.fromRGB(120, 160, 190), Enum.Material.Glass))
 	-- Bumpers, lights, grille, plates, mirrors and an aerial.
 	for _, endX in ipairs({ -1, 1 }) do
 		piece(model, Vector3.new(0.6, 0.7, 5.4), carAt * CFrame.new(endX * 6.2, 1.5, 0), Color3.fromRGB(60, 60, 66), Enum.Material.Metal)
@@ -837,8 +899,9 @@ local function sweaterArrest(model, origin)
 			decor(piece(model, Vector3.new(1.2, 0.5, 1.7), at * CFrame.new(leg, 0.25, -0.25), black))
 		end
 		local torso = piece(model, Vector3.new(2.8, 3.4, 1.7), at * CFrame.new(0, 4.9, 0), navy, Enum.Material.Fabric)
-		decor(piece(model, Vector3.new(3.0, 0.5, 1.9), at * CFrame.new(0, 3.45, 0), Color3.fromRGB(18, 18, 22), Enum.Material.Fabric))
-		decor(piece(model, Vector3.new(0.5, 0.36, 0.2), at * CFrame.new(0, 3.45, -1.05), brass, Enum.Material.Metal))
+		-- The belt hangs 0.07 below the torso's bottom rather than level with it.
+		decor(piece(model, Vector3.new(3.0, 0.5, 1.9), at * CFrame.new(0, 3.38, 0), Color3.fromRGB(18, 18, 22), Enum.Material.Fabric))
+		decor(piece(model, Vector3.new(0.5, 0.36, 0.2), at * CFrame.new(0, 3.38, -1.05), brass, Enum.Material.Metal))
 		decor(piece(model, Vector3.new(0.5, 0.9, 0.7), at * CFrame.new(-side * 1.75, 3.3, 0.2), black))
 		decor(piece(model, Vector3.new(0.6, 0.7, 0.2), at * CFrame.new(-0.8, 5.6, -0.95), brass, Enum.Material.Metal))
 		decor(piece(model, Vector3.new(0.5, 1.7, 0.2), at * CFrame.new(0.1, 5.5, -0.95), Color3.fromRGB(16, 20, 34), Enum.Material.Fabric))
@@ -858,7 +921,8 @@ local function sweaterArrest(model, origin)
 			for _, s in ipairs({ -1, 1 }) do
 				decor(piece(model, Vector3.new(0.72, 0.5, 0.2), head * CFrame.new(s * 0.4, 0.12, -0.95), black, Enum.Material.SmoothPlastic))
 			end
-			decor(piece(model, Vector3.new(0.3, 0.2, 0.2), head * CFrame.new(0, 0.12, -0.93), black, Enum.Material.SmoothPlastic))
+			-- The bridge sits 0.08 behind the lenses' fronts (it was 0.02, and shimmered).
+			decor(piece(model, Vector3.new(0.3, 0.2, 0.2), head * CFrame.new(0, 0.12, -0.87), black, Enum.Material.SmoothPlastic))
 			decor(piece(model, Vector3.new(0.7, 0.2, 0.2), head * CFrame.new(0, -0.4, -0.92), Color3.fromRGB(120, 66, 62)))
 		else
 			cartoonEyes(model, head, 0.36, 0.1, -0.82, 0.62)
@@ -894,7 +958,9 @@ local function sweaterArrest(model, origin)
 	-- The sweater: heavy-set, hands cuffed behind him, chin down, sweating. The game's own cartoon
 	-- eyes, so he reads as one of ours rather than as anybody in particular.
 	for _, leg in ipairs({ -1.1, 1.1 }) do
-		piece(model, Vector3.new(1.5, 2.6, 1.5), lean * CFrame.new(leg, 1.3, 0), Color3.fromRGB(70, 74, 88), Enum.Material.Fabric)
+		-- The leg starts a tenth up inside the shoe, so the two soles are not one face (the lean lifts
+		-- the toes clear of the grass, where that face shows).
+		piece(model, Vector3.new(1.5, 2.5, 1.5), lean * CFrame.new(leg, 1.35, 0), Color3.fromRGB(70, 74, 88), Enum.Material.Fabric)
 		decor(piece(model, Vector3.new(1.7, 0.6, 2.4), lean * CFrame.new(leg, 0.3, -0.4), Color3.fromRGB(40, 38, 44)))
 	end
 	local belly = sphere(model, Vector3.new(6, 4.6, 4.4), lean * CFrame.new(0, 4.6, 0), red, Enum.Material.Fabric)

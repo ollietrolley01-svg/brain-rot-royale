@@ -24,6 +24,11 @@
 -- `projectile` makes the gun fire a real round instead of a hitscan shot: its kind in
 -- Ballistics.Rounds ("rocket", "grenade", ...) says how it flies, and ProjectileService flies it.
 -- `damage` and `splashRadius` are then the round's blast.
+--
+-- `explosiveAmmo = { damage, radius, wallDamage }` makes a hitscan gun's bullets go off where they stop
+-- (#122): a small blast through ProjectileService's own, so it falls off to a fifth at the edge, is
+-- stopped by cover, and holes walls within half its radius for `wallDamage`, once per wall. The victim
+-- the bullet struck is inside it too, so keep `damage` well below the gun's own.
 
 local WeaponData = {}
 
@@ -478,6 +483,11 @@ WeaponData.Weapons = {
 		pellets = 1,
 		ability = "goldRush",
 		goldRushBonus = 150,
+		-- A cannon fires shells (#122). Small on purpose: 12 at the centre over a 5-stud radius, so the
+		-- struck player's body shot plus the blast (both x CombatDamageScale) still comes to about 96
+		-- and leaves them standing, as the comment on `damage` above wants. What it adds is splash on
+		-- whoever is beside them, and a wall it hits taking the shell as well as the bullet.
+		explosiveAmmo = { damage = 12, radius = 5, wallDamage = 60 },
 		groundWeight = 0,
 		chestWeight = 1,
 	},
