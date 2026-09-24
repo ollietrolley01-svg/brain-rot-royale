@@ -55,7 +55,10 @@
 -- When a wall, floor or roof part breaks, everything hanging off it goes too: the panes set into
 -- it shatter, and its trim (sills, shutters, frames, cornices, signs, lights) is removed rather
 -- than left floating where the wall used to be. Trim is found by overlap with the broken part,
--- walking the building's own children, so nothing is registered ahead of time.
+-- walking the building's own children, so nothing is registered ahead of time. Solid pieces that
+-- hang off the structure (ATTACHED: balconies and their rails, stair railings, ridge caps, coping,
+-- stair soffits and headers) go the same way unless another structural part still holds them, and
+-- break properly as they go: debris, and whatever rested on them is told.
 --
 -- A blast that goes off on open ground also takes a small bite out of the terrain (craterAt),
 -- capped per map and never on a road, paving or water, or under anything built.
@@ -88,6 +91,17 @@ local HEALTH = {
 	Table = 55,
 	Shelf = 55,
 	WindowGlass = 1,
+	-- Solid pieces fixed to the structure (#56): shootable on their own, and they come down with
+	-- whatever holds them up (ATTACHED below) instead of hanging in the air.
+	Balcony = 150,
+	BalconyRail = 60,
+	Railing = 80,
+	RidgeCap = 120,
+	Coping = 100,
+	StairSoffit = 200,
+	StairHeader = 160,
+	Dock = 300,
+	Bumper = 60,
 }
 
 -- How tough each tagged kind is for its size and material. 1 is a plain prop; a parked car is cover
@@ -97,7 +111,7 @@ local KINDS = {
 	Rock = 1.3, Log = 1, Stump = 1, Cairn = 1, Picnic = 0.8,
 	Shelter = 1.6, Wreck = 1.5, Container = 2.2,
 	Car = 1.8, Bench = 0.8, Bin = 0.7, Hydrant = 1.2, Planter = 0.8, Umbrella = 0.4, Lamp = 1,
-	RoofProp = 1, Prop = 1,
+	RoofProp = 1, Prop = 1, Sign = 0.8,
 }
 DestructibleService.Kinds = KINDS
 
@@ -142,7 +156,13 @@ local MAX_POOL_SPAN = 90
 local FX_PER_POOL = 10
 
 -- Structure whose breaking takes the panes and trim attached to it along.
-local CARRIES_DRESSING = { Wall = true, Floor = true, Roof = true, Gable = true, Parapet = true }
+local CARRIES_DRESSING = { Wall = true, Floor = true, Roof = true, Gable = true, Parapet = true, Stair = true, Balcony = true }
+-- Solid pieces that hang off the structure rather than hold anything up. They fall with their
+-- host the way trim does, and never count as what holds something else up.
+local ATTACHED = {
+	Balcony = true, BalconyRail = true, Railing = true, RidgeCap = true, Coping = true,
+	StairSoffit = true, StairHeader = true,
+}
 -- How far apart two parts may be and still count as attached: trim sits a hair off its wall.
 local ATTACH_MARGIN = 0.35
 -- A pane only overlaps the wall bands round its opening by a tenth of a stud.
@@ -408,6 +428,9 @@ end
 -- through trim resting on trim that fell (flowers in a flower box that lost its wall), and no
 -- further. Only the building's own loose parts count; props that are models of their own (an
 -- explosive barrel) keep all their pieces.
+-- Defined further down, beside the rest of the breaking; dropDressing needs them for solid pieces.
+local queueFx, tellBroken
+
 local function dropDressing(part, from)
 	local building = part.Parent
 	if not building or not CARRIES_DRESSING[part.Name] then
@@ -419,7 +442,7 @@ local function dropDressing(part, from)
 	local function heldBySolid(trim)
 		for _, other in ipairs(children) do
 			if not gone[other] and other:IsA("BasePart") and other.CanCollide and other.Name ~= DestructibleService.GlassName
-				and attached(other, trim, ATTACH_MARGIN) then
+				and not ATTACHED[other.Name] and attached(other, trim, ATTACH_MARGIN) then
 				return true
 			end
 		end
@@ -437,7 +460,8 @@ local function dropDressing(part, from)
 						gone[other] = true
 						breakPane(other, from)
 					end
-				elseif isTrim(other) and attached(current, other, ATTACH_MARGIN) and not heldBySolid(other) then
+				elseif (isTrim(other) or (ATTACHED[other.Name] and other.CanCollide))
+					and attached(current, other, ATTACH_MARGIN) and not heldBySolid(other) then
 					gone[other] = true
 					table.insert(queue, other)
 				end
@@ -447,6 +471,11 @@ local function dropDressing(part, from)
 
 	for trim in pairs(gone) do
 		if trim ~= part and trim.Parent and trim.Name ~= DestructibleService.GlassName then
+			if trim.CanCollide then
+				-- A solid piece: whatever rests on it settles, and it breaks like anything else.
+				tellBroken(trim.CFrame, trim.Size)
+				queueFx(trim, from)
+			end
 			trim:Destroy()
 		end
 	end
@@ -534,7 +563,7 @@ end
 local FX_PER_FRAME = 60
 local pendingFx = nil
 
-local function queueFx(part, from)
+queueFx = function(part, from)
 	if not pendingFx then
 		pendingFx = {}
 		task.defer(function()
@@ -549,7 +578,7 @@ local function queueFx(part, from)
 	end
 end
 
-local function tellBroken(cframe, size)
+tellBroken = function(cframe, size)
 	if DestructibleService.PartBrokenEnabled then
 		for _, listener in ipairs(partBrokenListeners) do
 			task.spawn(listener, cframe, size)

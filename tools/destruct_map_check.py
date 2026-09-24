@@ -388,6 +388,25 @@ local slabB = part(map, "Part", Vector3.new(60, 1, 60), Vector3.new(600, 0, 0))
 slabA:SetAttribute("Destructible", "Rock:BIG"); slabB:SetAttribute("Destructible", "Rock:BIG")
 out.hugeDealt = DS.Damage(slabA, 1e6)
 
+-- 4b. Solid attachments (#56): a balcony and its rail come down with the wall that holds them,
+-- and a ridge cap stays while either roof slab still holds it, then goes with the last one.
+local house2 = Instance.new("Model"); house2.Name = "House_2"; house2.Parent = map
+local wall2 = part(house2, "Wall", Vector3.new(20, 10, 1), Vector3.new(700, 5, 0), { Material = Enum.Material.Brick })
+local balcony = part(house2, "Balcony", Vector3.new(6, 0.5, 3.2), Vector3.new(700, 8, -2.1), { Material = Enum.Material.Concrete })
+local rail = part(house2, "BalconyRail", Vector3.new(6, 1.4, 0.25), Vector3.new(700, 9, -3.6), { Material = Enum.Material.Metal })
+local roofA = part(house2, "Roof", Vector3.new(10, 1, 10), Vector3.new(695, 20, 0), { Material = Enum.Material.Slate })
+local roofB = part(house2, "Roof", Vector3.new(10, 1, 10), Vector3.new(705, 20, 0), { Material = Enum.Material.Slate })
+local ridge = part(house2, "RidgeCap", Vector3.new(1, 0.5, 10), Vector3.new(700, 20.75, 0), { Material = Enum.Material.Slate })
+out.balconyShootable = DS.FromPart(balcony) ~= nil and DS.FromPart(ridge) ~= nil
+local toldBefore = told
+DS.Damage(wall2, 1e6)
+out.balconyFell = balcony.Parent == nil and rail.Parent == nil
+out.balconyTold = told - toldBefore
+DS.Damage(roofA, 1e6)
+out.ridgeHeld = ridge.Parent ~= nil
+DS.Damage(roofB, 1e6)
+out.ridgeFell = ridge.Parent == nil
+
 -- 5. Craters: 100 blasts on open grass; then on asphalt; then over a building; then a new Map.
 mock.fills = {}
 local grass = { Instance = workspace.Terrain, Position = Vector3.new(0, 0, 0), Material = Enum.Material.Grass }
@@ -416,6 +435,7 @@ return out
 
 SERVICE_DEDUPE = ("\t\tif key and not seen[key] then\n\t\t\tseen[key] = true\n", "\t\tif key then\n")
 SERVICE_NEVER = ("local NEVER = {\n", "local NEVER = {}\nlocal _unusedNever = {\n")
+SERVICE_ATTACHED = ("(isTrim(other) or (ATTACHED[other.Name] and other.CanCollide))", "isTrim(other)")
 SERVICE_CAP = ("\tif craterCount >= CRATER_CAP then\n\t\treturn false\n\tend\n", "")
 
 
@@ -447,6 +467,10 @@ def service(faults=(), quiet=False):
     r.append(check(all(x == 0 for x in excluded) and not out["bridgeFrom"] and not out["groundFloorFrom"],
                    "bridge, road, ground floor, lobby, unanchored and oversized pools take nothing (6 examined)"))
     r.append(check(out["upperFloorDealt"] == 50, "control: an upper floor still takes damage"))
+    r.append(check(out["balconyShootable"], "a balcony and a ridge cap can be shot on their own"))
+    r.append(check(out["balconyFell"] and out["balconyTold"] >= 3,
+                   "a broken wall takes its balcony and rail down, and says so (%d told)" % out["balconyTold"]))
+    r.append(check(out["ridgeHeld"] and out["ridgeFell"], "a ridge cap stays while one roof slab holds it, goes with the last"))
     r.append(check(out["craters"] == out["craterCap"], "craters capped per Map (%d of 100 blasts)" % out["craters"]))
     r.append(check(out["craterMaxRadius"] <= 4.5, "crater radius at most 4.5 studs"))
     r.append(check(out["asphaltCraters"] == 0 and out["builtCraters"] == 0, "no crater on asphalt or under something built"))
@@ -554,6 +578,7 @@ def main():
             ("per-blast dedupe removed", lambda: service([SERVICE_DEDUPE], quiet=True)),
             ("NEVER table emptied", lambda: service([SERVICE_NEVER], quiet=True)),
             ("crater cap removed", lambda: service([SERVICE_CAP], quiet=True)),
+            ("solid attachments left hanging", lambda: service([SERVICE_ATTACHED], quiet=True)),
             ("client total cap removed", lambda: client([CLIENT_CAP, CLIENT_CAP2], quiet=True)),
             ("client settle/lifetime backstop removed", lambda: client([CLIENT_LIFE], quiet=True)),
         ]
