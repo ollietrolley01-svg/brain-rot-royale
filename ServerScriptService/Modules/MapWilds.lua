@@ -11,7 +11,11 @@
 --              yuccas, fan palms and apple trees, each built to read as its species from a distance;
 --   ground     ferns, grass tufts, flower clumps, mushrooms, shrubs, meadows, hedgerows, dry-stone
 --              field walls and orchards, and patches of long grass where they read as deliberate --
---              the skirts of the woods, the river banks and the ground beside a shelter;
+--              the skirts of the woods, the river banks and the ground beside a shelter; hedges
+--              along the country roads and reeds along both river banks;
+--   the fill   an even layer over all the open ground (saplings, shrubs, tufts, a few full trees
+--              and rocks) on blue noise, denser on slopes, in hollows and in groves, so no stretch
+--              of the map between the towns is left bare (Oliver 09-24);
 --   shelters   lean-tos, campsites, log cabins, stone bothies, beach huts, metal shacks, pole barns,
 --              palapas, ruins, rock overhangs, deer stands, concrete pipes and roadside bus shelters.
 --              Some are spaced along the routes between towns, so cover is never far off the road.
@@ -37,10 +41,9 @@
 --   * NO GLOBAL RNG. Everything rolls on a Random seeded from ctx.seed, so adding or tuning a
 --     feature here never shifts a roll anywhere else on the map. Nothing here adds loot.
 --   * A PART BUDGET. Each map gets about BUDGET_PER_RADIUS parts per stud of radius, shared out
---     by phase so shelters and woods always get built before the ground clutter. It is a CEILING,
---     not a target: measured, the build stops growing at about 12 per stud because the attempt
---     counts below (stands, single trees, undergrowth) run out first, so raising the budget alone
---     changes nothing. Raise the counts to get more foliage; raise the budget to let them spend.
+--     by phase so shelters and woods always get built before the ground clutter. The fill runs
+--     last and is sized to what is left (up to the profile's fillTo share of it), so the budget
+--     is what the wilds come to: raising it raises the fill everywhere at once, evenly.
 --
 -- API:
 --   MapWilds.Build(map, ctx) -> { model, parts, seconds, counts = { trees, undergrowth, shelters, byKind } }
@@ -63,6 +66,14 @@ local MapWilds = {}
 -- Agreed with claude-79 (00:55) against the measured curve: 7.5 is the density we can defend on
 -- part count, and it is raised later with numbers rather than taste.
 MapWilds.BUDGET_PER_RADIUS = 12
+
+-- The even base layer of foliage over the whole map (Build's step 8). A switch so a harness can show
+-- what the map looks like without it (tools/foliage_map.py's "nofill" fault).
+local FILL_ENABLED = true
+-- Its grid: one candidate point in each FILL_SPACING-stud square, and the parts one taken point
+-- costs on average (measured over all five maps), which is how the budget left is shared out.
+local FILL_SPACING = 13
+local FILL_COST = 3.4
 
 -- Trunks, posts and walls start this far underground, like MapDecor's, so a slope never leaves
 -- one standing on air on its low side.
@@ -713,6 +724,45 @@ local function shrub(parent, p, s, color)
 		local at = p + Vector3.new(rand(-1.4, 1.4) * s, 0, rand(-1.4, 1.4) * s)
 		soft(ball(parent, "Shrub", Vector3.new(at.X, groundY(at.X, at.Z, p.Y) + size * 0.25, at.Z), size,
 			green:Lerp(rgb(0, 0, 0), index * 0.05), Enum.Material.Grass), true)
+	end
+end
+
+-- A young tree for the even base layer (the fill in Build): the green dot a whole tree reads as from
+-- a distance, at a fifth of its parts. A broadleaf is a trunk and one crown (2 parts), its underside
+-- held at HEAD_CLEAR like every solid crown here; a spruce is a trunk and one soft skirt you walk
+-- through (5 parts). Stands on the point, sunk like the full trees.
+local function sapling(parent, p, s, greens, conifer, snowy)
+	if conifer then
+		column(parent, "Trunk", p - Vector3.new(0, SINK + footDrop, 0), SINK + footDrop + 7 * s, 0.9 * s, BARKS[2], Enum.Material.Wood)
+		local color = pick(SPRUCE_NEEDLES)
+		if snowy then
+			color = color:Lerp(SNOW, 0.45)
+		end
+		for _, piece in ipairs(pyramid(parent, "Needles", CFrame.new(p + Vector3.new(0, 0.6 * s, 0)) * CFrame.Angles(0, rand(0, math.pi / 2), 0),
+			rand(6.5, 8) * s, rand(8, 10) * s, color, Enum.Material.Grass)) do
+			soft(piece, true)
+		end
+		return
+	end
+	local height = rand(5.5, 7.5) * s
+	column(parent, "Trunk", p - Vector3.new(0, SINK + footDrop, 0), height + SINK + footDrop, 0.9 * s, pick(BARKS), Enum.Material.Wood)
+	local size = rand(6.5, 8.5) * s
+	local centreY = math.max(p.Y + height + size * 0.3, p.Y + HEAD_CLEAR + size / 2)
+	ball(parent, "Leaves", Vector3.new(p.X, centreY, p.Z), size, leafColor(greens or OAK_LEAVES), Enum.Material.Grass)
+end
+
+sapling = grouped("Tree", sapling)
+
+-- Reeds at the water's edge: a tuft's three blades drawn tall, thin and sedge-coloured.
+local REED = rgb(122, 142, 74)
+local function reeds(parent, p, s)
+	local turn = rand(0, math.pi * 2)
+	for index = 1, 3 do
+		local height = rand(4.2, 6.2) * s
+		soft(block(parent, "Reed", Vector3.new(0.34 * s, height, 0.1 + index * 0.02),
+			CFrame.new(p) * CFrame.Angles(0, turn + index * 2.1 + rand(-0.2, 0.2), 0) * CFrame.Angles(math.rad(rand(4, 16)), 0, rand(-0.1, 0.1))
+				* CFrame.new(rand(-0.4, 0.4), height / 2 - 0.4 - index * 0.11, 0),
+			REED:Lerp(rgb(190, 170, 100), rand(0, 0.35)), Enum.Material.Grass))
 	end
 end
 
@@ -1573,57 +1623,68 @@ MapWilds.ShelterKinds = SHELTERS
 
 local GRASS_TUFT = rgb(104, 138, 64)
 
+-- Per base material. Besides the species and kinds by weight: `woods` scales the number of stands;
+-- `fillTo` is the share of the part budget the even fill (Build's step 8) may bring the wilds up
+-- to; `fillCover` weights the fill's ground cover (cheap pieces first) and `fillTrees` the share of
+-- its points that grow a tree; `verges` is the chance a stretch of country road gets a hedge run.
 local PROFILES = {
 	[Enum.Material.Grass] = {
 		trees = { oak = 5, birch = 3, spruce = 2, dead = 0.5 },
-		woods = 1.0, scattered = 1.0,
+		woods = 1.0, fillTo = 1.0,
 		shelters = { leanTo = 3, cabin = 2, ruin = 2, rockShelter = 1.5, deerStand = 1, campsite = 2 },
 		clearing = { campsite = 2, leanTo = 2, deerStand = 1, ruin = 0.7 },
 		undergrowth = { fern = 3, flowers = 3, tuft = 2, mushrooms = 1, shrub = 1.2 },
 		clutter = { log = 1.5, stump = 1, boulder = 1, picnic = 0.35 },
 		flowers = "meadow", tuft = GRASS_TUFT, meadows = 1.0, stoneWalls = 0.3, hedgerows = 0.2,
+		verges = 0.55, fillCover = { shrub = 3, tuft = 3, flowers = 1.5, fern = 1, mushrooms = 0.3 },
 		rock = { color = rgb(122, 118, 110), material = Enum.Material.Rock, moss = true },
 	},
 	[Enum.Material.Ground] = {
 		trees = { birch = 3, dead = 3, oak = 2, spruce = 0.5 },
 		-- The downtown map has the least open ground between its towns, so what there is gets more.
-		woods = 0.9, scattered = 1.0, treeScale = 0.85, shelterScale = 1.5, coverScale = 1.5,
+		woods = 0.9, fillTo = 1.0, treeScale = 0.85, shelterScale = 1.5,
 		shelters = { shack = 3, pipes = 2.5, concreteRuin = 2, wreck = 2.5, leanTo = 1, campsite = 0.7, rockShelter = 0.5 },
 		clearing = { campsite = 1, leanTo = 2, shack = 1 },
 		undergrowth = { tuft = 4, shrub = 2, flowers = 0.7, fern = 0.5 },
 		clutter = { log = 1, stump = 1.2, boulder = 1 },
 		flowers = "weeds", tuft = rgb(128, 132, 78), meadows = 0.3, stoneWalls = 0, hedgerows = 0,
+		verges = 0.35, fillCover = { tuft = 4, shrub = 3, flowers = 0.5 },
 		rock = { color = rgb(128, 122, 114), material = Enum.Material.Rock, moss = false },
 	},
 	[Enum.Material.Sand] = {
 		trees = { acacia = 3, yucca = 3, fanPalm = 3 },
-		woods = 0.5, scattered = 0.45,
+		-- 0.88: the beach map had the most parts before the fill and keeps to them (#121).
+		woods = 0.5, fillTo = 0.88,
 		shelters = { palapa = 2.5, beachHut = 2, sandstoneRuin = 2, sandstoneShelter = 2.5, driftwoodLeanTo = 1, campsite = 1, upturnedBoat = 2, wreck = 1 },
 		clearing = { palapa = 2, campsite = 1.5, driftwoodLeanTo = 1 },
 		undergrowth = { tuft = 4, shrub = 2 },
 		clutter = { log = 0.6, boulder = 2 },
 		flowers = "meadow", tuft = rgb(184, 170, 112), shrubColor = rgb(124, 132, 76), logColor = rgb(186, 172, 150),
 		meadows = 0, stoneWalls = 0, hedgerows = 0,
+		-- No hedges on a beach; its fill is dune grass and scrub, and a few more trees than elsewhere.
+		verges = 0, fillCover = { tuft = 3, shrub = 3 }, fillTrees = 0.2,
 		rock = { color = rgb(196, 164, 120), material = Enum.Material.Sandstone, moss = false },
 	},
 	[Enum.Material.Rock] = {
 		trees = { spruce = 6, dead = 1.5, birch = 1 },
-		woods = 1.0, scattered = 1.0, flatScale = 1.8, shelterScale = 1.3,
+		woods = 1.0, fillTo = 0.93, flatScale = 1.8, shelterScale = 1.3,
 		shelters = { bothy = 3, slateShelter = 3, ruin = 2, leanTo = 1.5, campsite = 1.5, deerStand = 0.7 },
 		clearing = { campsite = 2, leanTo = 2, bothy = 1 },
 		undergrowth = { tuft = 2, flowers = 2, fern = 1, shrub = 1 },
 		clutter = { log = 2, stump = 1.5, boulder = 3, cairn = 1 },
 		flowers = "heather", tuft = rgb(138, 128, 84), meadows = 0.4, stoneWalls = 0.8, hedgerows = 0,
+		verges = 0.25, fillCover = { tuft = 3, shrub = 2, flowers = 2, fern = 0.5 }, fillTrees = 0.2,
 		rock = { color = rgb(104, 102, 100), material = Enum.Material.Slate, moss = false },
 	},
 	[Enum.Material.LeafyGrass] = {
 		trees = { oak = 4, apple = 2, birch = 1.5 },
-		woods = 0.7, scattered = 1.0,
+		woods = 0.7, fillTo = 1.0,
 		shelters = { poleBarn = 3, leanTo = 1.5, cabin = 1.5, ruin = 1, deerStand = 1.5, campsite = 1, wreck = 0.5 },
 		clearing = { campsite = 1.5, leanTo = 1.5, deerStand = 1.5 },
 		undergrowth = { flowers = 3, tuft = 3, fern = 1, shrub = 1, mushrooms = 0.5 },
 		clutter = { log = 1, stump = 1, boulder = 1, picnic = 0.5 },
 		flowers = "meadow", tuft = rgb(112, 146, 66), meadows = 1.3, stoneWalls = 0.5, hedgerows = 1.0, orchards = 1.0, autumn = 0.3,
+		verges = 0.75, fillCover = { shrub = 3, tuft = 3, flowers = 2, fern = 0.5 },
 		rock = { color = rgb(122, 118, 110), material = Enum.Material.Rock, moss = true },
 	},
 }
@@ -1773,7 +1834,7 @@ function MapWilds.Build(map, ctx)
 	-- Groups of scattered things (a stand of trees, a meadow, a hedgerow) aren't structures with a
 	-- floor: the footing audit skips them. Shelters carry their footprint instead (placeShelter).
 	local SCATTER = { Woods = true, Trees = true, Clutter = true, GroundCover = true, Meadow = true, Hedgerow = true, StoneWall = true,
-		Orchard = true, Grass = true }
+		Orchard = true, Grass = true, Fill = true, Reeds = true, Verge = true }
 	local function named(prefix)
 		serial += 1
 		local m = model(root, prefix .. "_" .. serial)
@@ -1928,6 +1989,56 @@ function MapWilds.Build(map, ctx)
 	local function welcome(x, z, exponent)
 		local factor = townFactor(x, z)
 		return factor > 0 and rng:NextNumber() < factor ^ (exponent or 1)
+	end
+
+	-- The scattered foliage goes into one Model per kind per CELL_GROUP-stud cell rather than one
+	-- Model across the whole map. TeamBaseRuins.ClearSite takes away whatever map item a team's
+	-- compound lands on only when that item is under 70 studs across (its ClearableSpan), and a
+	-- map-wide "Trees" or "GroundCover" model never is: a tree standing where a base went was left
+	-- inside its walls, and SiteCost charged a site with one tuft on it as if a building stood there.
+	-- 36 studs plus the widest fill tree's crown either side (12) stays under 70.
+	local CELL_GROUP = 36
+	local cellModels = {}
+	local function cellModel(prefix, x, z)
+		local key = prefix .. "_" .. math.floor(x / CELL_GROUP) .. "_" .. math.floor(z / CELL_GROUP)
+		local m = cellModels[key]
+		if not m or not m.Parent then
+			m = named(prefix)
+			cellModels[key] = m
+		end
+		return m
+	end
+
+	-- The lie of the land, for the even base layer: ground heights on a coarse grid (cached, so each
+	-- is cast once), and from them how much more growth a spot takes -- more on a slope, where
+	-- nobody would plough, and in a hollow, where the water runs; less on a bare crest. 1 on the
+	-- level, 0.6 to 1.9 in all.
+	local RELIEF_CELL = 32
+	local reliefCache = {}
+	local function reliefAt(ix, iz)
+		local key = ix * 65536 + iz
+		local h = reliefCache[key]
+		if h == nil then
+			local y, _ = sample(ix * RELIEF_CELL, iz * RELIEF_CELL)
+			h = y or false
+			reliefCache[key] = h
+		end
+		return h
+	end
+	local function lieOfLand(x, z)
+		local ix, iz = math.floor(x / RELIEF_CELL + 0.5), math.floor(z / RELIEF_CELL + 0.5)
+		local h = reliefAt(ix, iz)
+		if not h then
+			return 0
+		end
+		local e, w, n, s = reliefAt(ix + 1, iz), reliefAt(ix - 1, iz), reliefAt(ix, iz + 1), reliefAt(ix, iz - 1)
+		if not (e and w and n and s) then
+			-- Beside water: a bank, which grows as well as anywhere.
+			return 1.2
+		end
+		local slope = math.max(math.abs(e - w), math.abs(n - s)) / (2 * RELIEF_CELL)
+		local hollow = ((e + w + n + s) / 4 - h) / 6
+		return math.clamp(1 + math.min(slope, 0.5) * 1.6 + math.clamp(hollow, -0.4, 0.4), 0.6, 1.9)
 	end
 
 	-- Which phase ran out of budget, and how often it asked after that. Without this a density
@@ -2140,8 +2251,11 @@ function MapWilds.Build(map, ctx)
 
 	-- Budget shares, cumulative: each phase may spend up to this fraction of the whole budget
 	-- including what the phases before it spent. Shelters go first because they are the cover.
-	local SHARE = { routes = 0.10, roadside = 0.13, shelters = 0.24, woods = 0.58, singles = 0.76, lines = 0.82, orchards = 0.86,
-		grass = 0.93, meadows = 0.97 }
+	-- The woods, which used to take a third of the budget in a few dozen dense stands, now stop at
+	-- a sixth, and the single trees and the ground cover that were thrown down at random
+	-- after them are one even base layer at the end (the fill), which takes whatever is left.
+	local SHARE = { routes = 0.10, roadside = 0.13, shelters = 0.24, woods = 0.40, lines = 0.45, orchards = 0.49,
+		grass = 0.52, meadows = 0.55, verges = 0.60, reeds = 0.63 }
 
 	-- 1. Shelters spaced along the routes between towns, alternating sides, so cover is never far
 	-- off the road.
@@ -2443,14 +2557,17 @@ function MapWilds.Build(map, ctx)
 	end
 
 	-- 4. Woods, placed where there's room for a real stand rather than squeezed in round the props.
-	local wantedWoods = math.max(4, math.floor(40 * area * profile.woods + 0.5))
+	-- Fewer and smaller than they were (40 stands of 40 to 78 studs per 1150 of radius): measured, the stands held most
+	-- of the map's trees in a few places and left the ground between them bare, so part of what they
+	-- spent now goes to the even layer at the end (step 8).
+	local wantedWoods = math.max(4, math.floor(20 * area * profile.woods + 0.5))
 	local builtWoods = 0
 	for _ = 1, wantedWoods * 12 do
 		if builtWoods >= wantedWoods or overBudget(SHARE.woods - 0.06) then
 			break
 		end
 		local x, z = randomPoint()
-		local R = rand(40, 78)
+		local R = rand(30, 56)
 		if open(x, z, 22) and townFactor(x, z) > 0.4 then
 			-- Enough of the ground around free?
 			local free = 0
@@ -2468,52 +2585,8 @@ function MapWilds.Build(map, ctx)
 		end
 	end
 
-	-- 5. Single trees, small groups and ground clutter between everything else.
-	local singles = math.floor(460 * area * profile.scattered)
-	local singlesModel = named("Trees")
-	local clutterModel = named("Clutter")
-	for index = 1, singles do
-		if overBudget(SHARE.singles) then
-			break
-		end
-		local x, z = randomPoint()
-		local y, material = sample(x, z)
-		if y and welcome(x, z) then
-			local kind, snowy = treeKindFor(material)
-			if kind then
-				local s = rand(0.8, 1.3) * (profile.treeScale or 1)
-				local reach = TREES[kind].reach * s
-				if open(x, z, reach + 4) and steady(x, z, y, 2.6, 3) then
-					space:AddCircle(x, z, reach)
-					TREES[kind].build(singlesModel, Vector3.new(x, y, z), s, snowy)
-					footDrop = 0
-					counts.trees += 1
-					count(kind)
-					-- A little undergrowth at its foot.
-					-- Inside the tree's own claim (reach), which was free of everything before it went down.
-					for _ = 1, rng:NextInteger(1, 3) do
-						local angle = rand(0, math.pi * 2)
-						local d = rand(math.min(3, reach * 0.5), reach * 0.8)
-						local ux, uz = x + math.cos(angle) * d, z + math.sin(angle) * d
-						undergrowthAt(singlesModel, ux, uz, weighted(profile.undergrowth))
-					end
-				end
-			end
-		end
-		if index % 3 == 0 then
-			local cx, cz = randomPoint()
-			local kind = weighted(profile.clutter)
-			local spec = CLUTTER[kind]
-			local cy, cmaterial = sample(cx, cz)
-			if cy and not BARE[cmaterial] and welcome(cx, cz) and open(cx, cz, spec.reach + 1) and steady(cx, cz, cy, spec.footing, spec.rise) then
-				space:AddCircle(cx, cz, spec.reach)
-				clutterAt(clutterModel, kind, Vector3.new(cx, cy, cz), cmaterial)
-			end
-		end
-		if index % 40 == 0 then
-			task.wait()
-		end
-	end
+	-- 5. The single trees, small groups and ground clutter that used to be thrown down at random here
+	-- are the even base layer now (step 8), which puts them down evenly instead of in random heaps.
 
 	-- Hedgerows and dry-stone walls: long, low lines of cover across the fields.
 	local function linear(kind, wanted)
@@ -2636,7 +2709,6 @@ function MapWilds.Build(map, ctx)
 	-- nothing and stops nothing -- it's cover for the eye only.
 	do
 		local grassColor = (profile.tuft or GRASS_TUFT):Lerp(rgb(126, 176, 84), 0.3)
-		local grassModel = named("Grass")
 		local function patch(x, z, spread)
 			if overBudget(SHARE.grass) then
 				return false
@@ -2647,8 +2719,11 @@ function MapWilds.Build(map, ctx)
 				local angle = rand(0, math.pi * 2)
 				local px, pz = x + math.cos(angle) * r, z + math.sin(angle) * r
 				local y, material = sample(px, pz)
-				if y and not BARE[material] and townFactor(px, pz) > 0 then
-					grassClump(grassModel, Vector3.new(px, y, pz), rand(0.85, 1.25), grassColor)
+				-- open(): a clump asks the roads and the claims like everything else. It didn't, and a
+				-- patch at the skirt of a stand beside a road put long grass in the road's corridor
+				-- (tools/foliage_map.py measured 60 blades in one on Tralala Town).
+				if y and not BARE[material] and townFactor(px, pz) > 0 and open(px, pz, 1) then
+					grassClump(cellModel("Grass", px, pz), Vector3.new(px, y, pz), rand(0.85, 1.25), grassColor)
 					put += 1
 				end
 			end
@@ -2660,7 +2735,7 @@ function MapWilds.Build(map, ctx)
 		end
 		-- The skirt of each stand, where the canopy thins and the light gets in.
 		for _, stand in ipairs(woodsSpots) do
-			for _ = 1, rng:NextInteger(2, 4) do
+			for _ = 1, rng:NextInteger(1, 2) do
 				local angle = rand(0, math.pi * 2)
 				local r = stand.r * rand(0.92, 1.18)
 				if not patch(stand.x + math.cos(angle) * r, stand.z + math.sin(angle) * r, rand(7, 12)) then
@@ -2677,7 +2752,8 @@ function MapWilds.Build(map, ctx)
 			if length > 1 then
 				along = along.Unit
 				local side = Vector3.new(-along.Z, 0, along.X)
-				local step = 44
+				-- Every 88 studs, not 44: the reeds (step 7b) line both banks now, at a third of the parts.
+				local step = 88
 				for travelled = step / 2, length, step do
 					local at = a + along * travelled
 					local offset = (river.width or 34) / 2 + rand(16, 26)
@@ -2694,14 +2770,11 @@ function MapWilds.Build(map, ctx)
 			local r = rand(13, 19)
 			patch(at.X + math.cos(angle) * r, at.Z + math.sin(angle) * r, rand(5, 9))
 		end
-		if #grassModel:GetChildren() == 0 then
-			grassModel:Destroy()
-		end
 	end
 	task.wait()
 
 	-- 7. Meadows and scattered ground cover last: they claim nothing, so nothing waits on them.
-	local wantedMeadows = math.floor(20 * area * (profile.meadows or 0) + 0.5)
+	local wantedMeadows = math.floor(12 * area * (profile.meadows or 0) + 0.5)
 	for _ = 1, wantedMeadows * 6 do
 		if wantedMeadows <= 0 or overBudget(SHARE.meadows) then
 			break
@@ -2709,35 +2782,275 @@ function MapWilds.Build(map, ctx)
 		local x, z = randomPoint()
 		local R = rand(22, 42)
 		if welcome(x, z) and open(x, z, R * 0.5) then
-			local m = named("Meadow")
+			-- Into the cell models (see cellModel), so a team base landing on a meadow can clear it.
+			local put = 0
 			for _ = 1, rng:NextInteger(9, 16) do
 				local r = R * math.sqrt(rng:NextNumber())
 				local angle = rand(0, math.pi * 2)
 				local ux, uz = x + math.cos(angle) * r, z + math.sin(angle) * r
-				if open(ux, uz, 1.5) then
-					undergrowthAt(m, ux, uz, chance(0.7) and "flowers" or "tuft")
+				if open(ux, uz, 1.5) and undergrowthAt(cellModel("Meadow", ux, uz), ux, uz, chance(0.7) and "flowers" or "tuft") then
+					put += 1
 				end
 			end
-			if #m:GetChildren() == 0 then
-				m:Destroy()
-			else
+			if put > 0 then
 				count("meadow")
 			end
 			wantedMeadows -= 1
 		end
 	end
 
-	local groundModel = named("GroundCover")
-	for index = 1, math.floor(380 * area * (profile.coverScale or 1)) do
-		if overBudget(1) then
-			break
+	-- 7a. Hedgerows along the roads: broken runs of hedge just past each road's graded corridor, the
+	-- way a country lane is lined. Soft, like the shrubs, so a car pulling off the road, a bot or a
+	-- player goes straight through, and never near a bridge, a controlled junction's sight lines or
+	-- a town, whose verges are its own.
+	if roads and roads.edges and roads.WithinCorridor and (profile.verges or 0) > 0 then
+		local HEDGE_STEP = 4.2
+		local hedgeGreens = profile.shrubColor and { profile.shrubColor } or OAK_LEAVES
+		for _, corridor in ipairs(corridors) do
+			if overBudget(SHARE.verges) then
+				break
+			end
+			local edge = corridor.edge
+			local from, to = corridor.a, corridor.b
+			local flat = Vector3.new(to.X - from.X, 0, to.Z - from.Z)
+			local length = flat.Magnitude
+			if edge and length > 80 then
+				local along = flat.Unit
+				for _, sign in ipairs({ 1, -1 }) do
+					local side = Vector3.new(-along.Z, 0, along.X) * sign
+					-- How far this side's corridor reaches, found at the middle of the edge: the hedge
+					-- stands three studs past it.
+					local mid = from + along * (length / 2)
+					local out = (roads.Width or 18) / 2 + 8
+					while out < 44 and roads:WithinCorridor(mid.X + side.X * out, mid.Z + side.Z * out) do
+						out += 2
+					end
+					out += 3
+					local t = rand(40, 70)
+					while t < length - 40 do
+						local run = rng:NextInteger(5, 12)
+						if chance(profile.verges) then
+							for k = 0, run - 1 do
+								local s = t + k * HEDGE_STEP
+								local clear = s < length - 40
+								for _, span in ipairs(edge.bridges or {}) do
+									local s0, s1 = span.s0 or span[1], span.s1 or span[2]
+									if s0 and s1 and s > s0 - 40 and s < s1 + 40 then
+										clear = false
+									end
+								end
+								local p = from + along * s + side * (out + rand(-0.8, 0.8))
+								for _, position in ipairs(controlled) do
+									if (position.X - p.X) ^ 2 + (position.Z - p.Z) ^ 2 < 70 * 70 then
+										clear = false
+									end
+								end
+								-- Inside the road's own claim, which reaches well past its graded corridor, so
+								-- asked with that claim set aside (as a bus shelter is) and the corridor --
+								-- this road's or any other's -- checked here instead.
+								if clear and townFactor(p.X, p.Z) > 0.15 and not roads:WithinCorridor(p.X, p.Z)
+									and open(p.X, p.Z, 2.5, edge.claim) then
+									local y, material = sample(p.X, p.Z)
+									if y and not BARE[material] then
+										local size = rand(4.6, 6)
+										soft(ball(cellModel("Verge", p.X, p.Z), "Hedge", Vector3.new(p.X, y + size * 0.3, p.Z),
+											size, pick(hedgeGreens):Lerp(rgb(0, 0, 0), rand(0.04, 0.12)), Enum.Material.Grass), true)
+									end
+								end
+							end
+						end
+						t += run * HEDGE_STEP + rand(14, 44)
+					end
+				end
+			end
 		end
-		local x, z = randomPoint()
-		if welcome(x, z) and open(x, z, 1.5) then
-			undergrowthAt(groundModel, x, z, weighted(profile.undergrowth))
+	end
+
+	-- 7b. Reeds along both banks of the river, between the edge of the river's own claim (MapTerrain
+	-- claims width / 2 + 8 either side) and the top of its sand beach (width / 2 + 14).
+	local river = ctx.river
+	if river and river.points then
+		local half = (river.width or 34) / 2
+		for index = 1, #river.points - 1 do
+			if overBudget(SHARE.reeds) then
+				break
+			end
+			local a, b = river.points[index], river.points[index + 1]
+			local flat = Vector3.new(b.X - a.X, 0, b.Z - a.Z)
+			local length = flat.Magnitude
+			if length > 1 then
+				local along = flat.Unit
+				local side = Vector3.new(-along.Z, 0, along.X)
+				for travelled = rand(0, 6), length, 11 do
+					for _, sign in ipairs({ 1, -1 }) do
+						local p = a + along * travelled + side * sign * (half + rand(8.5, 13))
+						if chance(0.62) and townFactor(p.X, p.Z) > 0 and open(p.X, p.Z, 1) then
+							local y, material = sample(p.X, p.Z)
+							if y and not BARE[material] then
+								noShadow = true
+								reeds(cellModel("Reeds", p.X, p.Z), Vector3.new(p.X, y, p.Z), rand(0.85, 1.2))
+								noShadow = false
+								counts.undergrowth += 1
+							end
+						end
+					end
+				end
+			end
 		end
-		if index % 90 == 0 then
-			task.wait()
+	end
+	task.wait()
+
+	-- 8. The even base layer (Oliver 09-24: "spread the foliage more across the map"). Measured
+	-- before this (tools/foliage_map.py, five maps, three seeds each), much of the open ground had no
+	-- foliage at all, in bare stretches hundreds of studs across, while the woods and meadows piled
+	-- their parts up elsewhere. So what used to be thrown down at random -- the single trees, the
+	-- rocks and logs, the ground cover -- goes down here instead, on blue noise: a jittered grid with
+	-- a minimum spacing, visited in a shuffled order. Whether a point takes something is the budget
+	-- left spread over all the points, times how welcome growth is there: the lie of the land
+	-- (lieOfLand), a slow noise that makes groves and open stretches without ever reaching nothing,
+	-- and a short fade in from each town's edge. Shuffled, a budget that runs short thins the whole
+	-- map evenly rather than leaving whichever side came last bare. Mostly cheap pieces (a shrub or a
+	-- sapling is 2 parts, a tuft 3), so it covers the ground for the parts the stands used to heap up.
+	if FILL_ENABLED then
+		local spacing = FILL_SPACING * (profile.fillSpacing or 1)
+		local points = {}
+		for gx = -limit, limit, spacing do
+			for gz = -limit, limit, spacing do
+				local x, z = gx + rand(0, spacing), gz + rand(0, spacing)
+				if x * x + z * z <= limit * limit then
+					table.insert(points, { x, z })
+				end
+			end
+		end
+		for i = #points, 2, -1 do
+			local j = rng:NextInteger(1, i)
+			points[i], points[j] = points[j], points[i]
+		end
+		local noiseSeed = rand(0, 1000)
+		local function grove(x, z)
+			local n = math.noise(x / 230, z / 230, noiseSeed) + 0.5 * math.noise(x / 90, z / 90, noiseSeed + 17)
+			return math.clamp(0.5 + n * 0.8, 0, 1)
+		end
+		-- Growth starts 20 studs out from a town's edge and is full 50 studs further on: a town's
+		-- outskirts are green, not a bare ring 130 studs wide round every town.
+		local function nearTown(x, z)
+			local nearest = math.huge
+			for _, centre in ipairs(centers) do
+				local dx, dz = centre.X - x, centre.Z - z
+				nearest = math.min(nearest, dx * dx + dz * dz)
+			end
+			return math.clamp((math.sqrt(nearest) - townSpread - 20) / 50, 0, 1)
+		end
+		-- The minimum spacing that makes the jittered grid blue noise: taken points are kept in a hash
+		-- of spacing-sized cells and checked against the nine round them.
+		local minGap = spacing * 0.55
+		local taken = {}
+		local function crowded(x, z)
+			local cx, cz = math.floor(x / spacing), math.floor(z / spacing)
+			for dx = -1, 1 do
+				for dz = -1, 1 do
+					for _, other in ipairs(taken[(cx + dx) * 65536 + cz + dz] or {}) do
+						if (other[1] - x) ^ 2 + (other[2] - z) ^ 2 < minGap * minGap then
+							return true
+						end
+					end
+				end
+			end
+			return false
+		end
+		local function take(x, z)
+			local key = math.floor(x / spacing) * 65536 + math.floor(z / spacing)
+			taken[key] = taken[key] or {}
+			table.insert(taken[key], { x, z })
+		end
+		-- Each point's weight first, so the budget left can be shared out over their total: a point
+		-- takes something with the chance its weight gives it, and the whole layer comes out at about
+		-- the budget left whatever share of the map is town, water or claimed.
+		local weights, total = {}, 0
+		for index, point in ipairs(points) do
+			local x, z = point[1], point[2]
+			local g = grove(x, z)
+			local weight = nearTown(x, z)
+			if weight > 0 then
+				weight *= lieOfLand(x, z) * (0.35 + 0.9 * g)
+			end
+			weights[index] = weight
+			point[3] = g
+			total += weight
+			if index % 2000 == 0 then
+				task.wait()
+			end
+		end
+		local fillTo = profile.fillTo or 1
+		local chanceEach = math.max(0, budget * fillTo - partCount) / (math.max(1, total) * FILL_COST)
+		local fillTrees = profile.fillTrees or 0.16
+		local cover = profile.fillCover or profile.undergrowth
+		for index, point in ipairs(points) do
+			if overBudget(fillTo) then
+				break
+			end
+			local x, z, g = point[1], point[2], point[3]
+			local want = weights[index] * chanceEach
+			if want > 0 and rng:NextNumber() < want and not crowded(x, z)
+				and not (MapTerrain and MapTerrain.PadNear and MapTerrain.PadNear(x, z, 1)) then
+				local y, material = sample(x, z)
+				if y and not BARE[material] then
+					local roll = rng:NextNumber()
+					local treeShare = fillTrees * (0.4 + 1.2 * g)
+					local placed = false
+					if roll < treeShare then
+						local kind, snowy = treeKindFor(material)
+						if kind then
+							local young = (kind == "oak" or kind == "birch" or kind == "spruce" or kind == "apple") and chance(0.6)
+							local s = young and rand(0.85, 1.15) or rand(0.75, 1) * (profile.treeScale or 1)
+							local reach = young and 4.5 or TREES[kind].reach * s
+							if open(x, z, reach + 3) and steady(x, z, y, 2.6, 3) then
+								space:AddCircle(x, z, reach)
+								local m = cellModel("Fill", x, z)
+								if young then
+									local greens = (kind == "birch" and BIRCH_LEAVES) or (kind == "apple" and APPLE_LEAVES) or OAK_LEAVES
+									sapling(m, Vector3.new(x, y, z), s, greens, kind == "spruce", snowy)
+								else
+									TREES[kind].build(m, Vector3.new(x, y, z), s, snowy)
+								end
+								footDrop = 0
+								counts.trees += 1
+								count(young and "sapling" or kind)
+								placed = true
+							end
+						end
+					elseif roll < treeShare + 0.06 then
+						local kind = weighted(profile.clutter)
+						local spec = CLUTTER[kind]
+						if open(x, z, spec.reach + 1) and steady(x, z, y, spec.footing, spec.rise) then
+							space:AddCircle(x, z, spec.reach)
+							clutterAt(cellModel("Fill", x, z), kind, Vector3.new(x, y, z), material)
+							placed = true
+						end
+					end
+					if not placed and open(x, z, 1.5) then
+						-- Ground cover, and now and then a second clump beside it: plants grow in
+						-- patches, not one to a grid square.
+						local m = cellModel("Fill", x, z)
+						local kind = weighted(cover)
+						placed = undergrowthAt(m, x, z, kind)
+						if placed and chance(0.35) then
+							local angle = rand(0, math.pi * 2)
+							local d = rand(2.5, 5)
+							local ux, uz = x + math.cos(angle) * d, z + math.sin(angle) * d
+							if open(ux, uz, 1.5) then
+								undergrowthAt(m, ux, uz, kind)
+							end
+						end
+					end
+					if placed then
+						take(x, z)
+					end
+				end
+			end
+			if index % 200 == 0 then
+				task.wait()
+			end
 		end
 	end
 
