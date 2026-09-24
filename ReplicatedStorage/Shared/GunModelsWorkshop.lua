@@ -109,7 +109,9 @@ Builders.YardWorkBlower = function(g, K)
 		g:cyl("StartCord", 60, 6, CF(-46, 24, 148) * A(0, 90, 0), plastic(K, 226, 226, 220))
 	end)
 	g:travel("charge", 90)
-	g:hand("ChargeHand", V(-62, 26, 120), V(0.25, -1, 0.3), V(-0.4, 0.2, 1))
+	-- Turned 0 degrees on the palm and tilted 30 so the wrist is not bent past 77 degrees working it (it was 92): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-62, 26, 120), V(0.38, -0.9, -0.21), V(-0.2, -0.31, 0.93))
 
 	-- Sights: a post on a band round the tube, an aperture on the housing, both on y = 70.
 	g:cyl("SightBand", 16, 62, CF(0, 0, -300), dark)
@@ -296,7 +298,9 @@ Builders.RageQuitCarbine = function(g, K)
 		g:box("SpacebarStem", V(10, 8, 20), CF(48, 4, 70), braid)
 	end)
 	g:travel("charge", 60)
-	g:hand("ChargeHand", V(74, 8, 70), V(-0.2, -1, 0.1), V(1, 0.2, 0))
+	-- Turned 15 degrees on the palm and tilted -30 so the wrist is not bent past 76 degrees working it (it was 108): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(74, 8, 70), V(0.33, -0.94, -0.12), V(0.94, 0.32, 0.12))
 
 	-- A red dot on a riser, its line well above the keycaps.
 	g:box("SightRail", V(26, 8, 120), CF(0, 22, -20), case)

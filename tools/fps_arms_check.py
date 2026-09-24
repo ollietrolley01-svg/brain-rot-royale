@@ -14,10 +14,10 @@ actually is (tools/fps_arms_measure.lua.txt) and holds these, every one of them 
       part, to 0.01 studs, for any bend up to a right angle;
   J3  no bone is stretched past 1.10 of its length;
   J4  the shoulder, which may come forward toward a far hand, never shows in the widest view (95 degrees);
-  J5  at the hip and aimed, no wrist bends past 85 degrees (as far as a wrist goes) between forearm and
-      hand. Not held during the reload and rack clips: there some anchors (a side charging handle reached
-      across the gun with the fingers straight down, a crossbow string taken with the fingers pointing
-      back) have no elbow at all that straightens the wrist -- `--clips` lists them;
+  J5  at every moment, the reload and rack clips included, no wrist bends past 85 degrees (as far as a
+      wrist goes) between forearm and hand. The charging-handle, crossbow-string and feed-cover anchors
+      were re-aimed on the palm for this (a side handle reached across the gun with the fingers straight
+      down, a string taken with the fingers pointing back, had no elbow at all that straightened them);
   C1  at the hip and aimed, nothing of either arm lies on the centre ray or on a ring 4% of half the
       screen's height round it, at the widest field of view (95, and 95 x 0.64 aimed) -- unless the gun is
       scoped in, when CombatClient hides the whole viewmodel;
@@ -60,7 +60,7 @@ MOMENTS = [
 ]
 HELD = ("hip", "ads")
 AIMING = ("hip", "ads", "adsFire")
-WRISTED = AIMING
+WRISTED = tuple(m[0] for m in MOMENTS)
 RIGS = ("r15", "r6", "standin")
 RING = 0.04
 
@@ -179,6 +179,9 @@ PLANTS = [
      "hand = hand * CF(0, HAND_THICKNESS / 2 - HAND_SINK, 0)", "hand = hand * CF(0, HAND_THICKNESS / 2 - HAND_SINK + 0.05, 0)"),
     ("H2 every finger with no room to close parked in the palm", "Viewmodel",
      "if shape.cap < FINGER_MIN_CLOSE and shape.blocker then", "if shape.cap < FINGER_MIN_CLOSE then"),
+    ("J5 a charging handle taken with the fingers straight down", "GunModels",
+     'g:hand("ChargeHand", V(40, 26, -80), V(0.41, -0.74, -0.53), V(0.57, -0.25, 0.78))',
+     'g:hand("ChargeHand", V(40, 26, -80), V(0.2, -1, 0.1), V(0.3, 0.2, 1))'),
     ("A1 the arms never look at the avatar again", "Viewmodel",
      "local LOOK_CHECK = 1\n", "local LOOK_CHECK = math.huge\n"),
     ("A1 copied arms lose the avatar's colour", "Viewmodel",
@@ -207,9 +210,6 @@ def main():
                                                         (" (" + hit[0] + ")") if hit else ""))
         print("planted faults caught: %d of %d" % (caught, len(PLANTS)))
         sys.exit(0 if caught == len(PLANTS) else 1)
-    if "--clips" in sys.argv:
-        global WRISTED
-        WRISTED = tuple(m[0] for m in MOMENTS)
     faults, examined, guns = run(repo, src)
     known = [f for f in faults if (f.split()[0], f.split()[1], f.split()[4].rstrip(":")) in KNOWN]
     seen = {(f.split()[0], f.split()[1], f.split()[4].rstrip(":")) for f in known}

@@ -1396,7 +1396,9 @@ local function buildAK(g)
 		g:ball("ChargingKnob", 12, CF(36, 6, -86), F.steel)
 	end)
 	g:travel("bolt", 110)
-	g:hand("ChargeHand", V(40, 26, -80), V(0.2, -1, 0.1), V(0.3, 0.2, 1))
+	-- Turned 30 degrees on the palm and tilted 30 so the wrist is not bent past 60 degrees working it (it was 98): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(40, 26, -80), V(0.41, -0.74, -0.53), V(0.57, -0.25, 0.78))
 	g:key("Eject", CF(20, 4, -113) * A(0, -75, 0))
 
 	-- Top cover: rounded, ribbed, with the latch button out the back.
@@ -1892,7 +1894,9 @@ STYLES.smg = function(g)
 		g:ball("ChargingKnob", 13, CF(-30, 44, -236), F.polymerDark)
 	end)
 	g:travel("charge", 90)
-	g:hand("ChargeHand", V(-42, 58, -240), V(0.25, -1, 0.3), V(-0.4, 0.2, 1))
+	-- Turned -90 degrees on the palm and tilted 30 so the wrist is not bent past 62 degrees working it (it was 116): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-42, 58, -240), V(-0.6, -0.36, -0.71), V(-0.77, 0, 0.64))
 	g:at(CF(0, 28, -282), function()
 		-- The base's top stops 1.5 mm under the hood's inner face rather than level with it.
 		g:box("FrontSightBase", V(26, 14.5, 26), CF(0, -2.75, 0), metal)
@@ -2054,7 +2058,9 @@ local function buildM14(g)
 		g:cyl("OpRod", 290, 9, CF(17, -8, -185), metal)
 	end)
 	g:travel("charge", 80)
-	g:hand("ChargeHand", V(40, 14, -44), V(-0.1, -1, 0.2), V(1, 0.1, 0))
+	-- Turned 60 degrees on the palm so the wrist is not bent past 67 degrees working it (it was 122): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(40, 14, -44), V(-0.03, -0.66, -0.75), V(1, -0.09, 0.04))
 	g:key("Eject", CF(18, 22, 10) * A(0, -60, 30))
 	g:box("RearSightBase", V(26, 12, 26), CF(0, 27, 74), metal)
 	for _, sx in ipairs(SIGNS) do
@@ -2530,7 +2536,9 @@ STYLES.lmg = function(g)
 		g:ball("ChargingKnob", 14, CF(48, 0, -170), F.polymerDark)
 	end)
 	g:travel("charge", 110)
-	g:hand("ChargeHand", V(56, 20, -164), V(-0.2, -1, 0.1), V(1, 0.2, 0))
+	-- Turned 60 degrees on the palm and tilted -30 so the wrist is not bent past 47 degrees working it (it was 112): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(56, 20, -164), V(0.42, -0.6, -0.68), V(0.89, 0.12, 0.44))
 
 	-- Feed cover, hinged at its front, with a rail and the rear sight.
 	g:group("cover", function()
@@ -2545,7 +2553,9 @@ STYLES.lmg = function(g)
 		g:aperturePlate(CF(0, 0, 0), 46, 58, metal)
 	end)
 	g:swing("cover", CF(0, 30, -175), -72)
-	g:hand("CoverHand", V(-14, 58, 20), V(0.3, -0.6, -1), V(-0.2, 1, 0))
+	-- Turned -90 degrees on the palm so the wrist is not bent past 72 degrees working it (it was 131): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("CoverHand", V(-14, 58, 20), V(0.97, 0.19, 0.17), V(-0.07, 0.85, -0.53))
 
 	-- Trigger housing, guard, grip.
 	g:box("TriggerHousing", V(34, 18, 110), CF(0, -51, 20), metal)
@@ -2953,7 +2963,9 @@ STYLES.crossbow = function(g)
 	g:prism("Riser", V(150, 44, 50), CF(0, -4, -633), 8, metal)
 	g:box("RiserBlock", V(60, 66, 40), CF(0, -30, -640), metal)
 	g:key("Muzzle", CF(0, 12, -660))
-	g:hand("ChargeHand", V(-4, 26, -50), V(0.1, -0.3, 1), V(0, 1, 0))
+	-- Turned 90 degrees on the palm so the wrist is not bent past 59 degrees working it (it was 140): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-4, 26, -50), V(1, 0, -0.1), V(0.03, 0.96, 0.28))
 
 	-- Split limbs sweeping out and back to the cams, the strings and the cables.
 	local limbFinish = finishOf(metal.color:Lerp(Color3.new(0, 0, 0), 0.25), Mat.SmoothPlastic)
@@ -3292,7 +3304,9 @@ STYLES.railgun = function(g)
 		g:ball("ChargingKnob", 12, CF(41, 8, 228), F.polymerDark)
 	end)
 	g:travel("charge", 40)
-	g:hand("ChargeHand", V(52, 22, 226), V(-0.2, -1, 0.1), V(1, 0.2, 0))
+	-- Turned 45 degrees on the palm so the wrist is not bent past 75 degrees working it (it was 116): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(52, 22, 226), V(-0.12, -0.76, -0.63), V(0.98, -0.19, 0.04))
 
 	-- Grip, guard, trigger, foregrip.
 	g:grip(V(0, -64, 14), 16, furniture, { length = 104, depth = 48, front = 22, back = 31, grooves = 3 })
