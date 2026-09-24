@@ -3734,7 +3734,9 @@ end
 -- The header gear: straight to Settings from any screen (the shell's fallback only finds a Settings
 -- destination on the SETTINGS screen itself, so on the other four the gear did nothing).
 shell.onSettings = function()
-	openTab("Settings")
+	if not (shell:IsOpen() and activeTab == "Settings") then
+		openTab("Settings")
+	end
 end
 
 -- A HUD button: open its group, or close it if that group is what is showing.
@@ -3924,7 +3926,7 @@ Remotes.Event("OpenMenuTab").OnClientEvent:Connect(function(tab)
 					codexMode = true
 				end
 				-- Walking back through the booth while reading that tab must not close it (openTab toggles).
-				if not (panel.Visible and activeTab == tab) then
+				if not (shell:IsOpen() and activeTab == tab) then
 					openTab(tab)
 				end
 				return

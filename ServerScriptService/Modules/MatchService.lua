@@ -1691,8 +1691,15 @@ local function startMatch()
 		task.spawn(function()
 			-- The opening body: state is already InProgress by the time it arrives, and without this mark
 			-- OnCharacterAdded would run the respawn path (place + kit) and PlaceAtStart below would do
-			-- it all again. Cleared once CharacterAdded has had its turn.
-			player:SetAttribute("OpeningSpawn", true)
+			-- it all again. OnCharacterAdded consumes it (under deferred signals it runs after this
+			-- thread moves on, so clearing it here would be too early); a timer clears it if it never does.
+			local openingStamp = os.clock()
+			player:SetAttribute("OpeningSpawn", openingStamp)
+			task.delay(3, function()
+				if player:GetAttribute("OpeningSpawn") == openingStamp then
+					player:SetAttribute("OpeningSpawn", nil)
+				end
+			end)
 			local ok = pcall(function()
 				player:LoadCharacter()
 			end)
@@ -1715,7 +1722,6 @@ local function startMatch()
 			end
 
 			local humanoid = character and character:WaitForChild("Humanoid", 10)
-			player:SetAttribute("OpeningSpawn", nil)
 			if not humanoid then
 				failSpawn(player)
 				return
@@ -1846,7 +1852,9 @@ function MatchService.OnCharacterAdded(player, character)
 		-- LINE a respawned player falls through to the lobby path below and is teleported to Rot
 		-- Island mid-match. Do not remove it while tidying: it is the entire respawn path.
 		-- Only once the match is running: the opening spawn is placed by startMatch's PlaceAtStart.
-		if state == "InProgress" and not player:GetAttribute("OpeningSpawn") then
+		local opening = player:GetAttribute("OpeningSpawn") ~= nil
+		player:SetAttribute("OpeningSpawn", nil)
+		if state == "InProgress" and not opening then
 			currentMode.OnRespawn(player, character)
 			-- Everything startMatch gave the opening body, the respawn body gets too - passes and the
 			-- consumable's max-health boost, the movement speed, and the event's start shield, which

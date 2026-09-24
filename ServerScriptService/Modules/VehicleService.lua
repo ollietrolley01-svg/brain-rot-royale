@@ -986,6 +986,11 @@ function VehicleService.Start()
 		if not SafeValue.Number(jump, 500) or not SafeValue.Number(speed, 500) then
 			return
 		end
+		-- Only from someone actually driving: anyone else's report is noise in the count and the log.
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if not (humanoid and humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat")) then
+			return
+		end
 		joltCount += 1
 		warn(string.format("[VehicleJolt] #%d %s: %.1f studs/s vertical jump at %.0f studs/s forward speed, ServerControl %s",
 			joltCount, player.Name, jump, speed, tostring(serverControl == true)))
