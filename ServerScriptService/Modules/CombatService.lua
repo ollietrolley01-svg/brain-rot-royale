@@ -938,6 +938,7 @@ local function sendRecap(victimToken, killerToken, weaponId)
 	end
 
 	deathRecap:FireClient(victimToken, {
+		respawnDelay = CombatService.RespawnDelay, -- set by GameMode in respawn modes (#86 M32)
 		killer = killerName,
 		weapon = not environmentFinish and describeWeapon(weaponId) or nil,
 		distance = last and last.distance or nil,

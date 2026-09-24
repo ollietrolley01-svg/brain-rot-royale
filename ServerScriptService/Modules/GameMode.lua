@@ -462,6 +462,7 @@ local function startWorld(mapInfo)
 	end
 
 	CombatService.DamageVeto = ModeTeams.DamageVeto
+	CombatService.RespawnDelay = current.respawnDelay or 5
 
 	-- BotService pcalls this and fails OPEN: anything but a literal `false` counts as hostile, so
 	-- an error here leaves today's behaviour rather than producing pacifist bots. Return the
@@ -511,6 +512,7 @@ local function stopWorld()
 	running = false
 	generation += 1
 	CombatService.DamageVeto = nil
+	CombatService.RespawnDelay = nil
 	BotService.IsHostile = nil
 	BotService.SpawnLoadout = nil
 	ModeKingOfTheHill.Stop()
