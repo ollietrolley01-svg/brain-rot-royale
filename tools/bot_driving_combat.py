@@ -286,13 +286,14 @@ def build(vw_src, data_src, bot_src, cfg_src):
             f'MOUNTS["{model}"] = {{ yaw = Vector3.new({m["yaw"][0]}, {m["yaw"][1]}, {m["yaw"][2]}), '
             f'pitch = Vector3.new({m["pitch"][0]}, {m["pitch"][1]}, {m["pitch"][2]}), '
             f'muzzle = Vector3.new({m["muzzle"][0]}, {m["muzzle"][1]}, {m["muzzle"][2]}) }}')
+    # Before Ballistics: its throwable specs build Color3 values at load time.
+    lua.execute("Color3 = { fromRGB = function() return {} end, new = function() return {} end }")
     lua.execute("MODULES.SafeValue = (function() " + luau(read("ReplicatedStorage/Shared/SafeValue.lua")) + " end)()")
     lua.execute("MODULES.Ballistics = (function() " + luau(read("ReplicatedStorage/Shared/Ballistics.lua")) + " end)()")
     lua.execute("MODULES.VehicleWeaponData = (function() " + luau(data_src) + " end)()")
     lua.execute(luau(vwc.shot_budget_source()))
     lua.execute("VW = (function() " + luau(vw_src) + " end)()")
     lua.execute("CLOCK = 1000; VW.Now = function() return CLOCK end; VW.Start()")
-    lua.execute("Color3 = { fromRGB = function() return {} end, new = function() return {} end }")
     lua.execute("MatchConfig = (function() " + luau(cfg_src) + " end)()")
     lua.execute(bot_pieces(bot_src))
     lua.execute(SCENARIOS)

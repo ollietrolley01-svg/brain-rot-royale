@@ -8,7 +8,7 @@
 
 What it runs, found by FILENAME so a new harness joins the gate the moment it lands:
   - the three repo checks: tools/balance.py, tools/lua_static_check.py, tools/verify.py
-  - every tools/*_check.py and tools/*_sim.py
+  - every tools/*_check.py and tools/*_sim.py, and the few named in EXTRA_CHECKS
   - a second run with `--plant` for every harness whose source mentions "--plant" (the convention in
     this repo: `--plant` applies each planted fault in memory and exits non-zero if one is missed)
 
@@ -41,6 +41,10 @@ TOOLS = os.path.join(ROOT, "tools")
 
 REPO_CHECKS = ["balance.py", "lua_static_check.py", "verify.py"]
 
+# Harnesses whose names don't follow the *_check.py / *_sim.py convention but that are checks all the same
+# (they exit non-zero on a failure and run their own plants). Found by name they would never run.
+EXTRA_CHECKS = ["bot_driving_combat.py"]
+
 # Checks the gate knows about but does not run. Keep each reason honest: "slow" is not a reason,
 # raise its timeout instead.
 SKIP = {
@@ -70,7 +74,7 @@ DEFAULT_TIMEOUT = 600
 
 
 def discover():
-    names = list(REPO_CHECKS)
+    names = list(REPO_CHECKS) + [name for name in EXTRA_CHECKS if os.path.exists(os.path.join(TOOLS, name))]
     for name in sorted(os.listdir(TOOLS)):
         if (name.endswith("_check.py") or name.endswith("_sim.py")) and name not in names:
             names.append(name)
