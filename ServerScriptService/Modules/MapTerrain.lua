@@ -157,7 +157,17 @@ function MapTerrain.Plateaus(terrain, parent, preset, radius, centers, townSprea
 
 		-- A zipline from the rim opposite the ramp down to the plain.
 		local away = -out
-		local rim = Vector3.new(x, height, z) + away * (size - 3)
+		-- On the rim's own ground, not the height read at the plateau's middle: the cylinder's edge is a
+		-- voxel grid, and three studs in from it the ground can already be falling away down the cliff,
+		-- which stood the post 3.5 to 4.2 studs over thin air (tools/foundation_check.py). Where the
+		-- edge falls short of the top, the post steps in until it stands on the top.
+		local inset = 3
+		local rim = Vector3.new(x, height, z) + away * (size - inset)
+		while inset < size * 0.5 and groundHeightAt(rim.X, rim.Z) < height - 0.3 do
+			inset += 2
+			rim = Vector3.new(x, height, z) + away * (size - inset)
+		end
+		rim = Vector3.new(rim.X, groundHeightAt(rim.X, rim.Z), rim.Z)
 		for _, reach in ipairs({ 110, 90, 130 }) do
 			local lx, lz = rim.X + away.X * reach, rim.Z + away.Z * reach
 			local wet = riverPlan ~= nil and MapTerrain.InRiver({ points = riverPlan.points, width = RIVER_WIDTH }, lx, lz, 40)
@@ -899,6 +909,322 @@ function MapTerrain.RewritePads(terrain)
 	end
 	MapTerrain.Pads = pads
 	return written
+end
+
+--------------------------------------------------------------------------------
+-- Underpinning: nothing a structure stands on hangs in the air
+--------------------------------------------------------------------------------
+
+-- A levelled site is flat where it was levelled, and a structure is not always only there: a fence
+-- post, a floodlight pole or a deck corner past the round pad stands over the first terrace step, a
+-- bath house's floor overhangs the rock disc it sits on, a stair runs down into a pit it cut. Each of
+-- those showed daylight under it (tools/foundation_check.py: Sahur Ruins' stair 7 studs over its
+-- stairwell, a Farmstead fence post 2 over the grass, a Rot Bowl pole 3). This goes down the pieces a
+-- structure stands on and, wherever one hangs over lower ground, carries it down to that ground: a
+-- post or pole is lengthened, anything bigger gets a plinth block of its own material under it, down
+-- to the lowest ground beneath it and SINK into it. Nothing is moved and nothing is cut.
+--
+--   MapTerrain.Underpin(model, base, options) -> count underpinned
+--
+--   model     the structure; every BasePart in it is considered except a zipline's (its own posts
+--             stand on their own ground) and anything marked IntentionalFloat.
+--   base      its floor height. Only pieces whose underside is at most BAND above it are meant to
+--             stand on something (a roof, a lintel or a sign is not); anything lower is, however far
+--             down it goes (a stair into a cellar the structure dug for itself).
+--   options   band, tolerance, sink (numbers), and skip(part) -> true to leave a part alone;
+--             dryRun = true changes nothing and returns, as a second value, the pieces that would
+--             be carried down ({ part, drop } each), for a probe or a gallery to find the worst.
+--
+-- A piece held by the ground or by another piece of the model on BOTH sides of a hollow, in line with
+-- it, spans it (a slab over a crypt resting on its walls) and is left alone; one held on one side only
+-- is a cantilever and is carried down. Over water a piece is left alone: it is a jetty's business to
+-- stand over water. Upright blocks, trusses and cylinders standing on their ends only (a ball or a
+-- tilted rock touches at a point by design).
+local UNDERPIN_BAND = 1.5
+local UNDERPIN_TOLERANCE = 0.3
+local UNDERPIN_SINK = 0.4
+-- Samples this far apart under each piece: a ridge top falls away fast enough that the ground
+-- between four-stud samples stood most of a stud under a plinth laid to the lowest of them.
+local UNDERPIN_STEP = 2
+local UNDERPIN_FILE = 8
+-- Posts and poles this thin are lengthened; anything wider gets a plinth under it.
+local UNDERPIN_POST = 3
+
+local underpinParams = RaycastParams.new()
+underpinParams.FilterType = Enum.RaycastFilterType.Include
+underpinParams.IgnoreWater = true
+local underpinWet = RaycastParams.new()
+underpinWet.FilterType = Enum.RaycastFilterType.Include
+underpinWet.IgnoreWater = false
+
+-- The solid ground under (x, z), and whether water lies over it. From far above: a ray that starts
+-- inside terrain never reports that terrain.
+local function groundUnder(x, z)
+	underpinParams.FilterDescendantsInstances = { workspace.Terrain }
+	underpinWet.FilterDescendantsInstances = { workspace.Terrain }
+	local from, down = Vector3.new(x, 2000, z), Vector3.new(0, -4000, 0)
+	local dry = workspace:Raycast(from, down, underpinParams)
+	if not dry then
+		return nil, false
+	end
+	local wet = workspace:Raycast(from, down, underpinWet)
+	return dry.Position.Y, wet ~= nil and wet.Material == Enum.Material.Water and wet.Position.Y > dry.Position.Y + 0.2
+end
+
+-- Where the vertical line through (x, z) is inside `part`: its lowest and highest y there, or nil.
+-- A block (a wedge counts as its box), a ball, or a cylinder along its own X axis. Exact rather than a
+-- bounding box: a round rock disc's box reaches past the disc, and a floor overhanging the disc's rim
+-- would read as resting on it.
+local function slabRange(a, b, h, lo, hi)
+	if math.abs(b) < 1e-9 then
+		if math.abs(a) > h then
+			return nil
+		end
+		return lo, hi
+	end
+	local t1, t2 = (-h - a) / b, (h - a) / b
+	if t1 > t2 then
+		t1, t2 = t2, t1
+	end
+	lo, hi = math.max(lo, t1), math.min(hi, t2)
+	if lo >= hi then
+		return nil
+	end
+	return lo, hi
+end
+
+local function verticalSpan(part, x, z)
+	local cf, size = part.CFrame, part.Size
+	local p = cf.Position
+	local dx, dz = x - p.X, z - p.Z
+	local shape = part:IsA("Part") and part.Shape or Enum.PartType.Block
+	if shape == Enum.PartType.Ball then
+		local radius = math.min(size.X, size.Y, size.Z) / 2
+		local d2 = radius * radius - dx * dx - dz * dz
+		if d2 <= 0 then
+			return nil
+		end
+		return p.Y - math.sqrt(d2), p.Y + math.sqrt(d2)
+	end
+	-- Each local coordinate along the line is a + b * y.
+	local r, u, k = cf.RightVector, cf.UpVector, -cf.LookVector
+	local ar, br = r.X * dx + r.Z * dz - r.Y * p.Y, r.Y
+	local au, bu = u.X * dx + u.Z * dz - u.Y * p.Y, u.Y
+	local ak, bk = k.X * dx + k.Z * dz - k.Y * p.Y, k.Y
+	local lo, hi = slabRange(ar, br, size.X / 2, -1e6, 1e6)
+	if not lo then
+		return nil
+	end
+	if shape == Enum.PartType.Cylinder then
+		local radius = math.min(size.Y, size.Z) / 2
+		local A, B, C = bu * bu + bk * bk, 2 * (au * bu + ak * bk), au * au + ak * ak - radius * radius
+		if A < 1e-9 then
+			if C > 0 then
+				return nil
+			end
+			return lo, hi
+		end
+		local disc = B * B - 4 * A * C
+		if disc < 0 then
+			return nil
+		end
+		local root = math.sqrt(disc)
+		lo, hi = math.max(lo, (-B - root) / (2 * A)), math.min(hi, (-B + root) / (2 * A))
+		if lo >= hi then
+			return nil
+		end
+		return lo, hi
+	end
+	lo, hi = slabRange(au, bu, size.Y / 2, lo, hi)
+	if not lo then
+		return nil
+	end
+	return slabRange(ak, bk, size.Z / 2, lo, hi)
+end
+
+-- A part's world-axis box, for "is something of the model under this point".
+local function worldBox(part)
+	local cf, size = part.CFrame, part.Size / 2
+	local r, u, b = cf.RightVector, cf.UpVector, cf.LookVector
+	local ex = math.abs(r.X) * size.X + math.abs(u.X) * size.Y + math.abs(b.X) * size.Z
+	local ey = math.abs(r.Y) * size.X + math.abs(u.Y) * size.Y + math.abs(b.Y) * size.Z
+	local ez = math.abs(r.Z) * size.X + math.abs(u.Z) * size.Y + math.abs(b.Z) * size.Z
+	local p = cf.Position
+	return p.X - ex, p.X + ex, p.Y - ey, p.Y + ey, p.Z - ez, p.Z + ez
+end
+
+function MapTerrain.Underpin(model, base, options)
+	options = options or {}
+	local band = options.band or UNDERPIN_BAND
+	local tolerance = options.tolerance or UNDERPIN_TOLERANCE
+	local sink = options.sink or UNDERPIN_SINK
+
+	-- What each candidate stands on: its own axis that points (nearly) up, and the face at the end of
+	-- it. A block or a truss stands on its -Y face; a cylinder standing on its end (a round foot, a
+	-- column) on the end of its own X axis, which is its length.
+	local function standing(part)
+		if part.ClassName == "TrussPart" or (part.ClassName == "Part" and part.Shape == Enum.PartType.Block) then
+			return part.CFrame.UpVector, "Y"
+		elseif part.ClassName == "Part" and part.Shape == Enum.PartType.Cylinder then
+			return part.CFrame.RightVector, "X"
+		end
+		return nil
+	end
+
+	local boxes, candidates = {}, {}
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and not part:FindFirstAncestor("Zipline") and not part:GetAttribute("IntentionalFloat") then
+			local x0, x1, y0, y1, z0, z1 = worldBox(part)
+			table.insert(boxes, { part = part, x0 = x0, x1 = x1, y0 = y0, y1 = y1, z0 = z0, z1 = z1 })
+			local axis, _ = standing(part)
+			-- Solid pieces only: a bedroll, a glass pane or a glow is dressing, not something a thing stands on.
+			if axis and math.abs(axis.Y) > 0.995 and y0 <= base + band and part.Transparency < 0.95 and part.CanCollide
+				and not (options.skip and options.skip(part)) then
+				table.insert(candidates, part)
+			end
+		end
+	end
+
+	-- The model's pieces filed by where they stand, so a point only looks at its neighbours: a big
+	-- monument is several hundred parts and a deck a few hundred sample points.
+	local filed = {}
+	for _, box in ipairs(boxes) do
+		for gx = math.floor(box.x0 / UNDERPIN_FILE), math.floor(box.x1 / UNDERPIN_FILE) do
+			for gz = math.floor(box.z0 / UNDERPIN_FILE), math.floor(box.z1 / UNDERPIN_FILE) do
+				local key = gx .. "," .. gz
+				filed[key] = filed[key] or {}
+				table.insert(filed[key], box)
+			end
+		end
+	end
+
+	local count, found = 0, {}
+	for _, part in ipairs(candidates) do
+		local size, cf = part.Size, part.CFrame
+		local axis, along = standing(part)
+		-- Which way is down along it (a part can be built upside down), its length, and its cross-section.
+		local flip = axis.Y > 0 and 1 or -1
+		local length = along == "Y" and size.Y or size.X
+		local spanA, spanB = size.X, size.Z
+		if along == "X" then
+			spanA, spanB = size.Y, size.Z
+		end
+		local round = along == "X"
+		local function toWorld(a, b)
+			if along == "X" then
+				return cf * Vector3.new(-flip * length / 2, a, b)
+			end
+			return cf * Vector3.new(a, -flip * length / 2, b)
+		end
+		-- (A big deck twice as coarse: it is its edges and corners that hang.)
+		local step = math.max(spanA, spanB) > 16 and UNDERPIN_STEP * 2 or UNDERPIN_STEP
+		local na = math.max(1, math.ceil(spanA / step))
+		local nb = math.max(1, math.ceil(spanB / step))
+		local insetA, insetB = math.min(0.2, spanA / 4), math.min(0.2, spanB / 4)
+		local radius = math.min(spanA, spanB) / 2 - math.min(insetA, insetB)
+		local cells, overWater, lowest, bottom = {}, false, math.huge, math.huge
+		for i = 0, na do
+			cells[i] = {}
+			for j = 0, nb do
+				local a = -spanA / 2 + insetA + (spanA - 2 * insetA) * i / na
+				local b = -spanB / 2 + insetB + (spanB - 2 * insetB) * j / nb
+				if not round or a * a + b * b <= radius * radius + 1e-6 then
+					-- On the underside itself: a truss leaning a few degrees is off its foot higher up.
+					local point = toWorld(a, b)
+					bottom = math.min(bottom, point.Y)
+					local ground, wet = groundUnder(point.X, point.Z)
+					overWater = overWater or wet
+					local support, held = ground or -math.huge, false
+					for _, box in ipairs(filed[math.floor(point.X / UNDERPIN_FILE) .. "," .. math.floor(point.Z / UNDERPIN_FILE)] or {}) do
+						if box.part ~= part and point.X >= box.x0 and point.X <= box.x1 and point.Z >= box.z0 and point.Z <= box.z1 then
+							local lo, hi = verticalSpan(box.part, point.X, point.Z)
+							if lo then
+								if hi <= point.Y + 0.05 then
+									support = math.max(support, hi)
+								elseif lo < point.Y then
+									held = true
+								end
+							end
+						end
+					end
+					cells[i][j] = { gap = held and 0 or point.Y - support, ground = ground }
+					if ground then
+						lowest = math.min(lowest, ground)
+					end
+				end
+			end
+		end
+		local function holds(i, j)
+			local cell = cells[i] and cells[i][j]
+			return cell ~= nil and cell.gap <= tolerance
+		end
+		local hangs = false
+		if not overWater and lowest < math.huge then
+			for i = 0, na do
+				for j = 0, nb do
+					local cell = cells[i][j]
+					if cell and cell.gap > tolerance and cell.ground then
+						local left, right, near, far = false, false, false, false
+						for k = 0, na do
+							left = left or (k < i and holds(k, j))
+							right = right or (k > i and holds(k, j))
+						end
+						for k = 0, nb do
+							near = near or (k < j and holds(i, k))
+							far = far or (k > j and holds(i, k))
+						end
+						if not ((left and right) or (near and far)) then
+							hangs = true
+						end
+					end
+				end
+			end
+		end
+		if hangs and options.dryRun then
+			count += 1
+			table.insert(found, { part = part, drop = bottom - (lowest - sink) })
+		elseif hangs then
+			local foot = lowest - sink
+			local up = axis * flip
+			-- (A truss only comes in whole two-stud lengths, so it gets a plinth.)
+			if spanA <= UNDERPIN_POST and spanB <= UNDERPIN_POST and part.ClassName == "Part" then
+				-- A post, a pole or a column: the same piece, reaching further down along its own axis (so
+				-- one leaning a few degrees keeps leaning the same way). Its top stays where it was.
+				local longer = (bottom - foot) / up.Y
+				local top = part.Position + up * (length / 2)
+				part.Size = along == "X" and Vector3.new(length + longer, size.Y, size.Z) or Vector3.new(size.X, length + longer, size.Z)
+				part.CFrame = cf.Rotation + (top - up * ((length + longer) / 2))
+			else
+				-- A plinth of its own stone under anything bigger -- round under a round foot -- a hair
+				-- inside its edges, so no two side faces lie in one plane (the map's z-fight pass would have
+				-- to push one of them).
+				local plinth = Instance.new("Part")
+				plinth.Name = "Underpin"
+				local height = bottom - foot
+				if round then
+					plinth.Shape = Enum.PartType.Cylinder
+					plinth.Size = Vector3.new(height, math.max(0.2, size.Y - 0.1), math.max(0.2, size.Z - 0.1))
+				else
+					plinth.Size = Vector3.new(math.max(0.2, size.X - 0.1), height, math.max(0.2, size.Z - 0.1))
+				end
+				local under = part.Position - up * (length / 2)
+				plinth.CFrame = cf.Rotation + Vector3.new(under.X, (bottom + foot) / 2, under.Z)
+				plinth.Color = part.Color
+				plinth.Material = part.Material
+				plinth.Anchored = true
+				plinth.TopSurface = Enum.SurfaceType.Smooth
+				plinth.BottomSurface = Enum.SurfaceType.Smooth
+				-- Breaks with the piece it carries, if that piece breaks at all (DestructibleService).
+				local tag = part:GetAttribute("Destructible")
+				if tag ~= nil then
+					plinth:SetAttribute("Destructible", tag)
+				end
+				plinth.Parent = part.Parent
+			end
+			count += 1
+		end
+	end
+	return count, found
 end
 
 -- Material, and only material: the occupancy of every voxel is copied through untouched, so this

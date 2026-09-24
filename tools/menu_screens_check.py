@@ -441,7 +441,7 @@ for _, size in ipairs(fixtures.sizes) do
 					if rows ~= fixtures.killCount then
 						fail(string.format("%s: %d kill animation rows, CosmeticData has %d", tabWhere, rows, fixtures.killCount))
 					end
-					if fixtures.killCount == 0 and not text:find("No kill animations yet", 1, true) then
+					if fixtures.killCount == 0 and not text:find("No death effects yet", 1, true) then
 						fail(tabWhere .. ": no kill animations and no empty line")
 					end
 				end
@@ -630,8 +630,8 @@ PLANTS = [
            "self.Content.Size = UDim2.new(1, -left"), "fixtures"),
     ("EQUIP drawn live with no handler (wiring)",
      plant("StarterPlayerScripts/MenuScreens.lua",
-           'host.addButton(buttons, 1, "EQUIP", C.Green, function()',
-           'host.addButton(buttons, 1, "EQUIP", C.Green, nil, true, function()'), "fixtures"),
+           'host.addButton(buttons, 2, "EQUIP", C.Green, function()',
+           'host.addButton(buttons, 2, "EQUIP", C.Green, nil, true, function()'), "fixtures"),
     ("BUY sends the wrong remote (wiring)",
      plant("StarterPlayerScripts/MenuScreens.lua",
            "\t\t\t\thost.buy(id)",
@@ -646,8 +646,8 @@ PLANTS = [
            "position = UDim2.new(1, -80, 1, -9)"), "fixtures"),
     ("empty line dropped (kill animations, no entries)",
      plant("StarterPlayerScripts/MenuScreens.lua",
-           '\t\thost.emptyMessage("No kill animations yet.',
-           '\t\tlocal _ = ("No kill animations yet.'), "empty"),
+           '\t\thost.emptyMessage("No death effects yet.',
+           '\t\tlocal _ = ("No death effects yet.'), "empty"),
     ("settings slider back to a flat 240 px (overflow, phone)",
      plant("StarterPlayerScripts/MenuClient.client.lua",
            "Size = UDim2.new(0.55, -92, 0, 10),",

@@ -102,11 +102,15 @@ local rightValue, rightFill = side(1, Enum.TextXAlignment.Right)
 -- the enemy red. The team names stay in the tags so a callout of "Blue is pushing" still means something.
 local FRIEND = Color3.fromRGB(80, 230, 110)
 local ENEMY = Color3.fromRGB(232, 92, 92)
+-- The tags leave the middle of their row to the objectives line (OBJECTIVES_W, King of the Hill only),
+-- and say the team's short name ("YOUR TEAM · EMBER"), which fits beside it.
+local OBJECTIVES_W = 110
 local function tag(anchorX, align)
 	return create("TextLabel", {
 		AnchorPoint = Vector2.new(anchorX, 0),
 		Position = UDim2.new(anchorX, 0, 1, 3),
-		Size = UDim2.fromOffset(200, 16),
+		Size = UDim2.fromOffset((WIDTH - OBJECTIVES_W) / 2 - 4, 16),
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBlack,
 		Text = "",
@@ -125,6 +129,74 @@ local sideStroke = create("Frame", {
 	BorderSizePixel = 0,
 	Parent = root,
 }, { UiKit.rounded(Radius.Pill) })
+
+-- Who holds each objective (#86 C37), in the middle of the tags row: "A YOU  B OPEN", each word in its
+-- side's colour. The scoreline's lead says who is ahead; this says where to go. It reads the server's
+-- own status string (ModeKingOfTheHill.Tick: "A Ember Squad · B open"), the only per-objective state
+-- that reaches the client today.
+local objectivesLabel = create("TextLabel", {
+	Name = "Objectives",
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 1, 3),
+	Size = UDim2.fromOffset(OBJECTIVES_W, 16),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	RichText = true,
+	Text = "",
+	TextColor3 = Role.TextMuted,
+	TextSize = 12,
+	TextStrokeTransparency = 0.4,
+	Visible = false,
+	Parent = root,
+})
+
+local function shortName(index)
+	local team = GameModes.Teams[index]
+	return team and team.short or string.upper(GameModes.TeamName(index))
+end
+
+local function hex(colour)
+	return string.format("#%02X%02X%02X", math.floor(colour.R * 255 + 0.5), math.floor(colour.G * 255 + 0.5),
+		math.floor(colour.B * 255 + 0.5))
+end
+
+-- Each lettered objective's owner from the status string: a team index, false for open, or absent.
+local function objectiveOwners(status)
+	local owners = {}
+	for _, letter in ipairs({ "A", "B" }) do
+		local word = string.match(status, "%f[%w]" .. letter .. " (.-) · ") or string.match(status, "%f[%w]" .. letter .. " (.-)$")
+		if word == "open" then
+			owners[letter] = false
+		elseif word == GameModes.TeamName(1) then
+			owners[letter] = 1
+		elseif word == GameModes.TeamName(2) then
+			owners[letter] = 2
+		end
+	end
+	return owners
+end
+
+local function objectivesLine(status, mine, friend, enemy)
+	if type(status) ~= "string" then
+		return ""
+	end
+	local owners = objectiveOwners(status)
+	local parts = {}
+	for _, letter in ipairs({ "A", "B" }) do
+		local owner = owners[letter]
+		if owner ~= nil then
+			local word, colour = "OPEN", Role.TextMuted
+			if owner and (mine == 1 or mine == 2) then
+				word = owner == mine and "YOU" or "FOE"
+				colour = owner == mine and friend or enemy
+			elseif owner then
+				word, colour = shortName(owner), GameModes.TeamColor(owner)
+			end
+			table.insert(parts, string.format('%s <font color="%s">%s</font>', letter, hex(colour), word))
+		end
+	end
+	return table.concat(parts, "  ")
+end
 
 local function myTeam()
 	local character = player.Character
@@ -149,13 +221,24 @@ local function clock(seconds)
 end
 
 -- A phone gets the same readout a little smaller, and never wider than the screen it is on. The
--- rest of the phone HUD is PhoneLayout's map; this is one element placing itself inside the same
--- top band.
+-- rest of the phone HUD is PhoneLayout's map; this is one element placing itself inside it.
+--
+-- WHICH HUD is PhoneLayout.Mode's call, not UiKit.form's (#80). The two disagree on purpose (see the
+-- long note in PhoneLayout.lua): a tablet held upright is "large" to UiKit.form and "upright" to the
+-- HUD, so this drew at its DESKTOP spot over the upright HUD; and a small desktop window is "short" to
+-- UiKit.form but keeps the desktop HUD, so this went into a phone slot the desktop HUD doesn't use.
 local function fit()
 	local camera = workspace.CurrentCamera
 	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-	local form = UiKit.form(viewport)
-	if form == "large" then
+	local layout = script.Parent:FindFirstChild("PhoneLayout")
+	local ok, PhoneLayout = pcall(require, layout)
+	local spots = ok and type(PhoneLayout) == "table" and PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport) or nil
+	-- The banner's slot, as on a desktop screen: this is up exactly while HudClient hides the
+	-- players-alive banner (in a team match), so the slot is empty. The storm line's band, which this
+	-- used before, is 18 px tall; the scoreline at 0.8 is 35, and hung over the coin chip and the event
+	-- pill below it.
+	local band = spots and spots.banner
+	if not band then
 		-- Measured against every other HUD cluster at 1920x1080, 1366x768, 1280x720 and 1024x768:
 		-- zero overlaps in the storm readout's slot, which no team mode uses.
 		scale.Scale = 1
@@ -164,20 +247,10 @@ local function fit()
 		-- there and clears the compass below it (it used to overlap the compass at y 100).
 		root.Position = UDim2.new(0.5, 0, 0, 10)
 	else
-		-- On a touch screen the desktop literals are NOT what is drawn — PhoneLayout replaces the
-		-- whole HUD with its own map — so measuring this against them was measuring the wrong thing
-		-- (it reported clashes with a compass that isn't where the model thought). It asks that map
-		-- instead, and takes the storm line's band: the same reasoning as the desktop slot, since a
-		-- team mode has no storm and that band is empty for the whole match.
-		local layout = script.Parent:FindFirstChild("PhoneLayout")
-		local band = layout and require(layout).Rects(viewport).stormLine
-		scale.Scale = 0.8
+		-- Scaled to fit the slot both ways, centred in it.
+		scale.Scale = math.min(band.w / WIDTH, band.h / HEIGHT, 1)
 		root.AnchorPoint = Vector2.new(0.5, 0)
-		if band then
-			root.Position = UDim2.new(0, band.x + band.w / 2, 0, band.y)
-		else
-			root.Position = UDim2.new(0.5, 0, 0, 72)
-		end
+		root.Position = UDim2.new(0, band.x + band.w / 2, 0, band.y)
 	end
 end
 
@@ -246,11 +319,14 @@ local function render(state)
 	sideStroke.Visible = known
 	leftTag.Visible, rightTag.Visible = known, known
 	if known then
-		leftTag.Text = "YOUR TEAM · " .. string.upper(GameModes.TeamName(left))
+		leftTag.Text = "YOUR TEAM · " .. shortName(left)
 		leftTag.TextColor3 = FRIEND
-		rightTag.Text = "ENEMY · " .. string.upper(GameModes.TeamName(right))
+		rightTag.Text = "ENEMY · " .. shortName(right)
 		rightTag.TextColor3 = ENEMY
 	end
+
+	objectivesLabel.Text = koth and objectivesLine(state.hillStatus, mine, FRIEND, ENEMY) or ""
+	objectivesLabel.Visible = objectivesLabel.Text ~= ""
 
 	if koth then
 		-- "Who has held it longest and by how much", said as a gap rather than two numbers to
@@ -267,12 +343,17 @@ local function render(state)
 				caption.TextColor3 = GameModes.TeamColor(leader)
 			end
 		else
-			caption.Text = clock(state.secondsLeft) .. "\nlevel"
+			-- "TIED", not "level", which read as a rank word rather than a draw (#86).
+			caption.Text = clock(state.secondsLeft) .. "\nTIED"
 			caption.TextColor3 = Role.TextMuted
 		end
 	else
-		caption.Text = "FIRST TO " .. target
-		caption.TextColor3 = Role.TextMuted
+		-- The time limit too: the server sends secondsLeft on every push, and without it a TDM match
+		-- simply flipped to MATCH OVER mid-fight and a losing team never knew how long it had (#86).
+		-- Red for the last thirty seconds.
+		local left = state.secondsLeft
+		caption.Text = left and ("FIRST TO " .. target .. "\n" .. clock(left)) or ("FIRST TO " .. target)
+		caption.TextColor3 = (left and left <= 30) and Role.Negative or Role.TextMuted
 	end
 	caption.RichText = false
 	caption.TextWrapped = true

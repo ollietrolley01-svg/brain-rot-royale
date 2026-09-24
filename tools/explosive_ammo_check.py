@@ -375,15 +375,22 @@ def main():
         ds = read(root, "ServerScriptService", "Modules", "DestructibleService.lua")
 
         def swap(text, before, after):
-            if before not in text:
-                sys.exit("explosive_ammo_check: plant target missing: " + before)
+            if text.count(before) != 1:
+                sys.exit("explosive_ammo_check: plant target missing or not unique: " + before)
             return text.replace(before, after, 1)
 
         plants = [
             ("a big blast (radius 12)", dict(weapon_text=swap(wd, "radius = 5, wallDamage", "radius = 12, wallDamage"))),
             ("splash as big as the bullet", dict(weapon_text=swap(wd, "explosiveAmmo = { damage = 12,", "explosiveAmmo = { damage = 92,"))),
             ("the blast takes the bullet's damage", dict(combat=swap(cs, "damage = ammo.damage,", "damage = def.damage,"))),
-            ("a pane counts as where the bullet stopped", dict(combat=swap(cs, "\t\t\t\tstopped = nil\n", ""))),
+            ("a pane counts as where the bullet stopped", dict(combat=swap(
+                cs,
+                "DestructiblePassesThrough(result.Instance) then\n\t\t\t\tlocal filter = params.FilterDescendantsInstances\n"
+                "\t\t\t\ttable.insert(filter, result.Instance)\n\t\t\t\tparams.FilterDescendantsInstances = filter\n"
+                "\t\t\t\tcurrentOrigin = result.Position + direction * 0.05\n\t\t\t\tstopped = nil\n",
+                "DestructiblePassesThrough(result.Instance) then\n\t\t\t\tlocal filter = params.FilterDescendantsInstances\n"
+                "\t\t\t\ttable.insert(filter, result.Instance)\n\t\t\t\tparams.FilterDescendantsInstances = filter\n"
+                "\t\t\t\tcurrentOrigin = result.Position + direction * 0.05\n"))),
             ("a blast for every gun", dict(combat=swap(cs, "if not ammo or not CombatService.Explode then", "ammo = ammo or { damage = 1, radius = 1 }\n\tif not CombatService.Explode then"))),
             ("the rewind instant dropped", dict(combat=swap(cs, "params, rewindTo)\n\t\tif not result", "params, nil)\n\t\tif not result"))),
             ("no falloff", dict(bsrc=swap(bs, "return 1 - t * (1 - Ballistics.EdgeScale)", "return 1"))),

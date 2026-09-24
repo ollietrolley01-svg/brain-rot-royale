@@ -165,7 +165,9 @@ Builders.JuiceBoxSquirter = function(g, K)
 		g:ball("ChargingKnob", 14, CF(-34, 8, -120), orange)
 	end)
 	g:travel("charge", 60)
-	g:hand("ChargeHand", V(-44, 20, -122), V(0.25, -1, 0.3), V(-0.4, 0.2, 1))
+	-- Turned -75 degrees on the palm and tilted 30 so the wrist is not bent past 61 degrees working it (it was 106): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-44, 20, -122), V(-0.52, -0.56, -0.64), V(-0.72, -0.11, 0.68))
 
 	-- Toy sights: a notch on a fin at the back, a post on a fin at the front, tops on the line (y=37).
 	g:box("RearSightBase", V(26, 14, 20), CF(0, 28, 90), body)
@@ -336,9 +338,12 @@ Builders.BoomboxBassline = function(g, K)
 		g:rounded("Pump", V(40, 26, 100), CF(0, -62, -150), 8, chrome)
 	end)
 	g:travel("pump", 50)
-	g:hand("SupportHand", V(-6, -82, -150), V(0.8, 0.5, -0.25), V(-0.4, -1, 0))
+	-- The hand cups the slider from below with the fingers across its right side, level: pointing 30
+	-- degrees up they ran into the body's rounded corner above the slider, even lying open, and every
+	-- finger was parked -- a bare palm under the gun (#92, tools/fps_arms_check.py).
+	g:hand("SupportHand", V(-6, -82, -150), V(0.9, 0.2, -0.3), V(-0.2, -1, 0))
 	g.model:SetAttribute("SupportGroup", "pump")
-	g:hand("ChargeHand", V(-6, -82, -150), V(0.8, 0.5, -0.25), V(-0.4, -1, 0))
+	g:hand("ChargeHand", V(-6, -82, -150), V(0.9, 0.2, -0.3), V(-0.2, -1, 0))
 
 	trigger(g, K, 8, -80, chrome, body)
 	g:grip(V(0, -50, 60), 12, body, { length = 96, depth = 46, front = 22, back = 30, grooves = 3 })
@@ -525,7 +530,9 @@ Builders.MicrowaveZapper = function(g, K)
 		g:box("ChargingHandle", V(12, 50, 10), CF(56, -4, -80), dark)
 	end)
 	g:travel("charge", 40)
-	g:hand("ChargeHand", V(70, -4, -80), V(-0.2, -1, 0.1), V(1, 0.2, 0))
+	-- Turned 30 degrees on the palm so the wrist is not bent past 84 degrees working it (it was 111): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(70, -4, -80), V(-0.16, -0.9, -0.41), V(0.98, -0.19, 0.04))
 
 	-- The magnetron horn: a copper throat, coils with glow between them, a flared emitter.
 	g:cyl("Barrel", 260, 26, CF(0, 0, -230), copper)
@@ -594,7 +601,9 @@ Builders.PizzaCutterCrossbow = function(g, K)
 	g:prism("Riser", V(150, 44, 50), CF(0, -4, -633), 8, darkWood)
 	g:box("RiserBlock", V(60, 66, 40), CF(0, -30, -640), darkWood)
 	g:key("Muzzle", CF(0, 12, -660))
-	g:hand("ChargeHand", V(-4, 26, -50), V(0.1, -0.3, 1), V(0, 1, 0))
+	-- Turned 90 degrees on the palm so the wrist is not bent past 59 degrees working it (it was 140): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-4, 26, -50), V(1, 0, -0.1), V(0.03, 0.96, 0.28))
 
 	-- Rolling-pin limbs with their handles, and the string drawn back to the latch or loosed.
 	local latch = V(0, 12, -70)
@@ -832,7 +841,9 @@ Builders.RubberChickenRailgun = function(g, K)
 		g:box("ChargingHandle", V(16, 20, 30), CF(36, -10, 226), body)
 	end)
 	g:travel("charge", 40)
-	g:hand("ChargeHand", V(52, 22, 226), V(-0.2, -1, 0.1), V(1, 0.2, 0))
+	-- Turned 30 degrees on the palm and tilted 30 so the wrist is not bent past 76 degrees working it (it was 116): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(52, 22, 226), V(-0.63, -0.68, -0.38), V(0.77, -0.61, -0.17))
 	g:grip(V(0, -64, 14), 16, body, { length = 104, depth = 48, front = 22, back = 31, grooves = 3 })
 	trigger(g, K, -12, -86, copper, body)
 	g:hand("GripHand", V(33, -102, 34), V(-0.3, 0.12, -1), V(1, 0.1, 0.3))
@@ -892,7 +903,9 @@ Builders.LavaLampLancer = function(g, K)
 		g:ball("ChargingKnob", 14, CF(-52, 0, 130), wax)
 	end)
 	g:travel("charge", 60)
-	g:hand("ChargeHand", V(-62, 12, 130), V(0.25, -1, 0.3), V(-0.4, 0.2, 1))
+	-- Turned 30 degrees on the palm and tilted 30 so the wrist is not bent past 59 degrees working it (it was 95): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-62, 12, 130), V(0.75, -0.65, -0.12), V(0.01, -0.17, 0.99))
 
 	g:grip(V(0, -40, 150), 18, metal, { length = 100, depth = 46, front = 22, back = 30, grooves = 3 })
 	g:hand("GripHand", V(31, -80, 170), V(-0.3, 0.12, -1), V(1, 0.1, 0.3))
@@ -958,7 +971,9 @@ Builders.SnowGlobeSingularity = function(g, K)
 		g:ball("ChargingKnob", 16, CF(-52, 10, -40), wood)
 	end)
 	g:travel("charge", 40)
-	g:hand("ChargeHand", V(-62, 20, -40), V(0.25, -1, 0.3), V(-0.4, 0.2, 1))
+	-- Turned 0 degrees on the palm and tilted 30 so the wrist is not bent past 83 degrees working it (it was 103): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-62, 20, -40), V(0.38, -0.9, -0.21), V(-0.2, -0.31, 0.93))
 
 	g:box("SightRiser", V(28, 40, 80), CF(0, 44, -80), brass)
 	g:rail("TopRail", 90, CF(0, 64, -80))
@@ -1016,7 +1031,9 @@ Builders.GrandmasSlipperLauncher = function(g, K)
 	g:prism("Riser", V(150, 44, 50), CF(0, -4, -633), 8, wood)
 	g:box("RiserBlock", V(60, 66, 40), CF(0, -30, -640), wood)
 	g:key("Muzzle", CF(0, 12, -660))
-	g:hand("ChargeHand", V(-4, 26, -50), V(0.1, -0.3, 1), V(0, 1, 0))
+	-- Turned 90 degrees on the palm so the wrist is not bent past 59 degrees working it (it was 140): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-4, 26, -50), V(1, 0, -0.1), V(0.03, 0.96, 0.28))
 
 	-- Knitting needles for limbs, their bead ends, and the elastic.
 	local latch = V(0, 12, -70)

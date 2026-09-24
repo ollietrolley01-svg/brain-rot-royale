@@ -1552,7 +1552,9 @@ local function renderIndex(content, progression, ctx)
 				Position = UDim2.new(0, 70, 1, -32),
 				Size = UDim2.new(1, -78, 0, 28),
 				Font = FONT.Body,
-				Text = "BOUGHT — pull it\nin play to claim",
+				-- Plain words at the old line lengths (the tile is not re-laid out): "pull it in play" was
+				-- jargon, and it must say COIN crate -- a Robux-crate pull is logged as Purchased too (#86).
+				Text = "BOUGHT — get one\nfrom a coin crate",
 				TextColor3 = C.Muted,
 				TextSize = 11,
 				TextYAlignment = Enum.TextYAlignment.Top,

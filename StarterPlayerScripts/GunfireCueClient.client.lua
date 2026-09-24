@@ -88,8 +88,11 @@ local gui = create("ScreenGui", {
 	Name = "GunfireCue",
 	ResetOnSpawn = false,
 	IgnoreGuiInset = true,
-	-- Under the HUD's own layer (8) so a panel always covers it.
-	DisplayOrder = 6,
+	-- Under the HUD, so a panel always covers it. The HUD's ScreenGuis (BrrHud, VehicleHud,
+	-- VehicleWeaponHud, BoonHud, ModeScoreHud) are all at the default 0 -- 8 is the inventory panel's --
+	-- so the 6 this had drew the chevrons over the hotbar and the driving HUD (#80). Below 0, and below
+	-- the sniper scope's -1, which covers the view when it is up.
+	DisplayOrder = -2,
 	Parent = player:WaitForChild("PlayerGui"),
 })
 

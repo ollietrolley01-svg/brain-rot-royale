@@ -79,17 +79,48 @@ local _ = title
 
 local rows = {}
 
+-- Where the panel rests, and its scale. On a desktop screen: the left edge, mid-screen. On a touch
+-- screen PhoneLayout owns the HUD and has a slot for it (`Rects().boons`, beside or under the pet
+-- tile): the desktop spot sat under the stamina bar on an 844x390 phone and was the same desktop
+-- spot on an upright one (#80, tools/hud_layout_check.py). The scale fits the slot's width, and its
+-- height too when there are more buffs than it has room for.
+local home = { anchor = Vector2.new(0, 0.5), position = UDim2.new(0, Space.LG, 0.5, 0), phone = false }
 local function fit()
 	local camera = workspace.CurrentCamera
 	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-	scale.Scale = UiKit.form(viewport) == "large" and 1 or 0.8
+	local layout = script.Parent:FindFirstChild("PhoneLayout")
+	local ok, PhoneLayout = pcall(require, layout)
+	local spot = ok and type(PhoneLayout) == "table" and PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport).boons or nil
+	if spot then
+		-- The panel's own height before scaling: the two caption lines, one line per buff, the list's
+		-- 2 px gaps and the padding.
+		local natural = 16 + 16 + #rows * 18 + (#rows + 1) * 2 + 2 * Space.SM
+		scale.Scale = math.min(spot.w / WIDTH, spot.h / natural, 1)
+		home = { anchor = Vector2.new(0, 0), position = UDim2.fromOffset(spot.x, spot.y), phone = true }
+	else
+		scale.Scale = UiKit.form(viewport) == "large" and 1 or 0.8
+		home = { anchor = Vector2.new(0, 0.5), position = UDim2.new(0, Space.LG, 0.5, 0), phone = false }
+	end
+	panel.AnchorPoint = home.anchor
+	panel.Position = home.position
 end
 
 local shownKey = nil
+-- In a vehicle on a touch screen the panel steps aside: PhoneLayout's driving block (VehicleClient's
+-- speed panel and the gun panel) takes the same corner of the screen, and nobody reads their buffs while
+-- driving. On a desktop screen the two are far apart and the panel stays.
+local function drivingOnPhone()
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	return home.phone and ((seat ~= nil and seat:IsA("VehicleSeat")) or player:GetAttribute("VehicleGunActive") == true)
+end
+
 local function render()
 	local text = player:GetAttribute("CompanionBoons")
 	local name = player:GetAttribute("CompanionBoonName")
-	if type(text) ~= "string" or text == "" then
+	fit()
+	if type(text) ~= "string" or text == "" or drivingOnPhone() then
 		panel.Visible = false
 		shownKey = nil
 		return
@@ -124,9 +155,9 @@ local function render()
 	local key = tostring(name) .. "|" .. text
 	local fresh = key ~= shownKey
 	shownKey = key
-	panel.Position = UDim2.new(0, -WIDTH, 0.5, 0)
+	panel.Position = UDim2.new(0, -WIDTH, home.position.Y.Scale, home.position.Y.Offset)
 	TweenService:Create(panel, TweenInfo.new(fresh and 0.45 or 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-		Position = UDim2.new(0, Space.LG, 0.5, 0),
+		Position = home.position,
 	}):Play()
 	stroke.Transparency = 0
 	stroke.Thickness = 3
@@ -137,10 +168,23 @@ local function render()
 end
 
 player:GetAttributeChangedSignal("CompanionBoons"):Connect(render)
+player:GetAttributeChangedSignal("VehicleGunActive"):Connect(render)
+local function watchSeat(character)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if humanoid then
+		humanoid:GetPropertyChangedSignal("SeatPart"):Connect(render)
+	end
+end
+player.CharacterAdded:Connect(watchSeat)
+if player.Character then
+	task.spawn(watchSeat, player.Character)
+end
 player:GetAttributeChangedSignal("CompanionBoonName"):Connect(render)
 
 local camera = workspace.CurrentCamera
 if camera then
-	camera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+	-- The whole render, not just fit: turning the phone can move the panel into (or out of) the corner
+	-- the driving block takes.
+	camera:GetPropertyChangedSignal("ViewportSize"):Connect(render)
 end
 render()

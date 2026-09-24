@@ -15,6 +15,7 @@ local WeaponData = require(Shared:WaitForChild("WeaponData"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
+local TeamBaseRuins = require(script.Parent:WaitForChild("TeamBaseRuins"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
 local ModeTeams = {}
@@ -88,6 +89,9 @@ local arenaRadius = 0
 local pads = { {}, {} }
 -- Each team's base point (the centre its pads were looked for around), for the base loot.
 local bases = {}
+-- Each team's compound in a team match (TeamBaseRuins.Build's result), or nothing when it was not
+-- built and the pads are the open-ground ones.
+local ruins = {}
 
 -- token -> 1 or 2
 local teamOf = {}
@@ -217,13 +221,58 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	-- Two bases on opposite sides of the centre, on an axis rolled per match so the same map does
 	-- not always play along the same street.
 	local axis = math.random() * math.pi * 2
+	local fraction = BASE_FRACTION
+	ModeTeams.MapRiver = mapInfo and mapInfo.river
+
+	-- In a team match each base is a ruined compound (TeamBaseRuins; Oliver 2026-09-24: "so that all
+	-- the item chests and cars aren't just sitting in random fields"), both built from one seed so
+	-- they are the same compound turned to face the middle. The axis may be turned to find ground the
+	-- compounds can stand on. If either cannot be built, neither is: one side in a fort and the other
+	-- in a field is not a fair start, so both fall back to the open-ground pads.
+	local withRuins = TeamBaseRuins ~= nil and currentMode ~= nil and currentMode.teams == true
+		and mapInfo ~= nil and mapInfo.map ~= nil
+	if withRuins then
+		axis, fraction = ModeTeams.PickBaseAxis(axis, mapInfo)
+	end
+	local ruinSeed = withRuins and math.random(1, 2147483646) or nil
 	for team = 1, GameModes.TeamCount do
 		local heading = axis + (team - 1) * math.pi
-		local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * BASE_FRACTION)
-		pads[team] = ModeTeams.BuildPads(base, mapInfo)
-		bases[team] = base
+		bases[team] = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
+		if withRuins then
+			ModeTeams.BuildRuin(team, bases[team], mapInfo, ruinSeed)
+		end
 	end
-	ModeTeams.MapRiver = mapInfo and mapInfo.river
+	if withRuins and not (ruins[1] and ruins[2]) then
+		ModeTeams.ClearRuins()
+	end
+	for team = 1, GameModes.TeamCount do
+		local ruin = ruins[team]
+		if ruin then
+			pads[team] = {}
+			for _, pad in ipairs(ruin.pads) do
+				table.insert(pads[team], pad.Position)
+			end
+		else
+			pads[team] = ModeTeams.BuildPads(bases[team], mapInfo)
+		end
+	end
+	if ruins[1] and ruins[2] then
+		ModeTeams.BaseVehicleBays = ModeTeams.RuinBays
+	end
+	-- The battleground in the middle (BEGIN BATTLEGROUND, below), after the bases so it faces them.
+	if withRuins then
+		ModeTeams.BuildBattleground(mapInfo, axis, ruinSeed)
+	end
+
+	-- After the pads (it keeps clear of them) and before GameMode seeds the base loot, which then
+	-- keeps clear of the vehicles through RefusePad's blocked test. A failure here costs the base its
+	-- vehicles, never the match its start.
+	if currentMode and currentMode.teams then
+		local ok, problem = pcall(ModeTeams.SpawnBaseVehicles, mapInfo)
+		if not ok then
+			warn("ModeTeams: base vehicles failed: " .. tostring(problem))
+		end
+	end
 
 	return arenaCentre, arenaRadius, #pads[1], #pads[2]
 end
@@ -293,17 +342,142 @@ function ModeTeams.BaseOf(team)
 	return active and bases[team] or nil
 end
 
+--------------------------------------------------------------------------------
+-- The compounds (TeamBaseRuins)
+--------------------------------------------------------------------------------
+
+-- Other axes tried when the rolled one puts a compound on a road, in the river or over a town (8
+-- more, every 22.5 degrees, since the two bases are opposite), at the usual distance and a little
+-- nearer the middle. The rolled axis wins any tie, so the base still moves about from match to match.
+local RUIN_AXES = 8
+local RUIN_FRACTIONS = { BASE_FRACTION, 0.64 }
+-- A chest or pickup lying within this of a compound's spot means the spot is taken.
+local RUIN_SPOT_TAKEN = 3
+-- GameMode asks for chests with this gap (and nothing else with it). Read as "chest" only when the
+-- caller does not name the kind; see BaseLootSpots.
+local RUIN_CHEST_GAP = 14
+
+-- The flat frame a compound is built in at `base`: on the ground, facing the arena centre.
+local function ruinFrame(base)
+	local ground = terrainAt(base.X, base.Z) or 0
+	local at = Vector3.new(base.X, ground, base.Z)
+	return CFrame.lookAt(at, Vector3.new(arenaCentre.X, ground, arenaCentre.Z))
+end
+
+-- The axis (and distance from the centre, as a fraction of the arena's radius) whose two sites suit
+-- a compound best, starting from the rolled `axis`. Returns the rolled axis unchanged when no pair
+-- of sites is usable at all; Build then stands the compounds on plinths.
+function ModeTeams.PickBaseAxis(axis, mapInfo)
+	local best, bestFraction, bestCost = axis, BASE_FRACTION, math.huge
+	for step = 0, RUIN_AXES - 1 do
+		local candidate = axis + step * math.pi / RUIN_AXES
+		for _, fraction in ipairs(RUIN_FRACTIONS) do
+			local total = step * 0.01 + (fraction == BASE_FRACTION and 0 or 0.5)
+			for team = 1, GameModes.TeamCount do
+				local heading = candidate + (team - 1) * math.pi
+				local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
+				local cost = TeamBaseRuins.SiteCost(ruinFrame(base), mapInfo)
+				total = cost and total + cost or math.huge
+			end
+			if total < bestCost then
+				best, bestFraction, bestCost = candidate, fraction, total
+			end
+		end
+		-- Flat, clear ground on the rolled axis (or near it) is as good as it gets.
+		if bestCost < 4 then
+			break
+		end
+	end
+	return best, bestFraction
+end
+
+-- Builds `team`'s compound at `base`. Returns it, or nil (warned) when it could not be built.
+function ModeTeams.BuildRuin(team, base, mapInfo, seed)
+	local ok, ruin = pcall(TeamBaseRuins.Build, ruinFrame(base), GameModes.TeamColor(team), mapInfo, seed)
+	if not ok or type(ruin) ~= "table" or #ruin.pads == 0 then
+		warn("ModeTeams: team " .. team .. "'s base was not built: " .. tostring(ok and "no pads" or ruin))
+		if ok and type(ruin) == "table" and ruin.model then
+			ruin.model:Destroy()
+		end
+		return nil
+	end
+	ruin.model.Name = "TeamBase" .. team
+	ruins[team] = ruin
+	return ruin
+end
+
+-- Takes both compounds down (a match ending, or one side failing to build).
+function ModeTeams.ClearRuins()
+	for team, ruin in pairs(ruins) do
+		if ruin.model then
+			ruin.model:Destroy()
+		end
+		ruins[team] = nil
+	end
+end
+
+-- The team's compound (model, pads, chestSpots, vehicleBays, lootSpots), or nil.
+function ModeTeams.BaseRuin(team)
+	return ruins[team]
+end
+
+-- ModeTeams.BaseVehicleBays while the compounds stand: each compound's named bays.
+function ModeTeams.RuinBays(team)
+	local ruin = ruins[team]
+	return ruin and ruin.vehicleBays or {}
+end
+
+-- The first `count` of `list` (CFrames) with no chest or pickup already lying on them, as positions.
+local function freeRuinSpots(list, count)
+	local loot = workspace:FindFirstChild("Loot")
+	local out = {}
+	for _, spot in ipairs(list) do
+		if #out >= count then
+			break
+		end
+		local at = spot.Position
+		local taken = false
+		if loot then
+			for _, item in ipairs(loot:GetChildren()) do
+				if item:IsA("BasePart") and Vector3.new(item.Position.X - at.X, 0, item.Position.Z - at.Z).Magnitude < RUIN_SPOT_TAKEN then
+					taken = true
+					break
+				end
+			end
+		end
+		if not taken then
+			table.insert(out, at)
+		end
+	end
+	return out
+end
+
 -- Where the base loot goes (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Up to
 -- `count` open-ground spots between `inner` and `outer` studs from the team's base, each passing the
 -- same checks a spawn pad does (inside the arena, real ground, not in the river, nothing built on it)
 -- and kept `gap` studs apart so pickups never sit in one another.
-function ModeTeams.BaseLootSpots(team, count, inner, outer, gap)
+--
+-- With a compound standing, its own spots come first: chests ("chest" as `kind`) go ONLY in its named
+-- chest spots, never out in the field, and other pickups fill its loot spots before the ground round
+-- it. GameMode does not pass `kind` yet; until it does, the chest call is known by its gap
+-- (RUIN_CHEST_GAP), which is the only one that asks for 14.
+function ModeTeams.BaseLootSpots(team, count, inner, outer, gap, kind)
 	local base = bases[team]
 	if not active or not base then
 		return {}
 	end
 	inner, outer, gap = inner or 12, outer or 80, gap or 6
 	local spots = {}
+	local ruin = ruins[team]
+	if ruin then
+		if kind == nil and gap >= RUIN_CHEST_GAP then
+			kind = "chest"
+		end
+		spots = freeRuinSpots(kind == "chest" and ruin.chestSpots or ruin.lootSpots, count)
+		if kind == "chest" then
+			return spots
+		end
+	end
 	for _ = 1, count * 10 do
 		if #spots >= count then
 			break
@@ -337,6 +511,12 @@ function ModeTeams.BaseLootSpots(team, count, inner, outer, gap)
 end
 
 function ModeTeams.Teardown()
+	ModeTeams.StopBaseVehicles()
+	ModeTeams.ClearBattleground()
+	ModeTeams.ClearRuins()
+	if ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then
+		ModeTeams.BaseVehicleBays = nil
+	end
 	active = false
 	mode = nil
 	table.clear(bases)
@@ -345,6 +525,499 @@ function ModeTeams.Teardown()
 	table.clear(downed)
 	pads = { {}, {} }
 end
+
+--------------------------------------------------------------------------------
+-- BEGIN BATTLEGROUND
+--------------------------------------------------------------------------------
+-- The battleground in the middle of a team match (TeamBattleground; Oliver, 2026-09-24: "make a way
+-- better quality and more fun to play around battleground in the centre of the maps for the team
+-- gamemodes"). Everything for it is in this block, apart from one call in Setup and one in Teardown.
+-- tools/team_battleground_modeteams_check.py runs it.
+
+local TeamBattleground = require(script.Parent:WaitForChild("TeamBattleground"))
+local BotNav = require(script.Parent:WaitForChild("BotNav"))
+local battleground = nil
+
+-- Builds it at the arena's centre facing the bases (team 1's along the frame's LookVector, so the
+-- mirror between its halves is the plane halfway between the two bases), from the match's one seed.
+-- Returns it, or nil and why (warned when it was tried and failed): a failure costs the match its
+-- battleground, never its start.
+function ModeTeams.BuildBattleground(mapInfo, axis, seed)
+	ModeTeams.ClearBattleground()
+	if not (TeamBattleground and mapInfo and mapInfo.map and seed) then
+		return nil, "no map or no seed"
+	end
+	local at = Vector3.new(arenaCentre.X, terrainAt(arenaCentre.X, arenaCentre.Z) or 0, arenaCentre.Z)
+	local toTeamOne = Vector3.new(math.cos(axis), 0, math.sin(axis))
+	local ok, built, why = pcall(TeamBattleground.Build, CFrame.lookAt(at, at + toTeamOne), mapInfo, seed)
+	if not ok or type(built) ~= "table" then
+		local reason = tostring(ok and why or built)
+		warn("ModeTeams: no battleground: " .. reason)
+		return nil, reason
+	end
+	battleground = built
+	local seeded, problem = pcall(TeamBattleground.SeedLoot, built)
+	if not seeded then
+		warn("ModeTeams: battleground loot failed: " .. tostring(problem))
+	end
+	-- The bots take cover behind what it built (BotNav.FindCover asks this first).
+	if BotNav then
+		BotNav.CoverHints = function(origin, radius)
+			return TeamBattleground.CoverNear(built, origin, radius)
+		end
+	end
+	return built
+end
+
+-- The battleground standing in this match ({ model, objectives, cover, lootSpots, ... }), or nil.
+function ModeTeams.Battleground()
+	return active and battleground or nil
+end
+
+function ModeTeams.ClearBattleground()
+	if BotNav then
+		BotNav.CoverHints = nil
+	end
+	if battleground then
+		TeamBattleground.Destroy(battleground)
+		battleground = nil
+	end
+end
+
+--------------------------------------------------------------------------------
+-- END BATTLEGROUND
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- BEGIN BASE VEHICLES
+--------------------------------------------------------------------------------
+-- Everything for the base vehicles is in this block, down to END BASE VEHICLES, apart from one
+-- call in Setup and one in Teardown. tools/team_vehicles_check.py runs it.
+
+local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
+local VehicleService = require(script.Parent:WaitForChild("VehicleService"))
+
+-- Oliver, 2026-09-24: "make vehicles spawn near the spawns of the teams on team gamemodes". A few
+-- vehicles parked at each base with their noses to the arena centre, so the way out of the base is
+-- the way to the fight. They are EXTRA to the map's own parking: MapGenerator parks the town lots and
+-- the verges in every mode, and that stays as it is. What holds, each checked by
+-- tools/team_vehicles_check.py:
+--   * both bases get the same models, rolled once per match: one base with the rocket pod and the
+--     other with a scooter is not a fair start;
+--   * every spot passes RefusePad (inside the arena with 40 to spare, real ground, not in the river,
+--     nothing built there), its whole footprint is clear of anything solid, and it is level enough
+--     that parkOn leaves the vehicle where it was put rather than stepping it aside;
+--   * clear of every spawn pad, of the base's other vehicles and of any loot lying there;
+--   * a wrecked one, or one lost off the map, is replaced after RespawnDelay while the match runs,
+--     one per slot, so a base never holds more live vehicles than it has slots. A live one driven
+--     away and left somewhere still counts: it is still in play.
+-- Bots need nothing: VehicleWeapons.FreeArmedNear finds any armed vehicle by its tag.
+--
+-- BAYS. Whatever builds a base's structure (TeamBaseRuins, when it lands) can hand over named
+-- vehicle bays by setting ModeTeams.BaseVehicleBays to a function (team, basePoint) -> list of
+-- CFrames, each the centre of a bay on its floor with LookVector the way a parked nose should point.
+-- It is asked every time a slot is parked (in Setup, after the pads, and on each replacement), so
+-- bays built later still count. Free bays are filled first; with none, or all taken, the spots are
+-- computed as below.
+ModeTeams.BaseVehicleBays = nil
+
+-- The biggest vehicle in the set plus a stud each side, as ParkInTowns assumes for a bay.
+local BASE_VEHICLE_FOOTPRINT = Vector3.new(8.9, 1, 16.6)
+local BASE_VEHICLE_TRIES = 80
+-- A spot that cannot be found (the base is boxed in) is looked for again this often, not every tick.
+local BASE_VEHICLE_RETRY_MS = 5000
+-- A bay with a base vehicle standing this close to its centre is taken.
+local BAY_TAKEN = 6
+-- The box over a bay that must be empty of anything solid before a vehicle is put in it: the biggest
+-- vehicle's footprint (Sahur Van 9.0 wide, Crocodilo Ranger 17.4 long, measured from VehicleModels by
+-- tools/team_base_ruins_check.py) with half a stud all round, 8 high, from 0.6 over the floor. A car
+-- put into a wreck, a driven-back car, a player or a deployable is two assemblies in one place, and
+-- the physics shoves them apart into a pile (Oliver's playtest, 2026-09-24: "the vehicles in the team
+-- bases are all messed up, like piled together").
+local BAY_CLEAR = Vector3.new(10, 8, 18.5)
+-- A vehicle put in a bay is held anchored this long, so nothing shoves it before it has settled.
+local BAY_SETTLE_SECONDS = 1.5
+
+local bayParams = OverlapParams.new()
+bayParams.FilterType = Enum.RaycastFilterType.Exclude
+bayParams.RespectCanCollide = true
+
+-- Anything solid standing in the bay.
+-- Critic C2: GetPartBoundsInBox matches world-aligned bounding boxes, so a wall turned to the
+-- compound's yaw covered bays it never touched. Each hit is confirmed against its real box.
+local function boxesOverlap(a, aSize, b, bSize)
+	local axes = { a.RightVector, a.UpVector, a.LookVector, b.RightVector, b.UpVector, b.LookVector }
+	for i = 1, 3 do
+		for j = 4, 6 do
+			local cross = axes[i]:Cross(axes[j])
+			if cross.Magnitude > 1e-4 then
+				table.insert(axes, cross.Unit)
+			end
+		end
+	end
+	local ha, hb = aSize / 2, bSize / 2
+	local offset = b.Position - a.Position
+	for _, axis in ipairs(axes) do
+		local ra = math.abs(a.RightVector:Dot(axis)) * ha.X + math.abs(a.UpVector:Dot(axis)) * ha.Y + math.abs(a.LookVector:Dot(axis)) * ha.Z
+		local rb = math.abs(b.RightVector:Dot(axis)) * hb.X + math.abs(b.UpVector:Dot(axis)) * hb.Y + math.abs(b.LookVector:Dot(axis)) * hb.Z
+		if math.abs(offset:Dot(axis)) > ra + rb then
+			return false
+		end
+	end
+	return true
+end
+
+local function bayOccupied(bay)
+	bayParams.FilterDescendantsInstances = { workspace.Terrain }
+	local look = bay.LookVector
+	local frame = CFrame.new(bay.Position + Vector3.new(0, 0.6 + BAY_CLEAR.Y / 2, 0)) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0)
+	for _, part in ipairs(workspace:GetPartBoundsInBox(frame, BAY_CLEAR, bayParams)) do
+		-- A ball or cylinder is tested as its box: a little generous, never short.
+		if part.CanCollide and (not part.CFrame or boxesOverlap(frame, BAY_CLEAR, part.CFrame, part.Size)) then
+			return true
+		end
+	end
+	return false
+end
+
+-- baseSlots[team] = list of { modelId, kind, model, lostAt }; one live vehicle per slot at most.
+local baseSlots = {}
+local baseFolder = nil
+-- Bumped by StopBaseVehicles so the respawn loop of a finished match stops.
+local baseGeneration = 0
+
+local footprintParams = OverlapParams.new()
+footprintParams.FilterType = Enum.RaycastFilterType.Exclude
+footprintParams.RespectCanCollide = true
+
+local function flatDistance(a, b)
+	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+end
+
+-- The yaw that points a vehicle's nose (its own -Z, see MapGenerator's verge parking) from `at` at
+-- the arena centre.
+local function yawTowardCentre(at)
+	local toward = Vector3.new(arenaCentre.X - at.X, 0, arenaCentre.Z - at.Z)
+	if toward.Magnitude < 0.01 then
+		return 0
+	end
+	return math.atan2(-toward.X, -toward.Z)
+end
+
+-- Nothing solid anywhere over the footprint. RefusePad's blocked test covers an 8-stud square at the
+-- centre only, and a car is twice that long.
+local function footprintClear(at, yaw)
+	footprintParams.FilterDescendantsInstances = { workspace.Terrain }
+	local frame = CFrame.new(at + Vector3.new(0, 3.6, 0)) * CFrame.Angles(0, yaw, 0)
+	local size = Vector3.new(BASE_VEHICLE_FOOTPRINT.X, 6, BASE_VEHICLE_FOOTPRINT.Z)
+	for _, part in ipairs(workspace:GetPartBoundsInBox(frame, size, footprintParams)) do
+		if part.CanCollide then
+			return false
+		end
+	end
+	return true
+end
+
+-- The models for one base, rolled once and handed to both. "armed" is drawn from the cars that carry
+-- a mount (VehicleModels.Mounts), in a fixed order so the roll is repeatable.
+function ModeTeams.RollBaseVehicleModels(rng)
+	local armed = {}
+	for id, def in pairs(VehicleModels.Models) do
+		if def.kind == "car" and VehicleModels.Mounts[id] then
+			table.insert(armed, id)
+		end
+	end
+	table.sort(armed)
+	local ids = {}
+	for _, slot in ipairs(MatchConfig.TeamBaseVehicles.Slots) do
+		local id
+		if slot == "armed" then
+			id = #armed > 0 and armed[rng:NextInteger(1, #armed)] or nil
+		else
+			id = VehicleModels.Pick(slot == "bike" and "bike" or "car", rng)
+		end
+		if id then
+			table.insert(ids, id)
+		end
+	end
+	return ids
+end
+
+-- Where this team's live base vehicles stand now, wherever they have been driven, except `except`.
+local function baseVehicleSpots(team, except)
+	local spots = {}
+	for _, slot in ipairs(baseSlots[team] or {}) do
+		if slot ~= except and slot.model and slot.model.Parent then
+			table.insert(spots, slot.model:GetPivot().Position)
+		end
+	end
+	return spots
+end
+
+-- Why a base vehicle of `team` cannot stand at `at`, or nil. Split out, like RefusePad, so the
+-- harness can watch each rule fire; also asked of where a vehicle actually landed. A declared bay
+-- (`inBay`) keeps the arena and pad rules, since those are ours to guarantee, but not the spacing or
+-- loot rules: whoever built the bays laid them out side by side with the chests beside them, on
+-- purpose, and baySpot does its own "is this bay taken" test.
+function ModeTeams.RefuseVehicleSpot(team, at, others, inBay)
+	local config = MatchConfig.TeamBaseVehicles
+	if flatDistance(at, arenaCentre) > arenaRadius - 40 then
+		return "outside the arena"
+	end
+	for _, pad in ipairs(pads[team] or {}) do
+		if flatDistance(pad, at) < config.PadClearance then
+			return "on a spawn pad"
+		end
+	end
+	if inBay then
+		return nil
+	end
+	for _, other in ipairs(others or {}) do
+		if flatDistance(other, at) < config.Gap then
+			return "on another vehicle"
+		end
+	end
+	local loot = workspace:FindFirstChild("Loot")
+	if loot then
+		for _, item in ipairs(loot:GetChildren()) do
+			if item:IsA("BasePart") and flatDistance(item.Position, at) < config.LootClearance then
+				return "on the loot"
+			end
+		end
+	end
+	return nil
+end
+
+-- The first free declared bay of `team`'s, as a spot and yaw, or nil when there are none or all are
+-- taken. A bay counts as taken while any live base vehicle of the team stands within BAY_TAKEN
+-- studs of its centre (the one being replaced, `except`, does not count).
+local function baySpot(team, except)
+	local provider = ModeTeams.BaseVehicleBays
+	if type(provider) ~= "function" then
+		return nil
+	end
+	local ok, bays = pcall(provider, team, bases[team])
+	if not ok or type(bays) ~= "table" then
+		if not ok then
+			warn("ModeTeams: BaseVehicleBays failed: " .. tostring(bays))
+		end
+		return nil
+	end
+	local others = baseVehicleSpots(team, except)
+	for _, bay in ipairs(bays) do
+		if typeof(bay) == "CFrame" then
+			local at = bay.Position
+			local free = not ModeTeams.RefuseVehicleSpot(team, at, nil, true)
+			-- Taken: one of the team's base vehicles stands there, or anything solid at all does.
+			local function taken()
+				for _, other in ipairs(others) do
+					if flatDistance(other, at) < BAY_TAKEN then
+						return true
+					end
+				end
+				return bayOccupied(bay)
+			end
+			if free and taken() then
+				free = false
+			end
+			if free then
+				local look = bay.LookVector
+				return at, math.atan2(-look.X, -look.Z), true
+			end
+		end
+	end
+	return nil
+end
+
+-- A spot and yaw for one of `team`'s vehicles, or nil, and whether it is a declared bay. A free bay
+-- wins; otherwise a computed spot: a level one is taken the moment one turns up, failing that the
+-- least sloping acceptable one, which parkOn then levels or steps aside (and parkSlot checks where
+-- it went).
+function ModeTeams.BaseVehicleSpot(team, except)
+	local base = bases[team]
+	if not base or not baseFolder then
+		return nil
+	end
+	local bayAt, bayYaw = baySpot(team, except)
+	if bayAt then
+		return bayAt, bayYaw, true
+	end
+	-- A compound's bays are where its vehicles go. With all of them taken, the slot waits and tries
+	-- again (BASE_VEHICLE_RETRY_MS) rather than dropping a car in a random spot round the walls.
+	if ModeTeams.BaseVehicleBays ~= nil and ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then
+		return nil
+	end
+	local config = MatchConfig.TeamBaseVehicles
+	local others = baseVehicleSpots(team, except)
+	local best, bestYaw, bestSpread = nil, nil, math.huge
+	for _ = 1, BASE_VEHICLE_TRIES do
+		local angle = math.random() * math.pi * 2
+		local reach = config.Inner + math.sqrt(math.random()) * (config.Outer - config.Inner)
+		local x, z = base.X + math.cos(angle) * reach, base.Z + math.sin(angle) * reach
+		if not ModeTeams.RefusePad(x, z, ModeTeams.MapRiver) then
+			local at = Vector3.new(x, terrainAt(x, z) or 0, z)
+			local yaw = yawTowardCentre(at)
+			if not ModeTeams.RefuseVehicleSpot(team, at, others) then
+				local spread, top = VehicleService.FootingAt(baseFolder, at, yaw, BASE_VEHICLE_FOOTPRINT)
+				if spread and footprintClear(Vector3.new(x, top, z), yaw) then
+					if spread <= VehicleService.FootingTolerance then
+						return Vector3.new(x, top, z), yaw
+					elseif spread < bestSpread then
+						best, bestYaw, bestSpread = Vector3.new(x, top, z), yaw, spread
+					end
+				end
+			end
+		end
+	end
+	return best, bestYaw
+end
+
+-- Parks the slot's model at a fresh spot. Returns the model, or nil (the slot stays empty).
+local function parkSlot(team, slot)
+	for _ = 1, 3 do
+		local at, yaw, inBay = ModeTeams.BaseVehicleSpot(team, slot)
+		if not at then
+			return nil
+		end
+		-- In a bay the spot is exact (its floor read by raycast when the compound was built), so it
+		-- is used as given: parkOn's step-aside would move the car off its bay onto the next one.
+		local model = VehicleService.Create(baseFolder, at, yaw, slot.kind,
+			{ model = slot.modelId, rng = Random.new(math.random(1, 2147483646)), exact = inBay or nil })
+		if model and inBay and model.PrimaryPart then
+			local chassis = model.PrimaryPart
+			chassis.Anchored = true
+			task.delay(BAY_SETTLE_SECONDS, function()
+				if chassis.Parent then
+					chassis.Anchored = false
+				end
+			end)
+		end
+		if model then
+			-- parkOn may have stepped a not-quite-level spot aside; one that went onto a pad or out
+			-- of the arena is taken back and another spot tried.
+			if not ModeTeams.RefuseVehicleSpot(team, model:GetPivot().Position, baseVehicleSpots(team, slot), inBay) then
+				slot.model = model
+				slot.lostAt = nil
+				return model
+			end
+			model:Destroy()
+		end
+	end
+	return nil
+end
+
+local function isLive(model)
+	return model ~= nil and model.Parent ~= nil and model:GetAttribute("Wrecked") ~= true
+end
+
+-- Live base vehicles of `team`, counted from the slots.
+function ModeTeams.LiveBaseVehicles(team)
+	local live = 0
+	for _, slot in ipairs(baseSlots[team] or {}) do
+		if isLive(slot.model) then
+			live += 1
+		end
+	end
+	return live
+end
+
+-- A team's spawn pads, for the harness and for whatever lays out bays around them.
+function ModeTeams.BasePads(team)
+	return pads[team] or {}
+end
+
+-- The folder the base vehicles are parked in (for probes), or nil outside a team match.
+function ModeTeams.BaseVehicleFolder()
+	return baseFolder
+end
+
+-- One pass of the respawn rule at wall-clock `nowMs`. Called every second by the loop
+-- SpawnBaseVehicles starts; public so the harness can drive the clock.
+function ModeTeams.TickBaseVehicles(nowMs)
+	if not active or not baseFolder then
+		return
+	end
+	local delayMs = MatchConfig.TeamBaseVehicles.RespawnDelay * 1000
+	for team, slots in pairs(baseSlots) do
+		for _, slot in ipairs(slots) do
+			if not isLive(slot.model) then
+				slot.lostAt = slot.lostAt or nowMs
+				if nowMs - slot.lostAt >= delayMs and ModeTeams.LiveBaseVehicles(team) < #slots then
+					-- The wreck goes BEFORE its replacement is parked: it is still standing in its bay,
+					-- and the bay test skips this slot's own vehicle, so the replacement used to be
+					-- put into the wreck. Wrecking has already put everyone out of it.
+					local wreck = slot.model
+					if wreck and wreck.Parent then
+						wreck:Destroy()
+					end
+					if not parkSlot(team, slot) then
+						slot.lostAt = nowMs - delayMs + BASE_VEHICLE_RETRY_MS
+					end
+				end
+			end
+		end
+	end
+end
+
+-- Parks every base's vehicles and starts the respawn loop. Called from Setup, after the pads.
+function ModeTeams.SpawnBaseVehicles(mapInfo)
+	ModeTeams.StopBaseVehicles()
+	local config = MatchConfig.TeamBaseVehicles
+	local map = mapInfo and mapInfo.map
+	if not config or not config.Enabled or not map then
+		return 0
+	end
+	-- A child of the map, so parkOn's hardstanding (it goes in the parent's parent) lands in the map
+	-- and goes with it.
+	baseFolder = Instance.new("Model")
+	baseFolder.Name = "TeamBaseVehicles"
+	baseFolder.Parent = map
+
+	local modelIds = ModeTeams.RollBaseVehicleModels(Random.new(math.random(1, 2147483646)))
+	local parked = 0
+	local now = protectionNowMs()
+	for team = 1, GameModes.TeamCount do
+		baseSlots[team] = {}
+		for _, modelId in ipairs(modelIds) do
+			local slot = { modelId = modelId, kind = VehicleModels.Models[modelId].kind }
+			table.insert(baseSlots[team], slot)
+			if parkSlot(team, slot) then
+				parked += 1
+			else
+				-- Tried again once the delay has run, like a wreck.
+				slot.lostAt = now
+			end
+		end
+	end
+	if parked < #modelIds * GameModes.TeamCount then
+		warn(string.format("ModeTeams: parked %d of %d base vehicles", parked, #modelIds * GameModes.TeamCount))
+	end
+
+	local generation = baseGeneration
+	task.spawn(function()
+		while baseGeneration == generation do
+			task.wait(1)
+			if baseGeneration ~= generation then
+				return
+			end
+			ModeTeams.TickBaseVehicles(protectionNowMs())
+		end
+	end)
+	return parked
+end
+
+-- Removes every base vehicle, whoever is in it, and stops the respawn loop. From Teardown.
+function ModeTeams.StopBaseVehicles()
+	baseGeneration += 1
+	if baseFolder then
+		baseFolder:Destroy()
+		baseFolder = nil
+	end
+	table.clear(baseSlots)
+end
+
+-- END BASE VEHICLES
 
 --------------------------------------------------------------------------------
 -- Team assignment
@@ -420,6 +1093,12 @@ function ModeTeams.DamageVeto(attackerToken, victimToken, _weaponId)
 		return true
 	end
 
+	-- A swing at an enemy ends the swinger's own protection. The comment on BreakProtection always
+	-- promised this and nothing called it from an attack, so a fresh spawn could fire at you for the
+	-- whole window while being unhittable back (#86). Here, because every hit on a combatant --
+	-- gun, blast, melee -- comes through this veto; a clean miss does not, which is the one gap.
+	ModeTeams.BreakProtection(attackerToken)
+
 	if ModeTeams.IsProtected(victimToken) then
 		return true
 	end
@@ -447,8 +1126,8 @@ function ModeTeams.IsProtected(token)
 	return until_ ~= nil and protectionNowMs() < until_
 end
 
--- Protection ends the moment you take a swing, not when you move. Called from the fire and throw
--- paths; safe to call when nothing is protected.
+-- Protection ends the moment you land a swing on an enemy, not when you move: DamageVeto calls
+-- BreakProtection for the attacker. Safe to call when nothing is protected.
 -- The raw deadline, for tools/respawn_probe.lua. Read-only and read by nothing in the game.
 --
 -- It exists because the UNITS are checkable offline and the BEHAVIOUR is not: this deadline was
@@ -626,9 +1305,23 @@ local function occupiedAt(point, except)
 	return false
 end
 
-function ModeTeams.ClearSpotNear(pad, except)
+-- `others` (optional) are the team's other pads, tried nearest first before the rings. In a compound
+-- the pads stand 9 to 14 apart under one roof, so the ring search from a busy pad would put the body
+-- out in the courtyard, or outside the walls, while a free pad stood a few steps away.
+function ModeTeams.ClearSpotNear(pad, except, others)
 	if not occupiedAt(pad, except) then
 		return pad
+	end
+	if others then
+		local sorted = table.clone(others)
+		table.sort(sorted, function(a, b)
+			return (a - pad).Magnitude < (b - pad).Magnitude
+		end)
+		for _, other in ipairs(sorted) do
+			if not occupiedAt(other, except) then
+				return other
+			end
+		end
 	end
 	for ring = 1, 3 do
 		local reach = ring * SPAWN_CLEARANCE * 1.4
@@ -772,7 +1465,7 @@ function ModeTeams.PlaceAt(token, character, extra, allowRefused)
 		return false
 	end
 
-	pad = ModeTeams.ClearSpotNear(pad, character)
+	pad = ModeTeams.ClearSpotNear(pad, character, ruins[team] and pads[team] or nil)
 	local position = pad + Vector3.new(0, 4, 0)
 	character:PivotTo(CFrame.lookAt(position, Vector3.new(arenaCentre.X, position.Y, arenaCentre.Z)))
 	character:SetAttribute("Team", team)

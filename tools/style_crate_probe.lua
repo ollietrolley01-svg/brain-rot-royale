@@ -142,7 +142,7 @@ local function shownOdds(crate)
 		local prefix, percent = string.match(part, "^(%a+) ([%d%.]+)%%$")
 		if prefix and percent then
 			for _, rarity in ipairs(Rarity.Order) do
-				if rarity:sub(1, 4) == prefix then
+				if rarity == prefix then
 					shown[rarity] = tonumber(percent)
 					count += 1
 				end
@@ -284,7 +284,7 @@ for _, tier in ipairs(TIERS) do
 		if (crate.odds[rarity] or 0) > 0 then
 			shown += 1
 			expect(string.format("%s card prints a percentage for %s", tier, rarity),
-				string.find(line, rarity:sub(1, 4) .. " %d") ~= nil, line)
+				string.find(line, rarity .. " %d") ~= nil, line)
 		end
 	end
 	expect(string.format("%s card prints every rarity it can roll", tier), shown >= 5, shown)

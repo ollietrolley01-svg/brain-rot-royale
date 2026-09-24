@@ -58,13 +58,13 @@ at all — they are in **"Needs a number from Oliver"** at the bottom. One line 
 
 | | List 1 (#1–#94) | List 2 (#95–#135) | A1–A6 | Total |
 |---|---|---|---|---|
-| `[x]` done | 23 | 11 | 1 | **35** |
-| `[~]` in progress / in tree | 43 | 15 | 4 | **62** |
-| `[ ]` not started | 28 | 13 | 0 | **41** |
-| `[?]` held → you | 0 | 2 | 1 | **3** |
+| `[x]` done | 22 | 10 | 1 | **33** |
+| `[~]` in progress / in tree | 68 | 27 | 4 | **99** |
+| `[ ]` not started | 4 | 4 | 0 | **8** |
+| `[?]` held → you | 0 | 0 | 1 | **1** |
 | **Items** | **94** | **41** | **6** | **141** |
 
-Counted from the rows below, not asserted: every number #1–#135 appears exactly once, no gaps and
+Recounted 2026-09-24 after the cloud session's rows went to `[~]` "in tree, unproven (commit X)" (coordination/cloud_status.md has the full table). Counted from the rows below, not asserted: every number #1–#135 appears exactly once, no gaps and
 no duplicates. Re-check with the row marks any time you doubt this table — if they disagree, the
 rows are right and this table is stale.
 
@@ -186,21 +186,21 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[~]` **4. Respawned me in the lobby.** IN TREE, probe-proven once — least-bad pad at once under
   protection; StartWorld before the spawn loop. **REOPENED by your #74**, which says it still happens.
   Final proof is you dying twice in a TDM. — *bug review*
-- `[x]` **5. TDM/KOTH map far too small.** `clamp(mapRadius×0.50, 450, 650)`: 2.5–2.9× the area. Say if it is now too big. — *match flow*
+- `[~]` **5. TDM/KOTH map far too small.** **09-24 cloud session: in tree, unproven (commit 4918382; merged to main).** `clamp(mapRadius×0.50, 450, 650)`: 2.5–2.9× the area. Say if it is now too big. — *match flow*
 - `[~]` **6. Died and never respawned.** IN TREE — `watchDeath` re-armed on every match body. Same fix and same proof as #4. — *bug review*
-- `[ ]` **7. Potion drinking animation clips into your face.** No owner in the current seven tabs. — *unowned*
+- `[~]` **7. Potion drinking animation clips into your face.** **09-24 cloud session: in tree, unproven (commit e11e0ed; merged to main).** No owner in the current seven tabs. — *unowned*
 - `[x]` **8. Stamina bar takes longer to empty.** `SprintDrainPerSecond` 9 → 5.5; 11.1 s → 18.2 s of sprint. — *movement*
 - `[x]` **9. Bat on top of the van.** Verified in render `run13/033_rearquarter_SahurVan.png` — raked on the rack, no longer flat. — *vehicles*
 - `[~]` **10. TDM to 100 kills + small top HUD.** **22 Sep evening: score bar now takes the top slot in team modes and the players-alive banner is hidden there; compass sits flush under it. Render still outstanding.** Server half verified (`GameModes.lua:194`); HUD in
   `ModeScoreHud.client.lua`. Render outstanding. — *HUD*
-- `[ ]` **11. Arm joints look disconnected on long rifles in FPS.** — *guns*
+- `[~]` **11. Arm joints look disconnected on long rifles in FPS.** **09-24 cloud session: in tree, unproven (commit 1914388, 61a001f; on the working branch).** — *guns*
 - `[x]` **12. Buff the shotguns.** Verified in tree (Pump 13/7/110 … hip damage at 10 studs 32→69).
   **⚠ SUPERSEDED BY #64**, which asks for the opposite. Do not treat both as live. — *guns*
-- `[ ]` **13. Third-person animations should match first-person.** — *guns*
+- `[~]` **13. Third-person animations should match first-person.** **09-24 cloud session: in tree, unproven (commit 4b5c995, cfb861d, f76b1d0; on the working branch).** — *guns*
 - `[~]` **14. Brainrot ability HUD — position and a DPS/health readout.** Code verified
   (`CompanionAbilityIcon.lua:43`, `:167+`, called from `HudClient:3981`). Render outstanding. — *HUD*
 - `[x]` **15. Infinite stamina in the lobby.** Already true both sides; the dead `LobbyDrains` key removed so nobody trusts it. — *movement*
-- `[ ]` **16. Replace the old map cars with the drivable designs.** Roads tab: "not started here" —
+- `[~]` **16. Replace the old map cars with the drivable designs.** **09-24 cloud session: in tree, unproven (commit 951ec86, 69cd028; on the working branch).** Roads tab: "not started here" —
   placement lives in MapGenerator. Pairs with #51 and #94. — *map*
 - `[~]` **17. Previews of every accessory and cosmetic.** **22 Sep evening: live cosmetic previews now draw in the shop rows (01fd06e).** IN TREE, probe-proven — all 65 build a
   preview including the 18 `OfKind` hides; heaviest 103 parts. Contact sheets not re-run since the
@@ -208,7 +208,7 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[~]` **18. Improve the accessory designs before the previews.** IN TREE / **unproven** — detail
   floors raised (PizzaBackpack 6→10, CrownOfRot 22→25), ChefHat off Fabric. No Studio job since the change. — *cosmetics*
 - `[x]` **19. Brainrot pass = 450 Robux.** `GamepassConfig.lua:83`, in the 03:23 build. — *shop*
-- `[~]` **20. Polish the menu / redesign if needed.** IN TREE — three-version MenuShell, five-destination
+- `[~]` **20. Polish the menu / redesign if needed.** **09-24 cloud session: in tree, unproven (commit 24c0293; merged to main).** IN TREE — three-version MenuShell, five-destination
   nav, viewport finally wired (the `short` and `tall` versions had never run in the game). The bigger
   restructure is #78. — *menu*
 
@@ -216,39 +216,39 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 
 - `[~]` **21. Redesign the crates and their animations.** IN TREE — shared `CrateOpen.lua`, per-tier
   feel. Card + film-strip gallery outstanding. — *crates*
-- `[ ]` **22. Directional HUD cue for nearby bullet sounds.** — *HUD*
+- `[~]` **22. Directional HUD cue for nearby bullet sounds.** **09-24 cloud session: in tree, unproven (commit 2589403; merged to main).** — *HUD*
 - `[x]` **23. Vaulting breaks through windows.** Proven: vaulting a pane breaks it, and with the call
   removed the test fails. Reinforced by the MovementService rewrite (see #119). — *destruction*
-- `[~]` **24. Kill-animations tab in the shop.** Slot decided (top-level on large/short, inside STYLE on tall). Not built. — *menu*
-- `[~]` **25. Zoom → Z, scroll wheel switches hotbar items.** Spec written, edit granted. No tab
+- `[~]` **24. Kill-animations tab in the shop.** **09-24 cloud session: in tree, unproven (commit 408a8b7, df35ef0, 24c0293; on the working branch).** Slot decided (top-level on large/short, inside STYLE on tall). Not built. — *menu*
+- `[~]` **25. Zoom → Z, scroll wheel switches hotbar items.** **09-24 cloud session: in tree, unproven (commit 0e49fc2; merged to main).** Spec written, edit granted. No tab
   reported it in the current cycle — **confirm it is still owned.** — *movement / HUD*
-- `[ ]` **26. Bending fingers on the hands, not blocking the crosshair.** — *guns*
+- `[~]` **26. Bending fingers on the hands, not blocking the crosshair.** **09-24 cloud session: in tree, unproven (commit 61a001f; on the working branch).** — *guns*
 - `[x]` **27. Enemies get a red aura, not through walls.** Verified in render: no wall = visible,
   behind wall = fully hidden, planted AlwaysOnTop fault glows through. Extended by #95. — *HUD*
 - `[x]` **28. Treehouse obby branches not solid.** 11 real holes → 0, 36 exposed bits → 4.
   **⚠ DISAGREEMENT:** `coordination/handoffs/foliage.md` still lists #28 as an open item, "mine,
   untouched". One of the two is wrong — settle before it is re-fixed or wrongly closed. — *map / foliage*
-- `[~]` **29. Explosions leave a giant floating black circle.** Ground case verified in render.
+- `[~]` **29. Explosions leave a giant floating black circle.** **09-24 cloud session: in tree, unproven (commit d508889, a99a009; merged to main).** Ground case verified in render.
   **REOPENED by you:** the second-storey case (blast destroys the floor under it) is unmeasured — the
   scorch must land on the upper floor and go with the surface. Same cause as #70. — *destruction*
-- `[ ]` **30. Make gun tracers more visible.** — *guns*
-- `[~]` **31. Real parking lots for cars to spawn on.** **22 Sep evening: still no bays: TownKinds describes parking bays but nothing builds them yet. Town lots are now padded flat (#32).** The mechanism now exists — `MapTerrain.FlattenPad`
+- `[~]` **30. Make gun tracers more visible.** **09-24 cloud session: in tree, unproven (commit 5d577bf; merged to main).** — *guns*
+- `[~]` **31. Real parking lots for cars to spawn on.** **09-24 cloud session: in tree, unproven (commit 951ec86; on the working branch).** **22 Sep evening: still no bays: TownKinds describes parking bays but nothing builds them yet. Town lots are now padded flat (#32).** The mechanism now exists — `MapTerrain.FlattenPad`
   landed and is probe-proven (20 pads, flatness 0.000 footprint, 3.6 ms/pad). Bays themselves not built. Converged with #32. — *roads + vehicles*
 - `[~]` **32. Give the cities personalisation.** **22 Sep evening: HOOKED UP and in the 18:15 playtest (9ba0a79): themed set pieces, flags, props, per-kind streets and buildings, every lot padded flat. Playtest decides.** Phase 1 approved, 18 named characters over 7 layout kinds.
   **BLOCKED ON A HOOK:** `TownThemes` (4,857 lines) and `TownKinds` (485) have **no production caller at
   all** — confirmed independently by the contributors' census. The hook is the item. — *map*
 - `[x]` **33. Bots sometimes don't drop their weapons.** Proven merged9 8/8 — in respawn modes
   `eliminate()` returned above `dropLoot`. Ruled: bots drop their held gun in respawn modes, players don't. — *bug review*
-- `[~]` **34. Lag-switch SMG duplicated barrel.** SMG fixed (cocking tube banded at the front, sight
+- `[~]` **34. Lag-switch SMG duplicated barrel.** **09-24 cloud session: in tree, unproven (commit 9dd2628; on the working branch).** SMG fixed (cocking tube banded at the front, sight
   line kept). All-guns floating-tube check written with self-test, **not yet run**. — *guns*
-- `[~]` **35. Roof inaccessible on the legendary barricade.** Coded (hatch 3.8→5.8 with truss).
+- `[~]` **35. Roof inaccessible on the legendary barricade.** **09-24 cloud session: in tree, unproven (commit a4e3d78; on the working branch).** Coded (hatch 3.8→5.8 with truss).
   `defense_roof` gallery shot. Opening/headroom measurement outstanding. — *destruction*
 - `[x]` **36. A way to drop weapons and ammo from inventory.** Server half always existed; the DROP
   button (`InventoryPanel.lua:289-296`) was the missing discoverability. Server path proven 8/8. — *HUD*
 - `[x]` **37. Stairs leading into walls.** Five maps clean on the 04:42 build: `wallHoles=0`, no
   blocked stair tops, self-test 0-as-built → 1-planted on every map. Log read by claude-43. — *map*
 - `[x]` **38. Remove the out-of-stamina sound.** No longer played; the SoundConfig entry kept for a future breath cue. — *movement*
-- `[~]` **39. Vehicles stuck in the ground.** Measured with the vehicle loop running: 0 buried, mean
+- `[~]` **39. Vehicles stuck in the ground.** **09-24 cloud session: in tree, unproven (commit 1d4a67a; on the working branch).** Measured with the vehicle loop running: 0 buried, mean
   tyre gap −0.17. 1 of 13 hangs 1.48 studs where MapGenerator asks for that spot — fixed by the routed
   placement patch, ticks when that patch is in a build. — *vehicles*
 - `[x]` **40. Nerf the AI aim.** **22 Sep evening: REVERSED on your word (a43b176): bot aim back to 0.66 near / 0.19 far.** `MatchConfig.lua:103-104` Near 0.66→0.55, Far 0.19→0.15; measured
@@ -256,12 +256,12 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 
 ## #41–#60
 
-- `[~]` **41. Improve the arrest egg + rename "The Sweaty Incident".** Rename verified in the 03:23 build. Roof and arms still owed. — *easter eggs*
-- `[ ]` **42. Revamp the other low-quality easter eggs.** — *easter eggs*
+- `[~]` **41. Improve the arrest egg + rename "The Sweaty Incident".** **09-24 cloud session: in tree, unproven (commit cb5c7ef; merged to main).** Rename verified in the 03:23 build. Roof and arms still owed. — *easter eggs*
+- `[~]` **42. Revamp the other low-quality easter eggs.** **09-24 cloud session: in tree, unproven (commit ccad881, cb5c7ef; merged to main).** — *easter eggs*
 - `[~]` **43. All benches on sidewalks face the road.** Street benches were already correct — 720 cases,
   worst 0.000001°. **Waiting on you:** which bench did you see? — *map*
-- `[ ]` **44. FPS animations should use your avatar.** — *guns*
-- `[ ]` **45. Make the storm brainrot-themed.** — *storm*
+- `[~]` **44. FPS animations should use your avatar.** **09-24 cloud session: in tree, unproven (commit 61a001f; on the working branch).** — *guns*
+- `[~]` **45. Make the storm brainrot-themed.** **09-24 cloud session: in tree, unproven (commit 4918382, 6707c8b, 7c7d923; merged to main).** — *storm*
 - `[x]` **46. Bots just move in circles in the other modes.** Proven — hill contest/hold, 0 objectiveless
   bots; TDM rally to friendly centroid then push to last-seen. Root cause was #88 (no team). — *bots*
 - `[x]` **47. Bots shoot through walls and barricades.** Proven — barricade shots; bots track structures
@@ -269,9 +269,9 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[~]` **48. Improve the blood splat and add particles.** IN TREE and **photographed** — blast frames,
   scorch views and splats on body/head/shield all captured. Life hold 3.0 + fade 1.0; MAX_SPLATS 40→30. — *destruction*
 - `[~]` **49. Improve the sound of the carts running.** Rebuilt — same cue as #83, one fix covers both. Needs your ears. — *audio*
-- `[~]` **50. Car designs have random black poles.** Van drumsticks thickened; door seams at 0.02.
+- `[~]` **50. Car designs have random black poles.** **09-24 cloud session: in tree, unproven (commit 7a3f3e4, e162d58; on the working branch).** Van drumsticks thickened; door seams at 0.02.
   **The Ranger is still reported** — see #61 and #116. — *vehicles*
-- `[ ]` **51. Old road cars can't be destroyed.** Cause known (parts literally named "Part", damage looked
+- `[~]` **51. Old road cars can't be destroyed.** **09-24 cloud session: in tree, unproven (commit 21c6199, 81c1263, d2be199; merged to main).** Cause known (parts literally named "Part", damage looked
   up by name). Roads tab: not started. Pairs with #16 and #94. — *vehicles / map*
 - `[x]` **52. Admin HUD for you only.** Probe 0 failures with both planted faults (wrong user gets
   nothing; wrong constant gives you nothing), nine forged payloads refused, every action logged. — *HUD*
@@ -280,8 +280,8 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
   reads as the leading score and the gap. Render outstanding. — *HUD*
 - `[x]` **55. Improve the reloading sounds.** The 7 closing beats now carry a low layer; opening beats
   stay light; volumes untouched. **In the build — needs your ears.** — *audio*
-- `[~]` **56. Make the whole map destructible.** Most of the map already breaks (walls, upper floors, roofs, props, trees, rocks, parked cars, terrain craters). 24 Sep: balconies, rails, railings, ridge caps, coping, stair soffits/headers, docks and bumpers now break, and solid pieces fall with the wall/roof/floor holding them instead of floating; town signs, fingerposts and stop signs break. Still fixed: roads, bridges, ground-floor slabs, traffic signals. — *destruction*
-- `[~]` **57. Roadkill with the cars.** Built — damage scales with speed, nothing below walking pace,
+- `[~]` **56. Make the whole map destructible.** **09-24 cloud session: in tree, unproven (commit 4239fad; merged to main).** Most of the map already breaks (walls, upper floors, roofs, props, trees, rocks, parked cars, terrain craters). 24 Sep: balconies, rails, railings, ridge caps, coping, stair soffits/headers, docks and bumpers now break, and solid pieces fall with the wall/roof/floor holding them instead of floating; town signs, fingerposts and stop signs break. Still fixed: roads, bridges, ground-floor slabs, traffic signals. — *destruction*
+- `[~]` **57. Roadkill with the cars.** **09-24 cloud session: in tree, unproven (commit 32de759, 41631ba; merged to main).** Built — damage scales with speed, nothing below walking pace,
   never your own passengers. **IN THE BUILD BUT UNPROVEN.** You re-asked as #110, which means it is
   absent or silent for you — prove it fires before touching it. — *vehicles*
 - `[~]` **58. Sticky bomb + translucent placement preview.** Coded end to end and probe-proven
@@ -293,11 +293,11 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 
 ## #61–#80
 
-- `[ ]` **61. The Ranger still has random poles sticking out.** Has now survived one "fix" — find out
+- `[~]` **61. The Ranger still has random poles sticking out.** **09-24 cloud session: in tree, unproven (commit 7a3f3e4, e162d58, 5ebcf23; on the working branch).** Has now survived one "fix" — find out
   what that fix actually changed before writing another. See #50 and #116. — *vehicles*
 - `[~]` **62. The sliding sound is an explosion.** Rebuilt as a skid, 1.16 s — it was a brick-crash bang
   pitched down through distortion, running 4.0 s against a 1.1 s slide. Needs your ears. — *audio*
-- `[ ]` **63. The throwable preview stays around after the throw.** — *destruction*
+- `[~]` **63. The throwable preview stays around after the throw.** **09-24 cloud session: in tree, unproven (commit 5a5972f; merged to main).** — *destruction*
 - `[ ]` **64. Shotgun nerf: all pellets = 2-shot body, 1-shot head.** NOT STARTED. **This reverses #12** — *guns*
 - `[~]` **65. Menu tabs don't fit inside the menu HUD.** IN TREE — 9 tabs needed 568 px in 539; the menu
   was also never told your screen size, so it always drew the desktop layout. Both fixed. — *menu*
@@ -307,55 +307,55 @@ Source: `C:\Users\oliver\Downloads\make improvements to the shown map.txt`.
 - `[ ]` **67. Move the companion to the character's left side.** — *companions*
 - `[~]` **68. Free mouse when not holding anything.** Built; checked that no pickup needs a click, so a
   free cursor can't break looting. Interacts with #100 and #112 — prove which writer wins. — *HUD*
-- `[~]` **69. Sticky bomb remote detonator left in your hand.** Fixed in 842ad50, awaiting a playtest: there is no detonator; the "detonator" was the next Clingy Crumpet of the stack, held timer-up with a lit red button. The button is now dark until a thrown crumpet sticks (ThrowableModels.Arm). The last one thrown clears the slot and the held model (WeaponService.spendAndFinish → RefreshHeldGun → clearHeldGun). — *destruction*
-- `[~]` **70. Bombs leave a floating circle on a destructible floor.** Same cause as #29 and reopened with it. — *destruction*
-- `[ ]` **71. A breaking animation per material instead of fading to clear.** — *destruction*
-- `[ ]` **72. Random floating texts on some gun textures in FPS.** — *guns*
+- `[~]` **69. Sticky bomb remote detonator left in your hand.** **09-24 cloud session: in tree, unproven (commit 842ad50; merged to main).** Fixed in 842ad50, awaiting a playtest: there is no detonator; the "detonator" was the next Clingy Crumpet of the stack, held timer-up with a lit red button. The button is now dark until a thrown crumpet sticks (ThrowableModels.Arm). The last one thrown clears the slot and the held model (WeaponService.spendAndFinish → RefreshHeldGun → clearHeldGun). — *destruction*
+- `[~]` **70. Bombs leave a floating circle on a destructible floor.** **09-24 cloud session: in tree, unproven (commit d508889, a99a009; merged to main).** Same cause as #29 and reopened with it. — *destruction*
+- `[~]` **71. A breaking animation per material instead of fading to clear.** **09-24 cloud session: in tree, unproven (commit 67965f1, 21c6199, ca956c1; on the working branch).** — *destruction*
+- `[~]` **72. Random floating texts on some gun textures in FPS.** **09-24 cloud session: in tree, unproven (commit 81c1263, 390ac21; merged to main).** — *guns*
 - `[~]` **73. Improve the rivers and their banks/valleys.** **22 Sep evening: BUILT and in the 18:15 playtest (be9a58e): graded banks (no sheer cliffs), sand beaches, shelving shore, roads/bridges/plateaus kept on their ground. Playtest decides.** **MEASURED, NOT DESIGNED.** 579 cross-sections:
   width 34/30 wetted constant, depth 4.3, and the finding that matters — **the typical riverbank (60–66°)
   is steeper than a player can climb out of** (escapable at ≤50°; swim 12.3 studs/s). Ruled banks first,
   width second. Design note is the next step. — *roads*
 - `[~]` **74. Still spawning in the lobby during other modes.** This is what reopened #4/#6. — *bug review*
-- `[~]` **75. Make the bots more aggressive.** Ruled: aggression = commitment, not lethality. Baseline
+- `[~]` **75. Make the bots more aggressive.** **09-24 cloud session: in tree, unproven (commit a057fff; on the working branch).** Ruled: aggression = commitment, not lethality. Baseline
   measured (first shot 0.83 s front / 2.09 s behind; rifle duels 3.1–4.9 s). A/B dial script **BUILT, NOT RUN**. — *bots*
-- `[ ]` **76. Compounding playtime awards.** — *progression*
-- `[ ]` **77. Daily streak awards.** — *progression*
-- `[~]` **78. Revamp the menu: separate progression, shop and catalogue menus, previews everywhere.** **22 Sep evening: started: the menu is split into SHOP / BRAINROTS / PROGRESS / ROBUX / SETTINGS buttons and the progression pages are their own tabs.**
+- `[~]` **76. Compounding playtime awards.** **09-24 cloud session: in tree, unproven (commit 698efa3; merged to main).** — *progression*
+- `[~]` **77. Daily streak awards.** **09-24 cloud session: in tree, unproven (commit 698efa3; merged to main).** — *progression*
+- `[~]` **78. Revamp the menu: separate progression, shop and catalogue menus, previews everywhere.** **09-24 cloud session: in tree, unproven (commit 24c0293; merged to main).** **22 Sep evening: started: the menu is split into SHOP / BRAINROTS / PROGRESS / ROBUX / SETTINGS buttons and the progression pages are their own tabs.**
   The big one. #20 is the polish; this is the restructure. — *menu*
-- `[ ]` **79. Leaning in FPS; on mobile only when scoped.** — *movement*
-- `[~]` **80. Fix HUD overlap everywhere, diligently.** **22 Sep evening: more fixed: compass and minimap names no longer overlap, compass docks flush under whatever is above it, stamina bar hides while driving so it no longer overlaps the car HUD.** The play-through sweep landed a long row of fixes.
+- `[x]` **79. Leaning in FPS; on mobile only when scoped.** **09-24: REMOVED on Oliver's word (5465a25).** — *movement*
+- `[~]` **80. Fix HUD overlap everywhere, diligently.** **09-24 cloud session: in tree, unproven (commit 6639f24, 18b25f0, e184912; on the working branch).** **22 Sep evening: more fixed: compass and minimap names no longer overlap, compass docks flush under whatever is above it, stamina bar hides while driving so it no longer overlaps the car HUD.** The play-through sweep landed a long row of fixes.
   **Still live:** on an upright phone the compass, bounty line and speed pill set `Visible = true` every
   frame and reappear at desktop positions over the portrait layout. See also #86. — *HUD*
 
 ## #81–#94
 
-- `[~]` **81. Increase bot reaction speed and aggressiveness.** With #75 — reaction speed is the one dial
+- `[~]` **81. Increase bot reaction speed and aggressiveness.** **09-24 cloud session: in tree, unproven (commit a057fff; on the working branch).** With #75 — reaction speed is the one dial
   you named. A/B built, not run. — *bots*
 - `[x]` **82. Sprinting in the lobby keeps cancelling.** The lobby sent match state once a second and the
   client read every repeat as "you left the match", cancelling sprint and aim. Fixed — hold shift in the lobby and say. — *movement*
 - `[~]` **83. The car sound is messed up.** Rebuilt — the engine loop was a brick-crash sample through
   distortion, i.e. a car repeatedly hitting something, at every speed. Needs your ears. — *audio*
-- `[ ]` **84. Cars get bumpy and glitchy at speed.** **22 Sep evening: ASSIGNED TO JACOB as HIGH PRIORITY (mailbox 17:10). Not started as of 18:00.** Same as #109. — *vehicles*
-- `[x]` **85. Chests and supply drops should drop contents on the ground, not into inventory.** **22 Sep evening: chests spill their loot onto the ground (f316617). Supply drops: check in playtest.** — *loot*
-- `[~]` **86. Bug-fixer pass over the HUD and menus for fit and crowding.** **DONE AS A REVIEW, NOT AS
+- `[~]` **84. Cars get bumpy and glitchy at speed.** **09-24 cloud session: in tree, unproven (commit 3f1d7b6; merged to main).** **22 Sep evening: ASSIGNED TO JACOB as HIGH PRIORITY (mailbox 17:10). Not started as of 18:00.** Same as #109. — *vehicles*
+- `[~]` **85. Chests and supply drops should drop contents on the ground, not into inventory.** **09-24 cloud session: in tree, unproven (commit 3441c0f, d508889; on the working branch).** **22 Sep evening: chests spill their loot onto the ground (f316617). Supply drops: check in playtest.** — *loot*
+- `[~]` **86. Bug-fixer pass over the HUD and menus for fit and crowding.** **09-24 cloud session: in tree, unproven (commit 5322cd4, 62a37b0, 4fa5a58; on the working branch).** **DONE AS A REVIEW, NOT AS
   FIXES:** the player's-eye review produced 142 claims → 89 survived adversarial refutation → 82 unique
   sites (2 blocks-play, 46 confuses, 34 minor), in `coordination/handoffs/bug-review-player-eye.md`.
   **None of it is assigned or landed.** This is the largest single block of ready work in the project. — *unrouted*
 - `[ ]` **87. Make the grenade launcher launch grenades further.** — *guns*
 - `[x]` **88. Bots never get assigned a team in TDM/KOTH.** Root cause of #46 and #125. `ModeTeams` now
   writes the `Team` attribute for players and bots alike (`:318/:620/:636/:712`). — *bots*
-- `[~]` **89. Can't see animations on other players, like sliding.** First cause was wrong and is
+- `[~]` **89. Can't see animations on other players, like sliding.** **09-24 cloud session: in tree, unproven (commit 4918382, e3890c5; merged to main).** First cause was wrong and is
   retracted: the slide IS published (`MatchService:858`) and you hearing it proves it arrives — so the
   state arrives and the POSE doesn't draw on someone else's body. **SPRINT is genuinely never published
   at all** — that half is real and separate. — *movement*
-- `[ ]` **90. Minimize button on the controls.** **22 Sep evening: a minimize tab now exists for the HUD button stack (not the controls overlay, which is off by default).** Collapsed state to be remembered between rounds; starts collapsed on phones. — *HUD*
+- `[~]` **90. Minimize button on the controls.** **09-24 cloud session: in tree, unproven (commit 4918382, 6a8dbee; merged to main).** **22 Sep evening: a minimize tab now exists for the HUD button stack (not the controls overlay, which is off by default).** Collapsed state to be remembered between rounds; starts collapsed on phones. — *HUD*
 - `[ ]` **91. Legendary brainrot "tom pearl".** **Concept comes to you before it is built.** Also checks
   the crate odds and the hard-coded "126 brainrots" in the menu. — *brainrot*
-- `[ ]` **92. The hands gripping the guns need improvement.** Rides in the hands/sights render — measuring
+- `[~]` **92. The hands gripping the guns need improvement.** **09-24 cloud session: in tree, unproven (commit 7364fb9, 61a001f; on the working branch).** Rides in the hands/sights render — measuring
   whether the palm meets the grip on every gun, and whether one pose is reused for every weapon shape. — *guns*
-- `[~]` **93. Improve the King of the Hill objective circle.** **22 Sep evening: marker made smaller (30x30), only drawn within 260 studs, no longer on top of everything; the pillar is the main marker.** To be built as a module the render and the
+- `[~]` **93. Improve the King of the Hill objective circle.** **09-24 cloud session: in tree, unproven (commit 5d6199c, b7661a2; merged to main).** **22 Sep evening: marker made smaller (30x30), only drawn within 260 studs, no longer on top of everything; the pillar is the main marker.** To be built as a module the render and the
   game share, so the picture you approve is the code that ships. — *match flow*
-- `[ ]` **94. Improve the cars that can't be driven and spawn on the road.** Any roadside car that stays
+- `[~]` **94. Improve the cars that can't be driven and spawn on the road.** **09-24 cloud session: in tree, unproven (commit 951ec86, 69cd028; on the working branch).** Any roadside car that stays
   decoration gets built from the real vehicle model, anchored — and destructible for free. Pairs with #16/#51. — *vehicles*
 
 ---
@@ -370,13 +370,13 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   iterated `Players:GetPlayers()` and bots are not Players, so no bot was ever marked.** Now keyed off the
   server's `Team` attribute. **UNPROVEN: whether the friendly outline reads clearly without a fill.** — *HUD*
 - `[ ]` **96. More loot boxes on the team gamemodes.** — *map*
-- `[~]` **97. The hit registration feels bad.** **The highest-value item on either list.** Measured, not
+- `[~]` **97. The hit registration feels bad.** **09-24 cloud session: in tree, unproven (commit affa05e, c102b7d; merged to main).** **The highest-value item on either list.** Measured, not
   guessed: the client quantises fire rate down to the frame rate and the server drops shots inside a 10%
   tolerance with no tracer, no flash and no ammo spent. **Fixing one alone makes it worse** — they land
   together or not at all. Design, the cap, the server-clock rule and the cover trade you must choose are
   in `HITREG_DESIGN.md`. Rewind deliberately unbuilt. — *guns*
 - `[x]` **98. Many TDM bots just stand in one spot.** `nextSlot` for replacement bots + S25. — *bots*
-- `[~]` **99. Bot and player movement is clippy, like low fps.** **22 Sep evening: bots re-claim their physics every second, which stopped the teleporting (85c3042).** — *bots + perf*
+- `[~]` **99. Bot and player movement is clippy, like low fps.** **09-24 cloud session: in tree, unproven (commit 30f6144; merged to main).** **22 Sep evening: bots re-claim their physics every second, which stopped the teleporting (85c3042).** — *bots + perf*
 - `[~]` **100. Mouse doesn't unlock when vote menus pull up.** Read as **our own cursor regression**, not a
   new bug. Ready-up loop landed: an unready player's vote no longer takes the cursor or the overlay. — *pre-match UI*
 - `[~]` **101. Improve the winning screens of each gamemode.** **22 Sep evening: NEW RESULTS SCREEN in the 18:15 playtest (c5895d1 + 01fd06e): VICTORY/DEFEAT/DRAW, stat tiles, reward chips and your reward crate as a 3D tile. Playtest decides.** — *pre-match UI*
@@ -384,36 +384,36 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   `InMatch` written true/false for every Player, leave key L, `[E]` next / `[L]` leave labelled. **The
   focus gate is now closed against a modified client** (`MatchService.FocusTarget`), which is the least
   visible and most important part. — *bug review*
-- `[ ]` **103. People can jump off the edge in the lobby.** — *map*
+- `[~]` **103. People can jump off the edge in the lobby.** **09-24 cloud session: in tree, unproven (commit 3095f71; merged to main).** — *map*
 - `[~]` **104. The TDM HUD at the top stays after the game.** **22 Sep evening: also fixed: battle royale showed the last TDM score.** IN TREE — five elements plus the TDM/KOTH
   scoreline hidden when in-progress and not in the match; a mid-game joiner renders the live score. — *HUD*
 - `[x]` **105. Make the drop menu higher res.** **22 Sep evening: drop map image up to 640 px on a 192x192 grid (77545a9, 90a2238).** — *pre-match UI*
 - `[x]` **106. Can't pick weapons up, especially after a lobby trial gun.** Range-stop guard in `verify.py`;
   found from the contributors' ignored-return-value rule within twenty minutes of merging it. — *guns*
-- `[ ]` **107. The game-choosing menu pulls up randomly mid-match.** — *pre-match UI*
+- `[~]` **107. The game-choosing menu pulls up randomly mid-match.** **09-24 cloud session: in tree, unproven (commit 81c1263, fefa725; merged to main).** — *pre-match UI*
 - `[x]` **108. The storm kills you in the lobby.** 20/20 probe. — *storm*
-- `[ ]` **109. Cars are glitchy and bounce around.** **22 Sep evening: same as #84, ASSIGNED TO JACOB as HIGH PRIORITY.** Same as #84. — *vehicles*
-- `[~]` **110. Add roadkill for the cars.** Already landed once as #57 and unproven. You asking again means
+- `[~]` **109. Cars are glitchy and bounce around.** **09-24 cloud session: in tree, unproven (commit 3f1d7b6; merged to main).** **22 Sep evening: same as #84, ASSIGNED TO JACOB as HIGH PRIORITY.** Same as #84. — *vehicles*
+- `[~]` **110. Add roadkill for the cars.** **09-24 cloud session: in tree, unproven (commit 32de759, 41631ba; merged to main).** Already landed once as #57 and unproven. You asking again means
   it is absent or silent — **prove it fires before touching it.** — *vehicles*
 - `[ ]` **111. Increase time-to-kill a bit.** — *guns*
-- `[~]` **112. I can still see my cursor in FPS.** Same cursor family as #100 and #68. — *HUD*
-- `[~]` **113. The bots are pretty laggy.** Cap now 15 (your figure), bots 30. Worst tick measured
+- `[~]` **112. I can still see my cursor in FPS.** **09-24 cloud session: in tree, unproven (commit f1a2ffb; on the working branch).** Same cursor family as #100 and #68. — *HUD*
+- `[~]` **113. The bots are pretty laggy.** **09-24 cloud session: in tree, unproven (commit 30f6144; merged to main).** Cap now 15 (your figure), bots 30. Worst tick measured
   32.4 ms at cap 15 on one run; **a second run read 42.6 ms and that is deliberately unresolved.** — *bots*
-- `[~]` **114. Popup barricade in the team-mode kit; two objectives on KOTH.** **22 Sep evening: (b) DONE: two capturable objectives A/B, bots split between them (7ddb96e, 9ba0a79). (a) popup barricade in the team kit: not confirmed.** — *destruction (a) / match flow (b)*
-- `[x]` **115. Make it easier to vault through windows.** `Parkour.lua` sets `MaxParts` per query instead
+- `[~]` **114. Popup barricade in the team-mode kit; two objectives on KOTH.** **09-24 cloud session: in tree, unproven (commit 7baed01; merged to main).** **22 Sep evening: (b) DONE: two capturable objectives A/B, bots split between them (7ddb96e, 9ba0a79). (a) popup barricade in the team kit: not confirmed.** — *destruction (a) / match flow (b)*
+- `[~]` **115. Make it easier to vault through windows.** **09-24 cloud session: in tree, unproven (commit 3a3ff59; merged to main).** `Parkour.lua` sets `MaxParts` per query instead
   of a flat 1 — with the flat cap, a box straddling a pane and the pier beside it reported CLEAR whenever
   Roblox returned the pane first, and the client CFramed you through the pier. — *destruction*
-- `[ ]` **116. Bat parts still sideways on the Sahur RV and the Ranger.** The `Enum.PartType.Cylinder`
+- `[~]` **116. Bat parts still sideways on the Sahur RV and the Ranger.** **09-24 cloud session: in tree, unproven (commit e162d58, 5ebcf23, cdd1262; merged to main).** The `Enum.PartType.Cylinder`
   X-axis lesson. Has survived one fix — see #50/#61. — *vehicles*
-- `[ ]` **117. Lobby trial guns change every pickup.** — *guns*
+- `[~]` **117. Lobby trial guns change every pickup.** **09-24 cloud session: in tree, unproven (commit e666c61; merged to main).** — *guns*
 - `[x]` **118. Nerf the bots' aim slightly.** **22 Sep evening: REVERSED on your word, see #40.** Measured 43/33/12% at 20/60/150 studs (was 58/43/19). — *bots*
 - `[x]` **119. Glass still doesn't break jumping through windows.** **Struck as already fixed** by the
   MovementService rewrite: no root-height ray left, `panesAhead` sweeps feet+1.6…feet+8.2 onto the wall,
   and `MovementService.LastGlass = {found, broken, at}` plus a warn-once say why on a miss. — *destruction*
-- `[ ]` **120. Sound design more accurate to real life.** — *audio*
+- `[~]` **120. Sound design more accurate to real life.** **09-24 cloud session: in tree, unproven (commit e389534, 99f89a4, c8302d0; merged to main).** — *audio*
 - `[ ]` **121. Bigger maps on every gamemode.** ⚠ Constrained: Sahur Springs already measures 32,969 parts
   against ~31,600 affordable. Read with #32 and the foliage ceiling. — *map*
-- `[~]` **122. Weapons with explosive ammo must actually explode what you shoot.** Built in 6ef6a52, awaiting a
+- `[~]` **122. Weapons with explosive ammo must actually explode what you shoot.** **09-24 cloud session: in tree, unproven (commit 6ef6a52; merged to main).** Built in 6ef6a52, awaiting a
   playtest: WeaponData `explosiveAmmo = { damage, radius, wallDamage }` makes a hitscan gun's bullets go off where
   they stop (a player, a wall, the ground; not the sky), through ProjectileService's blast: falls off to a fifth
   at the edge, stopped by cover, half to the shooter, holes walls. Only the Golden Sahur Cannon carries it
@@ -424,7 +424,7 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
 - `[~]` **125. Team bots walk in unison.** `nextSlot` fixed the shared-slot cause. The held idle-wander
   work re-hit it and was written with **two** constants (slot × 2.399963 + leg × 1.0) so equal slot+leg
   can't align again. — *bots*
-- `[ ]` **126. Too many bots in one area = lag.** Cap A/B partially done; see #113 and #131. — *bots*
+- `[~]` **126. Too many bots in one area = lag.** **09-24 cloud session: in tree, unproven (commit 371c029, 30f6144; merged to main).** Cap A/B partially done; see #113 and #131. — *bots*
 - `[x]` **127. Reduce the bot count to 30.** `MatchConfig.BotFillTarget` 50 → 30. **Changed 09-22 13:45 on your word:**
   "50 players in the battle royale rounds and keep 30 in the other gamemodes" — the battle royale now fills to
   `BotFillTargetBattleRoyale` = 50, TDM and KOTH stay at `BotFillTarget` = 30. — *bots*
@@ -435,11 +435,11 @@ message (#133), and your 2026-09-22 13:36 message (#134–#135).
   agreed not to relax. **D — aim a ghost and click to place — is yours to call, after you play A and B.** — *destruction*
 - `[x]` **129. Codex→brainrots back button visually broken.** Sized to its own label with `AutomaticSize.X`
   instead of a fixed 70 px that "BACK TO MY BRAINROTS" overflowed. Before/after shot not taken. — *menu*
-- `[?]` **130. Fix the sorting in the codex.** **HELD FOR YOU — it is not mis-sorted, it is UNSORTED**
+- `[~]` **130. Fix the sorting in the codex.** **09-24 cloud session: in tree, unproven (commit 4918382; merged to main).** **HELD FOR YOU — it is not mis-sorted, it is UNSORTED**
   (grouped by rarity, then source-file declaration order). Your choice: **A–Z within rarity** (positions
   stay put as you collect) or **owned-first** (shows progress, every row moves). — *menu*
-- `[ ]` **131. Fix as much lag as possible.** Cap + #127 landed against it; everyone's worst tick. — *all*
-- `[?]` **132. Vaulting still hard, glass doesn't always break.** **Nothing left to build** — it is #115
+- `[~]` **131. Fix as much lag as possible.** **09-24 cloud session: in tree, unproven (commit 371c029, 30f6144; merged to main).** Cap + #127 landed against it; everyone's worst tick. — *all*
+- `[~]` **132. Vaulting still hard, glass doesn't always break.** **09-24 cloud session: in tree, unproven (commit 3a3ff59; merged to main).** **Nothing left to build** — it is #115
   plus the MovementService rewrite, both in your build. **Your verdict decides.** On a miss,
   `MovementService.LastGlass` and the warn-once say why. — *destruction*
 - `[~]` **133. Bots need an idle wander when the bot count doesn't let them move.** **HELD, NOT LANDED —
@@ -474,7 +474,7 @@ whenever you like — #134+ is free.**
 - `[~]` **A4 (was "#62"). Merge dialog can't be confirmed on a phone.** Card was 436 tall on a 390 screen
   with both buttons ~26 px past the edge. Code landed via `PhoneLayout.PanelScale` — **not** FitPanel,
   and the comment says why that obvious fix was wrong. Phone-reach render outstanding. — *menu*
-- `[~]` **A5 (was "#63"). Brainrot abilities: improve designs and effects.** Audit found 126 brainrots
+- `[~]` **A5 (was "#63"). Brainrot abilities: improve designs and effects.** **09-24 cloud session: in tree, unproven (commit 9770fd5, 1d344a1, d8705e9; on the working branch).** Audit found 126 brainrots
   sharing **six identical effects and one attack sound**, 4 of 6 moves doing nothing with no target, and
   **a 0-HP companion able to fight all match**. Tier A coded (announce-last, per-victim LOS, Shockwave
   range by rarity). **Probe queued and never run; no tab in the current seven owns it.** — *unowned*

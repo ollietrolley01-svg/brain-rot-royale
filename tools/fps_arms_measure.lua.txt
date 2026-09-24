@@ -1,0 +1,397 @@
+-- Measuring side of tools/fps_arms_check.py (loaded after fps_arms_mock.lua.txt). Poses the REAL Viewmodel on
+-- every gun and reads back where its arm, hand and finger parts actually are.
+-- (Plain Lua with harness globals, loaded by fps_arms_check.py: named .txt so the Luau static check does not read it as game code.)
+
+-- A mock R15 character with its arm parts and rig attachments. The attachments are deliberately OFF the
+-- parts' centre lines (X and Z) and INSIDE the parts (a bone's part runs past its joints), as a real body
+-- package's are: a solver that lines up part centres rather than joints shows a gap here.
+function makeR15(shirt)
+	local character = Instance.new("Model")
+	character.Name = "MockAvatar"
+	-- Three different colours, so a copy that took the wrong part's colour (or none) shows.
+	local skin = Color3.fromRGB(204, 142, 105)
+	local sleeve = Color3.fromRGB(60, 70, 200)
+	local forearm = Color3.fromRGB(200, 60, 60)
+	local function part(name, size, colour, attachments)
+		local p = Instance.new("MeshPart")
+		p.Name = name
+		p.Size = size
+		p.Color = colour
+		p.Material = Enum.Material.Plastic
+		p.Parent = character
+		for attachmentName, position in pairs(attachments) do
+			local a = Instance.new("Attachment")
+			a.Name = attachmentName
+			a.Position = position
+			a.Parent = p
+		end
+		return p
+	end
+	for _, side in ipairs({ "Right", "Left" }) do
+		local s = side == "Right" and 1 or -1
+		part(side .. "UpperArm", Vector3.new(1, 1.169, 1), sleeve, {
+			[side .. "ShoulderRigAttachment"] = Vector3.new(-0.17 * s, 0.394, 0.04),
+			[side .. "ElbowRigAttachment"] = Vector3.new(0, -0.334, 0),
+		})
+		part(side .. "LowerArm", Vector3.new(1, 1.052, 1), forearm, {
+			[side .. "ElbowRigAttachment"] = Vector3.new(0, 0.2, 0),
+			[side .. "WristRigAttachment"] = Vector3.new(0, -0.5, 0.03),
+		})
+		part(side .. "Hand", Vector3.new(1, 0.3, 1), skin, {
+			[side .. "WristRigAttachment"] = Vector3.new(0, 0.125, 0),
+		})
+	end
+	if shirt then
+		local s = Instance.new("Shirt")
+		s.ShirtTemplate = "rbxassetid://1"
+		s.Parent = character
+	end
+	return character
+end
+
+function makeR6()
+	local character = Instance.new("Model")
+	local skin = Color3.fromRGB(204, 142, 105)
+	for _, side in ipairs({ "Right", "Left" }) do
+		local p = Instance.new("Part")
+		p.Name = side .. " Arm"
+		p.Size = Vector3.new(1, 2, 1)
+		p.Color = skin
+		p.Parent = character
+	end
+	local s = Instance.new("Shirt")
+	s.Parent = character
+	return character
+end
+
+-- Where each bone's joints are in its source part's own unscaled space, so the check reads the joints off
+-- the posed parts without trusting anything the Viewmodel computed.
+local function jointsOf(character, side)
+	local name = side == 1 and "Right" or "Left"
+	if not character then
+		return {
+			upper = { size = Vector3.new(1, 1, 1), top = Vector3.new(0, 0.5, 0), bottom = Vector3.new(0, -0.5, 0) },
+			lower = { size = Vector3.new(1, 1, 1), top = Vector3.new(0, 0.5, 0), bottom = Vector3.new(0, -0.5, 0) },
+			-- The stand-in hand is built at its final size, wrist at its top face.
+			hand = { size = nil, wrist = "top" },
+		}
+	end
+	local upper = character:FindFirstChild(name .. "UpperArm")
+	if upper then
+		local lower = character:FindFirstChild(name .. "LowerArm")
+		local hand = character:FindFirstChild(name .. "Hand")
+		return {
+			upper = { size = upper.Size, top = upper[name .. "ShoulderRigAttachment"].Position, bottom = upper[name .. "ElbowRigAttachment"].Position },
+			lower = { size = lower.Size, top = lower[name .. "ElbowRigAttachment"].Position, bottom = lower[name .. "WristRigAttachment"].Position },
+			hand = { size = hand.Size, wrist = hand[name .. "WristRigAttachment"].Position },
+		}
+	end
+	local arm = character:FindFirstChild(name .. " Arm")
+	local half = arm.Size.Y / 2
+	return {
+		upper = { size = arm.Size, top = Vector3.new(0, half, 0), bottom = Vector3.new(0, -half, 0) },
+		lower = { size = arm.Size, top = Vector3.new(0, half, 0), bottom = Vector3.new(0, -half, 0) },
+	}
+end
+
+local function worldJoint(part, sourceSize, point)
+	return part.CFrame * (point * (part.Size / sourceSize))
+end
+
+-- Distance from a point to a part's solid (0 inside), with cylinders and balls as their real shapes.
+function outside(part, point)
+	local p = part.CFrame:Inverse() * point
+	local h = part.Size / 2
+	if part.Shape == Enum.PartType.Cylinder then
+		local r = math.min(h.Y, h.Z)
+		local radial = math.max(math.sqrt(p.Y * p.Y + p.Z * p.Z) - r, 0)
+		local along = math.max(math.abs(p.X) - h.X, 0)
+		return math.sqrt(radial * radial + along * along)
+	elseif part.Shape == Enum.PartType.Ball then
+		return math.max(p.Magnitude - math.min(h.X, h.Y, h.Z), 0)
+	end
+	local dx, dy, dz = math.max(math.abs(p.X) - h.X, 0), math.max(math.abs(p.Y) - h.Y, 0), math.max(math.abs(p.Z) - h.Z, 0)
+	return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- How far inside a part's solid a point is (0 when outside), boxes and cylinders.
+local function depth(part, point)
+	local p = part.CFrame:Inverse() * point
+	local h = part.Size / 2
+	if part.Shape == Enum.PartType.Cylinder then
+		local r = math.min(h.Y, h.Z)
+		return math.max(math.min(r - math.sqrt(p.Y * p.Y + p.Z * p.Z), h.X - math.abs(p.X)), 0)
+	elseif part.Shape == Enum.PartType.Ball then
+		return math.max(math.min(h.X, h.Y, h.Z) - p.Magnitude, 0)
+	end
+	return math.max(math.min(h.X - math.abs(p.X), h.Y - math.abs(p.Y), h.Z - math.abs(p.Z)), 0)
+end
+
+-- Where a ray from the origin first enters a part's box, or nil.
+local function rayBox(part, origin, direction)
+	local inv = part.CFrame:Inverse()
+	local o, d = inv * origin, inv:VectorToWorldSpace(direction)
+	local h = part.Size / 2
+	local tmin, tmax = 0, math.huge
+	for _, axis in ipairs({ "X", "Y", "Z" }) do
+		local oa, da, ha = o[axis], d[axis], h[axis]
+		if math.abs(da) < 1e-9 then
+			if math.abs(oa) > ha then return nil end
+		else
+			local t1, t2 = (-ha - oa) / da, (ha - oa) / da
+			if t1 > t2 then t1, t2 = t2, t1 end
+			tmin, tmax = math.max(tmin, t1), math.min(tmax, t2)
+			if tmin > tmax then return nil end
+		end
+	end
+	return tmin
+end
+
+local function visible(part)
+	return (part.Transparency or 0) < 1 and (part.LocalTransparencyModifier or 0) < 1
+end
+
+-- One viewmodel, one moment: returns rows of measurements for Python.
+--   ringFraction: the crosshair's radius as a fraction of half the screen height.
+function measure(VM, def, rig, state, fov, ringFraction)
+	local character = rig == "r15" and makeR15(true) or (rig == "r6" and makeR6() or nil)
+	local vm = VM.new(def, { character = character })
+	local eye = CFrame.new()
+	vm:Pose(eye, state)
+	local arms = vm.arms
+	local out = { sides = {} }
+	-- Behind a full-screen scope CombatClient hides the whole viewmodel (SetHidden(result.scopedIn)).
+	local scopedIn = vm.scoped and vm.aim > 0.92 and not vm.clips.reload and not vm.clips.rack
+	vm:SetHidden(scopedIn)
+
+	-- The crosshair: the centre ray and a ring, in this moment's field of view.
+	local tanRing = math.tan(math.rad(fov / 2)) * ringFraction
+	local rays = { Vector3.new(0, 0, -1) }
+	for k = 0, 23 do
+		local a = k / 24 * 2 * math.pi
+		rays[#rays + 1] = Vector3.new(math.cos(a) * tanRing, math.sin(a) * tanRing, -1).Unit
+	end
+
+	-- Visible gun parts, for the hands to meet.
+	local gun = {}
+	for _, part in ipairs(vm.parts) do
+		if visible(part) and part.Name ~= "AimPoint" then
+			gun[#gun + 1] = part
+		end
+	end
+	local armParts = {}
+	for _, side in ipairs({ 1, -1 }) do
+		local arm = arms.sides[side]
+		for _, p in ipairs({ arm.upper.part, arm.lower.part, arm.hand }) do
+			if p then armParts[#armParts + 1] = p end
+		end
+	end
+	local function nearestArm(point)
+		local best = math.huge
+		for _, p in ipairs(armParts) do
+			best = math.min(best, outside(p, point))
+		end
+		return best
+	end
+
+	for _, side in ipairs({ 1, -1 }) do
+		local arm = arms.sides[side]
+		local j = jointsOf(character, side)
+		local row = {}
+		local shoulder = eye * Vector3.new(side == 1 and 0.72 or -0.7, side == 1 and -0.78 or -0.8, side == 1 and 0.3 or 0.25)
+		-- An R15 arm's joints are read off its own rig attachments, scaled with the part: nothing the
+		-- Viewmodel computed. The stand-in and R6 bones are lengthened past the elbow (ELBOW_OVERRUN) with
+		-- their joints moved inside the part, so there the bone's own joint record is used.
+		local sTop, e1, e2, w1
+		if rig == "r15" then
+			sTop = worldJoint(arm.upper.part, j.upper.size, j.upper.top)
+			e1 = worldJoint(arm.upper.part, j.upper.size, j.upper.bottom)
+			e2 = worldJoint(arm.lower.part, j.lower.size, j.lower.top)
+			w1 = worldJoint(arm.lower.part, j.lower.size, j.lower.bottom)
+		else
+			sTop = arm.upper.part.CFrame * arm.upper.top
+			e1 = arm.upper.part.CFrame * (arm.upper.top - arm.upper.joint)
+			e2 = arm.lower.part.CFrame * arm.lower.top
+			w1 = arm.lower.part.CFrame * (arm.lower.top - arm.lower.joint)
+		end
+		local w2 = w1
+		if arm.hand then
+			if j.hand.size then
+				w2 = worldJoint(arm.hand, j.hand.size, j.hand.wrist)
+			else
+				w2 = arm.hand.CFrame * Vector3.new(0, arm.hand.Size.Y / 2, 0)
+			end
+		end
+		-- The shoulder may come forward toward a far hand, but never into the widest view (95 degrees,
+		-- Settings.lua): how far the joint, less the arm's half thickness, stands inside that frustum's
+		-- bottom edge (positive is on screen).
+		local local_ = eye:PointToObjectSpace(sTop)
+		row.shoulderShown = -local_.Z - (-local_.Y - arm.upper.part.Size.X / 2) / math.tan(math.rad(95 / 2))
+		row.shoulderTravel = (sTop - shoulder).Magnitude
+		-- Each bone's joint-to-joint length over its rest length (1.12 and 1.0).
+		row.stretch = math.max((e1 - sTop).Magnitude / 1.12, (w1 - e2).Magnitude / 1.0)
+		row.elbowGap = (e1 - e2).Magnitude
+		row.wristGap = (w1 - w2).Magnitude
+		-- The notch on the outside of a bend: a point half the arm's thickness out from the joint, on the
+		-- outside of the bend, and on either side of that, and how far the nearest arm part is from it.
+		local function notch(inDir, outDir, at, radius)
+			local a, b = inDir.Unit, outDir.Unit
+			local bend = math.deg(math.acos(math.clamp(a:Dot(b), -1, 1)))
+			if bend < 1 then
+				return 0, bend
+			end
+			local outward = (a - b).Unit
+			local normal = a:Cross(b).Unit
+			local worst = 0
+			for k = -4, 4 do
+				local phi = math.rad(k * 15)
+				local p = at + (outward * math.cos(phi) + normal * math.sin(phi)) * radius
+				worst = math.max(worst, nearestArm(p))
+			end
+			return worst, bend
+		end
+		local thick = arm.lower.part.Size.X
+		row.elbowNotch, row.elbowBend = notch(e1 - sTop, w1 - e2, (e1 + e2) / 2, thick / 2 * 0.9)
+		if arm.hand then
+			local fingersDir = arm.hand.CFrame:VectorToWorldSpace(Vector3.new(0, -1, 0))
+			row.wristNotch, row.wristBend = notch(w1 - e2, fingersDir, (w1 + w2) / 2, math.min(thick, arm.hand.Size.Z) / 2 * 0.9)
+			row.fingersDir = { fingersDir.X, fingersDir.Y, fingersDir.Z }
+		else
+			row.wristNotch, row.wristBend = 0, 0
+		end
+		row.shoulderAt = { shoulder.X, shoulder.Y, shoulder.Z }
+		row.elbowAt = { e1.X, e1.Y, e1.Z }
+		row.wristAt = { w1.X, w1.Y, w1.Z }
+		-- The palm: the hand's inner face centre and how far that is from the nearest gun surface, and how
+		-- deep the gun reaches into the hand's box.
+		-- The palm, read off the posed hand part itself (an R6 arm has none): its inner face is the side
+		-- away from the back of the hand, -X on the right hand and +X on the left in the part's own axes
+		-- (Viewmodel's HAND_AXES). Some point of that face -- a 3 x 3 grid over its middle 60% each way --
+		-- must lie on the gun: a round grip meets a flat palm along a line, not at its centre.
+		row.palmGap, row.palmOn = 0, ""
+		if arm.hand then
+			local size = arm.hand.Size
+			local inner = side == 1 and -size.X / 2 or size.X / 2
+			local nearest, hit = math.huge, nil
+			for _, a in ipairs({ -0.3, 0, 0.3 }) do
+				for _, b in ipairs({ -0.3, 0, 0.3 }) do
+					local palm = arm.hand.CFrame * Vector3.new(inner, b * size.Y, a * size.Z)
+					for _, p in ipairs(gun) do
+						local d = outside(p, palm)
+						if d < nearest then nearest, hit = d, p end
+					end
+				end
+			end
+			row.palmGap = nearest
+			row.palmOn = hit and hit.Name or ""
+		end
+		-- Fingers: how many close on something, from the measured grip shape the pose used.
+		local closed, parked = 0, 0
+		if arm.fingers then
+			for _, finger in ipairs(arm.fingers) do
+				if (finger[1].CFrame.Position - finger[2].CFrame.Position).Magnitude < 1e-6 then
+					parked += 1
+				else
+					closed += 1
+				end
+			end
+		end
+		-- `closed` counts fingers shown (closed round the gun or lying along it), `parked` the ones kept
+		-- inside the palm because even lying open they would be in the gun.
+		row.fingersClosed, row.fingersParked = closed, parked
+		-- What the hand holds at the hip and aimed, when the gun measured something under it to close on.
+		local anchor = side == 1 and "GripHand" or "SupportHand"
+		local shape = vm.gripShapes and vm.gripShapes[anchor]
+		-- (An R6 arm has no hand, so no fingers to count.)
+		row.heldShape = (arm.fingers and shape and not shape.onNothing) and anchor or nil
+		-- The crosshair: does any part of this arm lie on the centre ray or the ring?
+		local blockers = {}
+		local parts = { { "upper", arm.upper.part }, { "lower", arm.lower.part }, { "hand", arm.hand } }
+		for i, finger in ipairs(arm.fingers or {}) do
+			parts[#parts + 1] = { "finger" .. i .. "a", finger[1] }
+			parts[#parts + 1] = { "finger" .. i .. "b", finger[2] }
+		end
+		for _, entry in ipairs(parts) do
+			local p = entry[2]
+			if p and visible(p) and not vm.hidden then
+				for r, dir in ipairs(rays) do
+					if rayBox(p, eye.Position, dir) then
+						blockers[#blockers + 1] = entry[1] .. (r == 1 and "@centre" or "@ring")
+						break
+					end
+				end
+			end
+		end
+		row.blockers = table.concat(blockers, " ")
+		out.sides[side] = row
+	end
+	out.hidden = vm.hidden
+	out.scoped = vm.scoped
+	out.aim = vm.aim
+	-- Colours, the shirt and the arm's thickness (#44), on the right arm.
+	local r = arms.sides[1]
+	out.colour = {
+		upper = tostring(r.upper.part.Color),
+		lower = tostring(r.lower.part.Color),
+		hand = r.hand and tostring(r.hand.Color) or "",
+		finger = r.fingers and tostring(r.fingers[1][1].Color) or "",
+	}
+	out.sourceColour = { upper = "", lower = "", hand = "" }
+	if rig == "r15" then
+		out.sourceColour.upper = tostring(character.RightUpperArm.Color)
+		out.sourceColour.lower = tostring(character.RightLowerArm.Color)
+		out.sourceColour.hand = tostring(character.RightHand.Color)
+	elseif rig == "r6" then
+		out.sourceColour.upper = tostring(character["Right Arm"].Color)
+		out.sourceColour.lower = out.sourceColour.upper
+	end
+	out.hasShirt = arms.model:FindFirstChildOfClass("Shirt") ~= nil
+	out.hasHumanoid = arms.model:FindFirstChildOfClass("Humanoid") ~= nil
+	out.thickness = r.lower.part.Size.X
+	return out
+end
+
+-- #44: an avatar whose appearance arrives after the gun is drawn. The character starts as a plain grey
+-- rig with no shirt (how a character spawns), the viewmodel is built and posed, then the appearance lands
+-- -- colours and a shirt -- and the viewmodel runs on for 1.5 s of frames. Returns the arms'
+-- colours and shirt after, the avatar's, and how many arms models the viewmodel carries.
+function lateLook(VM, def)
+	local character = makeR15(false)
+	local grey = Color3.fromRGB(163, 162, 165)
+	local dressed = {}
+	for _, part in ipairs(character:GetChildren()) do
+		if part:IsA("BasePart") then
+			dressed[part] = part.Color
+			part.Color = grey
+		end
+	end
+	local vm = VM.new(def, { character = character })
+	local eye = CFrame.new()
+	vm:Pose(eye, { aim = 0 })
+	local before = tostring(vm.arms.sides[1].upper.part.Color)
+	for part, colour in pairs(dressed) do
+		part.Color = colour
+	end
+	local shirt = Instance.new("Shirt")
+	shirt.ShirtTemplate = "rbxassetid://2"
+	shirt.Parent = character
+	for _ = 1, 15 do
+		vm:Update(0.1, { camera = eye, aiming = false, sway = false, speed = 0, grounded = true })
+	end
+	local arm = vm.arms.sides[1]
+	local models = 0
+	for _, child in ipairs(vm.model:GetChildren()) do
+		if child.Name == "Arms" then
+			models += 1
+		end
+	end
+	return {
+		before = before,
+		upper = tostring(arm.upper.part.Color),
+		hand = tostring(arm.hand.Color),
+		want = tostring(character.RightUpperArm.Color),
+		wantHand = tostring(character.RightHand.Color),
+		shirt = vm.arms.model:FindFirstChildOfClass("Shirt") ~= nil,
+		models = models,
+	}
+end

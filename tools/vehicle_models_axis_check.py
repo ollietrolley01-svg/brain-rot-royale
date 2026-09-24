@@ -218,6 +218,9 @@ PROTRUDE, HELD, ZFIGHT_DRIFT, CLEAR = 0.3, 0.06, 0.05, 0.05
 # edge: the arch lips' last segments on the van and the GT stop 0.07 past the arch panel's back
 # edge, 0.36 of their 0.67 clear of it.
 BARE, BARE_RATIO = 0.4, 2.0
+# The mount itself (ring, yoke, cheeks, cradle, trunnion) is squat; only the weapon's own barrel or
+# tubes may be long. The Ranger's pod stood on a 3.9-stud post, which read as a pole in the bed.
+MOUNT_POST = 2.5
 BAT_CHAIN = ("BatHandle", "BatFlare", "BatTaper", "BatThroat", "BatShoulder", "BatBarrel")
 BAT_PIECES = ("BatKnob",) + BAT_CHAIN + ("BatEnd", "BatStrap1", "BatStrap2")
 TURRET = re.compile(r"^(Turret|Gun|Pod|Mortar)")
@@ -449,6 +452,9 @@ def audit_rods(parts, label, verbose):
         if worst > max(BARE, BARE_RATIO * thick) and not TURRET.match(p["name"]):
             verdict = "FLAG free end"
             faults.append(f"{label}/{p['name']}: rod end sticks out {worst:.2f} studs with nothing round it (a pole sticking out)")
+        if TURRET.match(p["name"]) and ln > MOUNT_POST and not re.match(r"^(Gun|Pod|Mortar)", p["name"]):
+            verdict = "FLAG post"
+            faults.append(f"{label}/{p['name']}: a {ln:.1f}-stud rod in the weapon mount (a pole standing out of the vehicle)")
         if off > 6:
             leaning.append((worst, p["name"]))
         if verbose and (verdict != "ok" or worst > 0.25):
@@ -698,6 +704,11 @@ def main(repo="."):
          "local z = (barZ - batZ) / math.cos(math.rad(rake))", "local z = barZ", "strap does not reach a rack bar"),
         ("mortar back on its old 0.4 plinth (swings through the bat)", "SahurVan", VM,
          "base = V(0, 7.8, 5.2), column = 0.9", "base = V(0, 7.8, 5.2), column = 0.4", "turret runs into BatBarrel"),
+        ("the Ranger's pod back on its 3.9-stud post", "CrocodiloRanger", VM,
+         'CrocodiloRanger = { style = "pod", base = V(0, 7.0, 2.75), column = 0.2 },',
+         'CrocodiloRanger = { style = "pod", base = V(0, 3.1, 4.9), column = 3.9 },', "rod in the weapon mount",
+         ('b:box("TurretCradle", V(2.0, column, 0.9), base + V(0, column / 2, 0), "trim")',
+          'b:tube("TurretColumn", base, base + V(0, column, 0), 0.5, "trim")')),
         ("parked car keeps its bare steering column", "TralalaGT", VM,
          'local STATIC_CAR_DROP = { "^Column$" }', "local STATIC_CAR_DROP = {}", "Column: rod end sticks out"),
         ("z-fight pass shoves a bat piece", "SahurVan", ZF,
@@ -709,10 +720,12 @@ def main(repo="."):
          'b:box("BumperStep"',
          'b:tube("PlantPole", V(0, 4.5, 3), V(1.2, 6.2, 3.8), 0.2, "trim")\n\t\tb:box("BumperStep"', "PlantPole: rod end"),
     ]
-    for label, model_id, module, old, new, tag in plants:
+    for label, model_id, module, old, new, tag, *more in plants:
         src = sources[module]
-        assert src.count(old) == 1, f"plant anchor missing or ambiguous: {old!r}"
-        planted = dict(sources, **{module: src.replace(old, new)})
+        for o, n in [(old, new)] + list(more):
+            assert src.count(o) == 1, f"plant anchor missing or ambiguous: {o!r}"
+            src = src.replace(o, n)
+        planted = dict(sources, **{module: src})
         if module == ZF:
             # The pass itself misbehaving: after it runs, one bat piece is pushed 0.3 off its line.
             planted[ZF] = planted[ZF].replace("\treturn stats\nend\n\n-- The pairs",

@@ -226,7 +226,9 @@ GamepassConfig.Products = {
 	CrateLegendary = {
 		id = 0,
 		name = "Legendary Crate",
-		description = "One Legendary loot crate. Best odds you can also buy with coins.",
+		-- It used to say "Best odds you can also buy with coins", beside a Mythic Crate that is coin-buyable
+		-- and better (#86).
+		description = "One Legendary loot crate: Epic to Secret, with a shot at a coin jackpot.",
 		grant = { kind = "Crate", crate = "Legendary" },
 		suggestedPrice = 499,
 		order = 14,
@@ -341,8 +343,10 @@ function GamepassConfig.DescribeContents(grant, cosmeticName)
 		elseif entry.kind == "Crate" then
 			table.insert(lines, string.format("%dx %s Crate", entry.amount or 1, entry.crate))
 		elseif entry.kind == "Consumable" then
-			local labels = { Health = "1.5x Health Boost", Speed = "Speed Boost", HealthPro = "2x Health Boost (Pro)", SpeedPro = "1.5x Speed Boost (Pro)" }
-			table.insert(lines, string.format("%dx %s", entry.amount or 1, labels[entry.consumable] or (entry.consumable .. " Boost")))
+			-- The multiplier lives in brackets after the name, so a count never sits beside it: "5x 2x
+			-- Health Boost (Pro)" read as a typo, and nothing said the boost lasts one match (#86).
+			local labels = { Health = "Health Boost (1.5x max HP)", Speed = "Speed Boost", HealthPro = "Pro Health Boost (2x max HP)", SpeedPro = "Pro Speed Boost (1.5x speed)" }
+			table.insert(lines, string.format("%d × one-match %s", entry.amount or 1, labels[entry.consumable] or (entry.consumable .. " Boost")))
 		elseif entry.kind == "Cosmetic" then
 			table.insert(lines, "EXCLUSIVE " .. (cosmeticName and cosmeticName(entry.id) or entry.id))
 		end

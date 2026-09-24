@@ -1340,6 +1340,9 @@ function EasterEggs.Place(parent, radius, centers, keepOut, groundHeightAt, spac
 			local origin = CFrame.new(spot) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
 			local ok, hotspot = pcall(egg.build, model, origin)
 			if ok and hotspot then
+				-- Anything of it past the levelled disc, or over a dip the disc left, goes down to the ground
+				-- under it rather than hanging (MapTerrain.Underpin; tools/foundation_check.py).
+				MapTerrain.Underpin(model, spot.Y)
 				-- For tools/footing_probe.lua: the base is the levelled ground, the footprint the site's
 				-- square round the pivot, which sits at the site's centre.
 				model.WorldPivot = origin

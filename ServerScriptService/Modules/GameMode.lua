@@ -21,6 +21,7 @@ local BotService = require(script.Parent:WaitForChild("BotService"))
 local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local ProgressionData = require(Shared:WaitForChild("ProgressionData"))
 local ModeKingOfTheHill = require(script.Parent:WaitForChild("ModeKingOfTheHill"))
 local ModeTeams = require(script.Parent:WaitForChild("ModeTeams"))
 local LootService = require(script.Parent:WaitForChild("LootService"))
@@ -179,6 +180,244 @@ function GameMode.FinishNow()
 end
 
 --------------------------------------------------------------------------------
+-- Team-mode rewards: what everyone did this match (MatchConfig.TeamModeRewards)
+--------------------------------------------------------------------------------
+
+-- One ledger per combatant, players and bots alike (a bot's counts are only there so it can beat a
+-- player to MVP; a bot is a new token every life, so its ledger is one life's). Plain strong tables,
+-- cleared when the next match starts, NOT when this one stops: the payout reads them after StopWorld.
+local ledgers = {}
+-- [victim] = { [attacker] = { amount, at } }: recent damage, for assists. Wall-clock milliseconds.
+local damageLog = {}
+-- [token] = whoever last killed them, for revenge.
+local lastKiller = {}
+-- [token] = true for each team's MVP, decided in stopWorld while the teams still exist.
+local mvps = {}
+
+local TEAM_RULES = MatchConfig.TeamModeRewards or {}
+local MOVE_STUDS = ProgressionData.Playtime and ProgressionData.Playtime.MoveStuds or 4
+-- The battle royale's multi-kill callouts (MatchService STREAK_LABELS), so a team mode's banners read the
+-- same. tools/team_rewards_check.py fails if the two tables drift apart.
+local STREAK_LABELS = {
+	[2] = "DOUBLE KILL",
+	[3] = "TRIPLE KILL",
+	[4] = "QUAD KILL",
+	[5] = "RAMPAGE",
+}
+local killStreak = Remotes.Event("KillStreak")
+
+local function ledgerOf(token)
+	local ledger = ledgers[token]
+	if not ledger then
+		ledger = {
+			playerKills = 0, botKills = 0, assists = 0, revenges = 0, streakCoins = 0,
+			captures = 0, holdSeconds = 0, defends = 0, deaths = 0,
+			samples = 0, activeSamples = 0,
+			streakCount = 0, streakAt = 0,
+			isPlayer = Combatants.IsPlayer(token),
+			name = Combatants.GetName(token),
+		}
+		ledgers[token] = ledger
+	end
+	local team = ModeTeams.TeamOf(token)
+	if team then
+		ledger.team = team
+	end
+	return ledger
+end
+
+-- Damage one combatant did to another, for assists and for "active" (`busySince`: something this player
+-- did since the last participation check that counts as playing even without moving). Registered once;
+-- does nothing outside a running team match (`running` is only ever set by a respawn mode's startWorld).
+CombatService.OnDamage(function(attacker, victim, dealt)
+	if not running or attacker == nil or victim == nil or attacker == victim or (dealt or 0) <= 0 then
+		return
+	end
+	local log = damageLog[victim]
+	if not log then
+		log = {}
+		damageLog[victim] = log
+	end
+	local entry = log[attacker]
+	if not entry then
+		entry = { amount = 0, at = 0 }
+		log[attacker] = entry
+	end
+	entry.amount += dealt
+	entry.at = nowMs()
+	ledgerOf(attacker).busySince = true
+end)
+
+-- A death, credited. Enemy kills only: a team-mate cannot be shot (DamageVeto), and dying to the world
+-- pays nobody. Called from onDeath before the death is scored or announced.
+local function creditDeath(token, killerToken, victimTeam, killerTeam)
+	local victim = ledgerOf(token)
+	victim.deaths += 1
+	victim.streakCount = 0
+	local log = damageLog[token]
+	damageLog[token] = nil
+
+	if not killerToken or killerToken == token or not killerTeam or not victimTeam or killerTeam == victimTeam then
+		return
+	end
+	local now = nowMs()
+	local killer = ledgerOf(killerToken)
+	if Combatants.IsBot(token) then
+		killer.botKills += 1
+	else
+		killer.playerKills += 1
+	end
+
+	-- Multi-kills, the battle royale's streak: kills within the window of the one before escalate.
+	local streak = TEAM_RULES.streak or {}
+	local window = (streak.windowSeconds or 8) * 1000
+	killer.streakCount = (now - killer.streakAt <= window) and killer.streakCount + 1 or 1
+	killer.streakAt = now
+	local step = math.min(killer.streakCount, streak.max or 5)
+	local label = STREAK_LABELS[step]
+	if label then
+		killer.streakCoins += step * (streak.coinsPerStep or 50) - (streak.coinsPerStep or 50)
+		if Combatants.IsPlayer(killerToken) then
+			announce(function()
+				killStreak:FireClient(killerToken, label, killer.streakCount)
+			end)
+		end
+	end
+
+	if lastKiller[killerToken] == token then
+		killer.revenges += 1
+		lastKiller[killerToken] = nil
+	end
+	lastKiller[token] = killerToken
+
+	-- Objective Capture: an enemy killed standing on an objective the killer's team owns.
+	if current.id == "KingOfTheHill" then
+		local root = Combatants.GetRoot(token)
+		local _, owner = ModeKingOfTheHill.ObjectiveAt(root and root.Position)
+		if owner == killerTeam then
+			killer.defends += 1
+		end
+	end
+
+	-- Assists: everyone else on the killer's side who did enough damage recently.
+	local assist = TEAM_RULES.assist or {}
+	for attacker, entry in pairs(log or {}) do
+		if attacker ~= killerToken and entry.amount >= (assist.minDamage or 25)
+			and now - entry.at <= (assist.windowSeconds or 10) * 1000
+			and ModeTeams.TeamOf(attacker) == killerTeam then
+			local helper = ledgerOf(attacker)
+			helper.assists += 1
+		end
+	end
+end
+
+-- A fresh body is never "movement" and carries no damage from the last life.
+local function noteRespawn(token)
+	local ledger = ledgers[token]
+	if ledger then
+		ledger.lastPos = nil
+	end
+	damageLog[token] = nil
+end
+
+-- Objective Capture's per-tick presence (ModeKingOfTheHill.Tick's fifth return): captures and time on
+-- an objective your team owns. Taking one, or holding one that is contested, is playing even standing
+-- still (a defender behind cover), so it counts as active for the participation check; standing alone on
+-- an objective nobody is attacking does not.
+local function creditObjectives(presence, seconds)
+	for _, objective in ipairs(presence or {}) do
+		for token, team in pairs(objective.inside or {}) do
+			local ledger = ledgerOf(token)
+			if objective.capturedBy == team then
+				ledger.captures += 1
+				ledger.busySince = true
+			end
+			if objective.status == "Contested" then
+				ledger.busySince = true
+			end
+			if objective.owner == team then
+				ledger.holdSeconds += seconds
+			end
+		end
+	end
+end
+
+-- One participation check for a player (the PlaytimeService rule, per life).
+local function sampleActivity(player)
+	local ledger = ledgerOf(player)
+	ledger.samples += 1
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local active
+	if ModeTeams.IsDowned(player) or not humanoid or humanoid.Health <= 0 or not root then
+		active = ledger.lastActive == true
+		ledger.lastPos = nil
+	else
+		local position = root.Position
+		active = (ledger.lastPos ~= nil and (position - ledger.lastPos).Magnitude >= MOVE_STUDS) or ledger.busySince == true
+		ledger.lastPos = position
+		ledger.lastActive = active
+	end
+	ledger.busySince = false
+	if active then
+		ledger.activeSamples += 1
+	end
+end
+
+local function isAfk(ledger)
+	local share = (TEAM_RULES.participation and TEAM_RULES.participation.minActiveShare) or 0.5
+	return ledger.samples > 0 and ledger.activeSamples < ledger.samples * share
+end
+
+-- Each team's MVP: the best performance value (RewardService.TeamPerformanceValue, before caps), at least
+-- mvp.minCoins, never an idle player. Ties go to fewer deaths, then the name, so it never depends on
+-- table order. A bot can win it, and then no player on that team is paid for it.
+local function pickMvps()
+	table.clear(mvps)
+	local best = {}
+	for token, ledger in pairs(ledgers) do
+		local team = ledger.team
+		if team and not (ledger.isPlayer and isAfk(ledger)) then
+			local value = RewardService.TeamPerformanceValue(ledger)
+			local holder = best[team]
+			if not holder or value > holder.value
+				or (value == holder.value and (ledger.deaths < holder.ledger.deaths
+					or (ledger.deaths == holder.ledger.deaths and tostring(ledger.name) < tostring(holder.ledger.name)))) then
+				best[team] = { token = token, value = value, ledger = ledger }
+			end
+		end
+	end
+	local floor = (TEAM_RULES.mvp and TEAM_RULES.mvp.minCoins) or 0
+	for _, holder in pairs(best) do
+		if holder.value >= floor then
+			mvps[holder.token] = true
+		end
+	end
+	return mvps
+end
+
+-- What the payout reads for one player.
+local function summaryFor(token)
+	local ledger = ledgers[token] or {}
+	return {
+		playerKills = ledger.playerKills, botKills = ledger.botKills, assists = ledger.assists,
+		revenges = ledger.revenges, streakCoins = ledger.streakCoins, captures = ledger.captures,
+		holdSeconds = ledger.holdSeconds, defends = ledger.defends,
+		activeSamples = ledger.activeSamples, samples = ledger.samples,
+		mvp = mvps[token] == true,
+		afk = ledger.samples ~= nil and isAfk(ledger),
+	}
+end
+
+local function resetLedgers()
+	table.clear(ledgers)
+	table.clear(damageLog)
+	table.clear(lastKiller)
+	table.clear(mvps)
+end
+
+--------------------------------------------------------------------------------
 -- Respawning
 --------------------------------------------------------------------------------
 
@@ -282,6 +521,7 @@ local function respawnPlayer(player, character)
 	if not running or not host.IsParticipant(player) then
 		return
 	end
+	noteRespawn(player)
 	place(player, character)
 	local ok, err = pcall(ModeTeams.GrantLoadout, player)
 	if not ok then
@@ -362,6 +602,13 @@ local function onDeath(token, killerToken, method)
 		end
 	end
 
+	-- Rewards bookkeeping (kills, assists, streaks, revenge, defends) while both teams are still known.
+	-- Protected: a bookkeeping error must never stop the death being scored and the respawn scheduled.
+	local credited, creditError = pcall(creditDeath, token, killerToken, victimTeam, killerTeam)
+	if not credited then
+		warn("[GameMode] team reward bookkeeping failed: " .. tostring(creditError))
+	end
+
 	ModeTeams.MarkDown(token)
 
 	if Combatants.IsPlayer(token) then
@@ -370,7 +617,15 @@ local function onDeath(token, killerToken, method)
 			-- respawn grants a clean kit.
 			local delay = current.respawnDelay or 5
 			local myGeneration = generation
+			-- For the death recap's countdown, "DOWNED BY <name> — BACK IN n" (#86 M32). The recap itself
+			-- is CombatService's and has gone out already by now (HandleDeath sends it before the death
+			-- reaches a mode), so the time rides beside it on the player. Server time: the client reads it
+			-- against workspace:GetServerTimeNow(), the same clock.
+			token:SetAttribute("RespawnAt", workspace:GetServerTimeNow() + delay)
 			task.delay(delay, function()
+				if token.Parent then
+					token:SetAttribute("RespawnAt", nil)
+				end
 				if running and generation == myGeneration and token.Parent and host.IsParticipant(token) then
 					pcall(function()
 						token:LoadCharacter()
@@ -399,6 +654,7 @@ local function onDeath(token, killerToken, method)
 		killFeed:FireAllClients({
 			victim = Combatants.GetName(token),
 			killer = killerToken and Combatants.GetName(killerToken) or nil,
+			killerUserId = killerToken and Combatants.GetUserId(killerToken) or nil,
 			method = killerToken and method or nil,
 		})
 	end)
@@ -425,6 +681,7 @@ local function startWorld(mapInfo)
 
 	scores[1], scores[2] = 0, 0
 	hillStatus, hillHolder = "Open", nil
+	resetLedgers()
 	generation += 1
 	running = true
 	deadlineMs = nowMs() + (current.timeLimit or 480) * 1000
@@ -446,7 +703,7 @@ local function startWorld(mapInfo)
 						if missing > 0 then
 							local inner = kind == "chest" and 20 or 10
 							local gap = kind == "chest" and 14 or 6
-							LootService.SeedAt(ModeTeams.BaseLootSpots(team, missing, inner, LootService.BaseRadius - 5, gap), kind)
+							LootService.SeedAt(ModeTeams.BaseLootSpots(team, missing, inner, LootService.BaseRadius - 5, gap, kind), kind)
 						end
 					end
 				end
@@ -466,6 +723,7 @@ local function startWorld(mapInfo)
 	end
 
 	CombatService.DamageVeto = ModeTeams.DamageVeto
+	CombatService.RespawnDelay = current.respawnDelay or 5
 	CombatService.OnShot = ModeTeams.BreakProtection
 
 	-- BotService pcalls this and fails OPEN: anything but a literal `false` counts as hostile, so
@@ -490,8 +748,12 @@ local function startWorld(mapInfo)
 			end
 			if current.id == "KingOfTheHill" then
 				-- Objective Capture: every objective a team owns scores it a point a second.
-				local team, status, _, scoring = ModeKingOfTheHill.Tick()
+				local team, status, _, scoring, presence = ModeKingOfTheHill.Tick()
 				hillHolder, hillStatus = team, status
+				local credited, creditError = pcall(creditObjectives, presence, KOTH_TICK)
+				if not credited then
+					warn("[GameMode] objective reward bookkeeping failed: " .. tostring(creditError))
+				end
 				accumulated += KOTH_TICK
 				if accumulated >= 1 then
 					accumulated -= 1
@@ -513,6 +775,26 @@ local function startWorld(mapInfo)
 		end
 	end)
 
+	-- Participation: every player in the match checked every sampleSeconds for being active
+	-- (sampleActivity). Wall-clock task.wait, one loop per match generation.
+	task.spawn(function()
+		local every = (TEAM_RULES.participation and TEAM_RULES.participation.sampleSeconds) or 15
+		while running and generation == myGeneration do
+			task.wait(every)
+			if not running or generation ~= myGeneration then
+				return
+			end
+			for _, player in ipairs(Players:GetPlayers()) do
+				if host.IsParticipant(player) then
+					local ok, err = pcall(sampleActivity, player)
+					if not ok then
+						warn("[GameMode] participation check failed: " .. tostring(err))
+					end
+				end
+			end
+		end
+	end)
+
 	pushState()
 	return centre, radius
 end
@@ -520,7 +802,13 @@ end
 local function stopWorld()
 	running = false
 	generation += 1
+	-- MVPs now, while ModeTeams still knows the sides; the payout runs after Teardown.
+	local picked, pickError = pcall(pickMvps)
+	if not picked then
+		warn("[GameMode] MVP pick failed: " .. tostring(pickError))
+	end
 	CombatService.DamageVeto = nil
+	CombatService.RespawnDelay = nil
 	CombatService.OnShot = nil
 	BotService.IsHostile = nil
 	BotService.SpawnLoadout = nil
@@ -580,6 +868,21 @@ local function rankOf(token)
 	return team == winner and 1 or 2
 end
 
+-- A list of { team, name }, never a sparse array: a remote drops a table indexed [2] with no [1].
+local function mvpNames()
+	local names = {}
+	for token in pairs(mvps) do
+		local ledger = ledgers[token]
+		if ledger and ledger.team then
+			table.insert(names, { team = ledger.team, name = ledger.name })
+		end
+	end
+	table.sort(names, function(a, b)
+		return a.team < b.team
+	end)
+	return names
+end
+
 local function results()
 	return {
 		mode = current.id,
@@ -587,18 +890,22 @@ local function results()
 		teams = { GameModes.TeamName(1), GameModes.TeamName(2) },
 		winner = leader(),
 		target = current.scoreTarget,
+		-- Each team's MVP by name (pickMvps), for the card. A team nobody earned it on has no entry.
+		mvps = mvpNames(),
 	}
 end
 
 -- The team-mode payout (Oliver, 2026-09-23 16:10: "theres no rewards for the team gamemodes!"): a crate,
--- coins and pass XP for a win, a draw or a loss (MatchConfig.TeamModeRewards). Kills are paid as they
--- happen, in MatchService's respawn branch.
+-- coins and pass XP for a win, a draw or a loss, and since 2026-09-24 ("improve the rewards for team gamemodes
+-- too") everything the player did, itemised: kills, assists, multi-kills, revenge, objectives, MVP and time
+-- played (MatchConfig.TeamModeRewards, RewardService.TeamBreakdown). MatchService's live kill path pays 0
+-- now (killScale) and only counts the kill; the kill is paid here, on the card.
 local function awardResult(player, rank)
 	-- From the rank MatchService read before StopWorld: the team table is cleared by then, so TeamOf
 	-- here was nil for everyone and every winner was paid as a loss. Rank 1 is the winning team.
 	local winner = leader()
 	local outcome = winner == nil and "draw" or (rank == 1 and "win" or "loss")
-	local ok, reward = pcall(RewardService.AwardTeamResult, player, outcome, rank)
+	local ok, reward = pcall(RewardService.AwardTeamResult, player, outcome, rank, summaryFor(player))
 	if not ok then
 		warn("[GameMode] team reward failed for " .. player.Name .. ": " .. tostring(reward))
 		return { rank = rank, coins = 0, xp = 0 }
@@ -686,6 +993,17 @@ GameMode.Internal = {
 	rankOf = rankOf,
 	leader = leader,
 	nowMs = nowMs,
+	-- The team-mode rewards' bookkeeping (tools/team_rewards_check.py drives these, the shipped ones).
+	creditDeath = creditDeath,
+	creditObjectives = creditObjectives,
+	noteRespawn = noteRespawn,
+	sampleActivity = sampleActivity,
+	pickMvps = pickMvps,
+	summaryFor = summaryFor,
+	resetLedgers = resetLedgers,
+	awardResult = awardResult,
+	ledgers = ledgers,
+	streakLabels = STREAK_LABELS,
 }
 
 -- Unused but required so the module's dependency on the run loop is explicit for anything that

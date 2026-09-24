@@ -13,6 +13,11 @@
 --   vaporize  a white flash and it's gone
 --   gold      turns to a gold statue that topples and crumbles into coins
 --
+-- A death effect cosmetic (#24, KillAnimService) can then CLAIM a plain ragdoll (DeathFxService.Claim):
+-- the body is anchored where it is, every client's copy of the effect moves, squashes and fades it
+-- locally in step with its own effect, and this hides it for real once the effect is over. Only a
+-- plain ragdoll can be claimed: a gun's own effect keeps its body, and the cosmetic plays beside it.
+--
 -- Every effect ends with the body hidden (invisible, anchored, no collision or queries). Bot
 -- bodies are removed by MatchService a little after that; a player's stays hidden until the
 -- match respawns them, so nothing still holding player.Character breaks. Player characters are
@@ -639,6 +644,33 @@ end
 
 DeathFxService.Effects = EFFECTS
 
+-- Hands a plain ragdoll over to a death effect cosmetic for `seconds` (KillAnimService.Play). The
+-- body is anchored where it is and made untouchable, so no physics fights what every client then
+-- does to it locally; after `seconds` it is hidden here, which replicates, so a client that never
+-- built the effect still sees the body go. Returns false, leaving the body alone, for a body that
+-- isn't a plain ragdoll (a gun's own effect has it), is already claimed, or is gone.
+--
+-- Called in the same frame as Apply (CombatService.HandleDeath runs OnDeathFx, then OnElimination,
+-- whose kill credit reaches KillAnimService), so the body is anchored in the pose it died in, before
+-- the ragdoll has fallen: each effect's first beat is the body's reaction.
+function DeathFxService.Claim(character, seconds)
+	if not character or not character.Parent or character:GetAttribute("DeathFx") ~= "ragdoll"
+		or character:GetAttribute("DeathFxClaimed") then
+		return false
+	end
+	character:SetAttribute("DeathFxClaimed", true)
+	for _, part in ipairs(bodyParts(character)) do
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+	end
+	task.delay(seconds, function()
+		hideBody(character)
+	end)
+	return true
+end
+
 -- Call on every new character so death leaves the body in one piece for us.
 function DeathFxService.Prepare(character)
 	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
@@ -664,7 +696,10 @@ function DeathFxService.Apply(character, effect, impulse)
 		hideBody(character)
 		return false
 	end
-	deathFx:FireAllClients({ kind = effect, position = position })
+	-- `body` lets each client dress the plain death (DeathFxClient) and see whether a death effect has
+	-- claimed it since. `linger` is when a plain ragdoll starts to fade, so the client's puff meets it.
+	deathFx:FireAllClients({ kind = effect, position = position, body = character,
+		linger = effect == "ragdoll" and RAGDOLL_LINGER or nil })
 	return true
 end
 

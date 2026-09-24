@@ -43,6 +43,7 @@ local CompanionAnimations = require(Shared:WaitForChild("CompanionAnimations"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
 local Rarity = require(Shared:WaitForChild("Rarity"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 
 local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
@@ -625,10 +626,33 @@ local function slowTarget(token, factor, duration)
 	end
 end
 
+-- One use of a move takes at most BrainrotData.MaxUseDamage[rarity] off any one target, its hits and
+-- the DoT it starts added together (Oliver: "make the companions other than Secret ones not one-shot").
+-- The budget rides the use's `report`, which every hit of the use already shares. The cap is in
+-- health as the victim loses it, so it is counted after CombatService.DealDamage's
+-- CombatDamageScale: an amount handed to DealDamage (or to a DoT, which ticks through it) costs
+-- `amount * scale` of the budget. A Secret has no cap and no budget.
+local function useReport(entry)
+	return { positions = {}, cap = BrainrotData.MaxUseDamage[entry.def.rarity], spent = {} }
+end
+
+-- The most of `amount` (a DealDamage amount, before the scale) the use may still put on `token`, and
+-- books it against the budget. `amount` unchanged with no budget; 0 once the target's share is spent.
+local function withinUse(report, token, amount)
+	if not report or not report.cap then
+		return amount
+	end
+	local scale = MatchConfig.CombatDamageScale or 1
+	local left = math.max(0, report.cap - (report.spent[token] or 0))
+	amount = math.min(amount, left / scale)
+	report.spent[token] = (report.spent[token] or 0) + amount * scale
+	return amount
+end
+
 -- What a move's style adds once a hit has landed `dealt` on `token` (BrainrotData.AbilityStyles):
 -- a slow, a DoT, or a heal for the owner. Only ever after real damage, so a teammate the mode protects
 -- (dealt 0) is never slowed or poisoned by a move that did not hurt them.
-local function applyStyle(player, entry, token, dealt, tag)
+local function applyStyle(player, entry, token, dealt, tag, report)
 	local stats = entry.stats
 	if stats.slow and stats.slowTime and Combatants.IsAlive(token) then
 		slowTarget(token, stats.slow, stats.slowTime)
@@ -636,8 +660,12 @@ local function applyStyle(player, entry, token, dealt, tag)
 	-- Rides CompanionBoons' venom ticker: one slot per victim, refreshed rather than stacked, and a
 	-- kill by the tick is credited to the owner as this brainrot. A venom-boon brainrot never carries a
 	-- DoT style (the check refuses it), so the two never fight over the slot.
+	-- The DoT is inside the use's cap: whatever of the budget the hit left is all it may add.
 	if stats.dot and stats.dotTime and Combatants.IsAlive(token) then
-		CompanionBoons.StartVenom(player, token, { damage = dealt * stats.dot, duration = stats.dotTime }, tag)
+		local damage = withinUse(report, token, dealt * stats.dot)
+		if damage > 0 then
+			CompanionBoons.StartVenom(player, token, { damage = damage, duration = stats.dotTime }, tag)
+		end
 	end
 	if stats.leech then
 		local character = Combatants.GetCharacter(player)
@@ -653,6 +681,10 @@ local function hit(player, token, amount, tag, report)
 	if not Combatants.IsAlive(token) then
 		return
 	end
+	amount = withinUse(report, token, amount)
+	if amount <= 0 then
+		return
+	end
 	local dealt = CombatService.DealDamage(player, token, amount, tag)
 	if not dealt or dealt <= 0 then
 		return
@@ -663,6 +695,10 @@ local function hit(player, token, amount, tag, report)
 		local root = Combatants.GetRoot(token)
 		if root and #report.positions < MAX_HIT_MARKS then
 			table.insert(report.positions, root.Position)
+			-- Who it was, beside where: the client's style cue (a burn, a chill) clings to them for
+			-- the status's length. `false`, never a hole, so the list survives the remote.
+			report.victims = report.victims or {}
+			report.victims[#report.positions] = Combatants.GetCharacter(token) or false
 		end
 		report.killed = report.killed or not Combatants.IsAlive(token)
 	end
@@ -673,11 +709,15 @@ local function hit(player, token, amount, tag, report)
 	-- Venom rides the hit rather than replacing it: the bite still does its damage, and the poison is
 	-- what the boon adds. Refreshes on a second bite (CompanionBoons), it does not stack. Only on a hit
 	-- that hurt: it used to start on a teammate the mode had just refused to damage.
+	-- Inside the use's cap too, as the style's DoT is.
 	local venom = CompanionBoons.VenomOf(entry.def)
 	if venom then
-		CompanionBoons.StartVenom(player, token, venom, "Companion:" .. entry.def.name)
+		local damage = withinUse(report, token, venom.damage)
+		if damage > 0 then
+			CompanionBoons.StartVenom(player, token, { damage = damage, duration = venom.duration }, "Companion:" .. entry.def.name)
+		end
 	end
-	applyStyle(player, entry, token, dealt, tag)
+	applyStyle(player, entry, token, dealt, tag, report)
 end
 
 -- Where a splash is cast from: half a stud back toward where the move came from. A glob that
@@ -791,12 +831,22 @@ end
 
 local function reportHits(entry, report)
 	if #report.positions > 0 then
+		local owner = owners[entry.model]
+		local stats = entry.stats
 		broadcast(companionHit, {
 			companion = entry.model,
 			positions = report.positions,
 			killed = report.killed == true,
-			color = entry.stats.color,
-			style = entry.stats.style,
+			color = stats.color,
+			style = stats.style,
+			-- For CompanionFxClient: the victims (parallel to `positions`), how long the style's slow
+			-- or DoT really lasts (its cue lasts as long), the rarity that tints it, the owner (their
+			-- own screen pulses) and the owner's root (a Leech's ribbon runs back to it).
+			victims = report.victims,
+			styleTime = stats.slowTime or stats.dotTime,
+			rarity = entry.def.rarity,
+			owner = owner and Combatants.IsPlayer(owner) and owner.UserId or nil,
+			ownerRoot = owner and Combatants.GetRoot(owner) or nil,
 		})
 	end
 end
@@ -850,6 +900,12 @@ local function basePayload(player, entry, to)
 		-- The model to animate, and how long its windup runs before the move connects.
 		companion = entry.model,
 		windup = WINDUP,
+		-- When the damage lands, from the broadcast: the windup, plus the flight for a move that
+		-- travels (set with `travel` below). CompanionFxClient draws the landing on exactly this
+		-- beat, so the picture never runs ahead of or behind the hit.
+		lands = WINDUP,
+		-- Tints the effects (Rarity.Color) and sizes them up a little for rarer brainrots.
+		rarity = entry.def.rarity,
 	}
 end
 
@@ -862,7 +918,7 @@ local function attack(player, entry, token, targetRoot)
 	-- or strikes at once, and only needs the windup.
 	local to = kind == "Lob" and lead(targetRoot, WINDUP + LOB_TIME, LOB_MAX_LEAD) or lead(targetRoot)
 	local payload = basePayload(player, entry, to)
-	local report = { positions = {} }
+	local report = useReport(entry)
 
 	-- The damage is scheduled first and the broadcast goes last in every branch, so a send that
 	-- throws can never cost the hit (see broadcast).
@@ -891,6 +947,7 @@ local function attack(player, entry, token, targetRoot)
 		-- mid-flight still dodges it.
 		local travel = travelTime(kind, from, to)
 		payload.travel = travel
+		payload.lands = WINDUP + travel
 
 		task.delay(WINDUP, function()
 			if not stillOut(player, entry) then
@@ -944,7 +1001,7 @@ local function attackPoint(player, entry, to)
 	local payload = basePayload(player, entry, to)
 	local from = payload.from
 	payload.travel = travelTime(kind, from, to)
-	local report = { positions = {} }
+	local report = useReport(entry)
 
 	if kind == "Shockwave" then
 		task.delay(WINDUP, function()
@@ -967,6 +1024,7 @@ local function attackPoint(player, entry, to)
 	else
 		-- Spit, Bonk and Lob: a splash where they land, sized for the move.
 		local radius = (kind == "Spit" and SPIT_POINT_RADIUS) or math.max(stats.splash, 1)
+		payload.lands = WINDUP + payload.travel
 		task.delay(WINDUP + payload.travel, function()
 			if CombatService.IsEnabled() and stillOut(player, entry) then
 				splash(player, to, radius, stats.damage, nil, tag, report, from)
@@ -1042,7 +1100,10 @@ local function practice(player, entry, aimPoint)
 		payload.to3 = forks[2] and forks[2].Position or nil
 	end
 
-	local lands = WINDUP + ((kind == "Zap" or kind == "Chain") and 0 or payload.travel)
+	-- A Shockwave stomps on the windup here as it does in a match (it used to wait out a "flight"
+	-- it doesn't have, so the lobby dummies dropped a beat after the stomp).
+	local lands = WINDUP + ((kind == "Zap" or kind == "Chain" or kind == "Shockwave") and 0 or payload.travel)
+	payload.lands = lands
 	task.delay(lands, function()
 		if not stillOut(player, entry) then
 			return
@@ -1117,7 +1178,10 @@ local function blastFor(player, entry, position)
 		normal = Vector3.yAxis,
 		kind = "grenade",
 		radius = radius,
-		damage = entry.stats.damage * BrainrotData.BlastPower,
+		-- One DealDamage per victim, never more than this at the centre, so capping the amount caps the
+		-- use (MaxUseDamage); "blast" stands for every victim. It also trims what the blast does to
+		-- structures, vehicles and companions.
+		damage = withinUse(useReport(entry), "blast", entry.stats.damage * BrainrotData.BlastPower),
 		weaponId = "Companion:" .. entry.def.name,
 	})
 	return true
@@ -1145,7 +1209,14 @@ function CompanionService.UseAbility(owner, aimPoint)
 		-- A blast brainrot explodes at the point instead of landing its single hit, so the two never
 		-- both pay: the blast IS the ability, not a bonus on top of it.
 		if blastFor(owner, entry, to) then
-			-- handled
+			-- The explosion is ProjectileService's; this tells clients the creature used its move,
+			-- so it recoils (CompanionFxClient) and its owner's HUD starts the cooldown, as every
+			-- other move's broadcast does. Sent after the blast, so a send that throws costs nothing.
+			local payload = basePayload(owner, entry, to)
+			payload.blast = true
+			payload.windup = 0
+			payload.lands = 0
+			broadcast(companionAttack, payload)
 		elseif token then
 			attack(owner, entry, token, targetRoot)
 		else

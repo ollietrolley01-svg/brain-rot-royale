@@ -21,8 +21,10 @@
 
 local CrateData = {}
 
+-- DeathEffect is last on purpose: ShopRotation rolls each crate's stock in this order from one Random,
+-- so a crate added at the end leaves every earlier crate's stock in every rotation as it was.
 CrateData.Order = { "Super", "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic",
-	"Style", "DeluxeStyle", "PrestigeStyle", "Accessory", "Skin", "Aura", "Parachute" }
+	"Style", "DeluxeStyle", "PrestigeStyle", "Accessory", "Skin", "Aura", "Parachute", "DeathEffect" }
 
 CrateData.Crates = {
 	-- The best crate in the game, and the only one sold for Robux alone (no coin price): a Mythic
@@ -186,6 +188,20 @@ CrateData.Crates = {
 		odds = { Common = 25, Uncommon = 28, Rare = 25, Epic = 14, Legendary = 6, Mythic = 1.6, Secret = 0.4 },
 		description = "Parachutes only, never one you already own.",
 	},
+	-- Death effects (CosmeticData kind "KillAnimation", #24, 2026-09-24): the only place the Legendary,
+	-- Mythic and Secret ones come from. Like the other item crates it gives only one you don't own,
+	-- from every death effect of the rolled rarity, shop ones included, and moves to the nearest
+	-- rarity with something new left (CrateService.Open). The odds are the Parachute Crate's: the
+	-- same fifteen-item ladder, three Common to one Secret. Coins only, like the other kind crates.
+	DeathEffect = {
+		name = "Death Effect Crate",
+		category = "KillAnimation",
+		coinPrice = 15000,
+		color = Color3.fromRGB(150, 70, 255),
+		duplicateRefund = 0.35,
+		odds = { Common = 25, Uncommon = 28, Rare = 25, Epic = 14, Legendary = 6, Mythic = 1.6, Secret = 0.4 },
+		description = "Death effects only, never one you already own. The only way to get the crate exclusives.",
+	},
 }
 
 function CrateData.Get(tier)
@@ -267,9 +283,12 @@ function CrateData.OddsLine(crate, luck, boosted)
 	for _, rarity in ipairs(Rarity.Order) do
 		local chance = effective[rarity]
 		if chance and chance > 0 then
-			-- Fractions of a percent (Secret odds) need the extra digit to not read as 0.
-			table.insert(parts, boosted and rarity:sub(1, 4)
-				or string.format(chance < 1 and "%s %.2f%%" or "%s %.1f%%", rarity:sub(1, 4), chance))
+			-- Fractions of a percent (Secret odds) need the extra digit to not read as 0. The full rarity
+			-- word, not its first four letters: "Unco", "Lege" and "Secr" are not words a first-time player
+			-- knows, and these are the disclosed odds of a paid random item (player's-eye review, #86).
+			-- The card labels wrap and grow, so the longer line costs a line, not legibility.
+			table.insert(parts, boosted and rarity
+				or string.format(chance < 1 and "%s %.2f%%" or "%s %.1f%%", rarity, chance))
 		end
 	end
 	if crate.accessoryChance and crate.accessoryChance > 0 then

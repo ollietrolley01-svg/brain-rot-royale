@@ -46,7 +46,7 @@ local UP = Vector3.yAxis
 --   syncEvery     seconds between position corrections sent to clients ("free")
 --
 -- Behaviour callbacks, server-side, all optional. `api` is ProjectileService's toolkit (Explode,
--- DealDamage, Targets, Report, Remove, Clock); `entry` is the live round (owner, weaponId, def (the gun,
+-- DealDamage, Creditable, Targets, Report, Remove, Clock); `entry` is the live round (owner, weaponId, def (the gun,
 -- for launcher rounds), kind, age, position, velocity, body, damage, radius). A round in flight that
 -- strikes a Head part is a headshot: the direct part of its damage (impactBonus, or all of it when
 -- `explosive = false`) takes the gun's headshotMultiplier; the blast never does.
@@ -459,5 +459,206 @@ function Ballistics.SmokeChord(cloud, a, b, now)
 	local exit = math.min(length, along + half)
 	return math.max(0, exit - enter)
 end
+
+--------------------------------------------------------------------------------
+-- The gun rework's rounds (2026-09-24): the three new guns' own kinds
+--------------------------------------------------------------------------------
+-- Registered here rather than in a module of their own, so they exist wherever Ballistics is loaded:
+-- the server before ProjectileService looks one up, and every client that draws them. Their models are
+-- hand-built in GunModelsRounds (ThrowableModels.RoundBuilders); `look` is the fallback if that module is
+-- not loaded.
+--
+--   mosquitoDart  Zanzarino Pikpik. A fast little dart with next to no drop that noses toward whoever is
+--                 most nearly ahead of it, gently: inside a 10-degree cone, 6 degrees at most over its
+--                 flight, so it forgives a near miss and never turns a wide miss into a hit.
+--                 Non-explosive; the gun's `bleed` (the itch) comes from its WeaponData.
+--   drumlet       Tamburo Tung Tung. A little drum lobbed with a kick upward. It bounces and goes off on
+--                 its third contact, on anyone it touches, or 1.6 s after launch, whichever comes first.
+--                 Three a shot, fanned (CombatService.Patterns.fan).
+--   bananerang    Bananerang. Thrown out, it slows to a hang at the far end of its reach and comes back
+--                 along the same curve (a slight bend to the right) to where it was thrown. It passes
+--                 through people and cuts each one once on the way out and once on the way back; a wall
+--                 stops it. Its path is a function of its age alone (Ballistics.BoomerangVelocity), so
+--                 every client traces exactly the server's path.
+--
+-- `steer` runs on clients too and stays pure (see CreativeRounds). The boomerang's steer also clears, on
+-- the server only, the people it passed through from its sweep filter as it turns, so it can meet them
+-- again on the way back; that touches the filter, never the path.
+
+local function roundHitInstance(contact)
+	return contact and (contact.Instance or contact.instance) or nil
+end
+
+local function roundHitsCharacter(instance)
+	local model = instance and instance:FindFirstAncestorOfClass("Model")
+	return model ~= nil and model:FindFirstChildOfClass("Humanoid") ~= nil
+end
+
+-- Homing: gently, and only toward someone already nearly in line.
+Ballistics.DartHoming = { delay = 0.06, cone = math.rad(10), total = math.rad(6), rate = math.rad(60), range = 80 }
+
+Ballistics.RegisterRound("mosquitoDart", {
+	motion = "free",
+	speed = 175,
+	gravityScale = 0.05,
+	radius = 0.18,
+	maxTime = 1.6,
+	explosive = false,
+	impactBonus = 0,
+	syncEvery = 0.1,
+	look = { shape = "cylinder", size = 0.6, color = Color3.fromRGB(40, 40, 46), trim = Color3.fromRGB(240, 240, 240), spin = "none" },
+	steer = function(entry, dt, api)
+		local homing = Ballistics.DartHoming
+		local turned = type(entry.turned) == "number" and entry.turned or 0
+		if entry.age < homing.delay or turned >= homing.total then
+			return
+		end
+		local speed = entry.velocity.Magnitude
+		if speed < 1 then
+			return
+		end
+		local forward = entry.velocity / speed
+		local best, bestDot = nil, math.cos(homing.cone)
+		for _, target in ipairs(api.Targets(entry.position, homing.range, entry.owner)) do
+			local to = target.root.Position - entry.position
+			local distance = to.Magnitude
+			if distance > 0.5 then
+				local dot = (to / distance):Dot(forward)
+				if dot > bestDot then
+					best, bestDot = to / distance, dot
+				end
+			end
+		end
+		if not best then
+			return
+		end
+		local angle = math.acos(math.clamp(forward:Dot(best), -1, 1))
+		local turn = math.min(angle, homing.rate * dt, homing.total - turned)
+		if angle <= 1e-4 or turn <= 0 then
+			return
+		end
+		entry.turned = turned + turn
+		entry.velocity = forward:Lerp(best, turn / angle).Unit * speed
+	end,
+	onContact = function(_entry, contact)
+		if roundHitsCharacter(roundHitInstance(contact)) then
+			return "detonate"
+		end
+		return "stop"
+	end,
+})
+
+Ballistics.DrumletLift = 16
+
+Ballistics.RegisterRound("drumlet", {
+	motion = "body",
+	speed = 115,
+	gravityScale = 0.9,
+	radius = 0.26,
+	maxTime = 3,
+	fuse = 1.6,
+	maxBounces = 3,
+	restitution = 0.55,
+	friction = 0.35,
+	impactBonus = 4,
+	innerRadius = 1.5,
+	wallDamage = 40,
+	look = { shape = "cylinder", size = 0.5, color = Color3.fromRGB(200, 40, 50), trim = Color3.fromRGB(245, 240, 230), spin = "tumble" },
+	onLaunch = function(entry)
+		if entry.body then
+			entry.body.velocity += Vector3.new(0, Ballistics.DrumletLift, 0)
+		end
+	end,
+	onContact = function(_entry, contact)
+		if roundHitsCharacter(roundHitInstance(contact)) then
+			return "detonate"
+		end
+		return nil
+	end,
+})
+
+-- The boomerang's flight: out along the throw, slowing to a hang at the far end (the reach is
+-- speed x time / pi), and back the same way, bent `curve` x the reach to the right at the far end.
+-- Past `catch` of its time it is back at the thrower's end: its time running out there is a catch.
+Ballistics.Boomerang = { time = 1.5, curve = 0.1, catch = 0.9 }
+
+-- The velocity of a boomerang `age` seconds after it was thrown along `memory.dir` at `memory.speed`.
+function Ballistics.BoomerangVelocity(memory, age)
+	local spec = Ballistics.Boomerang
+	local u = math.clamp(age / spec.time, 0, 1)
+	return memory.dir * (memory.speed * math.cos(math.pi * u))
+		+ memory.side * (memory.speed * spec.curve * math.sin(2 * math.pi * u))
+end
+
+-- The boomerang's memory, from the velocity it was thrown with.
+function Ballistics.BoomerangMemory(velocity)
+	local speed = velocity.Magnitude
+	local dir = speed > 1e-3 and velocity / speed or -Vector3.zAxis
+	local reference = math.abs(dir.Y) > 0.95 and Vector3.xAxis or UP
+	return { dir = dir, side = dir:Cross(reference).Unit, speed = speed }
+end
+
+Ballistics.RegisterRound("bananerang", {
+	motion = "free",
+	speed = 115,
+	gravityScale = 0,
+	radius = 0.45,
+	maxTime = Ballistics.Boomerang.time,
+	explosive = false,
+	impactBonus = 0,
+	syncEvery = 0.12,
+	look = { shape = "disc", size = 1.1, color = Color3.fromRGB(250, 214, 60), glow = Color3.fromRGB(255, 240, 140), spin = "flat" },
+	steer = function(entry, dt)
+		local memory = entry.turned
+		if type(memory) ~= "table" then
+			memory = Ballistics.BoomerangMemory(entry.velocity)
+			entry.turned = memory
+			-- Server only: what the sweep filter held at the throw (the thrower), kept through the turn.
+			if type(entry.filter) == "table" then
+				memory.base = #entry.filter
+			end
+		end
+		-- Sampled mid-step, so the stepped path keeps to the exact one.
+		entry.velocity = Ballistics.BoomerangVelocity(memory, math.max(0, entry.age - dt / 2))
+		if memory.base and not memory.back and entry.age >= Ballistics.Boomerang.time / 2 then
+			memory.back = true
+			for index = #entry.filter, memory.base + 1, -1 do
+				table.remove(entry.filter, index)
+			end
+			entry.params.FilterDescendantsInstances = entry.filter
+		end
+	end,
+	onContact = function(entry, contact, api)
+		local instance = roundHitInstance(contact)
+		if not roundHitsCharacter(instance) then
+			return "detonate"
+		end
+		local pass = entry.age < Ballistics.Boomerang.time / 2 and 1 or 2
+		entry.cut = entry.cut or {}
+		local at = contact.Position or contact.position
+		for _, target in ipairs(api.Targets(at, 10, entry.owner)) do
+			local character = target.root.Parent
+			if character and instance:IsDescendantOf(character) then
+				if entry.cut[target.token] ~= pass then
+					entry.cut[target.token] = pass
+					-- Credited as a burst credits its hit: to nobody once the thrower has left.
+					local attacker = entry.owner
+					if api.Creditable then
+						attacker = api.Creditable(entry.owner)
+					end
+					api.DealDamage(attacker, target.token, entry.damage, entry.weaponId, false)
+				end
+				break
+			end
+		end
+		return "pass"
+	end,
+	onDetonate = function(entry, blast)
+		if not blast.direct and entry.age >= Ballistics.Boomerang.time * Ballistics.Boomerang.catch then
+			return false
+		end
+		return nil
+	end,
+})
 
 return Ballistics

@@ -177,6 +177,8 @@ function WeaponService.Push(player)
 				name = def.name,
 				rarity = def.rarity,
 				ability = def.ability,
+				-- Its silhouette, which the HUD and the bag turn into a type word (#86 C39).
+				style = def.style,
 				mag = slot.mag,
 				magSize = def.magSize,
 				reserve = slot.reserve,
@@ -1343,12 +1345,48 @@ function WeaponService.MountGun(character, model, receiver)
 	local facing = root.CFrame - root.CFrame.Position
 	model:PivotTo(CFrame.new(torso.Position) * facing * CFrame.new(HAND_OFFSET - gripOffset))
 
-	-- Weld before parenting: the gun then arrives already attached, instead of existing
-	-- unwelded on a live character for a replication step.
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = receiver
-	weld.Part1 = torso
-	weld.Parent = receiver
+	-- Joined before parenting: the gun then arrives already attached, instead of existing
+	-- unjoined on a live character for a replication step. A Motor6D rather than a weld (#13): at rest
+	-- (Transform identity) it holds exactly as the weld did, and GunPoseClient can raise the gun toward
+	-- the eye line of a body that is aiming by setting its Transform, which is local to each client --
+	-- the server's gun, and every shot origin, stay where they were. DeathFxService's ragdoll leaves it
+	-- alone (the receiver's parent is the HeldGun, not the character), so the gun stays in hand.
+	--
+	-- ONLY ON A MOTOR6D RIG. A physics rig (every bot: CreateHumanoidModelFromDescription) is held
+	-- together by AnimationConstraints the Animator drives by torque, and a Motor6D was a second kind of
+	-- rig joint in that rig -- the one change to bots' bodies in the build where Oliver saw bots with no
+	-- animations (09-24). Nothing gained by it there: bots never publish `Aiming`, so nothing would ever
+	-- raise their gun. They get the weld they always had.
+	local motorRig = false
+	for _, child in ipairs(torso:GetChildren()) do
+		if child:IsA("Motor6D") then
+			motorRig = true
+			break
+		end
+	end
+	local lower = character:FindFirstChild("LowerTorso")
+	if not motorRig and lower then
+		for _, child in ipairs(lower:GetChildren()) do
+			if child:IsA("Motor6D") then
+				motorRig = true
+				break
+			end
+		end
+	end
+	if motorRig then
+		local mount = Instance.new("Motor6D")
+		mount.Name = "GunMount"
+		mount.Part0 = torso
+		mount.Part1 = receiver
+		mount.C0 = torso.CFrame:ToObjectSpace(receiver.CFrame)
+		mount.C1 = CFrame.identity
+		mount.Parent = receiver
+	else
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = receiver
+		weld.Part1 = torso
+		weld.Parent = receiver
+	end
 
 	model.Parent = character
 	return true
@@ -1454,6 +1492,7 @@ end
 -- Holding a slot. Cancels a reload or a use in progress on whatever was held before.
 local function selectSlot(player, loadout, index)
 	loadout.reloading = false
+	if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 	loadout.reloadToken += 1
 	loadout.useToken += 1
 	loadout.using = nil
@@ -1530,6 +1569,7 @@ function WeaponService.TakeSlot(player, slotIndex)
 
 	if loadout.equipped == slotIndex then
 		loadout.reloading = false
+		if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 		loadout.reloadToken += 1
 		loadout.useToken += 1
 		loadout.using = nil
@@ -1656,6 +1696,7 @@ function WeaponService.SwapHeldForItem(player, itemId, amount)
 
 	-- Whatever was being done with the old slot stops with it.
 	loadout.reloading = false
+	if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 	loadout.reloadToken += 1
 	loadout.useToken += 1
 	loadout.using = nil
@@ -1815,6 +1856,7 @@ function WeaponService.Reload(player)
 	end
 
 	loadout.reloading = true
+	if player.Character then player.Character:SetAttribute("Reloading", def.reloadTime); player.Character:SetAttribute("ReloadEmpty", slot.mag <= 0) end -- #13: other clients pose this reload
 	loadout.reloadToken += 1
 	local token = loadout.reloadToken
 	WeaponService.Push(player)
@@ -1836,6 +1878,7 @@ function WeaponService.Reload(player)
 		slot.mag += moved
 		slot.reserve -= moved
 		loadout.reloading = false
+		if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 		WeaponService.Push(player)
 	end)
 end
@@ -1863,7 +1906,11 @@ local function refusal(player, loadout, item)
 		return ""
 	end
 	if item.kind == "heal" and humanoid.Health >= healCap(humanoid, item) then
-		return item.cap < 100 and string.format("%s only heals up to %d.", item.name, item.cap) or "You're already at full health."
+		-- The cap in the player's own health points, scaled the way healCap scales it: with a Health
+		-- Boost (MaxHealth 150) a Bandage heals to 112, and "only heals up to 75" contradicted the 113
+		-- on their HUD (#86).
+		return item.cap < 100 and string.format("%s only heals up to %d.", item.name, math.floor(healCap(humanoid, item)))
+			or "You're already at full health."
 	elseif item.kind == "shield" and loadout.shield >= item.cap then
 		return item.cap < MAX_SHIELD and string.format("%s only fills shield up to %d.", item.name, item.cap) or "Your shield is already full."
 	end
@@ -1886,7 +1933,9 @@ local function applyItem(player, loadout, item, aimPoint)
 	elseif item.kind == "throwable" then
 		return WeaponService.ThrowEffect(player, item.id, aimPoint) == true
 	else
-		return WeaponService.MovementEffect(player, item.id) == true
+		-- The reason comes back too (a Blink Bean too close to a wall), so the click is not silent.
+		local ok, why = WeaponService.MovementEffect(player, item.id)
+		return ok == true, why
 	end
 	return true
 end
@@ -1946,8 +1995,9 @@ function WeaponService.StartUse(player, aimPoint, slotIndex)
 		if lastInstantAt[player] and now - lastInstantAt[player] < INSTANT_COOLDOWN then
 			return false
 		end
-		if not applyItem(player, loadout, item, aimPoint) then
-			return false
+		local applied, why = applyItem(player, loadout, item, aimPoint)
+		if not applied then
+			return false, why
 		end
 		lastInstantAt[player] = now
 		spendAndFinish(player, loadout, index, item)

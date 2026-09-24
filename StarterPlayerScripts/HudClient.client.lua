@@ -44,6 +44,21 @@ local create, rounded, padding = UiKit.create, UiKit.rounded, UiKit.padding
 local formatNumber = UiKit.formatNumber
 local C = UiKit.Colors
 
+-- #80: which pieces the phone layout has no room for right now. An upright phone has no compass, kill
+-- feed, bounty or location line or speed pill (PhoneLayout.lua's portraitRects), and the layout hid them
+-- once -- but the compass's own per-frame code, the bounty handler and the speed pill's refresh each
+-- wrote `Visible = true` again the next time they ran, and the pieces came back at their DESKTOP spots
+-- over the portrait HUD. So every piece the layout places says whether it wants to be shown through
+-- `hudLayout.show`, which records the wish and draws the piece only if the layout has a place for it;
+-- when the phone turns and the layout finds room again, it shows whatever was last wished for.
+-- (tools/hud_layout_check.py runs this file and fails on any direct `.Visible =` on one of those pieces.)
+-- One table, not three locals: the main chunk is close to Luau's 200-local limit.
+local hudLayout = { dropped = {}, wanted = {} }
+function hudLayout.show(gui, want)
+	hudLayout.wanted[gui] = want == true
+	gui.Visible = want == true and not hudLayout.dropped[gui]
+end
+
 local screenGui = create("ScreenGui", {
 	Name = "BrrHud",
 	ResetOnSpawn = false,
@@ -205,9 +220,18 @@ local function updateReadyButton()
 	tickShort.Visible = ready
 	tickLong.Visible = ready
 	readyArrow.Visible = not ready
-	readySub.Text = string.format("%d of %d ready  •  [%s] %s",
-		matchState.readyCount or 0, matchState.playerCount or 0, Settings.KeyLabel("Ready"),
-		ready and "stay in lobby" or "join next match")
+	-- A key only means something on a keyboard (#86 M2): on a touch screen or a pad the pill itself is
+	-- what you press.
+	local lastInput = UserInputService:GetLastInputType()
+	if lastInput == Enum.UserInputType.Touch or string.find(lastInput.Name, "Gamepad", 1, true) then
+		readySub.Text = string.format("%d of %d ready  •  %s",
+			matchState.readyCount or 0, matchState.playerCount or 0,
+			ready and "tap to stay in lobby" or "tap to join next match")
+	else
+		readySub.Text = string.format("%d of %d ready  •  [%s] %s",
+			matchState.readyCount or 0, matchState.playerCount or 0, Settings.KeyLabel("Ready"),
+			ready and "stay in lobby" or "join next match")
+	end
 end
 
 local readyHovered = false
@@ -286,9 +310,14 @@ local crosshair = create("Frame", {
 local crosshairWanted = false
 local function showCrosshair(wanted)
 	crosshairWanted = wanted
-	crosshair.Visible = wanted and not player:GetAttribute("SightsUp")
+	-- One crosshair at a time: while the player works a vehicle's gun, VehicleWeaponClient draws its own
+	-- aim mark and this one stands down (#80: with a gun in hand both were drawn, one over the other).
+	crosshair.Visible = wanted and not player:GetAttribute("SightsUp") and not player:GetAttribute("VehicleGunActive")
 end
 player:GetAttributeChangedSignal("SightsUp"):Connect(function()
+	showCrosshair(crosshairWanted)
+end)
+player:GetAttributeChangedSignal("VehicleGunActive"):Connect(function()
 	showCrosshair(crosshairWanted)
 end)
 
@@ -888,13 +917,14 @@ local companionMoveText = ""
 local profileMatches = nil
 local tipIndex = 0
 local NEW_PLAYER_TIPS = {
-	"Step on the green pad or press F to ready up for the next match",
+	-- Keys as {ActionId}, filled in with this player's own binding when shown (#86 M3).
+	"Step on the green pad or press {Ready} to ready up for the next match",
 	"The buttons on the left: shop, brainrots, progress, Robux and settings",
-	"Loot guns, heals, shields and items — eight slots, keys 1 to 8 (Q cycles)",
+	"Loot guns, heals, shields and items — eight slots, keys {Slot1} to {Slot8} ({NextSlot} cycles)",
 	"Equip a brainrot as your companion and press {Companion} to use its move in a fight",
 	"Try the Cloud Climb up the tree, kick a ball into the goal, spin the daily wheel",
-	"Stay inside the storm. Last one standing wins a Legendary Crate",
-	"Press T to switch to a third-person camera; every key is rebindable in Settings",
+	"Stay inside the zone — the purple storm wall hurts. Last one standing wins a Legendary Crate",
+	"Press {ToggleCamera} to switch to a third-person camera; every key is rebindable in Settings",
 }
 -- When the companion's move is ready again, from the cooldown in its last attack broadcast.
 local abilityReadyAt = 0
@@ -988,14 +1018,15 @@ local speedPill = create("TextLabel", {
 	Font = Enum.Font.FredokaOne,
 	Text = "SPEED BOOST",
 	TextColor3 = Color3.new(1, 1, 1),
-	TextSize = 16,
+	-- Scaled into the box, up to 16: with two effects on at once the line is longer than the pill.
+	TextScaled = true,
 	Visible = false,
 	Parent = screenGui,
-}, { rounded(14) })
+}, { rounded(14), create("UITextSizeConstraint", { MaxTextSize = 16 }), padding(4) })
 
 local function updateCompanionWidget()
 	local show = companionDef ~= nil and loadout ~= nil
-	companionFrame.Visible = show
+	hudLayout.show(companionFrame, show)
 	if not show then
 		return
 	end
@@ -1088,6 +1119,8 @@ do
 	end
 	rescale()
 	camera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
+	-- A tablet gaining or losing a keyboard changes layout (PhoneLayout.Mode), as the phone block does.
+	UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(rescale)
 
 	local staminaView = { value = 100, max = 100 }
 	RunService.RenderStepped:Connect(function(dt)
@@ -1102,7 +1135,7 @@ do
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local seat = humanoid and humanoid.SeatPart
 		staminaView.hidden = not MovementState.inMatch or player:GetAttribute("MenuOpen") == true
-			or (seat ~= nil and seat:IsA("VehicleSeat"))
+			or (seat ~= nil and seat:IsA("VehicleSeat")) or player:GetAttribute("VehicleGunActive") == true
 		staminaBar:Update(math.min(dt, 0.1), staminaView)
 	end)
 end
@@ -1170,6 +1203,29 @@ local weaponName = create("TextLabel", {
 	TextSize = 15,
 	Parent = weaponFrame,
 })
+
+-- What the held item does (#86 C14), with its standing rule (the structure cap, M13): the left of the
+-- ammo row, which is empty while an item is in hand ("x3" or "RAISING" is all the right-hand side says,
+-- under 130 px at 30 pt). There is no row under the item line to put it in -- the slots start 6 px
+-- below it -- and a taller plate would push the whole hotbar up the screen. Two lines of 12 pt in 516
+-- px hold the longest description with its cap rule. Desktop shape only: setHotbarShape hides it on a
+-- phone, as it does the ammo and item lines.
+do
+	local itemDetail = create("TextLabel", {
+		Name = "ItemDetail",
+		Size = UDim2.new(1, -150, 0, 32),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		Text = "",
+		TextColor3 = C.Muted,
+		TextSize = 12,
+		TextWrapped = true,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Visible = false,
+		Parent = weaponFrame,
+	})
+end
 
 local slotRow = create("Frame", {
 	Position = UDim2.new(0, 0, 0, 58),
@@ -1304,9 +1360,26 @@ local function buildSlotCells()
 			Parent = cell,
 		})
 
+		-- The tier as a letter in the bottom-right corner (#86 M4): the bar under the cell says it only in
+		-- colour. C U R E L M S -- the first letters of Rarity.Order, all different. The item name beside
+		-- it stops 14 px short to leave the corner clear.
+		local tier = create("TextLabel", {
+			Name = "Tier",
+			AnchorPoint = Vector2.new(1, 1),
+			Position = UDim2.new(1, -3, 1, -5),
+			Size = UDim2.fromOffset(11, 13),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.GothamBlack,
+			Text = "",
+			TextColor3 = C.Muted,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			TextSize = 10,
+			Parent = cell,
+		})
+
 		local name = create("TextLabel", {
 			Position = UDim2.new(0, 3, 1, -18),
-			Size = UDim2.new(1, -6, 0, 13),
+			Size = UDim2.new(1, -17, 0, 13),
 			BackgroundTransparency = 1,
 			Font = Enum.Font.GothamBold,
 			Text = "",
@@ -1351,6 +1424,7 @@ local function buildSlotCells()
 			center = center,
 			name = name,
 			bar = bar,
+			tier = tier,
 		}
 	end
 end
@@ -1360,6 +1434,23 @@ local function renderSlots()
 		buildSlotCells()
 	end
 
+	-- The phone hotbar has no ammo line under it (setHotbarShape hides it), so each gun cell says its
+	-- reserve too (#86 C12). And the first movement item says the key that uses it without switching
+	-- off your gun (#86 C18: MovementClient's quick-use, the first "movement" item in the bag), on a
+	-- keyboard, where a key means something.
+	local phoneShape = weaponFrame:GetAttribute("PhoneShape") == true
+	local quickSlot = nil
+	if UserInputService.KeyboardEnabled and loadout and loadout.slots then
+		local ItemData = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("ItemData"))
+		for index = 1, SLOT_COUNT do
+			local slot = loadout.slots[index]
+			local item = type(slot) == "table" and slot.kind == "item" and ItemData.Get(slot.id)
+			if item and item.kind == "movement" then
+				quickSlot = index
+				break
+			end
+		end
+	end
 	for index = 1, SLOT_COUNT do
 		local refs = slotCells[index]
 		local slot = loadout and loadout.slots[index]
@@ -1368,7 +1459,9 @@ local function renderSlots()
 		refs.cell.BackgroundColor3 = held and C.Panel or C.Background
 		refs.cell.BackgroundTransparency = held and 0 or (slot and 0.35 or 0.6)
 		refs.stroke.Enabled = held and true or false
-		refs.key.Text = Settings.KeyLabel("Slot" .. index)
+		refs.key.Text = Settings.KeyLabel("Slot" .. index) .. (index == quickSlot and (" · " .. Settings.KeyLabel("MovementItem")) or "")
+		refs.tier.Text = (slot and type(slot.rarity) == "string") and string.upper(string.sub(slot.rarity, 1, 1)) or ""
+		refs.tier.TextColor3 = slot and Rarity.Color(slot.rarity) or C.Muted
 
 		if not slot then
 			setSlotIcon(refs, nil)
@@ -1387,10 +1480,11 @@ local function renderSlots()
 			refs.bar.BackgroundColor3 = Rarity.Color(slot.rarity)
 		else
 			setSlotIcon(refs, nil)
-			refs.center.Text = slot.name
-			refs.center.TextColor3 = Rarity.Color(slot.rarity)
+			local empty = slot.mag == 0 and slot.reserve == 0
+			refs.center.Text = (phoneShape and empty) and "NO AMMO" or slot.name
+			refs.center.TextColor3 = (phoneShape and empty) and C.Red or Rarity.Color(slot.rarity)
 			refs.name.Text = ""
-			refs.count.Text = tostring(slot.mag)
+			refs.count.Text = phoneShape and string.format("%d/%d", slot.mag, slot.reserve or 0) or tostring(slot.mag)
 			refs.count.TextColor3 = slot.mag == 0 and C.Red or C.Text
 			refs.bar.Visible = true
 			refs.bar.BackgroundColor3 = Rarity.Color(slot.rarity)
@@ -1487,20 +1581,46 @@ end)
 local function renderWeapon()
 	if not loadout then
 		weaponFrame.Visible = false
-		healthFrame.Visible = false
+		hudLayout.show(healthFrame, false)
 		showCrosshair(false)
 		updateCompanionWidget()
 		return
 	end
 
 	weaponFrame.Visible = true
-	healthFrame.Visible = true
+	hudLayout.show(healthFrame, true)
 
 	local slot = loadout.equipped and loadout.slots[loadout.equipped]
+	-- The words for the slot (#86 C14 description, C39 gun type), from the inventory module, which says
+	-- them in its cards too. Required here, not at the top: this chunk is close to Luau's local limit.
+	local okPanel, Panel = pcall(require, script.Parent:FindFirstChild("InventoryPanel"))
+	if not okPanel or type(Panel) ~= "table" or type(Panel.Describe) ~= "function" then
+		Panel = nil
+	end
+	local itemDetail = weaponFrame:FindFirstChild("ItemDetail")
+	if itemDetail then
+		itemDetail.Text = (Panel and slot and slot.kind == "item") and Panel.Describe(slot) or ""
+		itemDetail.Visible = itemDetail.Text ~= "" and weaponFrame:GetAttribute("PhoneShape") ~= true
+	end
 	if slot and slot.kind == "item" then
-		ammoText.Text = "x" .. slot.count
-		ammoText.TextColor3 = C.Text
-		weaponName.Text = slot.name .. "  •  click to use"
+		-- The same "not ready yet" as a gun gets after a swap (#86 M16): a click in it is eaten.
+		local raising = (loadout.equipReadyIn or 0) > 0.05
+		ammoText.Text = raising and "RAISING" or ("x" .. slot.count)
+		ammoText.TextColor3 = raising and C.Muted or C.Text
+		-- How to use it on this device (#86 M5), and why nothing happens from a driver's seat, where
+		-- the server refuses it (#86 M14: ProjectileService won't let a driver throw).
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		local lastInput = UserInputService:GetLastInputType()
+		local how = "click to use"
+		if seat ~= nil and seat:IsA("VehicleSeat") then
+			how = "hands on the wheel"
+		elseif string.find(lastInput.Name, "Gamepad", 1, true) then
+			how = "RT to use"
+		elseif lastInput == Enum.UserInputType.Touch then
+			how = "tap FIRE to use"
+		end
+		weaponName.Text = slot.name .. "  •  " .. how
 		weaponName.TextColor3 = Rarity.Color(slot.rarity)
 		showCrosshair(false)
 	elseif slot then
@@ -1526,7 +1646,20 @@ local function renderWeapon()
 			ammoText.Text = string.format("%d / %d", slot.mag, slot.reserve)
 			ammoText.TextColor3 = C.Text
 		end
-		weaponName.Text = slot.name .. (slot.ability and ("  •  " .. slot.ability) or "")
+		-- What the gun's perk does, not its internal id (#86 C45).
+		local abilityWords = {
+			pierce = "PIERCE: through the first body",
+			chain = "CHAIN: arcs to a second enemy",
+			lifesteal = "LIFESTEAL: heals on hit",
+			explosive = "EXPLOSIVE: splash",
+			goldRush = "GOLD RUSH: kills pay coins",
+		}
+		-- The tier in words as well as colour (#86 M34), as the floor label already says it.
+		-- And what KIND of gun it is (#86 C39), unless the name already says so ("Rot SMG").
+		local typeWord = Panel and Panel.GunTypeWord(slot.name, slot.style) or nil
+		weaponName.Text = (type(slot.rarity) == "string" and (string.upper(slot.rarity) .. "  ") or "") .. slot.name
+			.. (typeWord and (" · " .. typeWord) or "")
+			.. (slot.ability and ("  •  " .. (abilityWords[slot.ability] or slot.ability)) or "")
 		weaponName.TextColor3 = Rarity.Color(slot.rarity)
 		showCrosshair(true)
 	else
@@ -1869,8 +2002,14 @@ stormChanged.OnClientEvent:Connect(function(storm)
 		return
 	end
 
+	-- The last circle does not move again, so "Storm moves in 0s" was a countdown to nothing (#86 C22);
+	-- and "Zone 2/5" read as jargon: it is which circle of how many.
+	if storm.status == "Final" then
+		stormLabel.Text = string.format("Final circle   •   outside: %d dmg/s", storm.damagePerSecond)
+		return
+	end
 	local verb = storm.status == "Shrinking" and "Storm closing" or "Storm moves in"
-	stormLabel.Text = string.format("%s  %ds   •   Zone %d/%d   •   %d dmg/s",
+	stormLabel.Text = string.format("%s  %ds   •   Circle %d of %d   •   outside: %d dmg/s",
 		verb, storm.secondsLeft, storm.phase, storm.totalPhases, storm.damagePerSecond)
 end)
 
@@ -2163,7 +2302,6 @@ end
 -- End of the drop screen's block; its locals are released here.
 
 -- The bounty on the match's kill leader, under the minimap.
-local bountyRemote = Remotes.Event("Bounty")
 
 local bountyLabel = create("TextLabel", {
 	AnchorPoint = Vector2.new(1, 0),
@@ -2501,10 +2639,10 @@ end
 
 local function updateCompass(root)
 	if not root or not Settings.Get("Compass") then
-		compass.Visible = false
+		hudLayout.show(compass, false)
 		return
 	end
-	compass.Visible = true
+	hudLayout.show(compass, true)
 	-- Always flush under whatever the top-centre HUD is showing right now (Oliver 17:16): the players-
 	-- alive banner, the storm line under it, or a team mode's score bar -- measured off what is actually
 	-- on screen, so it follows any of them changing size, hiding or scaling. A phone layout places the
@@ -2592,6 +2730,21 @@ local function updateCompass(root)
 		placeCompassMarker(marker, bearingTo(here, activeDrop.position), heading)
 	elseif compassMarkers.drop then
 		compassMarkers.drop.frame.Visible = false
+	end
+	-- King of the Hill's objectives by letter (#86 C34): nothing on the HUD pointed at them. The mode
+	-- builds each as workspace.Hill.Objective<letter> with its centre as HillX / HillZ
+	-- (ModeKingOfTheHill.buildObjective), and takes the model down with the match.
+	local hill = workspace:FindFirstChild("Hill")
+	for _, letter in ipairs({ "A", "B" }) do
+		local key = "objective:" .. letter
+		local folder = hill and hill:FindFirstChild("Objective" .. letter)
+		local x = folder and folder:GetAttribute("HillX")
+		local z = folder and folder:GetAttribute("HillZ")
+		if x and z then
+			placeCompassMarker(compassMarker(key, letter, C.Accent, "zone"), bearingTo(here, Vector3.new(x, 0, z)), heading)
+		elseif compassMarkers[key] then
+			compassMarkers[key].frame.Visible = false
+		end
 	end
 end
 
@@ -2700,12 +2853,12 @@ end)
 RunService.RenderStepped:Connect(function()
 	local radius = matchState.mapRadius
 	if matchState.state ~= "InProgress" or not radius or radius <= 0 then
-		minimap.Visible = false
-		compass.Visible = false
+		hudLayout.show(minimap, false)
+		hudLayout.show(compass, false)
 		return
 	end
 
-	minimap.Visible = true
+	hudLayout.show(minimap, true)
 	local scale = (MAP_PX / 2) / radius
 
 	local character = player.Character
@@ -2758,9 +2911,12 @@ end)
 -- Kill feed
 --------------------------------------------------------------------------------
 
+-- Under the location line, not beside it (#80): at y 312 the first row (312-336) lay across the bounty
+-- line (304-326) and the location line (332-352), which sit under the minimap. 108 + MAP_PX + 34 + 20 is
+-- the location line's bottom; 6 clear of it.
 local feed = create("Frame", {
 	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -16, 0, 312),
+	Position = UDim2.new(1, -16, 0, 108 + MAP_PX + 34 + 20 + 6),
 	Size = UDim2.new(0, 300, 0, 200),
 	BackgroundTransparency = 1,
 	Parent = screenGui,
@@ -2794,13 +2950,35 @@ killFeed.OnClientEvent:Connect(function(entry)
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamBold,
 		-- Placement is a battle-royale thing; a respawning mode's feed has none, and a nil here
-		-- would throw before the row exists.
-		Text = "  " .. text .. (entry.placement and ("  #" .. entry.placement) or "") .. "  ",
-		TextColor3 = entry.killer == player.Name and C.Accent or C.Text,
+		-- would throw before the row exists. It goes first, and a long row is cut with "…" rather
+		-- than running off the screen's edge (#86 M8).
+		Text = "  " .. (entry.placement and ("#" .. entry.placement .. "  ") or "") .. text .. "  ",
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		-- By UserId, not the shown name: a DisplayName is not unique (#86 C7). The server sends the
+		-- killer's UserId beside the name (Combatants.GetUserId; nil for a bot).
+		TextColor3 = entry.killerUserId ~= nil and entry.killerUserId == player.UserId and C.Accent or C.Text,
 		TextSize = 13,
 		LayoutOrder = feedOrder,
 		Parent = feed,
 	}, { rounded(6) })
+
+	-- No more rows than the feed's box holds (#80): the rows stack down from its top and each lasts six
+	-- seconds, so a burst of kills ran on past the box into whatever is under it (on a phone the slot is
+	-- two rows tall and the bounty line is right under it). The newest rows show; the phone layout sets
+	-- MaxRows for its slot, and the desktop box holds seven 24-pixel rows with their 4-pixel gaps.
+	local live = {}
+	for _, child in ipairs(feed:GetChildren()) do
+		if child:IsA("TextLabel") then
+			table.insert(live, child)
+		end
+	end
+	table.sort(live, function(a, b)
+		return a.LayoutOrder > b.LayoutOrder
+	end)
+	for index, shown in ipairs(live) do
+		shown.Visible = index <= (feed:GetAttribute("MaxRows") or 7)
+	end
 
 	task.delay(6, function()
 		TweenService:Create(row, TweenInfo.new(0.4), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
@@ -2813,9 +2991,12 @@ end)
 -- Toasts
 --------------------------------------------------------------------------------
 
+-- Bottom centre, clear of the bottom row (#80): its bottom edge 8 above the hotbar's top (16 up, 150
+-- tall). At -120 it sat inside the hotbar on any window narrower than about 1400 (253x36 px at 1366x768),
+-- and across the companion ability tile's readout at 1920x1080.
 local toast = create("TextLabel", {
 	AnchorPoint = Vector2.new(0.5, 1),
-	Position = UDim2.new(0.5, 0, 1, -120),
+	Position = UDim2.new(0.5, 0, 1, -(16 + 150 + 8)),
 	Size = UDim2.new(0, 460, 0, 36),
 	BackgroundColor3 = C.Panel,
 	BackgroundTransparency = 1,
@@ -2825,6 +3006,9 @@ local toast = create("TextLabel", {
 	TextColor3 = C.Text,
 	TextTransparency = 1,
 	TextSize = 15,
+	-- A long message wraps onto a second line inside the box rather than running out of it (#86 C3).
+	TextWrapped = true,
+	AutomaticSize = Enum.AutomaticSize.Y,
 	Parent = screenGui,
 }, { rounded(8) })
 
@@ -2836,9 +3020,21 @@ local function showToast(message, isError)
 
 	toast.Text = message
 	toast.TextColor3 = isError and C.Red or C.Text
+	-- In a vehicle on a desktop screen the driving HUD fills the band the toast normally uses (the speed
+	-- panel 178-256 up, its hint to 280, the damage line to 304: VehicleClient), so the toast goes above
+	-- it (#80). A phone places the toast itself, top-anchored (the phone layout block), and is left alone.
+	if toast.AnchorPoint.Y == 1 then
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		-- A gunner's panel sits in the same band as the driver's (VehicleWeaponClient), so a gunner counts.
+		local driving = seat ~= nil and (seat:IsA("VehicleSeat") or seat.Name == "GunnerSeat" or seat:GetAttribute("Gunner") == true)
+			or player:GetAttribute("VehicleGunActive") == true
+		toast.Position = UDim2.new(0.5, 0, 1, driving and -(304 + 8) or -(16 + 150 + 8))
+	end
 	TweenService:Create(toast, TweenInfo.new(0.15), { BackgroundTransparency = 0.15, TextTransparency = 0 }):Play()
 
-	task.delay(2.6, function()
+	-- Long enough to read: 2.6 s for a short line, more for a long one (#86 C3).
+	task.delay(math.max(2.6, 1.5 + 0.05 * #tostring(message)), function()
 		if token ~= toastToken then
 			return
 		end
@@ -2856,25 +3052,23 @@ Settings.Changed:Connect(function(id)
 end)
 
 -- Bounties: who's worth extra right now, and who just collected.
-bountyRemote.OnClientEvent:Connect(function(info)
+-- The remote is named here rather than kept in a local: the main chunk is at Luau's 200-local limit.
+Remotes.Event("Bounty").OnClientEvent:Connect(function(info)
 	if type(info) ~= "table" then
-		bountyLabel.Visible = false
+		hudLayout.show(bountyLabel, false)
 		return
 	end
 	if info.claimed then
-		bountyLabel.Visible = false
+		hudLayout.show(bountyLabel, false)
 		showToast(string.format("%s collected the %d coin bounty on %s!", info.by or "Someone", info.reward or 0, info.name or "?"))
 		return
 	end
 	bountyLabel.Text = string.format("BOUNTY  •  %s  (%d kills)  •  %d C", info.name or "?", info.kills or 0, info.reward or 0)
-	bountyLabel.Visible = matchState.state == "InProgress"
-	-- player.Name, not DisplayName: the server sends Combatants.GetName, which is the USERNAME
-	-- (Combatants.lua:44-45), and most accounts have a DisplayName that differs from it. So this
-	-- compared two different things, and the one toast written for a single person -- "there's a
-	-- bounty on YOU" -- went to everybody EXCEPT its subject, who got the third-person version about
-	-- their own username instead. The kill-feed self-highlight above already compares player.Name.
-	-- A username is unique across Roblox, so it identifies exactly one account.
-	if info.name ~= player.Name then
+	hudLayout.show(bountyLabel, matchState.state == "InProgress")
+	-- "Is it me?" by UserId, which the server sends beside the name (Combatants.GetUserId, #86 C7): the
+	-- name is a DisplayName and not unique, so comparing names gave a player who shares yours your "YOU"
+	-- toast. (Comparing two different kinds of name is how it once went to everyone except its subject.)
+	if info.userId == nil or info.userId ~= player.UserId then
 		showToast(string.format("BOUNTY: %d SahurCoins on %s (%d kills)", info.reward or 0, info.name or "?", info.kills or 0))
 	else
 		showToast(string.format("There's a %d coin bounty on YOU — everyone knows.", info.reward or 0), true)
@@ -2990,8 +3184,17 @@ do
 		local function setHotbarShape(phone, spot, slots, invSpot)
 			remember(weaponFrame)
 			remember(slotRow)
+			-- The cells word their ammo differently in the phone shape (renderSlots).
+			if weaponFrame:GetAttribute("PhoneShape") ~= (phone == true) then
+				weaponFrame:SetAttribute("PhoneShape", phone == true)
+				renderSlots()
+			end
 			ammoText.Visible = not phone
 			weaponName.Visible = not phone
+			local itemDetail = weaponFrame:FindFirstChild("ItemDetail")
+			if itemDetail then
+				itemDetail.Visible = not phone and itemDetail.Text ~= ""
+			end
 			if rowLayout then
 				rowLayout.Parent = phone and nil or slotRow
 			end
@@ -3163,22 +3366,24 @@ do
 					local spot = phone and spots[piece.key] or nil
 					if phone and spot then
 						PhoneLayout.Place(piece.gui, spots[piece.key], piece.natural, scaleFor(piece.gui), 0, piece.key ~= "killFeed")
-						if piece.dropped then
-							piece.gui.Visible = piece.wasVisible
-							piece.dropped = false
-						end
-					elseif phone then
-						if not piece.dropped then
-							piece.wasVisible, piece.dropped = piece.gui.Visible, true
-						end
-						piece.gui.Visible = false
-					else
+					elseif not phone then
 						piece.gui.AnchorPoint = saved[piece.gui].anchor
 						piece.gui.Position = saved[piece.gui].position
 						scaleFor(piece.gui).Scale = 1
-						if piece.dropped then
-							piece.gui.Visible, piece.dropped = piece.wasVisible, false
+					end
+					-- No place for it in this mode: dropped, and hudLayout.show keeps it hidden whatever its
+					-- own code asks for. Back in a mode with room: shown as its code last asked (or as it
+					-- was, for a piece nothing ever shows or hides, like the kill feed's box).
+					local dropped = phone and not spot
+					if dropped and not hudLayout.dropped[piece.gui] then
+						if hudLayout.wanted[piece.gui] == nil then
+							hudLayout.wanted[piece.gui] = piece.gui.Visible
 						end
+						hudLayout.dropped[piece.gui] = true
+						piece.gui.Visible = false
+					elseif not dropped and hudLayout.dropped[piece.gui] then
+						hudLayout.dropped[piece.gui] = nil
+						piece.gui.Visible = hudLayout.wanted[piece.gui] == true
 					end
 				end
 			end
@@ -3196,6 +3401,9 @@ do
 					end
 				end
 			end
+			-- How many kill rows the feed's slot holds at the scale it was given (a row is 24 plus a 4 gap).
+			local feedSpot = phone and spots.killFeed or nil
+			feed:SetAttribute("MaxRows", feedSpot and math.max(1, math.floor((feedSpot.h / scaleFor(feed).Scale + 4) / 28)) or nil)
 			setHealthShape(phone)
 			setHotbarShape(phone, phone and spots.hotbar or nil, phone and spots.hotbarSlots or nil, phone and spots.inventory or nil)
 			setReadyShape(phone, phone and spots.ready or nil)
@@ -3502,6 +3710,8 @@ local recapPanel = create("Frame", {
 	Parent = screenGui,
 }, { rounded(12), padding(12) })
 
+-- Scaled down to fit rather than cut off: "DOWNED BY <a long display name> — BACK IN 5" is wider than
+-- the panel at 22 pt.
 local recapTitle = create("TextLabel", {
 	Size = UDim2.new(1, 0, 0, 28),
 	BackgroundTransparency = 1,
@@ -3509,10 +3719,11 @@ local recapTitle = create("TextLabel", {
 	Text = "",
 	TextColor3 = C.Red,
 	TextSize = 22,
+	TextScaled = true,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	ZIndex = 13,
 	Parent = recapPanel,
-})
+}, { create("UITextSizeConstraint", { MaxTextSize = 22 }) })
 
 local recapBody = create("TextLabel", {
 	Position = UDim2.new(0, 0, 0, 30),
@@ -3529,11 +3740,46 @@ local recapBody = create("TextLabel", {
 	Parent = recapPanel,
 })
 
-local recapToken = 0
+-- `token` retires an old recap's hide timer; `killer`, `title` and `backAt` feed the respawn countdown.
+local recap = { token = 0 }
+
+-- In a respawn mode the recap says when you are back (#86 M32): "DOWNED BY RIVAL — BACK IN 4", counting
+-- down. The wait used to be only in a 2.6 s toast. The time comes from the recap's own `respawnDelay`
+-- when it carries one, else from the RespawnAt attribute GameMode puts on the player at the moment it
+-- schedules the respawn (server time; GetServerTimeNow is the same clock here). The two can arrive in
+-- either order, so the title is re-judged every frame while the panel is up, and a stale RespawnAt
+-- from an earlier death is already in the past and says nothing.
+do
+	local function respawnIn()
+		local at = recap.backAt or player:GetAttribute("RespawnAt")
+		if type(at) ~= "number" then
+			return nil
+		end
+		local left = math.ceil(at - workspace:GetServerTimeNow())
+		return left > 0 and left or nil
+	end
+	function recap.update()
+		local left = respawnIn()
+		local text = recap.title or ""
+		if left then
+			text = (recap.killer and ("DOWNED BY " .. string.upper(recap.killer)) or "DOWNED") .. " — BACK IN " .. left
+		end
+		if recapTitle.Text ~= text then
+			recapTitle.Text = text
+		end
+	end
+	RunService.Heartbeat:Connect(function()
+		if recapPanel.Visible then
+			recap.update()
+		end
+	end)
+end
 
 deathRecap.OnClientEvent:Connect(function(info)
-	recapToken += 1
-	local token = recapToken
+	recap.token += 1
+	local token = recap.token
+	recap.killer = info.killer
+	recap.backAt = type(info.respawnDelay) == "number" and (workspace:GetServerTimeNow() + info.respawnDelay) or nil
 
 	local lines = {}
 	if info.killer then
@@ -3556,7 +3802,8 @@ deathRecap.OnClientEvent:Connect(function(info)
 				info.killerShield and string.format(" + %d shield", info.killerShield) or ""))
 		end
 	else
-		recapTitle.Text = (info.taken or 0) > 0 and "ELIMINATED" or "THE STORM GOT YOU"
+		-- The storm's finishing blow is named as the storm's even after a shooter had hit you (#86 C6).
+		recapTitle.Text = (info.finishedBy == "Storm" or (info.taken or 0) == 0) and "THE STORM GOT YOU" or "ELIMINATED"
 	end
 	if (info.taken or 0) > 0 then
 		local sources = {}
@@ -3567,10 +3814,12 @@ deathRecap.OnClientEvent:Connect(function(info)
 			#sources > 0 and ("  —  " .. table.concat(sources, ", ")) or ""))
 	end
 	recapBody.Text = table.concat(lines, "\n")
+	recap.title = recapTitle.Text
+	recap.update()
 	recapPanel.Visible = true
 
 	task.delay(10, function()
-		if recapToken == token then
+		if recap.token == token then
 			recapPanel.Visible = false
 		end
 	end)
@@ -3703,8 +3952,8 @@ local function renderBanner()
 
 	-- Oliver: the players-alive bubble is Battle Royale only. In a team mode the score bar takes
 	-- this slot (ModeScoreHud moves up to it), so the banner hides while you're playing one.
-	banner.Visible = not (matchState.state == "InProgress" and loadout
-		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale")
+	hudLayout.show(banner, not (matchState.state == "InProgress" and loadout
+		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale"))
 
 	if matchState.state == "Waiting" then
 		bannerTitle.Text = ready and "WAITING FOR PLAYERS" or "READY UP TO PLAY"
@@ -3746,7 +3995,10 @@ local function renderBanner()
 			bannerSub.Text = "Generating terrain, towns and loot"
 		end
 	elseif matchState.state == "InProgress" then
-		bannerTitle.Text = matchState.aliveCount .. " ALIVE"
+		-- A count of the living means nothing in a respawn mode (#86 C36): there it names the mode.
+		local modeDef = matchState.mode and matchState.mode ~= "BattleRoyale"
+			and require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("GameModes")).Get(matchState.mode)
+		bannerTitle.Text = modeDef and string.upper(modeDef.name) or (matchState.aliveCount .. " ALIVE")
 
 		-- No loadout during a live match means this player isn't in it — they joined after
 		-- it started, or they've been eliminated and are spectating.
@@ -3852,33 +4104,59 @@ local function stopSpeedBoostTick()
 	end
 end
 
+--
+-- The same pill carries the other things on you that run out (#86): Bounce Boots, counted down off
+-- `BounceBootsUntil` (MovementService, a server-time stamp like the soda's; C17), and spawn protection
+-- in a team mode, off the character's `SpawnProtected` (ModeTeams; C32), which ends the moment you
+-- shoot. One pill rather than three, so there is still one thing in that spot to keep clear.
 local function refreshSpeedPill()
-	local on = player:GetAttribute("SpeedBoosted") == true
-	speedPill.Visible = on
-	if not on then
+	local function effects()
+		local now = workspace:GetServerTimeNow()
+		local out = {}
+		if player:GetAttribute("SpeedBoosted") == true then
+			local endsAt = player:GetAttribute("SpeedBoostUntil")
+			local left = endsAt and endsAt - now or 0
+			table.insert(out, left > 0 and string.format("SPEED BOOST  %ds", math.ceil(left)) or "SPEED BOOST")
+		end
+		local boots = player:GetAttribute("BounceBootsUntil")
+		if boots and boots - now > 0 then
+			table.insert(out, string.format("BOUNCE BOOTS  %ds", math.ceil(boots - now)))
+		end
+		if player.Character and player.Character:GetAttribute("SpawnProtected") == true then
+			table.insert(out, "PROTECTED")
+		end
+		return out
+	end
+	local current = effects()
+	hudLayout.show(speedPill, #current > 0)
+	if #current == 0 then
 		stopSpeedBoostTick()
 		speedPill.Text = "SPEED BOOST"
 		return
 	end
+	speedPill.Text = table.concat(current, "  •  ")
 	if speedBoostTick then
 		return
 	end
 	speedBoostTick = RunService.Heartbeat:Connect(function()
-		local endsAt = player:GetAttribute("SpeedBoostUntil")
-		if not endsAt then
-			speedPill.Text = "SPEED BOOST"
-			return
+		local live = effects()
+		if #live == 0 then
+			refreshSpeedPill()
+		else
+			speedPill.Text = table.concat(live, "  •  ")
 		end
-		local left = endsAt - workspace:GetServerTimeNow()
-		if left <= 0 then
-			speedPill.Text = "SPEED BOOST"
-			return
-		end
-		speedPill.Text = string.format("SPEED BOOST  %ds", math.ceil(left))
 	end)
 end
 
 player:GetAttributeChangedSignal("SpeedBoosted"):Connect(refreshSpeedPill)
+player:GetAttributeChangedSignal("BounceBootsUntil"):Connect(refreshSpeedPill)
+player.CharacterAdded:Connect(function(character)
+	character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+	refreshSpeedPill()
+end)
+if player.Character then
+	player.Character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+end
 refreshSpeedPill()
 
 --------------------------------------------------------------------------------
@@ -4035,6 +4313,10 @@ end
 
 -- Ambient particles for the map you're on: an invisible box that rides along ahead of the
 -- camera, emitting whatever MapData.Ambient says — pollen, dust, blown sand, mist, fireflies.
+-- In a do-block, so its five locals are released at its end rather than held by the main chunk:
+-- this file sits within a handful of Luau's 200-locals-per-function limit, and one past it stops the
+-- WHOLE HUD compiling (tools/local_limit_check.py measures the headroom). Left unindented, like Drop.
+do
 local ambientPart = nil
 local ambientMap = nil
 
@@ -4134,7 +4416,7 @@ matchChanged.OnClientEvent:Connect(function(state)
 	end
 	if state.state ~= "InProgress" then
 		activeDrop = nil
-		bountyLabel.Visible = false
+		hudLayout.show(bountyLabel, false)
 	end
 	-- The match's event is announced by the event banner ("Match event banner", above).
 	renderBanner()
@@ -4143,6 +4425,7 @@ matchChanged.OnClientEvent:Connect(function(state)
 		resultsPanel.Visible = false
 	end
 end)
+end -- the ambient and match-state block
 
 loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	loadout = newLoadout
@@ -4180,6 +4463,53 @@ do
 	local CompanionAbilityIcon = require(script.Parent:WaitForChild("CompanionAbilityIcon"))
 	local abilityIcon = CompanionAbilityIcon.new(screenGui)
 	local statsFor, statsKey = nil, nil
+
+	-- On a touch screen the tile goes in PhoneLayout's pet-tile slot (`Rects().petIcon`, above the
+	-- thumbstick's rest). Its own spot is worked out from the desktop hotbar, which on an 844x390 phone
+	-- put it on the thumbstick and on an upright one 400 px off the left edge (#80). Its UIScale is its
+	-- pop animation, so the phone size comes from a holder with a scale of its own (as the READY pill's
+	-- does). The holder is a bare box, so everything that shows, hides or animates the tile still works.
+	-- In a function of its own under pcall: the main chunk is at Luau's 200-local limit, and if the layout
+	-- fails to load the tile keeps its desktop spot.
+	xpcall(function()
+		local okLayout, PhoneLayout = pcall(require, script.Parent:WaitForChild("PhoneLayout"))
+		local tile = abilityIcon.frame
+		local home = { anchor = tile.AnchorPoint, position = tile.Position }
+		local size = CompanionAbilityIcon.Size
+		local holder = create("Frame", {
+			Name = "PhoneAbilityHolder",
+			Size = UDim2.fromOffset(size, size),
+			BackgroundTransparency = 1,
+			Parent = screenGui,
+		})
+		local holderScale = create("UIScale", { Parent = holder })
+		local function placeTile()
+			local viewport = camera.ViewportSize
+			local spot = okLayout and PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport).petIcon or nil
+			if spot then
+				holderScale.Scale = math.min(spot.w, spot.h) / size
+				holder.Position = UDim2.fromOffset(spot.x, spot.y)
+				tile.AnchorPoint = Vector2.new(0, 0)
+				tile.Position = UDim2.fromOffset(0, 0)
+				tile.Parent = holder
+			else
+				tile.AnchorPoint = home.anchor
+				tile.Position = home.position
+				tile.Parent = screenGui
+			end
+			-- The move-and-stats line above the tile grows leftward from its right edge, which from the
+			-- phone slot at the left edge is off the screen and over the companion strip. The tile hides it
+			-- there once CompanionAbilityIcon has SetCompact (proposed with #80); until then this is a no-op.
+			if abilityIcon.SetCompact then
+				abilityIcon:SetCompact(spot ~= nil)
+			end
+		end
+		placeTile()
+		camera:GetPropertyChangedSignal("ViewportSize"):Connect(placeTile)
+		UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(placeTile)
+	end, function(err)
+		warn("[HudClient] the ability tile's phone spot didn't load; it keeps its desktop spot: " .. tostring(err))
+	end)
 
 	-- The badge names the control this player would actually press: their own keyboard key, the
 	-- gamepad's Y button, or nothing on a touch screen, where the on-screen button is the control.

@@ -210,6 +210,7 @@ function CompanionAbilityIcon:SetStats(stats, moveName)
 	end
 
 	if not stats then
+		self.readoutWanted = false
 		self.readout.Visible = false
 		return
 	end
@@ -222,7 +223,19 @@ function CompanionAbilityIcon:SetStats(stats, moveName)
 	-- to compare companions with. Above 10 the decimal is noise and is dropped.
 	self.readoutStats.Text = string.format(dps < 10 and "%.1f DPS  ·  %d dmg / %.1fs  ·  %d HP"
 		or "%.0f DPS  ·  %d dmg / %.1fs  ·  %d HP", dps, stats.damage or 0, cooldown, stats.health or 0)
-	self.readout.Visible = true
+	self.readoutWanted = true
+	self.readout.Visible = not self.compact
+end
+
+-- Compact: the tile alone, without the move-and-stats line above it. HudClient sets it while the tile
+-- sits in PhoneLayout's pet-tile slot at the left edge of a touch screen (#80), where that line, which
+-- grows leftward from the tile's right edge, would run off the screen and over the companion strip.
+-- The line's own wish is kept, so it comes back as it was when the tile returns to its desktop spot.
+function CompanionAbilityIcon:SetCompact(compact)
+	self.compact = compact == true
+	if self.readout then
+		self.readout.Visible = self.readoutWanted == true and not self.compact
+	end
 end
 
 function CompanionAbilityIcon:SetKey(text)

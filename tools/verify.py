@@ -8,8 +8,13 @@ def read(rel):
     with open(os.path.join(root, rel), encoding="utf-8") as f:
         return f.read()
 
+# Never game or probe source. `.claude/worktrees` holds whole agent checkouts nested inside the repo;
+# walking them multiplied the run time and judged other branches' files as if they were this one's.
+SKIP_DIRS = {".git", ".claude", "__pycache__", "node_modules", ".venv", "venv"}
+
 def lua_files():
-    for base, _, files in os.walk(root):
+    for base, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
         for name in files:
             if name.endswith(".lua"):
                 path = os.path.join(base, name)
@@ -28,41 +33,47 @@ def lua_files():
 LOCAL_LIMIT = 200
 LOCAL_WARN = 195
 
+_STRIP_NEXT = re.compile(r'--|\[=*\[|["\'`]')
+_LONG_OPEN = re.compile(r'\[(=*)\[')
+
 def _strip_lua(src):
+    # Linear scan: jump straight to the next comment, long bracket or quote instead of re-slicing
+    # the rest of the file at every character (that was quadratic, and BotService is 260 KB).
     out, i, n = [], 0, len(src)
     while i < n:
+        m = _STRIP_NEXT.search(src, i)
+        if not m:
+            out.append(src[i:])
+            break
+        out.append(src[i:m.start()])
+        i = m.start()
         c = src[i]
-        m = re.match(r'--\[(=*)\[', src[i:])
-        if m:
-            close = ']' + m.group(1) + ']'
-            j = src.find(close, i)
-            i = n if j < 0 else j + len(close)
-            continue
-        if src.startswith('--', i):
+        if c == '-':
+            lm = _LONG_OPEN.match(src, i + 2)
+            if lm:
+                close = ']' + lm.group(1) + ']'
+                j = src.find(close, i)
+                i = n if j < 0 else j + len(close)
+                continue
             j = src.find('\n', i)
             i = n if j < 0 else j
             continue
-        m = re.match(r'\[(=*)\[', src[i:])
-        if m:
-            close = ']' + m.group(1) + ']'
+        if c == '[':
+            close = ']' + m.group()[1:-1] + ']'
             j = src.find(close, i)
             i = n if j < 0 else j + len(close)
             out.append(' "" ')
             continue
-        if c in '"\'`':
-            q, i = c, i + 1
-            while i < n:
-                if src[i] == '\\':
-                    i += 2
-                    continue
-                if src[i] == q:
-                    i += 1
-                    break
+        q, i = c, i + 1
+        while i < n:
+            if src[i] == '\\':
+                i += 2
+                continue
+            if src[i] == q:
                 i += 1
-            out.append(' "" ')
-            continue
-        out.append(c)
-        i += 1
+                break
+            i += 1
+        out.append(' "" ')
     return ''.join(out)
 
 def main_chunk_locals(src):
@@ -154,7 +165,7 @@ for m in re.finditer(r"^\t(\w+) = \{\n(.*?)^\t\},", items_block, re.S | re.M):
     rar = re.search(r'rarity = "(\w+)"', body)
     if not rar: problems.append(f"cosmetic {item_id} has no rarity")
     elif rar.group(1) not in RARITIES: problems.append(f"cosmetic {item_id} bad rarity")
-    if "crateOnly = true" not in body and "bundleOnly = true" not in body and "rankOnly = true" not in body and "price =" not in body: problems.append(f"cosmetic {item_id} has no price and isn't crateOnly/bundleOnly/rankOnly")
+    if "crateOnly = true" not in body and "bundleOnly = true" not in body and "rankOnly = true" not in body and "teamOnly = true" not in body and "price =" not in body: problems.append(f"cosmetic {item_id} has no price and isn't crateOnly/bundleOnly/rankOnly/teamOnly")
 cosmetic_ids = set(re.findall(r"^\t(\w+) = \{\n", items_block, re.M))
 gp = read("ReplicatedStorage/Shared/GamepassConfig.lua")
 for cid in re.findall(r'kind = "Cosmetic", id = "(\w+)"', gp):
@@ -345,7 +356,9 @@ if "local luck = profile and profile.crateLuck or 1" not in menu or "CrateData.O
     problems.append("MenuClient's crate cards don't build their odds line with CrateData.OddsLine at the player's crateLuck")
 # The one place the odds line is built, so a card can never print a number the roll didn't use.
 _odds_line = re.search(r"function CrateData\.OddsLine\(crate, luck, boosted\)(.*?)\nend\n", crates, re.S)
-if not _odds_line or "boosted and rarity:sub(1, 4)" not in _odds_line.group(1):
+# The full rarity word since #86 ("Unco" / "Lege" were not words a player knows); the rule is that
+# a boosted crate prints the NAME alone, with no percentage beside it.
+if not _odds_line or not re.search(r"boosted and rarity\s*\n", _odds_line.group(1)):
     problems.append("CrateData.OddsLine must print rarity names only for a boosted crate")
 for use in re.findall(r"crate\.odds\[[^\]]+\][^\n]*", menu):
     if "> 0" not in use: problems.append(f"MenuClient reads raw crate.odds for something other than 'can this rarity drop': {use.strip()}")

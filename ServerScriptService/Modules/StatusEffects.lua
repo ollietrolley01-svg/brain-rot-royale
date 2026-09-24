@@ -20,6 +20,15 @@
 --                             clears the stacks; a frozen victim can't be refrozen for FREEZE_IMMUNITY
 --                             seconds, so a fast gun can't lock someone down forever.
 --
+--   echo = { ratio, delay }   (the gun rework) the hit repeats itself `delay` seconds later for `ratio` of the
+--                             gun's body damage, if the victim is still standing: a lag spike you can see
+--                             in the hit markers. An echo never echoes.
+--   ratio = { stacks, window, duration, scale }
+--                             (the gun rework) each hit adds a stack; `stacks` of them landed with no gap
+--                             longer than `window` seconds "ratio" the victim for `duration` seconds, and a
+--                             ratio'd victim takes `scale` times the damage from everyone
+--                             (CombatService.DamageTakenScale). A tag over their head says so.
+--
 -- A death, or combat switching off, clears everything on that combatant, the slows included.
 --
 -- Damage-over-time ticks call DealDamage, which tells every listener again; `ticking` makes sure a
@@ -27,6 +36,7 @@
 
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Debris = game:GetService("Debris")
 
 local Modules = ServerScriptService:WaitForChild("Modules")
 local CombatService = require(Modules:WaitForChild("CombatService"))
@@ -98,10 +108,116 @@ local function applyChill(victim, spec, now)
 	MatchService.SetStatusSpeed(victim, "chill", math.clamp(1 - slow * state.stacks, 0.05, 1), duration)
 end
 
+--------------------------------------------------------------------------------
+-- Echo and ratio (the gun rework)
+--------------------------------------------------------------------------------
+
+-- Server game time (os.clock is CPU time in Roblox and drifts from the wall under load); swappable for the
+-- harness, as Delay is (task.delay, which the harness runs by hand).
+StatusEffects.Clock = function()
+	return time()
+end
+StatusEffects.Delay = function(seconds, fn)
+	task.delay(seconds, fn)
+end
+
+local ECHO_DELAY_MAX = 1
+-- [victimToken] = { stacks, at, untilAt, scale }
+local ratios = {}
+
+local function scheduleEcho(attacker, victim, weaponId, def)
+	local ratio, delay = tonumber(def.echo.ratio), tonumber(def.echo.delay)
+	if not ratio or not delay or ratio <= 0 then
+		return
+	end
+	StatusEffects.Delay(math.clamp(delay, 0, ECHO_DELAY_MAX), function()
+		if not Combatants.Exists(victim) or not Combatants.IsAlive(victim) or not Combatants.Exists(attacker) then
+			return
+		end
+		if CombatService.IsEnabled and not CombatService.IsEnabled() then
+			return
+		end
+		-- As a damage-over-time tick: `ticking` keeps the echo from starting effects (or an echo) of its own.
+		ticking = true
+		local ok, err = pcall(CombatService.DealDamage, attacker, victim, def.damage * ratio, weaponId, false)
+		ticking = false
+		if not ok then
+			warn("[StatusEffects] echo failed: " .. tostring(err))
+		end
+	end)
+end
+
+-- The tag over a ratio'd head, for everyone to see who is taking extra.
+local function ratioTag(victim, duration)
+	local character = Combatants.GetCharacter(victim)
+	local head = character and character:FindFirstChild("Head")
+	if not head then
+		return
+	end
+	local old = head:FindFirstChild("RatioTag")
+	if old then
+		old:Destroy()
+	end
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "RatioTag"
+	gui.Size = UDim2.fromScale(4, 1.2)
+	gui.StudsOffset = Vector3.new(0, 2.6, 0)
+	gui.AlwaysOnTop = true
+	gui.MaxDistance = 120
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Text = "RATIO'D"
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBlack
+	label.TextColor3 = Color3.fromRGB(255, 120, 190)
+	label.TextStrokeTransparency = 0.2
+	label.Parent = gui
+	gui.Parent = head
+	Debris:AddItem(gui, duration)
+end
+
+local function addRatio(victim, spec, now)
+	local need, window, duration, scale = tonumber(spec.stacks), tonumber(spec.window), tonumber(spec.duration), tonumber(spec.scale)
+	if not (need and window and duration and scale) then
+		return
+	end
+	local state = ratios[victim]
+	if not state then
+		state = { stacks = 0, at = -math.huge, untilAt = -math.huge, scale = 1 }
+		ratios[victim] = state
+	end
+	if now - state.at > window then
+		state.stacks = 0
+	end
+	state.at = now
+	-- Already ratio'd: nothing builds until it lapses, so a fast gun can't keep it up forever.
+	if now < state.untilAt then
+		return
+	end
+	state.stacks += 1
+	if state.stacks >= need then
+		state.stacks = 0
+		state.untilAt = now + duration
+		state.scale = scale
+		ratioTag(victim, duration)
+	end
+end
+
+-- How much more a combatant takes from every hit right now (1 unless ratio'd). CombatService.DealDamage asks.
+function StatusEffects.DamageTakenScale(victim)
+	local state = ratios[victim]
+	if state and StatusEffects.Clock() < state.untilAt then
+		return state.scale
+	end
+	return 1
+end
+
 -- Everything on a combatant goes, including the slows MatchService holds for them: those are keyed by
 -- token, not character, so a chill left on someone who died would otherwise meet their next character.
 local function clearVictim(victim)
 	dots[victim] = nil
+	ratios[victim] = nil
 	if chills[victim] then
 		chills[victim] = nil
 		MatchService.SetStatusSpeed(victim, "chill", 1, 0)
@@ -137,6 +253,12 @@ local function onDamage(attacker, victim, dealt, weaponId, _headshot, shieldHit)
 	if type(def.chill) == "table" then
 		applyChill(victim, def.chill, os.clock())
 	end
+	if type(def.echo) == "table" and attacker then
+		scheduleEcho(attacker, victim, weaponId, def)
+	end
+	if type(def.ratio) == "table" then
+		addRatio(victim, def.ratio, StatusEffects.Clock())
+	end
 end
 
 -- One pass of every damage-over-time effect. Nothing ticks while combat is off: a bleed started by the
@@ -147,6 +269,7 @@ local function tickAll()
 			clearVictim(victim)
 		end
 		table.clear(dots)
+		table.clear(ratios)
 		return
 	end
 	for victim, kinds in pairs(dots) do
@@ -181,6 +304,12 @@ local function tickAll()
 			chills[victim] = nil
 		end
 	end
+	local gameNow = StatusEffects.Clock()
+	for victim, state in pairs(ratios) do
+		if not Combatants.Exists(victim) or (state.untilAt < gameNow and gameNow - state.at > 10) then
+			ratios[victim] = nil
+		end
+	end
 end
 
 -- Exposed for probes: what is on a combatant right now.
@@ -192,6 +321,7 @@ end
 StatusEffects.OnDamage = onDamage
 StatusEffects.Tick = tickAll
 
+CombatService.DamageTakenScale = StatusEffects.DamageTakenScale
 if CombatService.OnDamage then
 	CombatService.OnDamage(onDamage)
 else

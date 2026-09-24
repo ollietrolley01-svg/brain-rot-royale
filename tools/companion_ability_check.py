@@ -15,6 +15,10 @@ checks:
              think loop
   styles     a slow, a DoT and a leech land on an enemy the move hurt, and never on a teammate it did
              not; a Forking Zap jumps on to a second enemy at 60%
+  one-shot   every brainrot at max level and max stars, with its style, venom or blast: one use takes
+             no more than BrainrotData.MaxUseDamage[rarity] off a target (hits and DoT together, after
+             CombatDamageScale) and never takes a full-health player to 0, with or without a full
+             shield; a Secret is never clipped; two uses still kill for every Epic and rarer
 
     python3 tools/companion_ability_check.py .            the checks
     python3 tools/companion_ability_check.py . --plant    planted faults; every one must be caught
@@ -174,15 +178,23 @@ mods.Combatants = {
         return map
     end,
 }
+mods.MatchConfig = { CombatDamageScale = 0.92, MaxShield = 100 }
 mods.CombatService = {
     IsEnabled = function() return true end,
     ConfirmHit = function() if throwConfirm then error("confirm send failed") end end,
+    -- As the real one: the mode's veto, then CombatDamageScale, then the shield soaks first.
     DealDamage = function(attacker, token, amount)
         -- A teammate is protected, as the mode's veto does: 0 dealt.
         if token.team ~= nil and token.team == attacker.team then return 0 end
-        token.humanoid.Health = token.humanoid.Health - amount
-        table.insert(log.deals, { who = token.Name, amount = amount })
-        return amount
+        if token.humanoid.Health <= 0 or amount <= 0 then return 0 end
+        amount = amount * mods.MatchConfig.CombatDamageScale
+        local absorbed = math.min(token.shield or 0, amount)
+        token.shield = (token.shield or 0) - absorbed
+        amount = amount - absorbed
+        local dealt = absorbed + math.min(amount, token.humanoid.Health)
+        token.humanoid.Health = math.max(0, token.humanoid.Health - amount)
+        table.insert(log.deals, { who = token.Name, amount = amount + absorbed })
+        return dealt
     end,
     InRadius = function(center, radius, attacker)
         local out = {}
@@ -198,9 +210,33 @@ mods.PlayerData = { Get = function(p) return p.data end }
 mods.CompanionBoons = {
     Clear = function() if throwClear then error("boon clear failed") end end,
     Apply = function() end, Tick = function() end, TickVenom = function() end,
-    VenomOf = function() return nil end,
-    StartVenom = function(owner, victim, venom, tag) table.insert(log.venoms, { who = victim.Name, damage = venom.damage, duration = venom.duration }) end,
+    VenomOf = function(def) return def.boon and def.boon.venom or nil end,
+    -- As the real one: one slot per victim, refreshed not stacked, ticking every 0.5 s through DealDamage.
+    StartVenom = function(owner, victim, venom, tag)
+        table.insert(log.venoms, { who = victim.Name, damage = venom.damage, duration = venom.duration })
+        local ticks = math.max(1, math.floor(venom.duration / 0.5))
+        _G.venomOn[victim] = { owner = owner, perTick = venom.damage / ticks, ticksLeft = ticks }
+    end,
 }
+_G.venomOn = {}
+_G.tickVenom = function(seconds)
+    for _ = 1, math.floor(seconds / 0.5 + 0.5) do
+        for victim, dot in pairs(_G.venomOn) do
+            mods.CombatService.DealDamage(dot.owner, victim, dot.perTick)
+            dot.ticksLeft = dot.ticksLeft - 1
+            if dot.ticksLeft <= 0 or victim.humanoid.Health <= 0 then _G.venomOn[victim] = nil end
+        end
+    end
+end
+-- Explode as far as a companion blast needs it: every combatant in the radius but the owner takes
+-- at most the full damage once (the centre's; falloff only lowers it).
+mods.ProjectileService = { Explode = function(b)
+    for _, t in ipairs(all) do
+        if t ~= b.owner and (t.root.Position - b.position).Magnitude <= b.radius then
+            mods.CombatService.DealDamage(b.owner, t, b.damage)
+        end
+    end
+end }
 mods.MatchService = { SetStatusSpeed = function(token, key, factor, duration) table.insert(log.slows, { who = token.Name, factor = factor, duration = duration }) end }
 mods.SafeValue = { Vector3 = function(v) return type(v) == "table" and rawget(v, "__vec") ~= nil end }
 mods.Rarity = { IsAtLeast = function() return false end, Color = function() return Any() end }
@@ -466,6 +502,107 @@ return out
 """
 
 
+# Every brainrot at max level and stars against one enemy 10 studs off (inside every move's reach).
+SWEEP = r"""
+local CS = _G.CS
+local BrainrotData = _G.BrainrotData
+local out, facts = {}, {}
+local function check(ok, msg) if not ok then table.insert(out, msg) end end
+local scale = 0.92
+local owner = _G.makeCombatant("Owner", true, 0, "A")
+local enemy = _G.makeCombatant("Enemy", true, 10, "B")
+
+-- What one use would take with no per-use cap: the hit, the DoT on what it dealt, the venom.
+local function uncapped(def, s)
+    local hit = s.damage * (def.blast and BrainrotData.BlastPower or 1) * scale
+    local total = hit
+    if not def.blast then
+        total = total + hit * (s.dot or 0) * scale
+        if def.boon and def.boon.venom then total = total + def.boon.venom.damage * scale end
+    end
+    return total
+end
+
+local function equip(def, level, stars)
+    CS.ReviveAll()
+    local xp = (level - 1) * BrainrotData.XpPerLevel
+    owner.data = { Companion = def.name, Brainrots = { def.name }, CompanionXp = { [def.name] = xp }, Stars = { [def.name] = stars } }
+    CS.Refresh(owner)
+    CS.ResetStats()
+end
+
+local function fresh(shield)
+    for k in pairs(_G.venomOn) do _G.venomOn[k] = nil end
+    enemy.humanoid.Health = 100
+    enemy.shield = shield
+    _G.advance(100)
+end
+
+local worst, clipped1, count = {}, {}, {}
+for _, def in ipairs(BrainrotData.Types) do
+    local cap = BrainrotData.MaxUseDamage[def.rarity]
+    local s = BrainrotData.Stats(def, BrainrotData.MaxLevel, BrainrotData.MaxStars)
+    local want = uncapped(def, s)
+    equip(def, BrainrotData.MaxLevel, BrainrotData.MaxStars)
+    for _, shield in ipairs({ 0, 100 }) do
+        fresh(shield)
+        check(CS.UseAbility(owner, enemy.root.Position) == true, "sweep: a move could not be used")
+        _G.flush()
+        _G.tickVenom(10)
+        local lost = (100 - enemy.humanoid.Health) + (shield - enemy.shield)
+        worst[def.rarity] = math.max(worst[def.rarity] or 0, lost)
+        if def.rarity == "Secret" then
+            check(math.abs(lost - math.min(want, 100 + shield)) < 0.01,
+                string.format("one-shot: Secret %s was clipped (%.1f of %.1f)", def.name, lost, want))
+        else
+            check(cap ~= nil and cap < 100, "one-shot: no MaxUseDamage under 100 for " .. def.rarity)
+            check(lost <= (cap or 0) + 0.001, string.format("one-shot: %s (%s) took %.1f in one use, cap %s (shield %d)", def.name, def.rarity, lost, tostring(cap), shield))
+            check(enemy.humanoid.Health > 0, string.format("one-shot: %s (%s) one-shot a full-health player (shield %d)", def.name, def.rarity, shield))
+            check(lost >= math.min(want, cap or 0) - 0.01, string.format("one-shot: %s took %.1f, less than its %.1f", def.name, lost, math.min(want, cap or 0)))
+        end
+    end
+    -- Two uses, the second as soon as the move is ready, the first's DoT ticking in between.
+    if BrainrotData.RarityIndex[def.rarity] >= BrainrotData.RarityIndex.Epic then
+        fresh(0)
+        check(CS.UseAbility(owner, enemy.root.Position) == true, "sweep: first use refused")
+        _G.flush()
+        _G.tickVenom(s.cooldown)
+        _G.advance(s.cooldown + 0.01)
+        if enemy.humanoid.Health > 0 then
+            check(CS.UseAbility(owner, enemy.root.Position) == true, "sweep: second use refused")
+            _G.flush()
+            _G.tickVenom(10)
+        end
+        check(enemy.humanoid.Health <= 0, string.format("two uses: %s (%s) left a full-health player on %.1f", def.name, def.rarity, enemy.humanoid.Health))
+    end
+    -- How often the cap bites on a fresh level-1 copy (for the facts line).
+    count[def.rarity] = (count[def.rarity] or 0) + 1
+    if cap and uncapped(def, BrainrotData.Stats(def, 1, 0)) > cap then clipped1[def.rarity] = (clipped1[def.rarity] or 0) + 1 end
+end
+for _, r in ipairs({ "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret" }) do
+    table.insert(facts, string.format("%s cap %s: most one max-level use takes %.1f; clipped at level 1: %d/%d", r,
+        tostring(BrainrotData.MaxUseDamage[r] or "none"), worst[r] or 0, clipped1[r] or 0, count[r] or 0))
+end
+return out, facts
+"""
+
+
+def run_sweep(data_src, service_src, fails, facts):
+    lua = LuaRuntime(unpack_returned_tuples=True)
+    lua.execute(PRELUDE)
+    lua.execute("function _run(h, a, b) return load(h, 'harness')(a, b) end")
+    try:
+        lua.globals()._run(SERVICE_HARNESS, luau_to_lua(data_src), luau_to_lua(service_src))
+        out, lines = lua.execute(SWEEP)
+    except Exception as exc:  # a crash is a failure, not a pass
+        fails.append(f"sweep: harness crashed: {exc}")
+        return
+    for i in range(1, len(lines) + 1):
+        facts.append(lines[i])
+    for i in range(1, len(out) + 1):
+        fails.append(out[i])
+
+
 def run_service_checks(data_src, service_src, fails):
     lua = LuaRuntime(unpack_returned_tuples=True)
     lua.execute(PRELUDE)
@@ -484,6 +621,7 @@ def check(root, data_src, service_src, base_src):
     fails, facts = [], []
     run_data_checks(root, data_src, base_src, fails, facts)
     run_service_checks(data_src, service_src, fails)
+    run_sweep(data_src, service_src, fails, facts)
     return fails, facts
 
 
@@ -501,6 +639,18 @@ PLANTS = [
     ("a style far over the side-grade band", DATA, 'Quick = { label = "Quick", power = 0.8,', 'Quick = { label = "Quick", power = 1.4,'),
     ("forks dropped from the Zap branch", SERVICE, "\t\t\t\thitForks(player, forks, stats.damage, tag, report)\n\t\t\t\treportHits(entry, report)\n\t\t\tend\n\t\tend)\n\telse\n\t\t-- Spit, Bonk and Lob travel",
      "\t\t\t\treportHits(entry, report)\n\t\t\tend\n\t\tend)\n\telse\n\t\t-- Spit, Bonk and Lob travel"),
+    ("per-use cap removed", DATA, "BrainrotData.MaxUseDamage = { Common = 34,", "BrainrotData.MaxUseDamage = { Commonx = 34,"),
+    ("cap per hit instead of per use (nothing booked)", SERVICE,
+     "\treport.spent[token] = (report.spent[token] or 0) + amount * scale\n", ""),
+    ("style DoT outside the cap", SERVICE,
+     "local damage = withinUse(report, token, dealt * stats.dot)", "local damage = dealt * stats.dot"),
+    ("venom outside the cap", SERVICE,
+     "local damage = withinUse(report, token, venom.damage)", "local damage = venom.damage"),
+    ("blast outside the cap", SERVICE,
+     'damage = withinUse(useReport(entry), "blast", entry.stats.damage * BrainrotData.BlastPower),',
+     "damage = entry.stats.damage * BrainrotData.BlastPower,"),
+    ("cap counted before CombatDamageScale", SERVICE,
+     "\tlocal scale = MatchConfig.CombatDamageScale or 1\n\tlocal left", "\tlocal scale = 1\n\tlocal left"),
 ]
 
 

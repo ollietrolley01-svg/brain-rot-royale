@@ -17,6 +17,10 @@
 
 local MatchEvents = {}
 
+-- Zone Rush's storm speed, named once so its card can quote it: "half again as fast" was an idiom
+-- many players would not read as 1.5x (#86), and a typed "50%" would drift from the number.
+local ZONE_RUSH_SPEED = 1.5
+
 MatchEvents.NoneChance = 0.3
 
 MatchEvents.List = {
@@ -46,7 +50,7 @@ MatchEvents.List = {
 	{
 		id = "ShieldUp",
 		name = "Shield Up",
-		description = "Everyone drops in with 50 shield already up.",
+		description = "Everyone starts with 50 shield.",
 		color = Color3.fromRGB(80, 170, 255),
 		startShield = 50,
 	},
@@ -74,9 +78,9 @@ MatchEvents.List = {
 	{
 		id = "ZoneRush",
 		name = "Zone Rush",
-		description = "The storm runs half again as fast. Keep moving.",
+		description = string.format("The storm closes %d%% faster. Keep moving.", math.floor((ZONE_RUSH_SPEED - 1) * 100 + 0.5)),
 		color = Color3.fromRGB(190, 90, 255),
-		stormSpeed = 1.5,
+		stormSpeed = ZONE_RUSH_SPEED,
 	},
 	{
 		id = "HotDrops",

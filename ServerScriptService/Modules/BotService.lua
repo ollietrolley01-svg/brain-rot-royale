@@ -17,6 +17,31 @@
 --
 -- One rig is built up front and cloned for the rest: CreateHumanoidModelFromDescription is
 -- a web call, and doing it 29 times would stall the match start.
+--
+-- SHARED INFRASTRUCTURE (for every section in this file: archetypes, looting, vehicles, animation).
+-- Bot code is hot: up to 13 bots think in one server frame. Anything a new behaviour needs from the
+-- world goes through these, never through its own workspace:Raycast or a walk over Combatants.All():
+--   BotService.Tick                  counts think slices; stamp a per-tick cache with it (see hostile()).
+--   combatantList / combatantsNear   the living combatants this tick (token, character, root, humanoid,
+--     (BotService.SpatialQuery)      position, isPlayer) and the ones within a radius, from a uniform
+--                                    grid rebuilt once a tick. The returned list is a SHARED scratch
+--                                    buffer: read it, never keep it. SpatialQuery.Loot(position,
+--                                    radius, kind) does the same for pickups; SpatialQuery.NewGrid
+--                                    makes a grid for anything else (vehicles, structures).
+--   castRay(origin, direction,       every ray a bot casts. A per-frame budget (BotService.RaycastBudget)
+--     params, priority)              serves "combat" (sight lines) before "navigation" (steps, cover,
+--                                    floors) before "idle" (wander and loot walking). Returns result,
+--                                    granted; on granted == false do the cautious thing (not visible,
+--                                    can't step) and DON'T cache the answer: the next think retries.
+--                                    BotNav.CastRay is the same function for BotNav's own rays.
+--   BotService.LodDefers             far from every player, an idle bot thinks every other turn; a
+--                                    bot that is fighting, fleeing, in the storm or was just hit never
+--                                    does. Time-based behaviour (regen, timers) must use elapsed time,
+--                                    not "one think = BotThinkInterval".
+-- Allocation: reuse rows (see refreshCombatants, findTarget, planCombatMove) rather than building
+-- tables in a per-think path; the GC pause is part of the frame. tools/perf_bot_cost.py counts rays,
+-- candidates examined, KB allocated and thinks per frame at 30 and 50 bots, and its planted faults
+-- must all still be caught after a change here.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -61,16 +86,50 @@ local BotService = {}
 BotService.IsHostile = nil
 BotService.SpawnLoadout = nil
 
+-- The think slice being run, bumped by refreshCombatants. Per-tick caches are stamped with it.
+BotService.Tick = 0
+
+-- The hook is a pcall per pair, and findTarget asks it for every combatant in reach of every bot
+-- that thinks: at 50 bots that was ~600 pcalls a slice. Teams don't change inside a slice, so the
+-- answer is kept per bot for the tick (cleared when BotService.Tick moves on). shootAt still asks
+-- at the trigger, through this same cache, so a side swap mid-match is seen by the next slice.
 local function hostile(bot, token)
+	-- Riding together is a truce: nobody sharing a bot's vehicle is its target (BOT VEHICLES).
+	local ride = bot.ride
+	if ride and ride.model then
+		local character = Combatants.GetCharacter(token)
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		if seat and seat.Parent == ride.model then
+			return false
+		end
+	end
 	local hook = BotService.IsHostile
 	if not hook then
 		return true
 	end
-	local ok, result = pcall(hook, bot, token)
-	if not ok then
-		return true
+	local cache = bot.hostileCache
+	if cache then
+		if bot.hostileTick ~= BotService.Tick then
+			table.clear(cache)
+			bot.hostileTick = BotService.Tick
+		else
+			local known = cache[token]
+			if known ~= nil then
+				return known
+			end
+		end
+	elseif type(bot) == "table" then
+		cache = {}
+		bot.hostileCache = cache
+		bot.hostileTick = BotService.Tick
 	end
-	return result ~= false
+	local ok, result = pcall(hook, bot, token)
+	result = (not ok) or result ~= false
+	if cache then
+		cache[token] = result
+	end
+	return result
 end
 
 -- Counters for tools/bot_probe.lua, shared with BotNav so the probe reads one table.
@@ -81,11 +140,26 @@ for _, key in ipairs({
 	"reloads", "flees", "hunts", "searches", "coverSearches", "coverFound", "coverReached",
 	"lootBlacklisted", "combatReplans", "badMoves", "sprints", "slides", "dangerDodges", "coverRouted",
 	"launcherShots", "launcherMisses", "coverUnreachable", "crouches", "lootIgnored", "lootFarReach",
-	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate",
+	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate", "quickShots",
+	-- BOT ARCHETYPES (tools/bot_archetype_sim.py reads these)
+	"peeks", "repositions", "thirdPartyHolds", "avoided", "flankMoves", "focusFire", "throwsSticky",
+	"buildsFortify", "buildsBlock", "buildsCross", "buildsPushed", "throwsRefusedFriendly", "buildsRefusedFriendly",
+	"rays", "raysCombat", "raysNavigation", "raysIdle", "raysDenied", "raysFrameMax", "sightDenied",
+	"candidatesExamined", "lodSkips", "lodThinks",
+	-- BOT LOOTING & ROTATION (tools/bot_loot_sim.py reads these)
+	"lootUpgrades", "lootBackups", "lootJunkDropped", "lootContested", "gunSwaps", "roadLegs",
+	"supplySkipped", "restockTrips", "dropHot", "dropQuiet", "lootStocked", "baseChestSpread", "lootBehind",
 }) do
 	STATS[key] = STATS[key] or 0
 end
 BotService.Stats = STATS
+
+-- BOT LOOTING & ROTATION (the section of that name, above updateBot): drop choice, loot routes,
+-- inventory, heal timing and zone rotation, per archetype. Declared here because functions defined
+-- before that section (tryHeal, holdLoot, FindBaseLoot) read its dials. A FIELD, not a local: the
+-- main chunk sits at the edge of Luau's 200-local limit (tools/verify.py warns from 195), so the
+-- section is reached as BotService.Loot everywhere, and tools/bot_loot_sim.py drives that table.
+BotService.Loot = {}
 
 local BOT_NAMES = {
 	"SahurFan2011", "TungTungKing", "crocodilo_xd", "TralalaGamer", "BananiniBoss",
@@ -99,10 +173,255 @@ local BOT_NAMES = {
 -- Guns bots don't pick up yet, whatever their rarity. BoomboxBassline shoves its target 45 studs/s,
 -- and a bot aims by turning its whole body with an AlignOrientation, so being shoved mid-burst turns
 -- its aim: worth one playtest look before bots can hold one. Remove the entry after that.
-local BOT_WEAPON_HOLD = { BoomboxBassline = true }
+-- TamburoTungTung throws three bouncing drumlets a shot, and a bot's ProjectileService.FireWeapon throws one
+-- round it can't lead; Bananerang's boomerang comes back to where it was thrown, which no bot plans for.
+-- Held here so a bot is never dealt one at spawn (the pickup filter below already passes them over).
+local BOT_WEAPON_HOLD = { BoomboxBassline = true, TamburoTungTung = true, Bananerang = true }
 
 -- Mostly floor-tier guns, with the occasional good one so some fights bite harder.
 local WEAPON_ODDS = { Common = 44, Uncommon = 38, Rare = 15, Epic = 3, Legendary = 0 }
+
+--------------------------------------------------------------------------------
+-- BOT ARCHETYPES
+--------------------------------------------------------------------------------
+-- Every bot used to play the same way: nearest target, 55 studs, strafe, cover at 80% health. Thirty
+-- copies of one player read as thirty statues that move. Each bot is now dealt an ARCHETYPE at spawn
+-- (Oliver, 2026-09-24: "different kinds that have different strategies in fighting and looting"), a
+-- table of dials the fighting, looting and rotation code reads instead of one shared constant. The
+-- dials say how a bot COMMITS: what it fights, from how far, when it hides, when it leaves. They never
+-- touch how well it shoots. Aim is MatchConfig.BotAccuracy* and AIM_SETTLE_DELAY, and stays where
+-- Oliver put it (#40/#75/#81): aggression is commitment, not lethality. tools/bot_aggression_check.py
+-- fails if the hit chance at any range moves.
+--
+-- Layered on top is the WEAPON CLASS a bot happens to hold (WeaponData `style`): a shotgun wants to be
+-- at 12 studs and pushes corners, a sniper wants 130 and moves after every shot, an LMG sits and
+-- suppresses, a launcher never fires point-blank. ARCHETYPE_CLASS is the small table where the two
+-- meet (a Marksman with a shotgun still keeps more distance than a Rusher with one). The merged result
+-- for a bot's current gun is BotService.DialsOf(bot), rebuilt when its gun changes.
+--
+-- Reading the dials elsewhere:
+--   BotService.ArchetypeOf(bot)  -> the archetype table (has .name), nil for a token that isn't a bot
+--   BotService.DialsOf(bot)      -> archetype x weapon class, the table the fight code runs on
+--   BotService.Archetypes        -> name -> archetype, for probes and the mode mix
+--   BotService.WeaponClasses     -> style -> class dials
+--   BotService.AssignArchetype(bot, name) -> force one (probes, a mode that wants a set squad)
+-- Loot and rotation dials (lootGreed, preferredWeaponClasses, rotateEarly, chestPriority, stock
+-- targets...) live in BotService.Loot.DIALS in the BOT LOOTING & ROTATION section, keyed by the same six names.
+--
+-- Dial meanings (fighting):
+--   rangeScale         multiplies the weapon class's preferred engagement distance
+--   coverUse           0-1, how readily the bot takes cover when the fight rules say it may
+--   peek               peeks from cover: hides between bursts rather than standing in the gap
+--   repositionOnHit    0-1, chance a fresh hit makes it change position (and drop the current move)
+--   targetPick         "closest" | "weakest" | "threat" | "engaged": what the target score favours
+--   pushTargetBelow    pushes a target under this health share (the MatchConfig one is the floor)
+--   retreatHealth      absolute health under which it leaves a close fight (MatchConfig is the default)
+--   healBelow          health share under which it uses heals (MatchConfig is the default)
+--   grenadeAt          minimum enemies bunched round the target before a frag goes over
+--   smokeToMove        smokes the ground between itself and the target before repositioning
+--   thirdParty         holds off a target that is busy with someone else until it is hurt
+--   thirdPartyBelow    ...under this health share (or the wait runs out: thirdPartyWait seconds)
+--   avoidUnforced      fights only what shoots it, is close, or is on its objective
+--   flank              works round the side of the target rather than straight at it
+--   holdObjective      KOTH: stays on a hill the team already holds rather than pushing off it
+--   buildRate          0-1, how readily it puts a barricade up when a build rule fires
+--   buildFortify       builds at a held objective or building with nobody shooting yet
+--   buildToCross       builds a wall mid-field to cross open ground toward the target
+--   buildToBlock       builds behind itself to break a pursuer's line of sight while leaving
+--   cookFrags          skilled enough to cook a frag for an airburst
+-- One local for the whole section: this file is close to Luau's 200-local limit for a chunk.
+local ARCH = {}
+
+ARCH.Types = {
+	Rusher = {
+		rangeScale = 0.55, coverUse = 0.25, peek = false, repositionOnHit = 0.15, targetPick = "weakest",
+		pushTargetBelow = 0.7, pushHealthAbove = 0.3, retreatHealth = 8, healBelow = 0.45,
+		grenadeAt = 2, smokeToMove = false, thirdParty = false, avoidUnforced = false, flank = false,
+		holdObjective = false, buildRate = 0.15, buildFortify = false, buildToCross = false, buildToBlock = false,
+		cookFrags = false,
+	},
+	Marksman = {
+		rangeScale = 1.6, coverUse = 0.8, peek = true, repositionOnHit = 0.7, targetPick = "closest",
+		pushTargetBelow = 0.3, pushHealthAbove = 0.7, retreatHealth = 30, healBelow = 0.7,
+		grenadeAt = 3, smokeToMove = true, thirdParty = false, avoidUnforced = false, flank = false,
+		holdObjective = false, buildRate = 0.6, buildFortify = true, buildToCross = false, buildToBlock = false,
+		cookFrags = true,
+	},
+	Flanker = {
+		rangeScale = 0.85, coverUse = 0.6, peek = false, repositionOnHit = 0.5, targetPick = "engaged",
+		pushTargetBelow = 0.6, pushHealthAbove = 0.4, retreatHealth = 25, healBelow = 0.55,
+		grenadeAt = 2, smokeToMove = true, thirdParty = false, avoidUnforced = false, flank = true,
+		holdObjective = false, buildRate = 0.35, buildFortify = false, buildToCross = true, buildToBlock = false,
+		cookFrags = true,
+	},
+	Anchor = {
+		rangeScale = 1.15, coverUse = 0.9, peek = true, repositionOnHit = 0.1, targetPick = "threat",
+		pushTargetBelow = 0.3, pushHealthAbove = 0.8, retreatHealth = 20, healBelow = 0.65,
+		grenadeAt = 2, smokeToMove = false, thirdParty = false, avoidUnforced = false, flank = false,
+		holdObjective = true, buildRate = 0.9, buildFortify = true, buildToCross = false, buildToBlock = false,
+		cookFrags = false,
+	},
+	Opportunist = {
+		rangeScale = 1.2, coverUse = 0.7, peek = false, repositionOnHit = 0.4, targetPick = "weakest",
+		pushTargetBelow = 0.6, pushHealthAbove = 0.5, retreatHealth = 30, healBelow = 0.6,
+		grenadeAt = 2, smokeToMove = false, thirdParty = true, thirdPartyBelow = 0.6, thirdPartyWait = 8,
+		avoidUnforced = false, flank = false,
+		holdObjective = false, buildRate = 0.3, buildFortify = false, buildToCross = false, buildToBlock = false,
+		cookFrags = true,
+	},
+	Survivor = {
+		rangeScale = 1.3, coverUse = 0.9, peek = true, repositionOnHit = 0.6, targetPick = "threat",
+		pushTargetBelow = 0.25, pushHealthAbove = 0.9, retreatHealth = 35, healBelow = 0.75,
+		grenadeAt = 3, smokeToMove = true, thirdParty = false, avoidUnforced = true, flank = false,
+		holdObjective = true, buildRate = 0.7, buildFortify = false, buildToCross = false, buildToBlock = true,
+		cookFrags = false,
+	},
+}
+for name, archetype in pairs(ARCH.Types) do
+	archetype.name = name
+end
+BotService.Archetypes = ARCH.Types
+
+-- What each gun class asks of the bot holding it, whatever its personality (Oliver: "react differently
+-- depending on the gun they have"). `range` is the preferred engagement distance before the archetype
+-- scales it; `minRange` is where it opens distance instead of closing (a launcher's own blast, a
+-- sniper's dead zone). `peek` is the style of working a corner: "push" goes round it, "hold" waits
+-- behind it and steps out to fire, "suppress" stands its ground and fires long bursts, "strafe"
+-- keeps moving in the open, "lob" fires at feet and cover from range. `burst` is the shots in one
+-- burst; `restScale` stretches (or trims) BotBurstRest so the class fires the same rounds a minute
+-- as the stock 2-5 burst did with its guns' fire rates (throughput is a lethality dial and stays
+-- put; the numbers come from tools/bot_archetype_sim.py's rounds-a-second table, and it checks them). `repositionAfterShots` moves the bot after that many
+-- shots from one spot. `reloadUnder` reloads early, behind cover, once the magazine is under that
+-- share. `fragToFlush` frags a target it can't see out of cover before pushing; `smokeToCross` smokes
+-- its own approach; `noFrags` never wastes a throwable on what it can simply shoot.
+ARCH.Classes = {
+	pistol       = { range = 30, minRange = 4, peek = "strafe", burst = { 2, 4 }, restScale = 0.8, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	revolver     = { range = 34, minRange = 4, peek = "hold", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.35, fragToFlush = false, smokeToCross = false, noFrags = false },
+	smg          = { range = 20, minRange = 3, peek = "strafe", burst = { 4, 7 }, restScale = 1.8, repositionAfterShots = 0, reloadUnder = 0.25, fragToFlush = false, smokeToCross = true, noFrags = false },
+	shotgun      = { range = 12, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = true, smokeToCross = true, noFrags = false },
+	doublebarrel = { range = 10, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = true, smokeToCross = true, noFrags = false },
+	rifle        = { range = 55, minRange = 8, peek = "strafe", burst = { 2, 5 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	dmr          = { range = 90, minRange = 20, peek = "hold", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 3, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	sniper       = { range = 130, minRange = 35, peek = "hold", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 1, reloadUnder = 0.4, fragToFlush = false, smokeToCross = false, noFrags = false },
+	lmg          = { range = 60, minRange = 10, peek = "suppress", burst = { 6, 10 }, restScale = 2.75, repositionAfterShots = 0, reloadUnder = 0.2, fragToFlush = false, smokeToCross = false, noFrags = true },
+	minigun      = { range = 45, minRange = 8, peek = "suppress", burst = { 8, 14 }, restScale = 3.9, repositionAfterShots = 0, reloadUnder = 0.15, fragToFlush = false, smokeToCross = false, noFrags = true },
+	launcher     = { range = 45, minRange = 18, peek = "lob", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
+	blaster      = { range = 28, minRange = 4, peek = "strafe", burst = { 3, 6 }, restScale = 1.4, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	crossbow     = { range = 70, minRange = 12, peek = "hold", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 2, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
+	railgun      = { range = 110, minRange = 25, peek = "hold", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 1, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
+	cannon       = { range = 50, minRange = 15, peek = "lob", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
+}
+ARCH.Classes.default = ARCH.Classes.rifle
+-- Empty-handed: the fight code never runs without a gun, but the dials must still exist.
+ARCH.Classes.none = { range = 20, minRange = 0, peek = "strafe", burst = { 2, 5 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false }
+for style, class in pairs(ARCH.Classes) do
+	class.style = class.style or style
+end
+BotService.WeaponClasses = ARCH.Classes
+
+-- Where personality and gun disagree: overrides applied last, archetype -> class -> dial.
+ARCH.Overrides = {
+	Rusher = {
+		sniper = { rangeScale = 0.8, repositionAfterShots = 0 }, -- a Rusher with a sniper still closes
+		dmr = { rangeScale = 0.75 },
+		lmg = { peekStyle = "strafe" },
+	},
+	Marksman = {
+		shotgun = { rangeScale = 2.2, peekStyle = "hold" }, -- keeps corners between it and the target
+		doublebarrel = { rangeScale = 2.2, peekStyle = "hold" },
+		smg = { rangeScale = 1.8 },
+	},
+	Anchor = {
+		shotgun = { peekStyle = "hold" }, -- holds the doorway rather than pushing through it
+		smg = { peekStyle = "hold" },
+	},
+	Survivor = {
+		shotgun = { rangeScale = 2 }, -- won't go looking for the knife fight
+	},
+	Flanker = {
+		sniper = { rangeScale = 0.7, repositionAfterShots = 1 },
+	},
+}
+
+-- The archetype x weapon-class table a bot fights by, rebuilt only when its gun changes.
+function ARCH.classOf(def)
+	if not def then
+		return ARCH.Classes.none
+	end
+	return ARCH.Classes[def.style] or ARCH.Classes.default
+end
+
+function ARCH.dialsOf(bot)
+	local archetype = bot.archetype or ARCH.Types.Rusher
+	local class = ARCH.classOf(bot.weapon)
+	local cached = bot.dials
+	if cached and cached.archetype == archetype and cached.class == class then
+		return cached
+	end
+	local dials = {}
+	for key, value in pairs(archetype) do
+		dials[key] = value
+	end
+	dials.archetype = archetype
+	dials.class = class
+	dials.peekStyle = class.peek
+	dials.burst = class.burst
+	dials.restScale = class.restScale
+	dials.repositionAfterShots = class.repositionAfterShots
+	dials.reloadUnder = class.reloadUnder
+	dials.fragToFlush = class.fragToFlush
+	dials.smokeToCross = class.smokeToCross
+	dials.noFrags = class.noFrags
+	dials.aimLow = class.aimLow == true
+	dials.minRange = class.minRange
+	local overrides = ARCH.Overrides[archetype.name]
+	overrides = overrides and overrides[class.style]
+	if overrides then
+		for key, value in pairs(overrides) do
+			dials[key] = value
+		end
+	end
+	-- The distance it wants between itself and the target: class range x personality, never past
+	-- what the gun reaches comfortably, never inside the class's dead zone.
+	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
+	dials.range = math.max(dials.minRange + 4, math.min(class.range * dials.rangeScale, reach * 0.6))
+	bot.dials = dials
+	return dials
+end
+
+-- How many of each archetype a mode wants, out of a hundred. Team modes want role balance PER TEAM
+-- (below); the hill wants bodies that stay on it.
+ARCH.Mix = {
+	BattleRoyale = { Rusher = 20, Marksman = 15, Flanker = 15, Anchor = 10, Opportunist = 15, Survivor = 25 },
+	TeamDeathmatch = { Rusher = 30, Marksman = 20, Flanker = 20, Anchor = 15, Opportunist = 10, Survivor = 5 },
+	KingOfTheHill = { Rusher = 20, Marksman = 15, Flanker = 15, Anchor = 35, Opportunist = 10, Survivor = 5 },
+}
+BotService.ArchetypeMix = ARCH.Mix
+
+-- Stable order for a deck: pairs() order is not.
+ARCH.Order = { "Rusher", "Marksman", "Flanker", "Anchor", "Opportunist", "Survivor" }
+
+function BotService.AssignArchetype(bot, name)
+	local archetype = type(name) == "table" and name or ARCH.Types[name]
+	if not archetype then
+		return nil
+	end
+	bot.archetype = archetype
+	bot.dials = nil
+	if bot.character then
+		-- Read by tools/bot_probe.lua and the nameplate/debug overlays; nothing gameplay keys off it.
+		bot.character:SetAttribute("Archetype", archetype.name)
+	end
+	return archetype
+end
+
+function BotService.ArchetypeOf(bot)
+	return type(bot) == "table" and bot.isBot and (bot.archetype or ARCH.Types.Rusher) or nil
+end
+
+function BotService.DialsOf(bot)
+	return type(bot) == "table" and bot.isBot and ARCH.dialsOf(bot) or nil
+end
 
 -- Roblox's stock R15 animations. These ship with the platform, so they resolve without
 -- uploading anything; swap the ids here if you want a different set.
@@ -546,30 +865,143 @@ end
 -- Perception
 --------------------------------------------------------------------------------
 
+-- RAYCAST BUDGET. Rays are the bots' frame cost: a think can cast 6 sight rays, 5 combat-step checks
+-- of up to 6 rays each and a cover search of up to 24 sight rays plus 6 step checks, and 13 bots
+-- think in one frame. Every bot ray goes through castRay, which counts it against one frame's cap
+-- and refuses the rest, least important class first: "idle" (a wandering or looting bot checking
+-- its footing) is cut at half the cap, "navigation" (combat steps, cover, floors, fleeing) at three
+-- quarters, "combat" (the sight lines that decide whether anyone gets shot) only at the cap itself.
+-- The cap is sized so an ordinary slice never reaches it; it is there for the burst (a fight
+-- breaking out in a crowd, the drop) so that burst costs a bounded number of rays a frame and a
+-- few bots wait one think, rather than the whole server waiting on the frame. A refused ray returns
+-- nil, false; callers take the cautious answer and don't cache it. tools/perf_bot_cost.py runs
+-- this against a crowd and checks the order of refusal; tools/perf_tick_probe.lua reads
+-- Stats.raysFrameMax / raysDenied in Studio.
+local castRay
+BotService.RaycastBudget = { FrameCap = 240, Share = { combat = 1, navigation = 0.75, idle = 0.5 } }
+do
+	local budget = BotService.RaycastBudget
+	local spent = 0
+	-- One RaycastParams and one filter list per class, refilled rather than rebuilt: RaycastParams.new
+	-- plus a filter table per ray was two allocations for every sight line.
+	local folderNames = { "Loot", "Effects", "Companions" }
+	local folders = { at = -1 }
+
+	-- The workspace folders every bot ray looks past, found once a frame rather than per ray.
+	function budget.Folders()
+		if folders.at ~= BotService.Tick then
+			folders.at = BotService.Tick
+			for index, name in ipairs(folderNames) do
+				folders[index] = workspace:FindFirstChild(name) or false
+			end
+		end
+		return folders
+	end
+
+	-- Fill `filter` with `first` and the folders (nil entries skipped), for params.FilterDescendantsInstances.
+	function budget.Filter(filter, first, withCompanions)
+		table.clear(filter)
+		filter[1] = first
+		local list = budget.Folders()
+		for index = 1, #folderNames do
+			local folder = list[index]
+			if folder and (withCompanions ~= false or index ~= 3) then
+				filter[#filter + 1] = folder
+			end
+		end
+		return filter
+	end
+
+	function budget.BeginFrame()
+		if spent > STATS.raysFrameMax then
+			STATS.raysFrameMax = spent
+		end
+		spent = 0
+	end
+
+	function budget.Spent()
+		return spent
+	end
+
+	function budget.Remaining(priority)
+		local share = budget.Share[priority or "navigation"] or budget.Share.navigation
+		return math.max(0, math.floor(budget.FrameCap * share) - spent)
+	end
+
+	function budget.Cast(origin, direction, params, priority)
+		priority = priority or "navigation"
+		local share = budget.Share[priority] or budget.Share.navigation
+		if spent >= budget.FrameCap * share then
+			STATS.raysDenied += 1
+			return nil, false
+		end
+		spent += 1
+		STATS.rays += 1
+		if priority == "combat" then
+			STATS.raysCombat += 1
+		elseif priority == "idle" then
+			STATS.raysIdle += 1
+		else
+			STATS.raysNavigation += 1
+		end
+		return workspace:Raycast(origin, direction, params), true
+	end
+	-- A spatial query that is not a ray (a driving bot's block sweeps, BotNav.DriveSense), counted
+	-- against the same cap and share. True if granted.
+	function budget.Spend(priority)
+		priority = priority or "navigation"
+		if spent >= budget.FrameCap * (budget.Share[priority] or budget.Share.navigation) then
+			STATS.raysDenied += 1
+			return false
+		end
+		spent += 1
+		STATS.rays += 1
+		STATS.raysNavigation += priority == "navigation" and 1 or 0
+		return true
+	end
+	castRay = budget.Cast
+	-- BotNav casts through the same budget (it loads before this module, so it is handed the function).
+	BotNav.CastRay = castRay
+	BotNav.CastSpend = budget.Spend
+	BotNav.CastRemaining = budget.Remaining
+
+	-- The sight-line params (hasLineOfSight). Terrain water is not cover: a raycast hits it unless
+	-- told not to, so a bot would refuse to shoot across a river at a target a player could hit — the
+	-- shot itself ignores water (CombatService.buildRaycastParams), as does the client's own trace.
+	budget.LosParams = RaycastParams.new()
+	budget.LosParams.FilterType = Enum.RaycastFilterType.Exclude
+	budget.LosParams.IgnoreWater = true
+	budget.LosFilter = {}
+	-- The barricade-finding params (coverBetween): only what can be collided with counts as cover.
+	budget.CoverParams = RaycastParams.new()
+	budget.CoverParams.FilterType = Enum.RaycastFilterType.Exclude
+	budget.CoverParams.RespectCanCollide = true
+	budget.CoverParams.IgnoreWater = true
+	budget.CoverFilter = {}
+	-- The "can that spot see me" params (exposedTo).
+	budget.ExposedParams = RaycastParams.new()
+	budget.ExposedParams.FilterType = Enum.RaycastFilterType.Exclude
+	budget.ExposedParams.RespectCanCollide = true
+	budget.ExposedParams.IgnoreWater = true
+	budget.ExposedFilter = {}
+end
+
+-- Returns visible, denied. `denied` is true when the ray budget refused the frame's ray, in which
+-- case `visible` is the cautious false and the caller must not cache it.
 local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 	local toPart = toCharacter:FindFirstChild("HumanoidRootPart")
 	if not toPart then
-		return false
+		return false, false
 	end
 
 	-- A smoke cloud hides whoever is behind it (ProjectileService).
 	if CombatService.SmokeBlocks and CombatService.SmokeBlocks(fromPart.Position, toPart.Position) then
-		return false
+		return false, false
 	end
 
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	-- Terrain water is not cover: a raycast hits it unless told not to, so a bot would refuse to
-	-- shoot across a river at a target a player could hit — the shot itself ignores water
-	-- (CombatService.buildRaycastParams), as does the client's own trace.
-	params.IgnoreWater = true
-	local filter = { botCharacter }
-	for _, name in ipairs({ "Loot", "Effects", "Companions" }) do
-		local instance = workspace:FindFirstChild(name)
-		if instance then
-			table.insert(filter, instance)
-		end
-	end
+	local budget = BotService.RaycastBudget
+	local params = budget.LosParams
+	local filter = budget.Filter(budget.LosFilter, botCharacter)
 	-- A bot at the wheel looks out from inside its own vehicle: its roof and panels aren't cover, or
 	-- it would never see anyone to fire the mount at.
 	local seated = botCharacter:FindFirstChildOfClass("Humanoid")
@@ -584,35 +1016,169 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 
 	-- Window glass is see-through, and a shot breaks it on the way (CombatService), so a pane
 	-- in the way is looked past rather than counted as cover. A few panes at most in one line.
-	local result
+	local result, granted
 	for _ = 1, 4 do
-		result = workspace:Raycast(fromPart.Position, toPart.Position - fromPart.Position, params)
+		result, granted = castRay(fromPart.Position, toPart.Position - fromPart.Position, params, "combat")
+		if not granted then
+			return false, true
+		end
 		if not (result and CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(result.Instance)) then
 			break
 		end
 		table.insert(filter, result.Instance)
 		params.FilterDescendantsInstances = filter
 	end
-	return result ~= nil and result.Instance:IsDescendantOf(toCharacter)
+	return result ~= nil and result.Instance:IsDescendantOf(toCharacter), false
 end
 
 -- The living combatants, looked up once per think tick for every bot to share: token, character, root,
--- humanoid and the root's position at the time. Positions are at most one think slice old
--- (BotThinkInterval / THINK_SLICES); line of sight always uses the live root.
+-- humanoid, whether it is a player, and the root's position at the time. Positions are at most one
+-- think slice old (BotThinkInterval / THINK_SLICES); line of sight always uses the live root.
+--
+-- SPATIAL QUERY. The list is also binned into a uniform grid, so "who is within R of here" reads
+-- the few cells R covers instead of every combatant: findTarget (vision range), squadCentroid
+-- (80), the outnumbered count (70) and clusterAround (10) used to each walk the whole list for
+-- every bot, N² a slice. Rows are pooled and refilled, not rebuilt, so a refresh allocates nothing
+-- once the pool has grown to the lobby. combatantsNear returns one shared scratch list, valid until
+-- the next call: read it there and then; never keep it or hand it on.
 local combatantList = {}
+local combatantsNear
+local refreshCombatants
+BotService.SpatialQuery = {}
+do
+	local query = BotService.SpatialQuery
+	local FLOOR = math.floor
+	local OFFSET = 32768 -- cells are keyed (cx + OFFSET) + (cz + OFFSET) * 65536: unique to ±2M studs
 
-local function refreshCombatants()
-	table.clear(combatantList)
-	for character, token in pairs(Combatants.All()) do
-		if character.Parent then
-			local root = character:FindFirstChild("HumanoidRootPart")
-			local humanoid = root and character:FindFirstChildOfClass("Humanoid")
-			if humanoid and humanoid.Health > 0 then
-				table.insert(combatantList, {
-					token = token, character = character, root = root, humanoid = humanoid, position = root.Position,
-				})
+	-- A grid of rows that carry `.position`. Cells are reused across Rebuild calls; `Near` fills and
+	-- returns the grid's own scratch list.
+	function query.NewGrid(cellSize)
+		local grid = { cellSize = cellSize, cells = {}, used = {}, scratch = {}, count = 0 }
+		local cells, used, scratch = grid.cells, grid.used, grid.scratch
+
+		local function keyOf(x, z)
+			return (FLOOR(x / cellSize) + OFFSET) + (FLOOR(z / cellSize) + OFFSET) * 65536
+		end
+
+		function grid.Rebuild(rows)
+			for index = 1, #used do
+				table.clear(used[index])
+			end
+			table.clear(used)
+			for index = 1, #rows do
+				local row = rows[index]
+				local position = row.position
+				local key = keyOf(position.X, position.Z)
+				local cell = cells[key]
+				if not cell then
+					cell = {}
+					cells[key] = cell
+				end
+				if #cell == 0 then
+					used[#used + 1] = cell
+				end
+				cell[#cell + 1] = row
+			end
+			grid.count = #rows
+		end
+
+		-- Rows within `radius` of `position` (3D distance, as the linear scans measured), in the
+		-- shared scratch list. `accept(row)` may filter; the distance is stored on `distances[i]`.
+		function grid.Near(position, radius, accept)
+			table.clear(scratch)
+			local n = 0
+			local px, pz = position.X, position.Z
+			local minX, maxX = FLOOR((px - radius) / cellSize), FLOOR((px + radius) / cellSize)
+			local minZ, maxZ = FLOOR((pz - radius) / cellSize), FLOOR((pz + radius) / cellSize)
+			for cz = minZ, maxZ do
+				local rowKey = (cz + OFFSET) * 65536 + OFFSET
+				for cx = minX, maxX do
+					local cell = cells[rowKey + cx]
+					if cell then
+						for index = 1, #cell do
+							local row = cell[index]
+							if (row.position - position).Magnitude <= radius and (accept == nil or accept(row)) then
+								n += 1
+								scratch[n] = row
+							end
+						end
+					end
+				end
+			end
+			return scratch, n
+		end
+
+		return grid
+	end
+
+	local grid = query.NewGrid(128)
+	local pool = {}
+	local playerPositions = {}
+
+	function refreshCombatants()
+		BotService.Tick += 1
+		-- A tick is a frame to the ray budget: whoever drives the thinks (the loop, or a sim calling
+		-- updateBot itself) opens the budget here, so it can never run dry across ticks.
+		BotService.RaycastBudget.BeginFrame()
+		local count = 0
+		local players = 0
+		for character, token in pairs(Combatants.All()) do
+			if character.Parent then
+				local root = character:FindFirstChild("HumanoidRootPart")
+				local humanoid = root and character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					count += 1
+					local row = pool[count]
+					if not row then
+						row = {}
+						pool[count] = row
+					end
+					row.token, row.character, row.root, row.humanoid = token, character, root, humanoid
+					row.position = root.Position
+					row.isPlayer = Combatants.IsPlayer(token)
+					combatantList[count] = row
+					if row.isPlayer then
+						players += 1
+						playerPositions[players] = row.position
+					end
+				end
 			end
 		end
+		for index = #combatantList, count + 1, -1 do
+			combatantList[index] = nil
+		end
+		for index = #playerPositions, players + 1, -1 do
+			playerPositions[index] = nil
+		end
+		grid.Rebuild(combatantList)
+	end
+
+	function combatantsNear(position, radius, accept)
+		return grid.Near(position, radius, accept)
+	end
+	query.Combatants = combatantsNear
+
+	-- All living combatants this tick (the snapshot itself; read-only).
+	function query.All()
+		return combatantList
+	end
+
+	-- How far the nearest living player is from `position`, or math.huge with no players in the match.
+	function query.NearestPlayerDistance(position)
+		local best = math.huge
+		for index = 1, #playerPositions do
+			local distance = (playerPositions[index] - position).Magnitude
+			if distance < best then
+				best = distance
+			end
+		end
+		return best
+	end
+
+	function query.Clear()
+		table.clear(combatantList)
+		table.clear(playerPositions)
+		grid.Rebuild(combatantList)
 	end
 end
 
@@ -632,15 +1198,32 @@ local THREAT_WINDOW = 3
 
 -- Returns visible, computed, entry: `entry` is the cache row, which findTarget also uses to keep
 -- the barricade test (coverBetween) on the same cadence as the sight ray it follows.
-local function sightOf(bot, head, token, character, now)
+-- `recheck` skips the cache: findTarget passes it for its best-scored candidate only, so the one a
+-- bot most wants to fight is looked at every think (someone stepping out from a corner is seen on
+-- the next think, not up to two later: the 0.4 s row outlived one ~0.267 s think). It spends the
+-- same LOS_CHECKS_PER_THINK budget, so a think's worst case is unchanged (#75/#81). Not for a row
+-- that already found a barricade in the way: that target is being fought through the cover anyway.
+local function sightOf(bot, head, token, character, now, recheck)
 	local entry = bot.sight[token]
-	if entry and not entry.visible and now - entry.at < SIGHT_CACHE_SECONDS then
+	local fresh = recheck and not (entry and entry.cover)
+	if entry and not entry.visible and not fresh and now - entry.at < SIGHT_CACHE_SECONDS then
 		return false, false, entry
 	end
 	STATS.sightChecks += 1
-	local visible = hasLineOfSight(head, character, bot.character)
-	entry = { at = now, visible = visible }
-	bot.sight[token] = entry
+	local visible, denied = hasLineOfSight(head, character, bot.character)
+	if denied then
+		-- The frame's ray budget is spent: nothing is learned, nothing is cached, and this think
+		-- carries on with what it already knew. The next think looks again.
+		STATS.sightDenied += 1
+		return false, false, nil
+	end
+	-- The row is reused when there is one: a fresh table per sight ray was one allocation per ray.
+	if entry then
+		entry.at, entry.visible, entry.cover = now, visible, nil
+	else
+		entry = { at = now, visible = visible }
+		bot.sight[token] = entry
+	end
 	return visible, true, entry
 end
 
@@ -655,13 +1238,16 @@ local function coverBetween(bot, head, targetRoot)
 		return nil
 	end
 	STATS.coverChecks += 1
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
+	local budget = BotService.RaycastBudget
+	local params = budget.CoverParams
 	-- Companions hover beside their owners and take raycasts; they aren't cover.
-	params.FilterDescendantsInstances = { bot.character, workspace:FindFirstChild("Companions") }
-	params.RespectCanCollide = true
-	params.IgnoreWater = true
-	local hit = workspace:Raycast(head.Position, targetRoot.Position - head.Position, params)
+	local filter = budget.CoverFilter
+	filter[1] = bot.character
+	filter[2] = budget.Folders()[3] or nil
+	params.FilterDescendantsInstances = filter
+	-- Refused by the frame's ray budget: no barricade found this think (the target is treated as
+	-- hidden by the world, as it was a moment ago); the next think asks again.
+	local hit = castRay(head.Position, targetRoot.Position - head.Position, params, "combat")
 	if not hit then
 		return nil
 	end
@@ -681,19 +1267,57 @@ local function coverBetween(bot, head, targetRoot)
 	return structure, hit.Position
 end
 
+-- Team modes: the target a teammate is fighting right now, one per team, so a squad puts its fire on
+-- one body (focus fire) instead of six bots on six targets. Written by reportSighting from fight(),
+-- read by findTarget through bot.focusTeam (set at the same time, so a bot that has never fought
+-- pays nothing). Cleared in Clear().
+local teamFocus = {}
+
 -- The best target this bot can see and has noticed, or nil. Candidates are scored before any ray:
 -- nearest first, players pulled closer by BotPlayerBias, whoever just shot us far closer, the current
 -- target a little closer (so a bot doesn't flick between two), and the badly hurt a little closer.
 --
 -- The old version picked the nearest combatant and only then asked whether it was visible — so a bot
 -- with an enemy hiding behind a wall 40 studs away ignored the one shooting it from 100.
+--
+-- Candidate rows are pooled and the list reused: findTarget runs for every armed bot every think,
+-- and a fresh list plus a row per combatant in reach was the biggest per-think allocation. The row
+-- returned is valid until the next findTarget call (fight() and botVehicleThink use it at once;
+-- quickFirstShot copies what it needs before its timer).
+--
+-- One table for the file's pooled per-think rows (the main chunk is near Luau's 200-local limit;
+-- tools/verify.py counts them): findTarget's candidates and planCombatMove's options.
+local scratch = {
+	candidatePool = {},
+	candidates = {},
+	-- planCombatMove sorts combatOptions in place, so it is refilled from baseOptions (the nine
+	-- standard moves) plus, for a Flanker, the two flankOptions rows, every replan.
+	combatOptions = {},
+	baseOptions = {
+		{ kind = 1, hold = true }, { kind = 2, side = 1 }, { kind = 3, side = -1 }, { kind = 4, side = 1 },
+		{ kind = 5, side = -1 }, { kind = 6, side = 1 }, { kind = 7, side = -1 }, { kind = 8, side = 1 },
+		{ kind = 9, side = -1 },
+	},
+	flankOptions = { { flank = true }, { flank = true } },
+	coverRadii = { 10, 18, 28 },
+	byScore = function(a, b)
+		return a.score < b.score
+	end,
+}
+
 local function findTarget(bot, root, head, now)
 	local threat = now - bot.lastHurtAt < THREAT_WINDOW and CombatService.GetLastAttacker(bot) or nil
 	local reach = math.max(MatchConfig.BotVisionRange, bot.weapon and bot.weapon.range or 0)
-	local candidates = {}
+	local candidatePool, candidates = scratch.candidatePool, scratch.candidates
+	table.clear(candidates)
+	local count = 0
 
 	local position = root.Position
-	for _, entry in ipairs(combatantList) do
+	-- Only combatants within reach can qualify, so only they are looked at (the grid, not the list).
+	local near, nearCount = combatantsNear(position, reach)
+	STATS.candidatesExamined += nearCount
+	for index = 1, nearCount do
+		local entry = near[index]
 		local token = entry.token
 		if token ~= bot and entry.humanoid.Health > 0 and hostile(bot, token) then
 			local distance = (entry.position - position).Magnitude
@@ -701,7 +1325,7 @@ local function findTarget(bot, root, head, now)
 			if distance <= MatchConfig.BotVisionRange or (token == threat and distance <= reach) then
 				local humanoid = entry.humanoid
 				local score = distance
-				if Combatants.IsPlayer(token) then
+				if entry.isPlayer then
 					score /= MatchConfig.BotPlayerBias
 				end
 				if token == threat then
@@ -713,25 +1337,52 @@ local function findTarget(bot, root, head, now)
 				if humanoid.Health < humanoid.MaxHealth * 0.4 then
 					score *= 0.85
 				end
-				table.insert(candidates, { token = token, character = entry.character, root = entry.root, distance = distance, score = score })
+				-- BOT ARCHETYPES: what the personality favours. "weakest" pulls the hurt closer in
+				-- proportion to what they have lost; "threat" doubles down on whoever is shooting us;
+				-- "engaged" (Flanker, Opportunist) prefers someone busy fighting somebody else. "closest"
+				-- is the score as it stands. A team's focus target is pulled closer for everyone on it.
+				local pick = bot.archetype and bot.archetype.targetPick
+				if pick == "weakest" then
+					score *= 0.45 + 0.55 * humanoid.Health / math.max(1, humanoid.MaxHealth)
+				elseif pick == "threat" and token == threat then
+					score *= 0.5
+				elseif pick == "engaged" then
+					local attacker, _, hitAt = CombatService.GetLastAttacker(token)
+					if attacker and attacker ~= bot and hitAt and now - hitAt < THREAT_WINDOW then
+						score *= 0.55
+					end
+				end
+				local focus = bot.focusTeam and teamFocus[bot.focusTeam]
+				if focus and focus.token == token and focus.by ~= bot and now - focus.at < THREAT_WINDOW then
+					score *= 0.6
+					STATS.focusFire += 1
+				end
+				count += 1
+				local row = candidatePool[count]
+				if not row then
+					row = {}
+					candidatePool[count] = row
+				end
+				row.token, row.character, row.root, row.distance, row.score = token, entry.character, entry.root, distance, score
+				row.throughCover = nil
+				candidates[count] = row
 			end
 		end
 	end
-	if #candidates == 0 then
+	if count == 0 then
 		return nil
 	end
-	table.sort(candidates, function(a, b)
-		return a.score < b.score
-	end)
+	table.sort(candidates, scratch.byScore)
 
 	local look = flatLook(root)
 	local fresh = 0
-	for _, candidate in ipairs(candidates) do
-		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now)
+	for index, candidate in ipairs(candidates) do
+		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now, index == 1)
 		if computed then
 			fresh += 1
 		end
-		if not visible and candidate.distance <= 120 then
+		-- No `entry` means the ray budget refused the look: nothing is known, so nothing is decided.
+		if not visible and entry and candidate.distance <= 120 then
 			-- Hidden by a barricade rather than by the world: engage, and the shots go into the cover.
 			-- The barricade ray is cast when the sight ray is (or once, for a row made while the
 			-- target was out past 120), and its answer kept on the sight row for as long as that
@@ -816,24 +1467,20 @@ local function forgetStale(bot, now)
 end
 
 -- Can anything at `from` see this bot? Characters, loot and effects don't count as cover.
+-- Water hides nobody: IgnoreWater (set on ExposedParams) defaulted to false, which counted the river
+-- as cover: a bot standing in it read as hidden, so it wouldn't put a barricade up or break off
+-- while in plain sight. Every other sight line in the project ignores water (CombatService,
+-- hasLineOfSight). A ray the frame's budget refuses reads as NOT exposed, so nothing is built on
+-- it this think; the next think asks again.
 local function exposedTo(bot, root, from)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	local filter = { bot.character }
-	for _, name in ipairs({ "Loot", "Effects", "Companions" }) do
-		local instance = workspace:FindFirstChild(name)
-		if instance then
-			table.insert(filter, instance)
-		end
-	end
-	params.FilterDescendantsInstances = filter
-	params.RespectCanCollide = true
-	-- Water hides nobody. IgnoreWater defaults to false, which counted the river as cover: a bot
-	-- standing in it read as hidden, so it wouldn't put a barricade up or break off while in plain
-	-- sight. Every other sight line in the project ignores water (CombatService, hasLineOfSight).
-	params.IgnoreWater = true
+	local budget = BotService.RaycastBudget
+	local params = budget.ExposedParams
+	params.FilterDescendantsInstances = budget.Filter(budget.ExposedFilter, bot.character)
 	local eye = root.Position + Vector3.new(0, 1.5, 0)
-	local hit = workspace:Raycast(from, eye - from, params)
+	local hit, granted = castRay(from, eye - from, params, "navigation")
+	if not granted then
+		return false
+	end
 	return hit == nil or hit.Instance:FindFirstAncestorOfClass("Model") ~= nil
 		and hit.Instance:FindFirstAncestorOfClass("Model"):FindFirstChildOfClass("Humanoid") ~= nil
 end
@@ -905,10 +1552,18 @@ end
 -- instead of each bot toward its own memory. Written in fight(), cleared in Clear().
 local teamSightings = {}
 
-local function reportSighting(bot, position, now)
+local function reportSighting(bot, position, now, token)
 	local state = BotService.ModeState(bot)
 	if state and state.team then
 		teamSightings[state.team] = { position = position, at = now }
+		bot.focusTeam = state.team
+		if token then
+			local focus = teamFocus[state.team]
+			-- The first bot on a target names the focus; it is kept while that bot keeps fighting it.
+			if not focus or focus.by == bot or now - focus.at >= THREAT_WINDOW then
+				teamFocus[state.team] = { token = token, by = bot, at = now }
+			end
+		end
 	end
 end
 
@@ -927,9 +1582,10 @@ local SIGHTING_MEMORY = 25
 -- Living friendlies near a bot, from the shared per-tick snapshot.
 local function squadCentroid(bot, root, team)
 	local sum, count = Vector3.zero, 0
-	for _, entry in ipairs(combatantList) do
-		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - root.Position).Magnitude <= RALLY_RANGE
-			and not hostile(bot, entry.token) then
+	local near, nearCount = combatantsNear(root.Position, RALLY_RANGE)
+	for index = 1, nearCount do
+		local entry = near[index]
+		if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token) then
 			sum += entry.position
 			count += 1
 		end
@@ -947,7 +1603,17 @@ local function modeObjective(bot, root, state, now)
 	if state.hill then
 		local ring = Vector3.new(math.cos(slot), 0, math.sin(slot)) * HILL_RADIUS * HILL_SPREAD
 		if state.holder == state.team then
-			return state.hill + ring, "hold"
+			-- BOT ARCHETYPES: Anchors and Survivors sit on a hill the team holds; the rest leave it to
+			-- them and go for the enemy the team last saw, so a held hill has guards AND hunters.
+			local dials = ARCH.dialsOf(bot)
+			local sighting = teamSightings[state.team]
+			if not dials.holdObjective and sighting and now - sighting.at < SIGHTING_MEMORY
+				and flatDistance(root.Position, sighting.position) > 20 then
+				return sighting.position + Vector3.new(math.cos(slot), 0, math.sin(slot)) * 10, "push"
+			end
+			-- A Marksman holds from the ring's edge, where its range counts; nobody stands past it.
+			local spread = math.min(0.9, HILL_SPREAD * math.max(1, dials.rangeScale))
+			return state.hill + ring.Unit * HILL_RADIUS * spread, "hold"
 		end
 		return state.hill + ring, "contest"
 	end
@@ -1093,7 +1759,9 @@ local function navigate(bot, humanoid, root, goal, priority, now)
 	if not BotNav.HasRoute(bot) and not BotNav.IsPending(bot) and not BotNav.RecentlyFailed(bot, goal, 3) then
 		BotNav.Request(bot, goal, priority)
 	end
-	BotNav.Follow(bot, humanoid, root, goal, now)
+	-- Footing checks for a wandering or looting bot are the first rays the frame budget gives up.
+	local branch = bot.branch
+	BotNav.Follow(bot, humanoid, root, goal, now, (branch == "wander" or branch == "loot") and "idle" or "navigation")
 	-- No route and the straight line isn't safe: wait for the route that's coming, or give up on this
 	-- goal once a route has already failed.
 	if bot.nav.directBlockedAt == now then
@@ -1119,8 +1787,12 @@ end
 local BOT_HEADSHOT_CHANCE = 0.12
 
 -- Launcher rounds ProjectileService.LeadAim can lead (straight-line flight with drop). Anything else a
--- bot would mis-aim, so it doesn't pick those guns up.
-local BOT_PROJECTILE_KINDS = { rocket = true, grenade = true }
+-- bot would mis-aim, so it doesn't pick those guns up. The mosquitoDart (Zanzarino Pikpik) flies nearly
+-- straight at 175 studs/s and blows nothing up: LeadAim hands back the target itself, which at a bot's
+-- ranges is a fair aim. Its gentle homing (6 degrees at most) leaves a bot's miss (6-12 studs wide) a
+-- miss at the 55 studs a bot prefers; only past 70 studs, where a bot hits 42% or less, can it pull the
+-- narrowest misses back (tools/gunfun_mechanics_check.py N1 measures it).
+local BOT_PROJECTILE_KINDS = { rocket = true, grenade = true, mosquitoDart = true }
 
 local function accuracyAt(distance)
 	local t = math.clamp(distance / MatchConfig.BotAccuracyFalloff, 0, 1)
@@ -1140,18 +1812,32 @@ local function startReload(bot, now)
 		return
 	end
 	bot.reloadUntil = now + (def.reloadTime or 1.5)
+	-- #13: players see a bot's reload on its body (GunPoseClient reads these, as for a player).
+	if bot.character then
+		bot.character:SetAttribute("Reloading", def.reloadTime or 1.5)
+		bot.character:SetAttribute("ReloadEmpty", (bot.mag or 0) <= 0)
+	end
 	STATS.reloads += 1
 end
 
 local function finishReload(bot, now)
 	if bot.reloadUntil and now >= bot.reloadUntil then
 		bot.reloadUntil = nil
+		if bot.character then
+			bot.character:SetAttribute("Reloading", nil)
+		end
 		local size = magazineOf(bot.weapon)
 		if size then
 			bot.mag = size
 		end
 	end
 end
+
+-- Aim starts settling this long after a target is picked up. It is the old BotReactionTime, pinned
+-- here on its own: #75/#81 made bots react faster, and Oliver's ruling is that aim must not move with
+-- it (#40). Read off BotReactionTime, the faster reaction would have settled aim earlier in every fight.
+-- tools/bot_aggression_check.py fails if the hit chance at any range and moment changes.
+local AIM_SETTLE_DELAY = 0.28
 
 local function shootAt(bot, target, targetRoot, distance, head)
 	local def = bot.weapon
@@ -1201,10 +1887,15 @@ local function shootAt(bot, target, targetRoot, distance, head)
 		end
 	end
 
-	-- Burst discipline: a handful of shots at the weapon's rate, then a rest.
+	-- Burst discipline: a handful of shots at the weapon's rate, then a rest. The shape is the gun
+	-- class's (BOT ARCHETYPES: a sniper fires one and waits, an LMG six to ten): restScale stretches
+	-- the rest so a longer burst is not more rounds a minute. Rounds a minute and the hit chance are
+	-- lethality, which stays where Oliver set it; tools/bot_archetype_sim.py checks the throughput
+	-- of every class against the stock 2-5 burst.
+	local dials = ARCH.dialsOf(bot)
 	if bot.burstLeft <= 0 then
-		bot.burstLeft = math.random(2, 5)
-		bot.nextShotAt = now + MatchConfig.BotBurstRest + math.random() * 0.35
+		bot.burstLeft = math.random(dials.burst[1], dials.burst[2])
+		bot.nextShotAt = now + MatchConfig.BotBurstRest * dials.restScale + math.random() * 0.35
 		return
 	end
 
@@ -1213,11 +1904,16 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	if size then
 		bot.mag -= 1
 	end
+	-- Shots since the last deliberate reposition, for the class's rule (fight() resets it there).
+	bot.shotsFromSpot = (bot.shotsFromSpot or 0) + 1
 
 	if projectiles then
+		-- A launcher aims at the feet (aimLow): the round lands and splashes where a torso shot that
+		-- misses would sail past. Where it lands, not whether it hits: the accuracy roll is below.
+		local aimAt = dials.aimLow and targetRoot.Position - Vector3.new(0, 2.5, 0) or targetRoot.Position
 		local aim = projectiles.LeadAim
-			and projectiles.LeadAim(def.id, head.Position, targetRoot.Position, targetRoot.AssemblyLinearVelocity)
-			or targetRoot.Position
+			and projectiles.LeadAim(def.id, head.Position, aimAt, targetRoot.AssemblyLinearVelocity)
+			or aimAt
 		-- A miss has to land clear of its own blast, or splash turns every miss into a hit: the round
 		-- goes a blast radius and more to one side.
 		if math.random() >= accuracyAt(distance) then
@@ -1245,7 +1941,7 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	-- 105% after about 1.5 s), and a target moving fast is harder to hit, so strafing and jumping pay
 	-- off for a player (Oliver, 2026-09-22: "aim a little better", "more strategic").
 	local chance = accuracyAt(distance)
-	local settle = math.clamp((now - (bot.acquiredAt or now) - MatchConfig.BotReactionTime) / 1.5, 0, 1)
+	local settle = math.clamp((now - (bot.acquiredAt or now) - AIM_SETTLE_DELAY) / 1.5, 0, 1)
 	chance *= 0.9 + 0.15 * settle
 	local velocity = targetRoot.AssemblyLinearVelocity
 	if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > 18 or math.abs(velocity.Y) > 8 then
@@ -1309,8 +2005,10 @@ local COMBAT_REPLAN = 0.45
 local COMBAT_CHECKS = 5
 
 local function planCombatMove(bot, root, threatPosition, distance, retreating, now)
-	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
-	local preferred = math.min(MatchConfig.BotEngagePreferred, reach * 0.6)
+	-- BOT ARCHETYPES: the range is the gun class's, scaled by the personality (ARCH.dialsOf): a
+	-- shotgun Rusher wants 7 studs, a sniper Marksman 130. It used to be one number for everyone.
+	local dials = ARCH.dialsOf(bot)
+	local preferred = dials.range
 	-- Closing in on a target that's nearly dead (set in fight()).
 	if bot.pushing and not retreating then
 		preferred *= 0.5
@@ -1319,34 +2017,108 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 	if bot.weapon and bot.weapon.projectile then
 		preferred = math.max(preferred, 30)
 	end
+	-- Inside the class's dead zone (a sniper at 20 studs, a launcher at 10): open the distance, and
+	-- count it as a retreat for the scoring below so every option that gains range wins.
+	local opening = not retreating and distance < dials.minRange
 	local dangers = dangersNear(root.Position, 40)
 	local toThreat = flat(threatPosition - root.Position)
 	local forward = toThreat.Magnitude > 0.5 and toThreat.Unit or flatLook(root)
 	local right = Vector3.new(-forward.Z, 0, forward.X)
 	local reloading = bot.reloadUntil ~= nil
+	local relocating = bot.relocateUntil ~= nil and now < bot.relocateUntil
 
-	local options = {
-		{ offset = Vector3.zero, hold = true },
-		{ offset = right * 12, side = 1 },
-		{ offset = -right * 12, side = -1 },
-		{ offset = right * 22, side = 1 },
-		{ offset = -right * 22, side = -1 },
-		{ offset = forward * 18 + right * 8, side = 1 },
-		{ offset = forward * 18 - right * 8, side = -1 },
-		{ offset = -forward * 18 + right * 10, side = 1 },
-		{ offset = -forward * 18 - right * 10, side = -1 },
-	}
+	-- The rows are reused across replans (a fighting bot replans every 0.45 s); only the offsets
+	-- change. The list is sorted in place, so it is put back in base order first and any flank rows
+	-- from the last replan dropped; the hold row is found by its flag, not its index.
+	local options = scratch.combatOptions
+	for i = #options, 10, -1 do
+		options[i] = nil
+	end
+	for i = 1, 9 do
+		options[i] = scratch.baseOptions[i]
+	end
+	for _, option in ipairs(options) do
+		local kind = option.kind
+		if kind == 1 then
+			option.offset = Vector3.zero
+		elseif kind == 2 then
+			option.offset = right * 12
+		elseif kind == 3 then
+			option.offset = -right * 12
+		elseif kind == 4 then
+			option.offset = right * 22
+		elseif kind == 5 then
+			option.offset = -right * 22
+		elseif kind == 6 then
+			option.offset = forward * 18 + right * 8
+		elseif kind == 7 then
+			option.offset = forward * 18 - right * 8
+		elseif kind == 8 then
+			option.offset = -forward * 18 + right * 10
+		else
+			option.offset = -forward * 18 - right * 10
+		end
+	end
+	-- A Flanker works round the target: two points on the arc at its range, 35 degrees round in the
+	-- direction it settled on when the fight began (bot.flankDir), so the angle keeps growing instead
+	-- of wobbling either side of the line between them.
+	-- The flank points are the two pooled rows past the nine base ones, refilled, not rebuilt.
+	if dials.flank and not retreating and toThreat.Magnitude > 8 then
+		local fromThreat = -forward
+		for _, step in ipairs({ math.rad(35), math.rad(60) }) do
+			local angle = step * (bot.flankDir or 1)
+			local turned = Vector3.new(
+				fromThreat.X * math.cos(angle) - fromThreat.Z * math.sin(angle), 0,
+				fromThreat.X * math.sin(angle) + fromThreat.Z * math.cos(angle))
+			local point = threatPosition + turned * math.max(preferred, 12)
+			local row = scratch.flankOptions[#options - 8]
+			row.offset, row.side = point - root.Position, bot.flankDir or 1
+			options[#options + 1] = row
+		end
+	end
+	-- Team modes: the nearest teammate also on this target. Points that line up behind or in front of
+	-- it are worse (one target, one line of fire); points off to a side make a crossfire.
+	local friendBearing = nil
+	if bot.focusTeam then
+		local nearest = 60
+		local near, nearCount = combatantsNear(root.Position, nearest)
+		for index = 1, nearCount do
+			local entry = near[index]
+			if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token) then
+				local gap = flatDistance(entry.position, root.Position)
+				if gap < nearest then
+					local away = flat(entry.position - threatPosition)
+					if away.Magnitude > 1 then
+						nearest, friendBearing = gap, away.Unit
+					end
+				end
+			end
+		end
+	end
 	for _, option in ipairs(options) do
 		local point = root.Position + option.offset
 		local range = flatDistance(point, threatPosition)
 		local score
-		if retreating then
+		if retreating or opening then
 			score = -range / 25
 		else
 			score = math.abs(range - preferred) / math.max(preferred, 1) * 3
 			if reloading then
 				score -= range / 60
 			end
+		end
+		if option.flank then
+			score -= 0.8
+		end
+		if friendBearing and not option.hold then
+			local away = flat(point - threatPosition)
+			if away.Magnitude > 1 and away.Unit:Dot(friendBearing) > math.cos(math.rad(25)) then
+				score += 0.8
+			end
+		end
+		-- Just hit, or too many shots from one spot: anything but here.
+		if relocating and option.hold then
+			score += 3
 		end
 		if option.hold then
 			-- Standing still is normally the worst option, but a bot already at the range it wants,
@@ -1376,11 +2148,9 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 		option.point = point
 		option.score = score + math.random() * 0.25
 	end
-	table.sort(options, function(a, b)
-		return a.score < b.score
-	end)
+	table.sort(options, scratch.byScore)
 
-	local params = BotNav.StepParams(bot.character)
+	local params = BotNav.StepParams(bot.character, bot.nav)
 	local checked = 0
 	for _, option in ipairs(options) do
 		if option.hold then
@@ -1388,8 +2158,17 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 		end
 		if stormAllows(root.Position, option.point) then
 			checked += 1
-			if BotNav.CanStep(root, bot.character, option.point, params) then
+			local ok, reason = BotNav.CanStep(root, bot.character, option.point, params, "navigation")
+			if ok then
+				if option.flank then
+					STATS.flankMoves += 1
+				end
 				return option.point, false
+			end
+			-- The frame's ray budget is spent: hold this think rather than walk unchecked, and
+			-- don't commit to the hold for the whole COMBAT_REPLAN (the caller replans next think).
+			if reason == "budget" then
+				return root.Position, true, true
 			end
 			if checked >= COMBAT_CHECKS then
 				break
@@ -1418,14 +2197,15 @@ local function combatMove(bot, root, threatPosition, distance, retreating, now)
 	end
 	if replan then
 		STATS.combatReplans += 1
-		local point, hold = planCombatMove(bot, root, threatPosition, distance, retreating, now)
+		local point, hold, unchecked = planCombatMove(bot, root, threatPosition, distance, retreating, now)
 		move = {
 			point = point,
 			hold = hold,
 			retreating = retreating,
 			startedAt = now,
 			startPosition = root.Position,
-			untilTime = now + COMBAT_REPLAN + math.random() * 0.3,
+			-- A hold forced by the ray budget lasts one think, not a whole replan interval.
+			untilTime = unchecked and now or now + COMBAT_REPLAN + math.random() * 0.3,
 		}
 		bot.combatMove = move
 	end
@@ -1451,9 +2231,14 @@ local function seekCover(bot, root, threatEye, now, threatCharacter)
 	if now < (bot.coverBlockedUntil or 0) then
 		return nil
 	end
-	local point, direct = BotNav.FindCover(root, bot.character, threatEye, { 10, 18, 28 }, function(candidate)
+	local point, direct, refused = BotNav.FindCover(root, bot.character, threatEye, scratch.coverRadii, function(candidate)
 		return stormAllows(from, candidate)
-	end, threatCharacter)
+	end, threatCharacter, "navigation")
+	if refused == "budget" then
+		-- The frame's rays are spent: this search didn't happen, so it isn't rate-limited away.
+		bot.lastCoverSearchAt = now - COVER_SEARCH_INTERVAL
+		return nil
+	end
 	if point then
 		STATS.coverFound += 1
 		if not direct then
@@ -1513,7 +2298,7 @@ end
 -- Same lull and cooldown as heals: a shield is topped up after breaking contact, never mid-duel.
 local function tryShield(bot, humanoid, now)
 	local current = humanoid:GetAttribute("Shield") or 0
-	if current >= BOT_SHIELD_LOW then
+	if current >= BotService.Loot.shieldLow(bot) then
 		return
 	end
 	if now - bot.lastCombatAt < MatchConfig.BotHealLull or now - bot.lastHealAt < MatchConfig.BotHealCooldown then
@@ -1600,11 +2385,15 @@ end
 -- A barricade can't go up across a doorway or an alley the bot (or anyone) needs to get through:
 -- with something solid close on both sides of the site, it's a gap, not open ground.
 local function narrowSite(bot, centre, facing)
-	local params = BotNav.StepParams(bot.character)
+	local params = BotNav.StepParams(bot.character, bot.nav)
 	local across = Vector3.new(-facing.Z, 0, facing.X)
-	local left = workspace:Raycast(centre, across * 7, params)
-	local right = workspace:Raycast(centre, -across * 7, params)
-	return left ~= nil and right ~= nil
+	-- Refused by the ray budget: counted as narrow, so the build waits for a think that can look.
+	local left, granted = castRay(centre, across * 7, params, "navigation")
+	if not granted then
+		return true
+	end
+	local right, grantedRight = castRay(centre, -across * 7, params, "navigation")
+	return not grantedRight or (left ~= nil and right ~= nil)
 end
 
 local function placeBarricade(bot, root, toward, now, reason)
@@ -1628,6 +2417,15 @@ local function placeBarricade(bot, root, toward, now, reason)
 		bot.lastBuildAt = now - BOT_BUILD_COOLDOWN + 3
 		return false
 	end
+	-- Never across a teammate's path: a friendly within a couple of body widths of the site would be
+	-- walled in or walled off (Oliver: "never block teammates' paths").
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token)
+			and flatDistance(entry.position, centre) < 9 then
+			STATS.buildsRefusedFriendly += 1
+			return false
+		end
+	end
 	-- A site that won't take it (a wall, a slope, someone in the way) is retried in a few seconds
 	-- rather than every tick.
 	local model = DefenseService.Deploy(bot, bot.character, "RotBarricade", centre, facing)
@@ -1639,24 +2437,95 @@ local function placeBarricade(bot, root, toward, now, reason)
 	bot.defenses -= 1
 	bot.lastBuildAt = now
 	bot.ownStructures[model] = true
-	if reason == "angle" then
-		STATS.buildsAngle += 1
+	if reason == "angle" or reason == "fortify" then
+		if reason == "angle" then
+			STATS.buildsAngle += 1
+		else
+			STATS.buildsFortify += 1
+		end
 		bot.anchor = { position = root.Position, untilTime = now + BOT_ANGLE_TIME }
 	else
 		if reason == "heal" then
 			STATS.buildsHeal += 1
+		elseif reason == "block" then
+			STATS.buildsBlock += 1
+		elseif reason == "cross" then
+			STATS.buildsCross += 1
+		elseif reason == "pushed" then
+			STATS.buildsPushed += 1
 		else
 			STATS.buildsExposed += 1
 		end
 		bot.coverUntil = now + BOT_COVER_TIME
+		bot.coverAt = root.Position
+		bot.peek = nil
 		-- Out of sight now: patch up straight away rather than after the usual lull.
 		bot.lastCombatAt = now - MatchConfig.BotHealLull
 	end
 	return true
 end
 
+-- BOT ARCHETYPES: buildRate is the share of fights in which this bot builds at all (rolled once per
+-- target, bot.buildRoll, so it is a decision rather than a coin flipped every think); a fortifier
+-- (Anchor, Marksman) rebuilds sooner after its wall comes down.
 local function canBuild(bot, now)
-	return bot.defenses > 0 and now - bot.lastBuildAt >= BOT_BUILD_COOLDOWN
+	if bot.defenses <= 0 then
+		return false
+	end
+	local dials = ARCH.dialsOf(bot)
+	if (bot.buildRoll or 0) > dials.buildRate then
+		return false
+	end
+	return now - bot.lastBuildAt >= BOT_BUILD_COOLDOWN * (dials.buildFortify and 0.6 or 1)
+end
+
+-- A quick wall when a target is coming at a bot that fights from range (a sniper or DMR pushed by
+-- a shotgun): built in the target's path while it is still 15-40 studs out, then the bot fights from
+-- beside it rather than being caught reloading in the open.
+function ARCH.tryBuildPushed(bot, humanoid, root, targetRoot, distance, now)
+	local dials = ARCH.dialsOf(bot)
+	if dials.peekStyle ~= "hold" or not canBuild(bot, now) then
+		return false
+	end
+	if distance < 15 or distance > 40 then
+		return false
+	end
+	local closing = flat(targetRoot.AssemblyLinearVelocity):Dot(flat(root.Position - targetRoot.Position).Unit)
+	if closing < 8 then
+		return false
+	end
+	return placeBarricade(bot, root, targetRoot.Position, now, "pushed")
+end
+
+-- A Flanker crossing open ground toward its target with nothing to hide behind: a wall mid-field to
+-- work from, only once it is being hit out there.
+function ARCH.tryBuildCross(bot, humanoid, root, targetRoot, distance, now)
+	local dials = ARCH.dialsOf(bot)
+	if not dials.buildToCross or not canBuild(bot, now) or now - bot.lastHurtAt > 1 then
+		return false
+	end
+	if distance < 30 or distance > BOT_BUILD_MAX or now >= (bot.coverBlockedUntil or 0) then
+		return false
+	end
+	return placeBarricade(bot, root, targetRoot.Position, now, "cross")
+end
+
+-- Anchors on a hill (or Marksmen at a firing position): a wall toward where the enemy was last seen,
+-- before anyone is shooting yet, when the bot is exposed from there. The cooldown and the
+-- 3-structure cap keep it to a couple of walls, rebuilt when they come down.
+function ARCH.tryBuildFortify(bot, humanoid, root, toward, now)
+	local dials = ARCH.dialsOf(bot)
+	if not dials.buildFortify or not canBuild(bot, now) then
+		return false
+	end
+	local distance = flatDistance(root.Position, toward)
+	if distance < BOT_BUILD_MIN or distance > 200 then
+		return false
+	end
+	if not exposedTo(bot, root, toward + Vector3.new(0, 1.5, 0)) then
+		return false
+	end
+	return placeBarricade(bot, root, toward, now, "fortify")
 end
 
 -- Getting shot up, hurt, with nowhere to hide.
@@ -1678,8 +2547,7 @@ local function tryBuildAngle(bot, humanoid, root, targetRoot, distance, now)
 		return false
 	end
 	bot.angleCheckAt = now + BOT_ANGLE_CHECK
-	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
-	local preferred = math.min(MatchConfig.BotEngagePreferred, reach * 0.6)
+	local preferred = ARCH.dialsOf(bot).range
 	if distance < math.max(BOT_BUILD_MIN, preferred * 1.1) or distance > BOT_BUILD_MAX then
 		return false
 	end
@@ -1687,7 +2555,10 @@ local function tryBuildAngle(bot, humanoid, root, targetRoot, distance, now)
 		return false
 	end
 	local closing = flat(targetRoot.AssemblyLinearVelocity):Dot(flat(root.Position - targetRoot.Position).Unit)
-	if closing > 6 or math.random() > BOT_ANGLE_CHANCE then
+	-- An LMG (suppress) or a fortifier settles in far more readily than the stock roll.
+	local dials = ARCH.dialsOf(bot)
+	local chance = (dials.peekStyle == "suppress" or dials.buildFortify) and 0.6 or BOT_ANGLE_CHANCE
+	if closing > 6 or math.random() > chance then
 		return false
 	end
 	return placeBarricade(bot, root, targetRoot.Position, now, "angle")
@@ -1724,7 +2595,10 @@ end
 
 local function tryHeal(bot, humanoid, now)
 	local missing = humanoid.MaxHealth - humanoid.Health
-	if missing <= 0 or humanoid.Health > humanoid.MaxHealth * MatchConfig.BotHealBelow then
+	-- BOT ARCHETYPES: a Survivor patches up at 75%, a Rusher waits until 45% (the archetype's healBelow);
+	-- a bot dealt no archetype falls back to the loot section's stock-based threshold (BotService.Loot.healBelow).
+	local healBelow = (bot.archetype and BotService.DialsOf(bot).healBelow) or BotService.Loot.healBelow(bot)
+	if missing <= 0 or humanoid.Health > humanoid.MaxHealth * healBelow then
 		return
 	end
 	if now - bot.lastCombatAt < MatchConfig.BotHealLull or now - bot.lastHealAt < MatchConfig.BotHealCooldown then
@@ -1766,6 +2640,9 @@ end
 local THROWABLES = {
 	grenade = { itemId = "CookedCoconut", cooldown = 8, minRange = 14, maxRange = 70, blast = 13, chestWeight = 14 },
 	smoke = { itemId = "LowkeyLatte", cooldown = 15, minRange = 0, maxRange = 40, blast = 0, chestWeight = 10 },
+	-- The Clingy Crumpet: thrown at a vehicle the target is in, or the barricade it is behind (fight()).
+	-- Bots only hold them from a mode's SpawnLoadout kit for now; a chest's roll is grenade or smoke.
+	sticky = { itemId = "ClingyCrumpet", cooldown = 12, minRange = 8, maxRange = 45, blast = 12, chestWeight = 0 },
 }
 -- What a player's chest gives: a 30% chance of one throwable, a pickup of two.
 local CHEST_THROWABLE_CHANCE = 0.3
@@ -1785,15 +2662,19 @@ end
 
 -- A lob needs headroom: a clear line up from the hand, and across above the landing point.
 local function lobClear(bot, head, point)
+	-- Fresh params, not the cached step params: a throw arcs over water perfectly well; only solid
+	-- things stop it, and IgnoreWater must not leak into the step checks. A ray the budget refuses
+	-- reads as blocked; the throw is tried again next think.
 	local params = BotNav.StepParams(bot.character)
-	-- A throw arcs over water perfectly well; only solid things stop it.
 	params.IgnoreWater = true
 	local apex = head.Position + Vector3.new(0, 10, 0)
-	if workspace:Raycast(head.Position, apex - head.Position, params) then
+	local hit, granted = castRay(head.Position, apex - head.Position, params, "navigation")
+	if hit or not granted then
 		return false
 	end
 	local above = point + Vector3.new(0, 10, 0)
-	return workspace:Raycast(apex, above - apex, params) == nil
+	hit, granted = castRay(apex, above - apex, params, "navigation")
+	return hit == nil and granted
 end
 
 local function tryThrow(bot, root, head, kind, point, now)
@@ -1823,6 +2704,14 @@ local function tryThrow(bot, root, head, kind, point, now)
 				return false
 			end
 		end
+		-- Nor onto a teammate (Oliver: "never throw frags at teammates' positions").
+		for _, entry in ipairs(combatantList) do
+			if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token)
+				and (entry.position - point).Magnitude < blast + 3 then
+				STATS.throwsRefusedFriendly += 1
+				return false
+			end
+		end
 	end
 	if kind == "grenade" and not lobClear(bot, head, point) then
 		return false
@@ -1830,8 +2719,10 @@ local function tryThrow(bot, root, head, kind, point, now)
 	bot.throwReadyAt[kind] = now + spec.cooldown
 	-- A little cook on a frag, never much: flight time is estimated the way DefenseService.throwKit
 	-- times a lob, and at most 40% of what's left is burned, so there's still a moment to run.
+	-- BOT ARCHETYPES: only the archetypes rated for it cook at all (cookFrags); the rest lob it as
+	-- it comes and give the target the full fuse to run.
 	local options = nil
-	if kind == "grenade" and info and info.fuse then
+	if kind == "grenade" and info and info.fuse and ARCH.dialsOf(bot).cookFrags then
 		local flight = math.clamp(distance / 40, 0.5, 1.6)
 		options = { cook = math.max(0, info.fuse - flight - 0.3) * 0.4 * math.random() }
 	end
@@ -1840,6 +2731,8 @@ local function tryThrow(bot, root, head, kind, point, now)
 		bot.throwables[spec.itemId] -= 1
 		if kind == "grenade" then
 			STATS.throwsGrenade += 1
+		elseif kind == "sticky" then
+			STATS.throwsSticky += 1
 		else
 			STATS.throwsSmoke += 1
 		end
@@ -1850,10 +2743,11 @@ end
 -- A grenade is worth it at two or more enemies bunched together round the target.
 local function clusterAround(bot, targetRoot)
 	local count, sum = 0, Vector3.zero
-	local at = targetRoot.Position
-	for _, entry in ipairs(combatantList) do
+	local near, nearCount = combatantsNear(targetRoot.Position, 10)
+	for index = 1, nearCount do
+		local entry = near[index]
 		-- Enemies only: a team-mate in melee with the target isn't a reason to throw.
-		if entry.token ~= bot and entry.humanoid.Health > 0 and (entry.position - at).Magnitude <= 10 and hostile(bot, entry.token) then
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token) then
 			count += 1
 			sum += entry.position
 		end
@@ -1927,8 +2821,13 @@ end
 --
 -- Pickups don't move, so the folder is read once a second into a shared list (item, position, kind)
 -- rather than walked by every bot that looks.
+--
+-- The snapshot is also binned into a SpatialQuery grid (64-stud cells), so a bot looking 200 studs
+-- around itself reads the cells that cover that circle rather than every pickup on a 1280-stud map.
+-- BotService.SpatialQuery.Loot(position, radius, kind, now) is the way in for any section: rows are
+-- { item, position, kind } ("gear" or "heal"), in a shared scratch list, valid until the next call.
 local LOOT_SNAPSHOT_SECONDS = 1
-local lootSnapshot = { at = -math.huge, items = {} }
+local lootSnapshot = { at = -math.huge, items = {}, grid = BotService.SpatialQuery.NewGrid(64) }
 
 local function lootItems(now)
 	if now - lootSnapshot.at < LOOT_SNAPSHOT_SECONDS then
@@ -1940,30 +2839,51 @@ local function lootItems(now)
 		for _, item in ipairs(folder:GetChildren()) do
 			if item:IsA("BasePart") then
 				local name = item.Name
-				local kind = (name == "GroundWeapon" or name == "Chest") and "gear" or (name == "HealPickup" and "heal") or nil
+				local kind = (name == "GroundWeapon" or name == "Chest") and "gear" or (name == "HealPickup" and "heal")
+					or (name == "ItemPickup" and "item") or nil
 				if kind then
-					table.insert(items, { item = item, position = item.Position, kind = kind })
+					-- itemId: a shield or throwable pickup (BotService.Loot.wantsConsumable); nil on guns and chests.
+					table.insert(items, { item = item, position = item.Position, kind = kind, itemId = item:GetAttribute("ItemId") })
 				end
 			end
 		end
 	end
 	lootSnapshot.at = now
 	lootSnapshot.items = items
+	lootSnapshot.grid.Rebuild(items)
 	return items
+end
+
+function BotService.SpatialQuery.Loot(position, radius, kind, now)
+	lootItems(now or os.clock())
+	if radius == math.huge then
+		-- No circle to read: the whole snapshot, filtered.
+		local list, n = lootSnapshot.grid.scratch, 0
+		table.clear(list)
+		for _, entry in ipairs(lootSnapshot.items) do
+			if kind == nil or entry.kind == kind then
+				n += 1
+				list[n] = entry
+			end
+		end
+		return list, n
+	end
+	return lootSnapshot.grid.Near(position, radius, kind and function(entry)
+		return entry.kind == kind
+	end or nil)
 end
 
 local function findLoot(bot, position, radius, heals, center, circleRadius, now)
 	local best, bestDistance = nil, radius
-	local wantedKind = heals and "heal" or "gear"
-	for _, entry in ipairs(lootItems(now)) do
-		if entry.kind == wantedKind then
-			local distance = (entry.position - position).Magnitude
-			if distance < bestDistance then
-				local item = entry.item
-				if item.Parent and not item:GetAttribute("Claimed") and (not heals or item:GetAttribute("HealId") ~= nil)
-					and lootAllowed(bot, item, distance, center, circleRadius, now) then
-					best, bestDistance = item, distance
-				end
+	local near, nearCount = BotService.SpatialQuery.Loot(position, radius, heals and "heal" or "gear", now)
+	for index = 1, nearCount do
+		local entry = near[index]
+		local distance = (entry.position - position).Magnitude
+		if distance < bestDistance then
+			local item = entry.item
+			if item.Parent and not item:GetAttribute("Claimed") and (not heals or item:GetAttribute("HealId") ~= nil)
+				and lootAllowed(bot, item, distance, center, circleRadius, now) then
+				best, bestDistance = item, distance
 			end
 		end
 	end
@@ -1987,22 +2907,14 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 		return nil
 	end
 	local myRank = bot.weapon and (Rarity.Index[bot.weapon.rarity] or 0) or -1
-	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < 3
+	-- How much to carry is the archetype's call (BotService.Loot.DIALS healStockTarget / shieldStockTarget).
+	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < BotService.Loot.dial(bot, "healStockTarget")
+	local wantShields = (bot.shields.MiniShield + bot.shields.ShieldPotion) < BotService.Loot.dial(bot, "shieldStockTarget")
 	-- While gearing up after a spawn, an unopened chest at the base beats everything else (Oliver,
-	-- 2026-09-23 14:38: "make the bots go after the chests when they spawn").
+	-- 2026-09-23 14:38: "make the bots go after the chests when they spawn"). The base has 14; a squad
+	-- spawning on one pad used to walk at the same nearest one, so the pick spreads them (BotService.Loot.baseChest).
 	if chestsFirst then
-		local chest, chestDistance = nil, 220
-		for _, entry in ipairs(lootItems(now)) do
-			local item = entry.item
-			local position = entry.position
-			if item.Name == "Chest" and item.Parent and not item:GetAttribute("Claimed")
-				and (Vector3.new(position.X, 0, position.Z) - flatBase).Magnitude <= baseRadius then
-				local distance = (position - here).Magnitude
-				if distance < chestDistance and lootAllowed(bot, item, distance, center, circleRadius, now) then
-					chest, chestDistance = item, distance
-				end
-			end
-		end
+		local chest = BotService.Loot.baseChest(bot, here, flatBase, baseRadius, center, circleRadius, now)
 		if chest then
 			return chest
 		end
@@ -2016,7 +2928,8 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 			if distance < bestDistance and item.Parent and not item:GetAttribute("Claimed") then
 				local wanted = false
 				if entry.kind == "heal" then
-					wanted = wantHeals and item:GetAttribute("HealId") ~= nil
+					wanted = (wantHeals and item:GetAttribute("HealId") ~= nil)
+						or (wantShields and entry.itemId ~= nil and WeaponService.Shields[entry.itemId] ~= nil)
 				elseif item.Name == "Chest" then
 					wanted = true
 				else
@@ -2058,11 +2971,8 @@ local function holdLoot(bot, humanoid, root, now)
 	local fromChest = targetName == "Chest"
 
 	local def
-	if targetName == "HealPickup" then
-		local healId, amount = LootService.ClaimHealForBot(item)
-		if healId then
-			giveBotHeal(bot, healId, amount)
-		end
+	if targetName == "HealPickup" or targetName == "ItemPickup" then
+		BotService.Loot.claimConsumable(bot, item)
 	else
 		local claim = fromCrate and SupplyDropService.ClaimForBot or LootService.ClaimForBot
 		def = claim(item)
@@ -2102,18 +3012,11 @@ local function holdLoot(bot, humanoid, root, now)
 		end
 	end
 
-	-- Anything beats nothing; after that, only ever swap up. A bot trading a sniper for a pistol
-	-- would look broken. A projectile gun whose round flies some way the bot's aim can't lead (a disc
-	-- that ricochets, a homing slipper, a lobbed toast) is left for players.
-	local usable = def and not def.staged and not BOT_WEAPON_HOLD[def.id]
-		and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile])
-	if usable and (not bot.weapon or (Rarity.Index[def.rarity] or 0) > (Rarity.Index[bot.weapon.rarity] or 0)) then
-		bot.weapon = def
-		bot.magWeapon = def.id
-		bot.mag = magazineOf(def)
-		bot.reloadUntil = nil
-		giveBotGun(bot.character, def)
-		claimPhysics(bot.character)
+	-- Anything beats nothing; after that the archetype decides (BotService.Loot.takeGun): swap up, keep a second
+	-- gun of another class, or put the junk back on the floor. Never a swap down: a bot trading a
+	-- sniper for a pistol would look broken.
+	if def then
+		BotService.Loot.takeGun(bot, def, root.Position)
 	end
 	return true
 end
@@ -2125,20 +3028,145 @@ end
 -- Closer than this, a bot would rather keep its speed than its smaller profile.
 local CROUCH_MIN_RANGE = 25
 
+-- BOT ARCHETYPES: the peek cycle. From cover a peeking bot (peek, or a "hold" gun class) alternates a
+-- hidden spell with an exposed one instead of standing in the gap. Shared by fight(), where the
+-- target is in view, and by updateBot's hold-in-cover, where it isn't (a bot that has reached cover
+-- has usually broken line of sight, so without this it would sit behind the wall until the cover
+-- time ran out and never fire from it). Returns the phase row; `exposed` is what to do this think.
+-- On ARCH rather than a local, like the build rules below it: this chunk is near Luau's 200-local limit.
+function ARCH.peekPhase(bot, now)
+	local peek = bot.peek
+	if not peek or now >= peek.untilTime then
+		local exposed = not (peek and peek.exposed)
+		peek = {
+			exposed = exposed,
+			untilTime = now + (exposed and 0.9 + math.random() * 0.6 or 1.2 + math.random() * 1),
+			side = peek and peek.side or (math.random() < 0.5 and 1 or -1),
+		}
+		bot.peek = peek
+		if exposed then
+			STATS.peeks += 1
+		end
+	end
+	return peek
+end
+
+-- BOT ARCHETYPES: an avoidUnforced bot letting someone go must not then walk into them. Its wander
+-- (or the leg it is on) heading closer to `threat` than it already is, and inside `reach` (+6) of them,
+-- would make them "close" by its own doing and start the very fight it chose not to. Such a goal is
+-- swapped for another rotation goal that keeps its distance, or failing four of those, a point
+-- straight away from them. tools/bot_archetype_sim.py's AVOID scenario is the check.
+function ARCH.steerClear(bot, root, threat, reach, now)
+	local from = flat(root.Position)
+	local toThreat = flat(threat) - from
+	local gap = toThreat.Magnitude
+	local function closes(goal)
+		if not goal then
+			return false
+		end
+		local seg = flat(goal) - from
+		local len2 = seg:Dot(seg)
+		local t = len2 > 0.01 and math.clamp(toThreat:Dot(seg) / len2, 0, 1) or 0
+		local nearest = (toThreat - seg * t).Magnitude
+		return nearest < reach + 6 and nearest < gap - 1
+	end
+	if not (closes(bot.wanderGoal) or closes(bot.wanderTarget)) then
+		return
+	end
+	local goal = nil
+	for _ = 1, 4 do
+		local option = BotService.Loot.rotationGoal(bot, root.Position)
+		if not closes(option) then
+			goal = option
+			break
+		end
+	end
+	if not goal and gap > 1 then
+		goal = root.Position - toThreat.Unit * 60
+	end
+	bot.wanderGoal = goal
+	bot.wanderAt = now
+	bot.wanderTarget = nil
+end
+
+-- BOT ARCHETYPES: the third-party rule (Opportunist), asked by fight() on every think past the reaction
+-- and before it arms the timed first shot (quickFirstShot). True while the target is busy with somebody
+-- else (hit by another within THREAT_WINDOW) and still over thirdPartyBelow, nobody is shooting us, and
+-- the wait (thirdPartyWait, from acquiring the target) has not run out.
+function ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now)
+	if not (dials.thirdParty and targetHumanoid and now - bot.lastHurtAt >= THREAT_WINDOW
+		and targetHumanoid.Health >= targetHumanoid.MaxHealth * (dials.thirdPartyBelow or 0.6)
+		and now - (bot.thirdPartyFrom or now) < (dials.thirdPartyWait or 8)) then
+		return false
+	end
+	local attacker, _, hitAt = CombatService.GetLastAttacker(target)
+	return attacker ~= nil and attacker ~= bot and hitAt ~= nil and now - hitAt < THREAT_WINDOW
+end
+
 -- Seen and noticed, gun in range: fight. Returns having issued this think's movement.
+-- Reaction time is a time, not a count of thinks (#75/#81). A bot thinks every ~0.267 s (BotThinkInterval,
+-- rounded up to frames by the THINK_SLICES waits), so a reaction ending between two thinks used to
+-- wait for the second one: 0.28 s was really 0.53. When the reaction ends before the next think, this
+-- fires the first shot on a timer at the right moment instead. Bounded: at most once per acquisition
+-- (bot.quickShotFor), one line-of-sight ray, and only from the plain reaction hold, facing a target
+-- inside the front cone (a bot still turning round, taking cover or building waits for its think).
+local function quickFirstShot(bot, candidate, head, now)
+	local acquiredAt = bot.acquiredAt
+	if bot.quickShotFor == acquiredAt then
+		return
+	end
+	local remaining = acquiredAt + MatchConfig.BotReactionTime - now
+	if remaining >= MatchConfig.BotThinkInterval then
+		return
+	end
+	bot.quickShotFor = acquiredAt
+	local target, targetCharacter, targetRoot = candidate.token, candidate.character, candidate.root
+	task.delay(math.max(0, remaining), function()
+		if not running or bot.acquiredAt ~= acquiredAt or bot.target ~= target or not bot.weapon then
+			return
+		end
+		local character = bot.character
+		local root = character and character.Parent and character:FindFirstChild("HumanoidRootPart")
+		if not (root and head.Parent and targetRoot.Parent and bot.humanoid.Health > 0) then
+			return
+		end
+		local to = flat(targetRoot.Position - root.Position)
+		if to.Magnitude > 1 and flatLook(root):Dot(to.Unit) < FRONT_CONE_COS then
+			return
+		end
+		STATS.sightChecks += 1
+		if not hasLineOfSight(head, targetCharacter, character) then
+			return
+		end
+		STATS.quickShots += 1
+		shootAt(bot, target, targetRoot, (targetRoot.Position - root.Position).Magnitude, head)
+	end)
+end
+
 local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	local target, targetRoot, distance = candidate.token, candidate.root, candidate.distance
 	local eye = targetRoot.Position + Vector3.new(0, 1.5, 0)
+	local dials = ARCH.dialsOf(bot)
 	bot.target = target
 	bot.lastCombatAt = now
+	bot.fightState = "engage"
 	-- Fighting interrupts a loot hold. Without resetting it, a bot pulled into combat mid-hold
 	-- would return with the time already "elapsed" and claim instantly.
 	bot.lootHoldStart = nil
 	bot.searchUntil = nil
 	remember(bot, target, targetRoot.Position, root, now)
-	reportSighting(bot, targetRoot.Position, now)
+	reportSighting(bot, targetRoot.Position, now, target)
 	if bot.acquiredAt == 0 then
 		bot.acquiredAt = now
+		-- BOT ARCHETYPES: the per-fight decisions, rolled once so a bot commits to them: whether it
+		-- takes cover this fight (coverUse), whether it builds (buildRate), which way round it
+		-- flanks, and where it was standing when the fight began (repositioning measures from here).
+		bot.coverRoll = math.random()
+		bot.buildRoll = math.random()
+		bot.flankDir = math.random() < 0.5 and 1 or -1
+		bot.shotsFromSpot = 0
+		bot.peek = nil
+		bot.thirdPartyFrom = now
 		-- Pre-arm the burst here, during the reaction delay, rather than leaving burstLeft at the 0
 		-- losing a target reset it to. Unarmed, shootAt's own burst-discipline check (below) treats
 		-- the first call after the reaction delay as "burst exhausted": it only sets burstLeft and
@@ -2175,10 +3203,35 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 
 	-- Newly spotted targets get the reaction delay before the first shot, whatever the bot is doing.
 	local reacted = now - bot.acquiredAt >= MatchConfig.BotReactionTime
+	local targetHumanoid = candidate.character and candidate.character:FindFirstChildOfClass("Humanoid")
+
+	-- Reposition: after a fresh hit (repositionOnHit, a Marksman 70% of the time, an Anchor 10%), or
+	-- after the class's count of shots since it last moved on purpose (a sniper moves after every
+	-- shot, a DMR after three; the strafe steps every bot takes don't count, this is a deliberate
+	-- change of position). The current move, cover spot and peek are dropped; for the next moment
+	-- standing still is the worst option (planCombatMove), and a smoker puts smoke down before it goes.
+	local freshHit = now - bot.lastHurtAt <= MatchConfig.BotThinkInterval + 0.05 and bot.lastHurtAt > bot.acquiredAt
+	local overstayed = dials.repositionAfterShots > 0 and (bot.shotsFromSpot or 0) >= dials.repositionAfterShots
+	if reacted and (overstayed or (freshHit and math.random() < dials.repositionOnHit)) and not (bot.relocateUntil and now < bot.relocateUntil) then
+		STATS.repositions += 1
+		bot.relocateUntil = now + 1.5
+		bot.combatMove = nil
+		bot.coverPoint = nil
+		bot.coverUntil = 0
+		bot.peek = nil
+		bot.shotsFromSpot = 0
+		bot.strafeDir = -bot.strafeDir
+		local toward = flat(targetRoot.Position - root.Position)
+		if dials.smokeToMove and toward.Magnitude > 1 then
+			tryThrow(bot, root, head, "smoke", root.Position + toward.Unit * math.min(12, distance / 2), now)
+		end
+	end
 
 	-- Losing badly and the shooter's close: leave by air, or smoke it and back off to cover,
-	-- facing the target so the retreat reads as backpedalling under fire.
-	if humanoid.Health <= MatchConfig.BotRetreatHealth and distance < 90 then
+	-- facing the target so the retreat reads as backpedalling under fire. BOT ARCHETYPES: the health
+	-- it happens at is the personality's (a Survivor at 35, a Rusher at 8); MatchConfig is the default.
+	if humanoid.Health <= (dials.retreatHealth or MatchConfig.BotRetreatHealth) and distance < 90 then
+		bot.fightState = "retreat"
 		-- Running for cover, so stand: crouched is 0.45x speed.
 		setCrouch(bot, false)
 		if tryRocket(bot, humanoid, root, targetRoot, distance, now) then
@@ -2204,25 +3257,65 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	-- not at full health. Push a target that's nearly dead when the bot is healthy.
 	local outnumbered = 0
 	if humanoid.Health < humanoid.MaxHealth * 0.85 then
-		local position = root.Position
-		for _, entry in ipairs(combatantList) do
+		local near, nearCount = combatantsNear(root.Position, 70)
+		for index = 1, nearCount do
+			local entry = near[index]
 			if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
-				and (entry.position - position).Magnitude < 70 then
+				and (entry.position - root.Position).Magnitude < 70 then
 				outnumbered += 1
 			end
 		end
 	end
-	local targetHumanoid = candidate.character and candidate.character:FindFirstChildOfClass("Humanoid")
-	bot.pushing = targetHumanoid ~= nil and targetHumanoid.Health < targetHumanoid.MaxHealth * 0.35
-		and humanoid.Health > humanoid.MaxHealth * 0.5 and not bot.reloadUntil
+	bot.pushing = targetHumanoid ~= nil and targetHumanoid.Health < targetHumanoid.MaxHealth * MatchConfig.BotPushTargetBelow
+		and humanoid.Health > humanoid.MaxHealth * MatchConfig.BotPushHealthAbove and not bot.reloadUntil
+	-- BOT ARCHETYPES: the push is the personality's call (a Rusher pushes anyone under 70% while it has
+	-- 30% itself; an Anchor waits for 30% and 80%). The MatchConfig line above is the stock rule and
+	-- what tools/bot_aggression_check.py reads; the dials replace it when the archetype sets them.
+	if targetHumanoid and dials.pushTargetBelow then
+		bot.pushing = targetHumanoid.Health < targetHumanoid.MaxHealth * dials.pushTargetBelow
+			and humanoid.Health > humanoid.MaxHealth * dials.pushHealthAbove and not bot.reloadUntil
+	end
+	if bot.pushing then
+		bot.fightState = "push"
+	end
 	local wantsCover = (humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth and now - bot.lastHurtAt < 2)
 		or (bot.reloadUntil ~= nil and distance < 100)
 		or outnumbered >= 2
+	-- BOT ARCHETYPES: coverUse is the share of fights in which the bot takes cover when those rules say
+	-- it may (a Rusher one in four, an Anchor nine in ten). Reloading still sends everyone behind
+	-- something: standing in the open with an empty gun is not a personality.
+	if wantsCover and bot.coverRoll and bot.coverRoll > dials.coverUse and bot.reloadUntil == nil then
+		wantsCover = false
+	end
+
+	-- Third party (Opportunist): the target is busy with somebody else and still healthy, and nobody
+	-- is shooting us. Hang back out of the fight, low and behind something if there is anything, and
+	-- let them wear each other down; go in once the target is under thirdPartyBelow, once the wait
+	-- (thirdPartyWait) runs out, or the moment we are hit. tools/bot_archetype_sim.py measures how
+	-- much later an Opportunist's first shot comes than a Rusher's from the same spot.
+	if reacted and ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now) then
+		STATS.thirdPartyHolds += 1
+		bot.fightState = "thirdParty"
+		local cover, direct = seekCover(bot, root, eye, now, candidate.character)
+		if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+			if flatDistance(root.Position, cover) < 3 then
+				bot.coverPoint = nil
+				bot.coverUntil = now + BOT_COVER_TIME
+				bot.coverAt = root.Position
+			end
+		else
+			holdStill(bot, humanoid, root, now)
+		end
+		setCrouch(bot, distance > CROUCH_MIN_RANGE)
+		faceTarget(bot, humanoid, root, targetRoot)
+		return
+	end
 
 	-- Hurt and being hit, reloading, or outnumbered: get behind something, or put something up.
 	if wantsCover and not bot.pushing then
 		local cover, direct = seekCover(bot, root, eye, now, candidate.character)
 		if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+			bot.fightState = "cover"
 			setCrouch(bot, false)
 			faceTarget(bot, humanoid, root, targetRoot)
 			if reacted then
@@ -2232,27 +3325,53 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 				STATS.coverReached += 1
 				bot.coverPoint = nil
 				bot.coverUntil = now + BOT_COVER_TIME
+				bot.coverAt = root.Position
+				bot.peek = nil
 				bot.lastCombatAt = now - MatchConfig.BotHealLull
 			end
 			return
 		end
-		if tryBuildExposed(bot, humanoid, root, targetRoot, distance, now) then
+		if tryBuildExposed(bot, humanoid, root, targetRoot, distance, now)
+			or ARCH.tryBuildCross(bot, humanoid, root, targetRoot, distance, now) then
 			holdStill(bot, humanoid, root, now)
 			faceTarget(bot, humanoid, root, targetRoot)
 			return
 		end
 	end
 
-	if tryBuildAngle(bot, humanoid, root, targetRoot, distance, now) then
+	if tryBuildAngle(bot, humanoid, root, targetRoot, distance, now)
+		or ARCH.tryBuildPushed(bot, humanoid, root, targetRoot, distance, now) then
 		holdStill(bot, humanoid, root, now)
 		faceTarget(bot, humanoid, root, targetRoot)
 		return
 	end
 
-	-- Two or more of them bunched up: a grenade in the middle.
-	local bunched, centre = clusterAround(bot, targetRoot)
-	if bunched >= 2 and centre then
-		tryThrow(bot, root, head, "grenade", centre, now)
+	-- Throwables, by gun and personality (Oliver: "make it change how they use throwables too").
+	-- A frag goes over when enough of them are bunched round the target (grenadeAt: a Rusher or
+	-- Anchor at two, a Marksman at three) and never from a gun that can simply shoot the problem
+	-- (noFrags: launcher, LMG, minigun). A corner gun (fragToFlush: shotguns) frags a target it can
+	-- only reach through a barricade, to flush it before the push. A sticky goes onto a target in a
+	-- vehicle, or onto the barricade it is behind. tryThrow refuses point-blank throws, a teammate in
+	-- the blast, and a second frag onto one still ticking.
+	if not dials.noFrags then
+		local bunched, centre = clusterAround(bot, targetRoot)
+		if bunched >= (dials.grenadeAt or 2) and centre then
+			tryThrow(bot, root, head, "grenade", centre, now)
+		elseif dials.fragToFlush and candidate.throughCover and candidate.throughCover.Parent then
+			tryThrow(bot, root, head, "grenade", targetRoot.Position, now)
+		end
+	end
+	if targetHumanoid and targetHumanoid.SeatPart then
+		tryThrow(bot, root, head, "sticky", targetRoot.Position, now)
+	elseif candidate.throughCover and candidate.throughCover.Parent and candidate.throughCover.GetPivot then
+		tryThrow(bot, root, head, "sticky", candidate.throughCover:GetPivot().Position, now)
+	end
+	-- Crossing open ground toward the target (a shotgun or SMG pushing in): smoke its own approach.
+	if dials.smokeToCross and bot.pushing and distance > 30 and distance < 60 then
+		local toward = flat(targetRoot.Position - root.Position)
+		if toward.Magnitude > 1 then
+			tryThrow(bot, root, head, "smoke", root.Position + toward.Unit * (distance * 0.5), now)
+		end
 	end
 
 	-- Brief reaction delay before the first shot of an engagement — turn toward them
@@ -2260,10 +3379,55 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	if now - bot.acquiredAt < MatchConfig.BotReactionTime then
 		holdStill(bot, humanoid, root, now)
 		faceTarget(bot, humanoid, root, targetRoot)
+		-- Not for a target the third-party rule (above) would have it hang back from: the timed shot goes
+		-- off at the end of the reaction, before that rule is ever asked, and would fire an Opportunist's
+		-- first round at a healthy target busy with someone else.
+		if not ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now) then
+			quickFirstShot(bot, candidate, head, now)
+		end
 		return
 	end
 
+	-- Peek and shoot (BOT ARCHETYPES: peek, and the "hold" gun classes): from cover or beside its own
+	-- wall, a bot alternates a hidden spell (crouched, still, reloading if the magazine is low: the
+	-- class's reloadUnder) with an exposed one in which it stands and fires, rather than standing in
+	-- the gap the whole time. The magazine is topped up while hidden so the exposed spell never
+	-- opens with a reload.
+	local size = magazineOf(bot.weapon)
+	local inCover = (bot.coverUntil and now < bot.coverUntil) or (bot.anchor and now < bot.anchor.untilTime)
+	if inCover and (dials.peek or dials.peekStyle == "hold") and not bot.pushing then
+		local peek = ARCH.peekPhase(bot, now)
+		if not peek.exposed then
+			bot.fightState = "peekHide"
+			if size and bot.mag and bot.mag < size * dials.reloadUnder then
+				startReload(bot, now)
+			end
+			setCrouch(bot, true)
+			-- Back behind the cover it came out of, if it has stepped away from it.
+			if bot.coverAt and flatDistance(root.Position, bot.coverAt) > 1.5 then
+				humanoid:MoveTo(bot.coverAt)
+				BotNav.Progress(bot, humanoid, root, nil, now)
+			else
+				holdStill(bot, humanoid, root, now)
+			end
+			faceTarget(bot, humanoid, root, targetRoot)
+			return
+		end
+		bot.fightState = "peekShoot"
+		setCrouch(bot, false)
+		humanoid:MoveTo(combatMove(bot, root, targetRoot.Position, distance, false, now))
+		faceTarget(bot, humanoid, root, targetRoot)
+		shootAt(bot, target, targetRoot, distance, head)
+		return
+	elseif inCover and size and bot.mag and bot.mag < size * dials.reloadUnder then
+		-- Any class behind cover with a low magazine reloads there rather than in the open.
+		startReload(bot, now)
+	end
+
 	local point = combatMove(bot, root, targetRoot.Position, distance, false, now)
+	if bot.fightState == "engage" then
+		bot.fightState = distance < dials.minRange and "open" or "strafe"
+	end
 	-- Hop now and then while strafing in the open, like a player dodging (Oliver, 2026-09-22: "jump
 	-- and strafe more"). Never from cover, never at knife range.
 	local jumped = false
@@ -2293,13 +3457,13 @@ local function runForCircle(bot, humanoid, root, now)
 	releaseLoot(bot)
 	bot.memory = nil
 	if not bot.wanderGoal or not insideCircle(bot.wanderGoal, center, circleRadius, 0.85) then
-		bot.wanderGoal = stormGoal(root.Position)
+		bot.wanderGoal = BotService.Loot.rotationGoal(bot, root.Position)
 		bot.wanderTarget = nil
 	end
 	setSprint(bot, true)
 	trySlide(bot, humanoid, now)
 	if not bot.wanderTarget or flatDistance(root.Position, bot.wanderTarget) < 16 then
-		bot.wanderTarget = nextLeg(root.Position, bot.wanderGoal)
+		bot.wanderTarget = BotService.Loot.leg(bot, root.Position, bot.wanderGoal, now, true)
 	end
 	if navigate(bot, humanoid, root, bot.wanderTarget, BotNav.Priority.Urgent, now) == "abandon" then
 		bot.wanderTarget = nil
@@ -2342,6 +3506,20 @@ local function flee(bot, humanoid, root, threatPosition, now, threatToken)
 	STATS.flees += 1
 	bot.combatMove = bot.combatMove and bot.combatMove.retreating and bot.combatMove or nil
 	local threatCharacter = threatToken and Combatants.GetCharacter(threatToken) or nil
+	-- BOT ARCHETYPES: a Survivor breaks the pursuer's line of sight on the way out, with smoke on the
+	-- ground between them and a wall across the pursuer's path (placeBarricade puts it 5 studs toward
+	-- the threat, so it is between them, never across the bot's own way out).
+	local dials = ARCH.dialsOf(bot)
+	local toward = flat(threatPosition - root.Position)
+	if toward.Magnitude > 1 then
+		if dials.smokeToMove then
+			local head = bot.character:FindFirstChild("Head") or root
+			tryThrow(bot, root, head, "smoke", root.Position + toward.Unit * math.min(10, toward.Magnitude / 2), now)
+		end
+		if dials.buildToBlock and canBuild(bot, now) and toward.Magnitude >= BOT_BUILD_MIN and toward.Magnitude <= 60 then
+			placeBarricade(bot, root, threatPosition, now, "block")
+		end
+	end
 	local cover, direct = seekCover(bot, root, threatPosition + Vector3.new(0, 1.5, 0), now, threatCharacter)
 	setSprint(bot, true)
 	trySlide(bot, humanoid, now)
@@ -2383,136 +3561,1762 @@ end
 BotService.IsUnderArmed = isUnderArmed
 
 --------------------------------------------------------------------------------
--- BOT VEHICLES (armed vehicles: VehicleWeapons, Shared/VehicleWeaponData)
+-- BOT VEHICLES (driving: BotNav's DRIVING section; mounted guns: VehicleWeapons, Shared/VehicleWeaponData)
 --------------------------------------------------------------------------------
--- Bots never drove. Now a few may: a bot already in a fight that finds an empty armed vehicle close
--- by walks to it and gets in, then drives at its target (circling once it is close) and fires the
--- mount through VehicleWeapons.Fire, the very function a player's trigger reaches, with the same
--- driver, rate, ammo and team checks. The target is findTarget's, so line of sight is the one
--- every bot already uses. While a bot drives, updateBot stops at the hook; once it gets out (nobody to
--- shoot for a while, or the vehicle wrecked) it carries on as a bot on foot. The server steps a
--- vehicle with no player at the wheel from its seat's ThrottleFloat/SteerFloat (VehicleService.step).
+-- Oliver, 2026-09-24: "make the bots shoot the vehicle guns and drive the cars, with quality vehicle
+-- behaviour. And when a player wants to get in, the bot gets out and is replaced by the player." Then:
+-- "make the bots not drive away if they have a gun on their car, wait till it's manned".
+--
+-- A bot gets into a vehicle for one of four reasons, looked at every VEHICLE.CHECK_EVERY seconds
+-- while it is on foot (Vehicles.considerVehicle):
+--   gunner     an armed vehicle close by has someone waiting at the wheel for a gunner (a teammate, or
+--              in the battle royale another bot): it gets on the gun
+--   fight      in a fight, an armed vehicle within VEHICLE.FIGHT_SEEK: the gun if it is free, else the
+--              wheel (VEHICLE.FIGHT_CHANCE a look, so not every bot in every fight)
+--   ride       a team mode: a teammate bot has just taken a vehicle for a trip and a seat is free
+--   trip       where it is going (the storm's circle, its objective, the enemy's base, loot) is
+--              further than MatchConfig.BotDriveMinTrip and a free vehicle stands within BotBoardReach,
+--              not behind it; one without a gun first (a gun needs a gunner)
+-- At most MatchConfig.BotDriversMax bots drive at once in a battle royale, BotDriversPerTeam a side
+-- in a team mode.
+--
+-- At the wheel, BotNav's DRIVING section does the driving: routes along the roads when that is
+-- quicker (BotService.SetRoads hands it the map's RoadNetwork), a base vehicle out of the yard along
+-- its bay's drive-out lane, stops for teammates, goes round what is in the way, backs out when stuck
+-- and gives up when it can't, never into water or off a drop, and keeps to the storm's circle or the
+-- team arena (every road node it takes is inside it). The decisions are made on the bot's own sliced
+-- think (Vehicles.driverThink, which calls BotNav.DriveSense: at most BotNav.DriveCastsPerSense spatial queries,
+-- 4, per driving bot per think); the throttle and steer are turned every frame by the servo below,
+-- which is arithmetic only (BotNav.DriveControl, no queries), for the handful of bots at a wheel.
+-- An armed vehicle with nobody on its gun is not driven anywhere (Oliver: "wait till it's manned"):
+-- the bot holds it, works the gun itself only once attacked, and gives it up after BotGunnerWait.
+-- With a gunner, the bot at the wheel circles the target at the gun's range and the gunner fires.
+--
+-- On the gun, every shot goes through VehicleWeapons.Fire, the very function a player's trigger
+-- reaches, with the same seat, rate, ammo and team checks. Where the bot aims comes from the same aim
+-- dials as a bot on foot (Vehicles.vehicleHitChance, which is shootAt's chance line for line, and
+-- tools/bot_driving_combat.py fails if the two ever differ) with the mount's own spread allowed for,
+-- and a miss aimed clear of the target. It fires in bursts, lets the belt cool rather than run it dry,
+-- holds fire outside the mount's arc, and a round is led by most of the target's run.
+--
+-- A player who wants a bot's seat triggers its prompt ("Take over", see VehicleService's TAKING OVER):
+-- VehicleService asks BotService.YieldSeat, which applies BotService.TakeoverAllowed (a teammate always
+-- may; with no teams, anyone the bot is not fighting) and gets the bot out, stopping the car first
+-- from the wheel. The bot goes back to what it does on foot.
 
--- Oliver 2026-09-24: "make sure the bots get in the cars and use the guns". Bots used to look only
--- mid-fight, a third of the time, within 45 studs, and got out after 10 s with nobody to shoot, so
--- a bot at a gun was a rare sight. Now roaming bots take an armed vehicle too, from further off, and
--- keep driving toward the storm's safe ground between fights.
-local BOT_DRIVERS_MAX = 5        -- bots behind a wheel at once, across the match
-local BOT_BOARD_SEEK = 90        -- an armed vehicle this close may be taken
-local BOT_BOARD_CHANCE = 0.7     -- chance, every BOT_BOARD_EVERY seconds of a fight, that a bot looks
-local BOT_BOARD_ROAM_CHANCE = 0.4 -- the same for a bot on the move with nobody to fight
-local BOT_BOARD_EVERY = 3
-local BOT_BOARD_WALK = 12        -- seconds walking to the vehicle before giving up on it
-local BOT_DRIVE_IDLE = 30        -- seconds with nobody to shoot before getting out
-local BOT_DRIVE_CIRCLE = 45      -- closer than this, circle the target rather than drive at it
-local BOT_STEER_FULL = math.rad(35)
+local RunService = game:GetService("RunService")
 
--- Bot record -> true while it drives. STRONG keys; pruned by botDriverCount as bots get out or die.
-local botDrivers = {}
+-- One table for the section's numbers and one for its functions: BotService's main chunk is near
+-- Luau's 200-local limit, and this section would otherwise add fifty.
+local VEHICLE = {}
+local Vehicles = {}
 
-local function botDriverCount()
+VEHICLE.CHECK_EVERY = 2.5     -- a bot on foot looks for a vehicle this often (seconds)
+-- Oliver 2026-09-24: "make sure the bots get in the cars and use the guns" (main's 3b593e6 took these
+-- from 45 studs / 0.35 / fights only / 10 s idle to the numbers below, and let roaming bots on a gun).
+VEHICLE.FIGHT_SEEK = 90       -- an armed vehicle this close may be jumped on (in a fight, or roaming)
+VEHICLE.FIGHT_CHANCE = 0.7    -- chance, each look in a fight, that a bot goes for one
+VEHICLE.ROAM_GUN_CHANCE = 0.4 -- the same for a bot with nobody to fight: it mans a free gun
+VEHICLE.WALK = 12             -- seconds walking to a vehicle before giving up on it
+VEHICLE.RIDE_REACH = 30       -- a teammate's (or waiting bot's) vehicle this close may be ridden or gunned
+VEHICLE.IDLE = 30             -- seconds on a gun nobody drives, with nothing to shoot, before getting down
+VEHICLE.REBOARD = 20          -- seconds before a bot that got out (or was asked out) takes one again
+VEHICLE.FOE_MEMORY = 8        -- seconds someone a bot shot at, or was shot by, counts as its fight
+VEHICLE.RETREAT_HEALTH = 0.35 -- share of a vehicle's health under which its bot drives away from a fight
+VEHICLE.BAIL_HEALTH = 0.15    -- ...and under which it gets out before the vehicle is wrecked
+VEHICLE.GUARD_RANGE = 70      -- people on foot this close are handed to BotNav to stop for
+VEHICLE.ARRIVE = 30           -- studs short of the goal a trip ends (it parks and gets out)
+VEHICLE.OFFER = 4             -- seconds a team driver waits at the start for a teammate walking over
+VEHICLE.BASE_LANE = 40        -- studs straight out along a parked base vehicle's nose: the yard's way out
+VEHICLE.BODY_RADIUS = 0.75    -- half a body's width, for the share of a mount's spread it catches (tools/bot_driving_combat.py DIAL)
+VEHICLE.GUN_RANGE = { hitscan = 70, rocket = 80, grenade = 200 } -- where a driver keeps a target
+VEHICLE.TAKEOVER_STOP = 1.5   -- seconds the wheel is held stopped for a takeover before the bot gets out
+
+for _, key in ipairs({ "vehicleBoards", "vehicleShots", "vehicleAimedHits", "vehicleTakeovers", "vehicleExits",
+	"vehicleWaits" }) do
+	STATS[key] = STATS[key] or 0
+end
+
+-- Bot record -> its ride while it is in a vehicle. STRONG keys; dropped when it gets out, and
+-- pruned when its humanoid is gone.
+local riders = {}
+-- The map's RoadNetwork (RoadNetwork.Plan's result), handed over when a map is built. Kept across
+-- Clear: the next map's replaces it.
+Vehicles.roads = nil
+
+function BotService.SetRoads(network)
+	Vehicles.roads = network
+end
+
+function Vehicles.teamsActive()
+	local teams = lazy("ModeTeams")
+	return teams ~= nil and teams.IsActive ~= nil and teams.IsActive()
+end
+
+function Vehicles.teamOf(token)
+	local teams = lazy("ModeTeams")
+	if teams and teams.IsActive and teams.IsActive() and teams.TeamOf then
+		return teams.TeamOf(token)
+	end
+	return nil
+end
+
+-- Who this bot is fighting: whoever it has had in its sights, or been shot by, in the last
+-- VEHICLE.FOE_MEMORY seconds. Published on its character as BotFoes (",userId,userId,") so a
+-- player's VehicleClient hides a takeover prompt the server would refuse.
+function Vehicles.refreshFoes(bot, now)
+	local foes = bot.vehicleFoes
+	if not foes then
+		foes = {}
+		bot.vehicleFoes = foes
+	end
+	if bot.target then
+		foes[bot.target] = now
+	end
+	if bot.threat and bot.threat.token and now - bot.threat.at < VEHICLE.FOE_MEMORY then
+		foes[bot.threat.token] = math.max(foes[bot.threat.token] or 0, bot.threat.at)
+	end
+	local ids = {}
+	for token, at in pairs(foes) do
+		if now - at > VEHICLE.FOE_MEMORY then
+			foes[token] = nil
+		elseif Combatants.IsPlayer(token) then
+			table.insert(ids, tostring(token.UserId))
+		end
+	end
+	table.sort(ids)
+	local published = #ids > 0 and ("," .. table.concat(ids, ",") .. ",") or nil
+	if bot.character and bot.character:GetAttribute("BotFoes") ~= published then
+		bot.character:SetAttribute("BotFoes", published)
+	end
+end
+
+-- Whether `player` may take this bot's seat: a teammate always; with no teams, anyone it is not
+-- fighting. VehicleClient's mayTakeOver is the same rule, read from what the server publishes.
+function BotService.TakeoverAllowed(bot, player)
+	if Vehicles.teamsActive() then
+		local mine, theirs = Vehicles.teamOf(bot), Vehicles.teamOf(player)
+		return mine ~= nil and mine == theirs
+	end
+	Vehicles.refreshFoes(bot, os.clock())
+	return bot.vehicleFoes[player] == nil
+end
+
+-- Gets out. The seat's own exit puts the bot down beside the vehicle (VehicleService.onSeatChanged).
+function Vehicles.leaveRide(bot, reason, cooldown)
+	local ride = riders[bot] or bot.ride
+	riders[bot] = nil
+	bot.ride = nil
+	bot.boarding = nil
+	if ride and ride.seat and ride.seat:IsA("VehicleSeat") then
+		ride.seat.ThrottleFloat = 0
+		ride.seat.SteerFloat = 0
+		ride.seat:SetAttribute("Handbrake", nil)
+	end
+	if bot.character then
+		bot.character:SetAttribute("BotFoes", nil)
+	end
+	local humanoid = bot.humanoid
+	if humanoid and humanoid.SeatPart then
+		humanoid.Sit = false
+	end
+	bot.noVehicleUntil = os.clock() + (cooldown or VEHICLE.REBOARD)
+	bot.lastVehicleExit = reason
+	STATS.vehicleExits += 1
+	if bot.nav then
+		BotNav.Drop(bot)
+	end
+end
+
+-- VehicleService.BotYield: a player asks for `seat`, which this bot holds. False leaves the bot where
+-- it is. True means it is getting out: straight away from the gun or a passenger seat, from the wheel
+-- once the servo has brought the car to a stop (VEHICLE.TAKEOVER_STOP at most).
+function BotService.YieldSeat(bot, player, seat)
+	local ride = riders[bot]
+	if not ride or ride.seat ~= seat or not BotService.TakeoverAllowed(bot, player) then
+		return false
+	end
+	STATS.vehicleTakeovers += 1
+	if ride.role == "driver" then
+		ride.yieldTo = { player = player, at = os.clock() }
+	else
+		Vehicles.leaveRide(bot, "takeover")
+	end
+	return true
+end
+
+-- A driver asked out: the car held on the brake until it has all but stopped, then out.
+function Vehicles.yieldServo(bot, ride, now)
+	local yieldTo = ride.yieldTo
+	if not yieldTo then
+		return false
+	end
+	ride.drive.hold = true
+	local speed = ride.drive.chassis.AssemblyLinearVelocity.Magnitude
+	if speed < 4 or now - yieldTo.at > VEHICLE.TAKEOVER_STOP then
+		Vehicles.leaveRide(bot, "takeover")
+		return true
+	end
+	return false
+end
+
+-- The shot's chance, from the same dials as shootAt's (these lines are shootAt's, and
+-- tools/bot_driving_combat.py fails if the two ever give different numbers): accuracy by distance, aim
+-- settling on a target, a fast target harder to hit. Then what is particular to a mounted gun: firing
+-- from a moving vehicle is harder, and a bullet aimed at a body still scatters by the mount's spread
+-- (VehicleWeapons.Fire), so the roll is divided by the share of that cone a body covers, and what
+-- lands is the dial rather than the dial times the cone.
+function Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)
+	local chance = accuracyAt(distance)
+	local settle = math.clamp((now - AIM_SETTLE_DELAY - (ride.fight.acquiredAt or now)) / 1.5, 0, 1)
+	chance *= 0.9 + 0.15 * settle
+	local velocity = targetRoot.AssemblyLinearVelocity
+	if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > 18 or math.abs(velocity.Y) > 8 then
+		chance *= 0.85
+	end
+	local chassis = ride.model.PrimaryPart
+	if chassis and chassis.AssemblyLinearVelocity.Magnitude > 30 then
+		chance *= 0.85
+	end
+	if spec.kind ~= "round" and (spec.spread or 0) > 0 then
+		-- The spread puts a bullet at a distance from the aim that is even across the cone's radius
+		-- `cone` (VehicleWeapons' spread), in any direction. A body `w` wide either side catches every
+		-- one inside `w`, and further out those whose sideways part is under `w`:
+		-- share = (w + 2/pi * integral from w to cone of asin(w / r) dr) / cone.
+		local cone = distance * math.tan(math.rad(spec.spread))
+		local w = VEHICLE.BODY_RADIUS
+		if cone > w then
+			local integral = cone * math.asin(w / cone) + w * math.log(cone + math.sqrt(cone * cone - w * w))
+				- (w * math.pi / 2 + w * math.log(w))
+			chance = math.min(1, chance / ((w + integral * 2 / math.pi) / cone))
+		end
+	end
+	return chance
+end
+
+-- One pull of the mounted gun's trigger, called every frame while `ride.trigger` is set: bursts at
+-- the gun's rate with rests between, the belt left to cool back up rather than fired dry, nothing
+-- outside the mount's arc or into a round's own blast.
+function Vehicles.vehicleTrigger(bot, ride, now)
+	local fight = ride.fight
+	if not fight or not fight.root.Parent or now < (ride.nextShotAt or 0) then
+		return
+	end
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local vehicle = VehicleWeapons and VehicleWeapons.DrivenBy(bot)
+	if not vehicle then
+		return
+	end
+	local ammo, spec = VehicleWeapons.AmmoOf(vehicle)
+	if not ammo then
+		return
+	end
+	if ride.cooling then
+		if ammo < spec.magazine * 0.6 then
+			return
+		end
+		ride.cooling = false
+	end
+	if ammo < 1 or (spec.magazine >= 10 and ammo < spec.magazine * 0.15) then
+		ride.cooling = true
+		return
+	end
+	if (ride.burstLeft or 0) <= 0 then
+		local rounds = spec.kind == "round"
+		ride.burstLeft = rounds and math.random(1, 2) or math.random(6, 10)
+		ride.nextShotAt = now + (rounds and 1.0 + math.random() * 0.8 or MatchConfig.BotBurstRest + math.random() * 0.35)
+		return
+	end
+	local targetRoot = fight.root
+	local distance = (targetRoot.Position - vehicle.PrimaryPart.Position).Magnitude
+	if not VehicleWeapons.InArc(vehicle, targetRoot.Position) then
+		return
+	end
+	if spec.kind == "round" and distance < (spec.splashRadius or 12) + 6 then
+		return
+	end
+	local hit = math.random() < Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)
+	local aim = VehicleWeapons.BotAimPoint(vehicle, targetRoot.Position, targetRoot.AssemblyLinearVelocity, hit)
+	ride.nextShotAt = now + 1 / spec.fireRate
+	local ok, why = VehicleWeapons.Fire(bot, aim)
+	if ok then
+		ride.burstLeft -= 1
+		STATS.vehicleShots += 1
+		if hit then
+			STATS.vehicleAimedHits += 1
+		end
+	elseif why == "ammo" then
+		ride.cooling = true
+	end
+end
+BotService.VehicleTrigger = Vehicles.vehicleTrigger
+
+-- Every frame, for the bots in a vehicle: the wheel (BotNav.DriveControl, arithmetic only) and the
+-- gun's trigger. Started the first time a bot gets in.
+Vehicles.servo = nil
+
+function Vehicles.driverServo(bot, ride, dt, now)
+	if Vehicles.yieldServo(bot, ride, now) then
+		return
+	end
+	local seat = ride.seat
+	local throttle, steer, handbrake = BotNav.DriveControl(ride.drive, dt, now)
+	seat.ThrottleFloat = throttle
+	seat.SteerFloat = steer
+	if (seat:GetAttribute("Handbrake") == true) ~= handbrake then
+		seat:SetAttribute("Handbrake", handbrake or nil)
+	end
+end
+
+function Vehicles.ensureServo()
+	local VehicleService = lazy("VehicleService")
+	if VehicleService and VehicleService.BotYield ~= BotService.YieldSeat then
+		VehicleService.BotYield = BotService.YieldSeat
+	end
+	if Vehicles.servo then
+		return
+	end
+	Vehicles.servo = RunService.Heartbeat:Connect(function(dt)
+		local now = os.clock()
+		for bot, ride in pairs(riders) do
+			local humanoid = bot.humanoid
+			if humanoid and humanoid.Health > 0 and humanoid.SeatPart == ride.seat then
+				if ride.role == "driver" and ride.drive then
+					Vehicles.driverServo(bot, ride, dt, now)
+				end
+				if riders[bot] and ride.trigger then
+					Vehicles.vehicleTrigger(bot, ride, now)
+				end
+			end
+		end
+	end)
+end
+
+function Vehicles.driverCount(team)
 	local count = 0
-	for driver in pairs(botDrivers) do
-		local humanoid = driver.humanoid
-		if humanoid and humanoid.Health > 0 and humanoid.SeatPart then
+	for other, ride in pairs(riders) do
+		local humanoid = other.humanoid
+		if not humanoid or humanoid.Health <= 0 or not humanoid.SeatPart then
+			riders[other] = nil
+		elseif ride.role == "driver" and (team == nil or Vehicles.teamOf(other) == team) then
 			count += 1
-		else
-			botDrivers[driver] = nil
 		end
 	end
 	return count
 end
 
-local function leaveVehicle(bot, humanoid, seat)
-	if seat:IsA("VehicleSeat") then
-		seat.ThrottleFloat = 0
-		seat.SteerFloat = 0
-	end
-	humanoid.Sit = false
-	botDrivers[bot] = nil
+function Vehicles.driverRoom(bot)
+	local team = Vehicles.teamOf(bot)
+	local cap = team and (MatchConfig.BotDriversPerTeam or 4) or (MatchConfig.BotDriversMax or 6)
+	return Vehicles.driverCount(team) < cap
 end
 
--- Returns true when this think was spent in (or getting into) an armed vehicle.
-local function botVehicleThink(bot, humanoid, root, head, now)
-	local VehicleWeapons = lazy("VehicleWeapons")
-	if not VehicleWeapons then
-		return false
+-- Where a bot wants to go, if anywhere, and how close counts as there: its team objective in a team
+-- mode; in the battle royale where the storm is going (once it presses), else the loot it is after,
+-- else its wander goal.
+function Vehicles.travelGoal(bot, root, now)
+	local state = BotService.ModeState(bot)
+	if state then
+		local objective, kind = modeObjective(bot, root, state, now)
+		if objective then
+			return objective, (kind == "hold" or kind == "contest") and 40 or VEHICLE.ARRIVE
+		end
+		return nil
 	end
-	local seat = humanoid.SeatPart
-	if seat then
-		local vehicle = VehicleWeapons.DrivenBy(bot)
-		if not vehicle or vehicle:GetAttribute("Wrecked") or not vehicle.PrimaryPart then
-			leaveVehicle(bot, humanoid, seat)
-			return false
+	local center, radius = safeCircle()
+	if center and (StormService.IsOutside(root.Position) or stormPressure(root.Position) >= MatchConfig.BotStormRotate) then
+		if not bot.wanderGoal or not insideCircle(bot.wanderGoal, center, radius, 0.85) then
+			bot.wanderGoal = stormGoal(root.Position)
+			bot.wanderAt = now
 		end
-		botDrivers[bot] = true
-		local candidate = findTarget(bot, root, head, now)
-		if candidate then
-			bot.driveSeenAt = now
-			bot.driveGoal = nil
-			VehicleWeapons.Fire(bot, candidate.root.Position)
-		elseif now - (bot.driveSeenAt or now) > BOT_DRIVE_IDLE then
-			leaveVehicle(bot, humanoid, seat)
-			return false
+		return bot.wanderGoal, VEHICLE.ARRIVE
+	end
+	if bot.lootTarget and bot.lootTarget.Parent then
+		return bot.lootTarget.Position, 40
+	end
+	return bot.wanderGoal, VEHICLE.ARRIVE
+end
+
+-- Where a route must stay: the circle the storm is heading for, or a team mode's arena.
+function Vehicles.driveBounds()
+	local teams = lazy("ModeTeams")
+	if teams and teams.IsActive and teams.IsActive() and teams.Arena then
+		local centre, radius = teams.Arena()
+		if centre and radius and radius > 0 then
+			return { center = centre, radius = radius - 40 }
 		end
-		local chassis = vehicle.PrimaryPart
-		local goal = candidate and candidate.root.Position or bot.driveGoal
-		if not goal or flatDistance(goal, chassis.Position) < 20 then
-			goal = stormGoal(chassis.Position)
-			bot.driveGoal = goal
+	end
+	local center, radius = safeCircle()
+	if center then
+		return { center = center, radius = radius * 0.92 }
+	end
+	return nil
+end
+
+-- People on foot near the car, for BotNav to stop for (teammates) or go round (anyone it isn't
+-- fighting). Read from the tick's combatant grid (combatantsNear), not queried.
+function Vehicles.guardsNear(bot, position)
+	local list = {}
+	local team = Vehicles.teamOf(bot)
+	local near, count = combatantsNear(position, VEHICLE.GUARD_RANGE)
+	for index = 1, count do
+		local entry = near[index]
+		if entry.token ~= bot and entry.humanoid.Health > 0 and not entry.humanoid.SeatPart then
+			local mate = team ~= nil and Vehicles.teamOf(entry.token) == team
+			if mate or not (bot.vehicleFoes and bot.vehicleFoes[entry.token]) then
+				table.insert(list, { root = entry.root, hard = mate })
+			end
 		end
-		local localGoal = chassis.CFrame:PointToObjectSpace(goal)
-		local distance = math.sqrt(localGoal.X * localGoal.X + localGoal.Z * localGoal.Z)
-		-- Positive is to the left, as the mount's yaw.
-		local heading = math.atan2(-localGoal.X, -localGoal.Z)
-		if candidate and distance < BOT_DRIVE_CIRCLE then
-			-- Keep them off to one side and keep moving: a parked car is the easiest thing to hit.
-			heading -= bot.strafeDir * math.rad(80)
+	end
+	return list
+end
+
+-- The sweeps must see past everyone sitting in the car, not stop at the gunner's head.
+function Vehicles.riderFilter(ride)
+	local list = { ride.model }
+	for _, child in ipairs(ride.model:GetChildren()) do
+		if child:IsA("Seat") or child:IsA("VehicleSeat") then
+			local occupant = child.Occupant
+			if occupant and occupant.Parent then
+				table.insert(list, occupant.Parent)
+			end
 		end
-		local throttle = distance < 15 and 0.4 or 1
-		local steer = math.clamp(-heading / BOT_STEER_FULL, -1, 1)
-		if math.abs(heading) > math.rad(125) and not candidate then
-			-- Behind: back round rather than drive a wide loop.
-			throttle, steer = -0.6, -steer
+	end
+	ride.drive.params.FilterDescendantsInstances = list
+	ride.drive.probeParams.FilterDescendantsInstances = list
+end
+
+function Vehicles.noteFight(bot, ride, candidate, now)
+	if not ride.fight or ride.fight.token ~= candidate.token then
+		ride.fight = { token = candidate.token, root = candidate.root, acquiredAt = now }
+	else
+		ride.fight.root = candidate.root
+	end
+	bot.target = candidate.token
+	bot.lastCombatAt = now
+	ride.lastTargetAt = now
+	reportSighting(bot, candidate.root.Position, now)
+end
+
+-- Where the wheel takes an armed vehicle with a gunner in a fight: round the target at the gun's
+-- range, a little ahead of where it is on that circle, so the car keeps moving (a parked car is the
+-- easiest thing to hit) and the target stays out to the side, inside every mount's arc. Badly
+-- damaged, away from it.
+function Vehicles.combatGoal(ride, candidate, health, now)
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local _, spec = VehicleWeapons.AmmoOf(ride.model)
+	local want = spec and (spec.kind == "hitscan" and VEHICLE.GUN_RANGE.hitscan
+		or VEHICLE.GUN_RANGE[spec.projectile] or VEHICLE.GUN_RANGE.rocket) or VEHICLE.GUN_RANGE.hitscan
+	local chassis = ride.drive.chassis
+	local target = flat(candidate.root.Position)
+	local away = flat(chassis.Position) - target
+	if away.Magnitude < 1 then
+		away = -flat(chassis.CFrame.LookVector)
+	end
+	away = away.Unit
+	if health < VEHICLE.RETREAT_HEALTH then
+		return target + away * 220, { arrive = 25, maxSpeed = nil, loiter = false }
+	end
+	if not ride.orbit or now > (ride.orbitFlipAt or 0) then
+		ride.orbit = ride.orbit and -ride.orbit or (math.random() < 0.5 and 1 or -1)
+		ride.orbitFlipAt = now + 12 + math.random() * 8
+	end
+	local turn = ride.orbit * math.rad(35)
+	local c, s = math.cos(turn), math.sin(turn)
+	local around = Vector3.new(away.X * c - away.Z * s, 0, away.Z * c + away.X * s)
+	return target + around * want, { arrive = 8, maxSpeed = 40, loiter = true }
+end
+
+-- At the wheel. Returns nothing; gets out itself when the drive is over.
+function Vehicles.driverThink(bot, root, head, ride, now)
+	local VehicleService = lazy("VehicleService")
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local model = ride.model
+	local drive = ride.drive
+	local maxHealth = model:GetAttribute("VehicleMaxHealth") or 1
+	local health = (model:GetAttribute("VehicleHealth") or maxHealth) / math.max(1, maxHealth)
+	if model:GetAttribute("Wrecked") or health < VEHICLE.BAIL_HEALTH then
+		Vehicles.leaveRide(bot, "wrecked")
+		return
+	end
+	if ride.yieldTo then
+		return
+	end
+	Vehicles.riderFilter(ride)
+	Vehicles.refreshFoes(bot, now)
+	drive.guard = Vehicles.guardsNear(bot, drive.chassis.Position)
+	-- The vehicles about, so BotNav only pulls out to overtake into a clear lane (read from
+	-- VehicleService's list, not a spatial query).
+	local traffic = {}
+	if VehicleService and VehicleService.VehiclesNear then
+		for _, near in ipairs(VehicleService.VehiclesNear(drive.chassis.Position, 160)) do
+			local chassis = near.entry.rig and near.entry.rig.chassis
+			if chassis and chassis ~= drive.chassis then
+				table.insert(traffic, chassis)
+			end
 		end
-		seat.ThrottleFloat = throttle
-		seat.SteerFloat = steer
-		return true
+	end
+	drive.traffic = traffic
+
+	local seats = VehicleService and VehicleService.SeatsOf(model)
+	local gunnerSeat = seats and seats.gunner or (VehicleWeapons and VehicleWeapons.GunnerSeatOf(model))
+	local candidate = findTarget(bot, root, head, now)
+	if candidate then
+		Vehicles.noteFight(bot, ride, candidate, now)
+	else
+		ride.fight = nil
+	end
+	ride.trigger = false
+
+	-- An armed vehicle is not driven anywhere with nobody on its gun: held where it is, the gun worked
+	-- from the wheel only once something shoots at it, given up after BotGunnerWait.
+	if gunnerSeat and not gunnerSeat.Occupant then
+		if not ride.waitSince then
+			ride.waitSince = now
+			STATS.vehicleWaits += 1
+		end
+		drive.hold = true
+		local attacked = bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW
+		ride.trigger = attacked and candidate ~= nil
+		if now - ride.waitSince > (MatchConfig.BotGunnerWait or 25) and not attacked then
+			Vehicles.leaveRide(bot, "no gunner")
+		end
+		return
+	end
+	ride.waitSince = nil
+	drive.hold = false
+	-- A team driver off on a trip waits a moment for a teammate walking over to ride along.
+	if ride.offerUntil and now < ride.offerUntil and ride.riderComing then
+		drive.hold = true
+		return
 	end
 
-	botDrivers[bot] = nil
+	local goal, options
+	if candidate and gunnerSeat then
+		goal, options = Vehicles.combatGoal(ride, candidate, health, now)
+	elseif candidate and not gunnerSeat and candidate.distance < 45
+		and drive.chassis.AssemblyLinearVelocity.Magnitude < 8 then
+		-- No gun, someone close, and not going anywhere: better on foot.
+		Vehicles.leaveRide(bot, "fight", 6)
+		return
+	else
+		local arrive
+		goal, arrive = Vehicles.travelGoal(bot, root, now)
+		if not goal then
+			Vehicles.leaveRide(bot, "nowhere", 8)
+			return
+		end
+		options = { arrive = arrive }
+	end
+	goal = flat(goal)
+	local moved = ride.goal and flatDistance(ride.goal, goal) or math.huge
+	if ride.replan or moved > (options.loiter and 12 or 40) or ride.goalLoiter ~= (options.loiter == true) then
+		options.roads = Vehicles.roads
+		options.bounds = Vehicles.driveBounds()
+		options.preferRoads = ride.preferRoads
+		options.via = ride.lane and { ride.lane } or nil
+		BotNav.DriveTo(drive, goal, options)
+		ride.goal = goal
+		ride.goalLoiter = options.loiter == true
+		ride.replan = false
+		ride.lane = nil
+	end
+
+	local status = BotNav.DriveSense(drive, now)
+	bot.branch = "drive"
+	if status == "arrived" then
+		Vehicles.leaveRide(bot, "arrived", 8)
+	elseif status == "hazard" then
+		-- Water or a drop in the way of the straight line: the roads, once; then on foot.
+		if Vehicles.roads and not ride.preferRoads then
+			ride.preferRoads = true
+			ride.replan = true
+		else
+			Vehicles.leaveRide(bot, "hazard")
+		end
+	elseif status == "stuck" or status == "lost" or status == "flipped" then
+		Vehicles.leaveRide(bot, status)
+	end
+end
+
+-- On the gun: find a target and hold the trigger (the servo fires). Nothing to shoot for a while
+-- with nobody at the wheel, get down.
+function Vehicles.gunnerThink(bot, root, head, ride, now)
+	local model = ride.model
+	local maxHealth = model:GetAttribute("VehicleMaxHealth") or 1
+	local health = (model:GetAttribute("VehicleHealth") or maxHealth) / math.max(1, maxHealth)
+	if model:GetAttribute("Wrecked") or health < VEHICLE.BAIL_HEALTH then
+		Vehicles.leaveRide(bot, "wrecked")
+		return
+	end
+	Vehicles.refreshFoes(bot, now)
+	local candidate = findTarget(bot, root, head, now)
+	if candidate then
+		Vehicles.noteFight(bot, ride, candidate, now)
+		ride.trigger = true
+		local VehicleWeapons = lazy("VehicleWeapons")
+		if VehicleWeapons and VehicleWeapons.Aim then
+			VehicleWeapons.Aim(bot, candidate.root.Position)
+		end
+	else
+		ride.fight = nil
+		ride.trigger = false
+		local driverSeat = model:FindFirstChild("DriverSeat")
+		if not (driverSeat and driverSeat.Occupant) and now - (ride.lastTargetAt or now) > VEHICLE.IDLE then
+			Vehicles.leaveRide(bot, "idle", 8)
+		end
+	end
+	bot.branch = "gunner"
+end
+
+-- A passenger (team modes): its own gun out of the window, as a player passenger may. No launchers
+-- (a round's flight only leaves out the bot, not the car it is sitting in). Out when the driver is.
+function Vehicles.passengerThink(bot, root, head, ride, now)
+	local model = ride.model
+	local driverSeat = model:FindFirstChild("DriverSeat")
+	if model:GetAttribute("Wrecked") or not (driverSeat and driverSeat.Occupant) then
+		Vehicles.leaveRide(bot, "driver gone", 6)
+		return
+	end
+	finishReload(bot, now)
+	local candidate = bot.weapon and not bot.weapon.projectile and findTarget(bot, root, head, now) or nil
+	if candidate and candidate.distance <= bot.weapon.range then
+		if bot.target ~= candidate.token then
+			bot.acquiredAt = now
+		end
+		bot.target = candidate.token
+		bot.lastCombatAt = now
+		shootAt(bot, candidate.token, candidate.root, candidate.distance, head)
+	else
+		bot.target = nil
+	end
+	bot.branch = "passenger"
+end
+
+-- Sat down: the ride starts. A driver gets a BotNav drive; a base vehicle still in its bay is driven
+-- out along the bay's nose first (TeamBaseRuins' yard: every bay faces its way out through a gate).
+function Vehicles.startRide(bot, role, seat, purpose, now)
+	local model = seat.Parent
+	local ride = { role = role, model = model, seat = seat, purpose = purpose, boardedAt = now, lastTargetAt = now,
+		burstLeft = 0, nextShotAt = 0 }
+	if role == "driver" then
+		local VehicleService = lazy("VehicleService")
+		local entry = VehicleService and VehicleService.Get(model)
+		local rig = entry and entry.rig
+		if not rig or not rig.handling or not rig.wheels or #rig.wheels == 0 then
+			return nil
+		end
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = { model }
+		params.IgnoreWater = true
+		local probe = RaycastParams.new()
+		probe.FilterType = Enum.RaycastFilterType.Exclude
+		probe.FilterDescendantsInstances = { model }
+		probe.IgnoreWater = false
+		local chassis = rig.chassis
+		-- Ride height, once at boarding; refused by the budget, the usual 2.5 stands.
+		local below = castRay(chassis.Position, Vector3.new(0, -20, 0), params, "navigation")
+		ride.drive = BotNav.NewDrive(chassis, rig.handling, {
+			wheelbase = rig.wheelbase, params = params, probeParams = probe,
+			rideHeight = below and chassis.Position.Y - below.Position.Y or 2.5,
+		})
+		local teams = lazy("ModeTeams")
+		local folder = teams and teams.BaseVehicleFolder and teams.BaseVehicleFolder()
+		if folder and model:IsDescendantOf(folder) and chassis.AssemblyLinearVelocity.Magnitude < 1 then
+			local look = flat(chassis.CFrame.LookVector)
+			if look.Magnitude > 0.1 then
+				ride.lane = flat(chassis.Position) + look.Unit * VEHICLE.BASE_LANE
+			end
+		end
+		if purpose == "trip" and Vehicles.teamsActive() then
+			ride.offerUntil = now + VEHICLE.OFFER
+		end
+	end
+	riders[bot] = ride
+	bot.ride = ride
+	bot.boarding = nil
+	STATS.vehicleBoards += 1
+	Vehicles.ensureServo()
+	return ride
+end
+
+-- The seat this bot on foot should go for now, if any, with its role and reason.
+-- How keen this bot is on vehicles, scaling its chance of jumping on a gun (1 = the numbers above):
+-- BotService.Loot.vehiclePreference(bot), the archetype's vehiclePreference dial (BOT LOOTING &
+-- ROTATION), 0.4 for a Marksman up to 1.4 for a Rusher; 1 for a bot with no dials.
+function Vehicles.preference(bot)
+	local loot = BotService.Loot
+	if type(loot) == "table" and type(loot.vehiclePreference) == "function" then
+		local ok, value = pcall(loot.vehiclePreference, bot)
+		if ok and type(value) == "number" then
+			return math.max(0, value)
+		end
+	end
+	return 1
+end
+
+function Vehicles.pickSeat(bot, root, now)
+	local VehicleService = lazy("VehicleService")
+	if not VehicleService or not VehicleService.VehiclesNear then
+		return nil
+	end
+	local team = Vehicles.teamOf(bot)
+	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	local reach = math.max(MatchConfig.BotBoardReach or 60, VEHICLE.FIGHT_SEEK, VEHICLE.RIDE_REACH)
+	local near = VehicleService.VehiclesNear(root.Position, reach)
+	if #near == 0 then
+		return nil
+	end
+
+	-- Someone waiting at the wheel for a gunner, or a teammate setting off with a seat free.
+	for _, found in ipairs(near) do
+		if found.distance <= VEHICLE.RIDE_REACH then
+			local seats = VehicleService.SeatsOf(found.model)
+			local driver = seats and seats.driver.Occupant
+			local holder = driver and driver.Parent and Combatants.FromCharacter(driver.Parent)
+			local friendly = holder ~= nil and ((team ~= nil and Vehicles.teamOf(holder) == team)
+				or (team == nil and Combatants.IsBot(holder) and riders[holder] ~= nil))
+			if friendly then
+				local ride = riders[holder]
+				if seats.gunner and not seats.gunner.Occupant then
+					return seats.gunner, "gunner", "gunner"
+				end
+				if team ~= nil and ride and ride.offerUntil and now < ride.offerUntil and not fighting then
+					for _, passenger in ipairs(seats.passengers) do
+						if not passenger.Occupant then
+							ride.riderComing = true
+							return passenger, "passenger", "ride"
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if fighting then
+		if math.random() > VEHICLE.FIGHT_CHANCE * Vehicles.preference(bot) then
+			return nil
+		end
+		for _, found in ipairs(near) do
+			local seats = VehicleService.SeatsOf(found.model)
+			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner then
+				if not seats.gunner.Occupant then
+					return seats.gunner, "gunner", "fight"
+				end
+				if not seats.driver.Occupant and Vehicles.driverRoom(bot) then
+					return seats.driver, "driver", "fight"
+				end
+			end
+		end
+		return nil
+	end
+
+	if bot.gearUntil and now < bot.gearUntil then
+		return nil
+	end
+	-- Roaming past a free gun: now and then a bot mans it, and watches from it (VEHICLE.IDLE) for
+	-- someone to shoot or someone to drive it.
+	if math.random() < VEHICLE.ROAM_GUN_CHANCE * Vehicles.preference(bot) then
+		for _, found in ipairs(near) do
+			local seats = VehicleService.SeatsOf(found.model)
+			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner and not seats.gunner.Occupant then
+				return seats.gunner, "gunner", "fight"
+			end
+		end
+	end
+
+	-- A trip: somewhere far, a free wheel close by and not back the way it came. One with an unmanned
+	-- gun last, since that gun needs a gunner before it goes anywhere.
+	local goal = Vehicles.travelGoal(bot, root, now)
+	if not goal or flatDistance(goal, root.Position) < (MatchConfig.BotDriveMinTrip or 220) or not Vehicles.driverRoom(bot) then
+		return nil
+	end
+	local best, bestScore = nil, math.huge
+	for _, found in ipairs(near) do
+		local seats = VehicleService.SeatsOf(found.model)
+		if seats and not seats.driver.Occupant and found.distance <= (MatchConfig.BotBoardReach or 60) then
+			local position = found.model:GetPivot().Position
+			if flatDistance(position, goal) < flatDistance(root.Position, goal) + 20 then
+				local score = found.distance + ((seats.gunner and not seats.gunner.Occupant) and 50 or 0)
+				if score < bestScore then
+					best, bestScore = seats.driver, score
+				end
+			end
+		end
+	end
+	if best then
+		return best, "driver", "trip"
+	end
+	return nil
+end
+
+-- On foot: walking to a seat already, or looking for one. True while this think went on that.
+function Vehicles.considerVehicle(bot, humanoid, root, now)
 	local boarding = bot.boarding
 	if boarding then
-		if now > boarding.giveUpAt or boarding.seat.Occupant or not boarding.seat:IsDescendantOf(workspace) then
+		local seat = boarding.seat
+		if now > boarding.giveUpAt or seat.Occupant or not seat:IsDescendantOf(workspace)
+			or (boarding.role == "driver" and not Vehicles.driverRoom(bot)) then
 			bot.boarding = nil
+			bot.noVehicleUntil = now + VEHICLE.CHECK_EVERY * 2
 			return false
 		end
-		if VehicleWeapons.BotBoard(humanoid, boarding.seat) then
-			bot.boarding = nil
-			bot.driveSeenAt = now
-			botDrivers[bot] = true
-			return true
+		local VehicleService = lazy("VehicleService")
+		if VehicleService and VehicleService.BotSit(humanoid, seat) then
+			if Vehicles.startRide(bot, boarding.role, seat, boarding.purpose, now) then
+				return true
+			end
+			Vehicles.leaveRide(bot, "unrideable")
+			return false
 		end
-		humanoid:MoveTo(boarding.seat.Position)
+		if navigate(bot, humanoid, root, seat.Position, BotNav.Priority.Loot, now) == "abandon" then
+			bot.boarding = nil
+		end
 		return true
 	end
-
-	-- Now and then, likelier in a fight, and only while there's room behind a wheel.
-	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
-	if now < (bot.boardCheckAt or 0) then
+	if bot.dropping or now < (bot.noVehicleUntil or 0) or now < (bot.vehicleCheckAt or 0) then
 		return false
 	end
-	bot.boardCheckAt = now + BOT_BOARD_EVERY
-	if math.random() > (fighting and BOT_BOARD_CHANCE or BOT_BOARD_ROAM_CHANCE) or botDriverCount() >= BOT_DRIVERS_MAX then
+	bot.vehicleCheckAt = now + VEHICLE.CHECK_EVERY
+	local seat, role, purpose = Vehicles.pickSeat(bot, root, now)
+	if not seat then
 		return false
 	end
-	local _, freeSeat = VehicleWeapons.FreeArmedNear(root.Position, BOT_BOARD_SEEK)
-	if not freeSeat then
-		return false
-	end
-	bot.boarding = { seat = freeSeat, giveUpAt = now + BOT_BOARD_WALK }
-	humanoid:MoveTo(freeSeat.Position)
+	bot.boarding = { seat = seat, role = role, purpose = purpose, giveUpAt = now + VEHICLE.WALK }
+	navigate(bot, humanoid, root, seat.Position, BotNav.Priority.Loot, now)
 	return true
+end
+
+-- Returns true when this think was spent in a vehicle, or on the way to one.
+function Vehicles.botVehicleThink(bot, humanoid, root, head, now)
+	local ride = bot.ride
+	if ride then
+		if humanoid.SeatPart ~= ride.seat or not ride.model.Parent then
+			-- Out some other way (thrown clear of a wreck, a blast, jumped): back on foot.
+			Vehicles.leaveRide(bot, "unseated", 6)
+			return false
+		end
+		stopFacing(bot, humanoid)
+		if ride.role == "driver" then
+			Vehicles.driverThink(bot, root, head, ride, now)
+		elseif ride.role == "gunner" then
+			Vehicles.gunnerThink(bot, root, head, ride, now)
+		else
+			Vehicles.passengerThink(bot, root, head, ride, now)
+		end
+		return true
+	end
+	if humanoid.SeatPart then
+		-- Sat in something this section didn't put it in: stand up.
+		humanoid.Sit = false
+		return false
+	end
+	return Vehicles.considerVehicle(bot, humanoid, root, now)
+end
+
+--------------------------------------------------------------------------------
+-- BOT ARCHETYPES, the dealing half (the dials are at the top of the file)
+--------------------------------------------------------------------------------
+
+-- GameMode requires this module while loading (its replacement bots), so it is reached lazily.
+function ARCH.modeIdNow()
+	local gameMode = lazy("GameMode")
+	local ok, current = pcall(function()
+		return gameMode and gameMode.Current and gameMode.Current() or nil
+	end)
+	return ok and current and current.id or "BattleRoyale"
+end
+
+-- A shuffled deck holding the mix exactly for `count` bots, dealt in pairs so a team mode's alternate
+-- dealing (ModeTeams.Assign puts each new bot on the smaller side) gives both teams the same roles.
+function ARCH.deck(count, mix)
+	local deck = {}
+	local total = 0
+	for _, name in ipairs(ARCH.Order) do
+		total += mix[name] or 0
+	end
+	local carry = 0
+	for _, name in ipairs(ARCH.Order) do
+		local share = (mix[name] or 0) / math.max(1, total) * count + carry
+		local n = math.floor(share + 0.5)
+		carry = share - n
+		for _ = 1, n do
+			table.insert(deck, name)
+		end
+	end
+	while #deck < count do
+		table.insert(deck, ARCH.Order[math.random(1, #ARCH.Order)])
+	end
+	-- Shuffle in pairs: positions 1-2 alike, 3-4 alike... so alternate teams get a matching role.
+	local pairsList = {}
+	table.sort(deck)
+	for index = 1, #deck, 2 do
+		table.insert(pairsList, { deck[index], deck[index + 1] or deck[index] })
+	end
+	for index = #pairsList, 2, -1 do
+		local j = math.random(1, index)
+		pairsList[index], pairsList[j] = pairsList[j], pairsList[index]
+	end
+	local dealt = {}
+	for _, pair in ipairs(pairsList) do
+		table.insert(dealt, pair[1])
+		table.insert(dealt, pair[2])
+	end
+	return dealt
+end
+
+-- Team modes: once a bot knows its team, the team's roles are counted and this bot swaps to whatever
+-- the mix says the team is shortest of, if it is itself one the team has too many of. Once per body:
+-- a replacement bot (spawned singly, so no deck) lands in the gap the death left.
+function ARCH.balance(bot, team, mix, teamOf)
+	local counts, total = {}, 0
+	for _, other in ipairs(bots) do
+		if other ~= bot and other.humanoid and other.humanoid.Health > 0 and teamOf(other) == team then
+			local name = (other.archetype or ARCH.Types.Rusher).name
+			counts[name] = (counts[name] or 0) + 1
+			total += 1
+		end
+	end
+	local mine = (bot.archetype or ARCH.Types.Rusher).name
+	local size = total + 1
+	-- A side of three is too small to have a "shortest role": the deck's deal stands.
+	if size < 4 then
+		return
+	end
+	local shortest, shortfall = nil, 0
+	for _, name in ipairs(ARCH.Order) do
+		local want = (mix[name] or 0) / 100 * size
+		local gap = want - (counts[name] or 0)
+		if gap > shortfall then
+			shortest, shortfall = name, gap
+		end
+	end
+	-- Only swap when this role is already covered: the deck put the right number on the team.
+	local wantMine = (mix[mine] or 0) / 100 * size
+	if shortest and shortest ~= mine and (counts[mine] or 0) + 1 > wantMine + 0.5 then
+		BotService.AssignArchetype(bot, shortest)
+	end
+end
+
+--------------------------------------------------------------------------------
+-- BOT LOOTING & ROTATION (Oliver, 2026-09-24: "different kinds that have different strategies in
+-- fighting and looting etc.")
+--------------------------------------------------------------------------------
+-- Everything here hangs off BotService.Loot (declared under STATS; a field because the main chunk has
+-- no local left to spare): where a bot
+-- lands, what it loots and in what order, what it keeps, when it patches up and how it rotates. The
+-- fighting side (target choice, shooting, cover) is untouched; this only calls into it through the
+-- functions that already exist (giveBotGun, findLoot, tryHeal...).
+--
+-- Which kind a bot is comes from BotService.ArchetypeOf(bot) when the archetype foundation provides
+-- it (a name, or a table with .name/.id and possibly the loot dials below), otherwise from its slot,
+-- so six kinds are always in a lobby. The dials are what the archetype means for looting:
+--   lootGreed              0..1  how long after landing it keeps looting before it goes looking for a fight
+--   preferredWeaponClasses list  weapon classes it prefers, best first (BotService.Loot.CLASS_OF_STYLE)
+--   upgradeThreshold       gain in BotService.Loot.gunValue (rarity + class fit) needed to swap the gun it holds
+--   healStockTarget        heals it tries to carry; also how early it heals (BotService.Loot.healBelow)
+--   shieldStockTarget      shields it tries to carry; also how low it lets its shield run (BotService.Loot.shieldLow)
+--   throwableWanted        picks up frags and smoke
+--   dropHotLanding         0..1  chance to drop on a busy town rather than a quiet edge
+--   rotateEarly            0..1  1 moves the moment a circle is called and sits deep in it; 0 waits and
+--                                holds the edge
+--   vehiclePreference      0..1  read by the BOT VEHICLES section when it wants it (BotService.Loot.vehiclePreference)
+--   chestPriority          0..1  how far it detours for an unopened chest over a floor gun
+--   supplyDropChase        0..1  share of SUPPLY_SEEK_RANGE it will walk for a crate; 0 never
+--
+-- Costs are bounded like the rest of the file: every pick reads the once-a-second loot snapshot
+-- through BotService.SpatialQuery.Loot (the grid cells covering its radius, a shared scratch list that
+-- is read there and then, never kept across another Loot call), the per-tick combatant list, and a
+-- per-match road snapshot of at most BotService.Loot.ROAD_MAX segments; nothing here casts a ray (castRay and its
+-- budget are the fight's and the nav's) or walks workspace inside a think (tools/perf_bot_cost.py passes).
+
+BotService.Loot.NAMES = { "Rusher", "Marksman", "Flanker", "Anchor", "Opportunist", "Survivor" }
+
+BotService.Loot.DIALS = {
+	Rusher = {
+		lootGreed = 0.25, preferredWeaponClasses = { "close", "mid" }, upgradeThreshold = 1,
+		healStockTarget = 2, shieldStockTarget = 1, throwableWanted = true, dropHotLanding = 1,
+		rotateEarly = 0.2, vehiclePreference = 0.7, chestPriority = 0.4, supplyDropChase = 0.6,
+	},
+	Marksman = {
+		lootGreed = 0.7, preferredWeaponClasses = { "long", "mid" }, upgradeThreshold = 1,
+		healStockTarget = 3, shieldStockTarget = 2, throwableWanted = false, dropHotLanding = 0.3,
+		rotateEarly = 0.8, vehiclePreference = 0.2, chestPriority = 0.8, supplyDropChase = 0.5,
+	},
+	Flanker = {
+		lootGreed = 0.5, preferredWeaponClasses = { "mid", "close" }, upgradeThreshold = 1,
+		healStockTarget = 3, shieldStockTarget = 2, throwableWanted = true, dropHotLanding = 0.6,
+		rotateEarly = 0.45, vehiclePreference = 0.5, chestPriority = 0.6, supplyDropChase = 0.7,
+	},
+	Anchor = {
+		lootGreed = 0.8, preferredWeaponClasses = { "mid", "long" }, upgradeThreshold = 1,
+		healStockTarget = 4, shieldStockTarget = 3, throwableWanted = true, dropHotLanding = 0.4,
+		rotateEarly = 0.9, vehiclePreference = 0.3, chestPriority = 0.7, supplyDropChase = 0.2,
+	},
+	Opportunist = {
+		lootGreed = 0.6, preferredWeaponClasses = { "mid", "close" }, upgradeThreshold = 0.5,
+		healStockTarget = 3, shieldStockTarget = 2, throwableWanted = true, dropHotLanding = 0.5,
+		rotateEarly = 0.4, vehiclePreference = 0.6, chestPriority = 0.9, supplyDropChase = 1,
+	},
+	Survivor = {
+		lootGreed = 0.9, preferredWeaponClasses = { "long", "mid" }, upgradeThreshold = 1,
+		healStockTarget = 5, shieldStockTarget = 3, throwableWanted = false, dropHotLanding = 0,
+		rotateEarly = 1, vehiclePreference = 0.5, chestPriority = 0.6, supplyDropChase = 0.1,
+	},
+}
+
+-- A gun's class from its WeaponData style: what range it is for. `heavy` is the launchers and the
+-- cannon, a class of their own that nobody prefers but anyone will carry as a second gun.
+BotService.Loot.CLASS_OF_STYLE = {
+	pistol = "mid", revolver = "mid", rifle = "mid", lmg = "mid", minigun = "mid",
+	smg = "close", shotgun = "close", doublebarrel = "close", blaster = "close",
+	dmr = "long", sniper = "long", crossbow = "long", railgun = "long",
+	launcher = "heavy", cannon = "heavy",
+}
+
+-- Looting phase after landing: 45 s for the greediest-for-a-fight, 130 s for the most patient.
+BotService.Loot.LOOT_PHASE_MIN, BotService.Loot.LOOT_PHASE_SPAN = 45, 85
+BotService.Loot.UPGRADE_RANGE = 90       -- an armed bot detours this far for a better gun while in its looting phase
+BotService.Loot.STOCK_RANGE = 90         -- and this far for heals, shields and throwables it is short of
+BotService.Loot.CONTEST_RADIUS = 30      -- enemies this close to a chest make it contested
+BotService.Loot.SWAP_COOLDOWN = 3        -- seconds between gun swaps, so a bot at a range boundary doesn't juggle
+BotService.Loot.CLOSE_RANGE, BotService.Loot.LONG_RANGE = 28, 120
+BotService.Loot.ROAD_MAX = 240           -- road segments kept per match for BotService.Loot.leg; sampled evenly beyond that
+BotService.Loot.ROAD_SNAP = 60           -- a leg moves to a road this close to it when someone is about
+BotService.Loot.RESTOCK_LULL = 8         -- team modes: seconds out of a fight before a trip home for heals
+BotService.Loot.CONSUMABLE_KINDS = { "heal", "item" } -- snapshot kinds BotService.Loot.bestConsumable reads
+
+-- Per-match state, cleared with the bots.
+BotService.Loot.dropClaims = {}   -- drop spot -> bots that chose it this match
+BotService.Loot.dropHeat = {}     -- drop spot -> chests within reach of it, counted once
+BotService.Loot.roads = nil       -- { positions }, built on first use from workspace.Map.Roads
+BotService.Loot.roadsAt = -math.huge
+
+function BotService.Loot.clear()
+	table.clear(BotService.Loot.dropClaims)
+	table.clear(BotService.Loot.dropHeat)
+	BotService.Loot.roads = nil
+	BotService.Loot.roadsAt = -math.huge
+end
+
+--------------------------------------------------------------------------------
+-- Archetype and dials
+--------------------------------------------------------------------------------
+
+-- The bot's archetype NAME, kept as bot.lootKind (bot.archetype is the BOT ARCHETYPES table and is
+-- never written here). BotService.ArchetypeOf is asked every few seconds (ARCH.balance may reassign);
+-- between asks the last answer stands, so a dial read costs a table lookup. A bot dealt nothing
+-- (a probe's bare record) takes a kind from its slot, so six kinds are always in a lobby.
+function BotService.Loot.archetypeOf(bot, now)
+	now = now or os.clock()
+	if bot.lootKind and now - (bot.lootKindAt or -math.huge) < 5 then
+		return bot.lootKind
+	end
+	bot.lootKindAt = now
+	local hook = BotService.ArchetypeOf
+	if type(hook) == "function" then
+		local ok, result = pcall(hook, bot)
+		if ok then
+			local name = type(result) == "table" and (result.name or result.id) or result
+			if type(name) == "string" and BotService.Loot.DIALS[name] then
+				bot.lootKind = name
+				-- An archetype table that carries loot dials of its own overrides BotService.Loot.DIALS.
+				bot.lootKindDials = type(result) == "table" and result or nil
+				return name
+			end
+		end
+	end
+	if not bot.lootKind then
+		bot.lootKind = BotService.Loot.NAMES[(bot.slot or 0) % #BotService.Loot.NAMES + 1]
+	end
+	return bot.lootKind
+end
+
+function BotService.Loot.dial(bot, key)
+	local name = BotService.Loot.archetypeOf(bot)
+	local own = bot.lootKindDials
+	local value = own and own[key]
+	if value == nil then
+		value = BotService.Loot.DIALS[name][key]
+	end
+	if value == nil then
+		value = BotService.Loot.DIALS.Flanker[key]
+	end
+	return value
+end
+
+-- Read by the BOT VEHICLES section (Vehicles.preference) as a multiplier on its boarding chances:
+-- the dial (0.2 Marksman .. 0.7 Rusher) over 0.5, so a middling kind keeps the section's own numbers,
+-- a Rusher jumps on a gun 1.4x as readily and a Marksman 0.4x.
+function BotService.Loot.vehiclePreference(bot)
+	return BotService.Loot.dial(bot, "vehiclePreference") / 0.5
+end
+
+--------------------------------------------------------------------------------
+-- Heal and shield timing
+--------------------------------------------------------------------------------
+
+-- Health fraction under which the bot patches up in a lull: a Survivor (stock target 5) at 70%, a
+-- Rusher (2) at 55%, MatchConfig.BotHealBelow (0.6) at the middle of the range.
+function BotService.Loot.healBelow(bot)
+	local target = BotService.Loot.dial(bot, "healStockTarget")
+	return math.clamp(MatchConfig.BotHealBelow + (target - 3) * 0.05, 0.4, 0.8)
+end
+
+-- Shield under which a potion goes in: BOT_SHIELD_LOW (50) for a middling stock target, 35 for a
+-- Rusher who would rather keep moving, 65 for an Anchor or Survivor.
+function BotService.Loot.shieldLow(bot)
+	local target = BotService.Loot.dial(bot, "shieldStockTarget")
+	return math.clamp(BOT_SHIELD_LOW + (target - 2) * 15, 20, 80)
+end
+
+--------------------------------------------------------------------------------
+-- Inventory: two guns of different classes, heals, shields, throwables; junk back on the floor
+--------------------------------------------------------------------------------
+
+function BotService.Loot.classOf(def)
+	return def and (BotService.Loot.CLASS_OF_STYLE[def.style] or "mid") or nil
+end
+
+-- Guns a bot can shoot at all (the same rule holdLoot used to apply inline).
+function BotService.Loot.usable(def)
+	return def ~= nil and not def.staged and not BOT_WEAPON_HOLD[def.id]
+		and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile] == true)
+end
+
+-- What a gun is worth to this bot: its rarity tier, plus a class fit (0.6 for the preferred class,
+-- 0.3 for the second). A Rare shotgun (3.6) beats a Rare sniper (3) for a Rusher; an Epic sniper (4)
+-- still beats both, because rarity is real stats and class fit is taste.
+function BotService.Loot.gunValue(bot, def)
+	local value = Rarity.Index[def.rarity] or 0
+	local class = BotService.Loot.classOf(def)
+	local prefer = BotService.Loot.dial(bot, "preferredWeaponClasses")
+	for rank, wanted in ipairs(prefer) do
+		if wanted == class then
+			value += rank == 1 and 0.6 or 0.3
+			break
+		end
+	end
+	return value
+end
+
+-- Hand the bot a gun as its held one. Magazine state follows the gun.
+function BotService.Loot.equip(bot, def, mag)
+	bot.weapon = def
+	bot.magWeapon = def.id
+	bot.mag = mag or magazineOf(def)
+	bot.reloadUntil = nil
+	if bot.character then
+		bot.character:SetAttribute("Reloading", nil)
+		giveBotGun(bot.character, def)
+		claimPhysics(bot.character)
+	end
+end
+
+function BotService.Loot.dropJunk(def, position)
+	if def and position then
+		STATS.lootJunkDropped += 1
+		LootService.DropWeapon(def.id, position)
+	end
+end
+
+-- A gun just claimed. Empty hands take anything usable. Otherwise a gain of `upgradeThreshold` in
+-- gunValue over the held gun swaps it in; the old one is kept as the backup when its class differs
+-- from the new one, and a gun of another class than the held one becomes (or replaces) the backup.
+-- Whatever isn't kept goes back on the floor where the bot stands, so the pickup isn't simply
+-- destroyed: a player following the bot finds what it left. Returns "primary", "backup" or "dropped".
+function BotService.Loot.takeGun(bot, def, position)
+	if not BotService.Loot.usable(def) then
+		BotService.Loot.dropJunk(def, position)
+		return "dropped"
+	end
+	if not bot.weapon then
+		BotService.Loot.equip(bot, def)
+		return "primary"
+	end
+	local threshold = BotService.Loot.dial(bot, "upgradeThreshold")
+	local held = bot.weapon
+	local gain = BotService.Loot.gunValue(bot, def) - BotService.Loot.gunValue(bot, held)
+	local class = BotService.Loot.classOf(def)
+	if gain >= threshold and (Rarity.Index[def.rarity] or 0) >= (Rarity.Index[held.rarity] or 0) then
+		STATS.lootUpgrades += 1
+		local heldMag = bot.mag
+		BotService.Loot.equip(bot, def)
+		if BotService.Loot.classOf(held) ~= class then
+			-- The old held gun becomes the backup; the previous backup, of the new gun's class or not,
+			-- is the one that goes.
+			BotService.Loot.dropJunk(bot.backup, position)
+			bot.backup, bot.backupMag = held, heldMag
+		elseif bot.backup and BotService.Loot.classOf(bot.backup) == class then
+			BotService.Loot.dropJunk(bot.backup, position)
+			bot.backup, bot.backupMag = nil, nil
+			BotService.Loot.dropJunk(held, position)
+		else
+			BotService.Loot.dropJunk(held, position)
+		end
+		return "primary"
+	end
+	if class ~= BotService.Loot.classOf(held) then
+		if not bot.backup then
+			STATS.lootBackups += 1
+			bot.backup, bot.backupMag = def, magazineOf(def)
+			return "backup"
+		end
+		if BotService.Loot.gunValue(bot, def) - BotService.Loot.gunValue(bot, bot.backup) >= threshold then
+			STATS.lootBackups += 1
+			BotService.Loot.dropJunk(bot.backup, position)
+			bot.backup, bot.backupMag = def, magazineOf(def)
+			return "backup"
+		end
+	end
+	BotService.Loot.dropJunk(def, position)
+	return "dropped"
+end
+
+-- Bring the backup out when it suits the range and the held gun doesn't: the held gun can't reach
+-- and the backup can; a long gun in hand with someone inside BotService.Loot.CLOSE_RANGE and a shorter gun on the
+-- back; a short gun in hand at BotService.Loot.LONG_RANGE or more with a long one that reaches. At most one swap per
+-- BotService.Loot.SWAP_COOLDOWN. Returns true when it swapped.
+function BotService.Loot.swapGunFor(bot, distance, now)
+	local held, backup = bot.weapon, bot.backup
+	if not held or not backup or now - (bot.gunSwapAt or 0) < BotService.Loot.SWAP_COOLDOWN then
+		return false
+	end
+	local heldClass, backupClass = BotService.Loot.classOf(held), BotService.Loot.classOf(backup)
+	local want = false
+	if distance > held.range and distance <= backup.range then
+		want = true
+	elseif distance <= BotService.Loot.CLOSE_RANGE and heldClass == "long" and backupClass ~= "long" and distance <= backup.range then
+		want = true
+	elseif distance >= BotService.Loot.LONG_RANGE and backupClass == "long" and heldClass ~= "long" and distance <= backup.range then
+		want = true
+	end
+	if not want then
+		return false
+	end
+	STATS.gunSwaps += 1
+	bot.gunSwapAt = now
+	local heldMag = bot.mag
+	local backupMag = bot.backupMag
+	bot.backup, bot.backupMag = held, heldMag
+	BotService.Loot.equip(bot, backup, backupMag)
+	return true
+end
+
+-- The heals a bot carries, the shields, and the throwables it has stock of.
+function BotService.Loot.healCount(bot)
+	return (bot.heals.Bandage or 0) + (bot.heals.MedKit or 0)
+end
+
+function BotService.Loot.shieldCount(bot)
+	return (bot.shields.MiniShield or 0) + (bot.shields.ShieldPotion or 0)
+end
+
+function BotService.Loot.throwableCount(bot)
+	local total = 0
+	for _, count in pairs(bot.throwables) do
+		total += count
+	end
+	return total
+end
+
+-- Which throwable kind an item id is, or nil.
+function BotService.Loot.throwableKind(itemId)
+	for kind, spec in pairs(THROWABLES) do
+		if spec.itemId == itemId then
+			return kind
+		end
+	end
+	return nil
+end
+
+-- Whether a consumable pickup (a snapshot entry with kind "heal" or "item") is worth a walk: a heal
+-- while under the heal stock target, a shield while under the shield target, a throwable when the
+-- archetype wants them, has none, and ProjectileService exists to throw them.
+function BotService.Loot.wantsConsumable(bot, entry)
+	if entry.kind == "heal" then
+		local itemId = entry.itemId
+		if itemId and WeaponService.Shields[itemId] then
+			return BotService.Loot.shieldCount(bot) < BotService.Loot.dial(bot, "shieldStockTarget")
+		end
+		return BotService.Loot.healCount(bot) < BotService.Loot.dial(bot, "healStockTarget")
+	elseif entry.kind == "item" then
+		local kind = entry.itemId and BotService.Loot.throwableKind(entry.itemId)
+		return kind ~= nil and BotService.Loot.dial(bot, "throwableWanted") == true and BotService.Loot.throwableCount(bot) == 0
+			and projectileApi() ~= nil
+	end
+	return false
+end
+
+-- Take a heal, shield or throwable pickup the bot is standing at. Real heals go through
+-- LootService.ClaimHealForBot as before; shields and throwables are claimed the same way it does it
+-- (Claimed attribute, then destroyed), since LootService has no bot claim for those yet.
+function BotService.Loot.claimConsumable(bot, item)
+	if item:GetAttribute("HealId") then
+		local healId, amount = LootService.ClaimHealForBot(item)
+		if healId then
+			giveBotHeal(bot, healId, amount)
+			return true
+		end
+		return false
+	end
+	if not item.Parent or item:GetAttribute("Claimed") or item:GetAttribute("PlayerHolding") then
+		return false
+	end
+	local itemId = item:GetAttribute("ItemId")
+	local amount = item:GetAttribute("Amount") or 1
+	local kind = itemId and BotService.Loot.throwableKind(itemId)
+	if itemId and WeaponService.Shields[itemId] then
+		giveBotShield(bot, itemId, amount)
+	elseif kind then
+		giveBotThrowable(bot, kind, amount)
+	else
+		return false
+	end
+	STATS.lootStocked += 1
+	item:SetAttribute("Claimed", true)
+	item:Destroy()
+	return true
+end
+
+--------------------------------------------------------------------------------
+-- What to loot next
+--------------------------------------------------------------------------------
+
+-- Still in the looting phase that follows the landing (BotService.Loot.LOOT_PHASE_MIN + lootGreed x SPAN seconds)?
+function BotService.Loot.lootPhase(bot, now)
+	local landed = bot.landedAt
+	return landed ~= nil and now - landed < BotService.Loot.LOOT_PHASE_MIN + BotService.Loot.dial(bot, "lootGreed") * BotService.Loot.LOOT_PHASE_SPAN
+end
+
+-- How often an armed bot looks for loot: every 3 s in its looting phase, the old 5 s afterwards.
+function BotService.Loot.lootInterval(bot, now)
+	return BotService.Loot.lootPhase(bot, now) and 3 or 5
+end
+
+-- A greedy looter (lootGreed >= 0.6) finishes a grab it is within 25 studs of before it hunts a
+-- memory, unless it was hit in the last 3 s.
+function BotService.Loot.finishingGrab(bot, root, now)
+	local item = bot.lootTarget
+	if not item or not item.Parent or BotService.Loot.dial(bot, "lootGreed") < 0.6 then
+		return false
+	end
+	if now - (bot.lastHurtAt or 0) < 3 then
+		return false
+	end
+	return (item.Position - root.Position).Magnitude < 25
+end
+
+-- Living enemies within BotService.Loot.CONTEST_RADIUS of a point, from the per-tick combatant snapshot.
+function BotService.Loot.enemiesNear(bot, point)
+	local count = 0
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
+			and (entry.position - point).Magnitude <= BotService.Loot.CONTEST_RADIUS then
+			count += 1
+		end
+	end
+	return count
+end
+
+-- Whether a pickup is too hot to walk at: enemies already on it, more than the archetype's boldness
+-- (dropHotLanding) will take. A Rusher (1) takes on two; a Survivor (0) skips one.
+function BotService.Loot.contested(bot, position)
+	local enemies = BotService.Loot.enemiesNear(bot, position)
+	if enemies == 0 then
+		return false
+	end
+	local bold = BotService.Loot.dial(bot, "dropHotLanding")
+	if enemies > bold * 2 then
+		STATS.lootContested += 1
+		return true
+	end
+	return false
+end
+
+-- The best gun or chest within `radius`: nearest, with chests pulled closer by chestPriority (a
+-- chest 100 studs off counts as 100 / (0.5 + priority) so an Opportunist walks past a floor gun
+-- for it), skipping contested ones and, unless `any`, guns that wouldn't improve the loadout.
+function BotService.Loot.bestGear(bot, position, radius, any, center, circleRadius, now)
+	local best, bestScore = nil, radius
+	local chestPull = 0.5 + BotService.Loot.dial(bot, "chestPriority")
+	local threshold = BotService.Loot.dial(bot, "upgradeThreshold")
+	local near, nearCount = BotService.SpatialQuery.Loot(position, radius, "gear", now)
+	for index = 1, nearCount do
+		local entry = near[index]
+		local distance = (entry.position - position).Magnitude
+		local item = entry.item
+		local isChest = item.Name == "Chest"
+		local score = isChest and distance / chestPull or distance
+		if score < bestScore and item.Parent and not item:GetAttribute("Claimed") then
+			local wanted = true
+			if not isChest and not any then
+				local id = item:GetAttribute("WeaponId")
+				local def = id and WeaponData.Get(id)
+				wanted = def ~= nil and BotService.Loot.usable(def) and BotService.Loot.wouldKeep(bot, def, threshold)
+			end
+			if wanted and lootAllowed(bot, item, distance, center, circleRadius, now) and not BotService.Loot.contested(bot, entry.position) then
+				best, bestScore = item, score
+			end
+		end
+	end
+	return best
+end
+
+-- Would BotService.Loot.takeGun keep this gun (as the held gun or the backup)?
+function BotService.Loot.wouldKeep(bot, def, threshold)
+	if not bot.weapon then
+		return true
+	end
+	local value = BotService.Loot.gunValue(bot, def)
+	if value - BotService.Loot.gunValue(bot, bot.weapon) >= threshold and (Rarity.Index[def.rarity] or 0) >= (Rarity.Index[bot.weapon.rarity] or 0) then
+		return true
+	end
+	if BotService.Loot.classOf(def) ~= BotService.Loot.classOf(bot.weapon) then
+		return not bot.backup or value - BotService.Loot.gunValue(bot, bot.backup) >= threshold
+	end
+	return false
+end
+
+-- Nearest heal, shield or throwable pickup within `radius` the bot is short of.
+function BotService.Loot.bestConsumable(bot, position, radius, center, circleRadius, now)
+	local best, bestDistance = nil, radius
+	-- Heals and shields are "heal" rows, throwables "item" rows: two cell reads, one after the other
+	-- (the scratch list is reused by the second, so the first is finished before it starts).
+	for _, kind in ipairs(BotService.Loot.CONSUMABLE_KINDS) do
+		local near, nearCount = BotService.SpatialQuery.Loot(position, radius, kind, now)
+		for index = 1, nearCount do
+			local entry = near[index]
+			local distance = (entry.position - position).Magnitude
+			local item = entry.item
+			if distance < bestDistance and item.Parent and not item:GetAttribute("Claimed") and BotService.Loot.wantsConsumable(bot, entry)
+				and lootAllowed(bot, item, distance, center, circleRadius, now) then
+				best, bestDistance = item, distance
+			end
+		end
+	end
+	return best
+end
+
+-- The pickup this bot should go for now, or nil. The order is the old block's, with the archetype
+-- deciding the ranges and what counts as worth it:
+--   1. a landed supply crate, within SUPPLY_SEEK_RANGE x supplyDropChase, unless contested (BR only);
+--   2. under-armed: the best gun or chest in LOOT_SEEK_RANGE (x1.6 while empty-handed);
+--   3. team modes: the home base's stock (FindBaseLoot), and a trip home for heals when short
+--      (BotService.Loot.RESTOCK_LULL out of a fight, within reach);
+--   4. BR, armed: an upgrade within BotService.Loot.UPGRADE_RANGE or a chest, while in the looting phase; afterwards
+--      only a chest within a range set by chestPriority (60..200), the old "armed bot opens chests";
+--   5. heals, shields and throwables up to the stock targets within BotService.Loot.STOCK_RANGE, and a heal within
+--      HEAL_SEEK_RANGE when hurt with none (as before);
+--   6. empty-handed with nothing in range: the nearest gun anywhere (as before);
+--   and, once the storm presses (center set), nothing that lies back toward the storm.
+function BotService.Loot.pickLoot(bot, humanoid, root, underArmed, empty, center, circleRadius, now)
+	local here = root.Position
+	local teamMode = BotService.ModeState(bot) ~= nil
+	local item = nil
+
+	if not teamMode then
+		local chase = BotService.Loot.dial(bot, "supplyDropChase")
+		if chase > 0 then
+			local crate = SupplyDropService.FindNearest(here, SUPPLY_SEEK_RANGE * chase)
+			if crate then
+				if not lootAllowed(bot, crate, (crate.Position - here).Magnitude, center, circleRadius, now) then
+					crate = nil
+				elseif BotService.Loot.contested(bot, crate.Position) then
+					STATS.supplySkipped += 1
+					crate = nil
+				end
+			end
+			item = crate
+		end
+	end
+
+	if not item and underArmed then
+		item = BotService.Loot.bestGear(bot, here, empty and LOOT_SEEK_RANGE * 1.6 or LOOT_SEEK_RANGE, empty, center, circleRadius, now)
+	end
+
+	if not item and teamMode then
+		local modeState = BotService.ModeState(bot)
+		if modeState then
+			item = BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
+			if item and item.Name == "HealPickup" then
+				-- A trip home for heals or shields: only in a lull, and counted.
+				if now - bot.lastCombatAt < BotService.Loot.RESTOCK_LULL then
+					item = nil
+				else
+					STATS.restockTrips += 1
+				end
+			end
+		end
+	end
+
+	if not item and not teamMode and bot.weapon then
+		if BotService.Loot.lootPhase(bot, now) then
+			item = BotService.Loot.bestGear(bot, here, LOOT_SEEK_RANGE, false, center, circleRadius, now)
+		else
+			local chestRange = 60 + 140 * BotService.Loot.dial(bot, "chestPriority")
+			local bestDistance = chestRange
+			local near, nearCount = BotService.SpatialQuery.Loot(here, chestRange, "gear", now)
+			for index = 1, nearCount do
+				local entry = near[index]
+				local chest = entry.item
+				if chest.Name == "Chest" and chest.Parent and not chest:GetAttribute("Claimed") then
+					local distance = (entry.position - here).Magnitude
+					if distance < bestDistance and lootAllowed(bot, chest, distance, center, circleRadius, now)
+						and not BotService.Loot.contested(bot, entry.position) then
+						item, bestDistance = chest, distance
+					end
+				end
+			end
+		end
+	end
+
+	if not item and bot.weapon then
+		item = BotService.Loot.bestConsumable(bot, here, BotService.Loot.STOCK_RANGE, center, circleRadius, now)
+	end
+
+	-- Empty-handed with nothing inside that sweep: walk to the nearest gun ANYWHERE rather than
+	-- wandering. A bot that lands in a corner of a 1280-stud map had nothing within 320 studs and
+	-- milled about picking random wander goals until a fight found it.
+	if not item and empty then
+		item = findLoot(bot, here, math.huge, false, center, circleRadius, now)
+		if item then
+			STATS.lootFarReach += 1
+		end
+	end
+
+	-- Hurt and carrying nothing to fix it: a loose Bandage or Med Kit is worth a detour.
+	if not item and BotService.Loot.healCount(bot) == 0 and humanoid.Health < humanoid.MaxHealth * MatchConfig.BotHealBelow then
+		item = findLoot(bot, here, HEAL_SEEK_RANGE, true, center, circleRadius, now)
+	end
+	-- Pressed by the storm (`center` is set only once pressure has passed this archetype's rotateAt):
+	-- loot only on the way in. A pickup further from the circle's middle than the bot is means
+	-- walking back toward the storm, which is how a bot that was rotating fine ends up dying "while
+	-- looting" (tools/bot_loot_sim.py counted those deaths before this rule).
+	if item and center and flatDistance(item.Position, center) > flatDistance(here, center) - 5 then
+		STATS.lootBehind += 1
+		return nil
+	end
+	return item
+end
+
+--------------------------------------------------------------------------------
+-- Team bases: 14 chests, one squad
+--------------------------------------------------------------------------------
+
+-- An unopened chest at the base for a bot gearing up. Chests nobody living is heading for come
+-- first (nearest of those); only when every chest has a taker does it fall back to the nearest one
+-- another bot is further from than we are (lootAllowed's rule). Twelve bots off one pad used to all
+-- read the same nearest chest.
+function BotService.Loot.baseChest(bot, here, flatBase, baseRadius, center, circleRadius, now)
+	local free, freeDistance = nil, 220
+	local taken, takenDistance = nil, 220
+	local near, nearCount = BotService.SpatialQuery.Loot(here, 220, "gear", now)
+	for index = 1, nearCount do
+		local entry = near[index]
+		local item = entry.item
+		local position = entry.position
+		if item.Name == "Chest" and item.Parent and not item:GetAttribute("Claimed")
+			and (Vector3.new(position.X, 0, position.Z) - flatBase).Magnitude <= baseRadius then
+			local distance = (position - here).Magnitude
+			if (distance < freeDistance or distance < takenDistance) and lootAllowed(bot, item, distance, center, circleRadius, now) then
+				local holder = lootClaims[item]
+				local claimed = holder ~= nil and holder ~= bot and holder.lootTarget == item
+					and holder.humanoid.Health > 0 and holder.character.Parent ~= nil
+				if claimed then
+					if distance < takenDistance then
+						taken, takenDistance = item, distance
+					end
+				elseif distance < freeDistance then
+					free, freeDistance = item, distance
+				end
+			end
+		end
+	end
+	if free then
+		if taken and takenDistance < freeDistance then
+			STATS.baseChestSpread += 1
+		end
+		return free
+	end
+	return taken
+end
+
+--------------------------------------------------------------------------------
+-- The drop: hot town or quiet edge
+--------------------------------------------------------------------------------
+
+-- Unopened chests within 110 studs of a drop spot, counted once per spot per match from the loot
+-- snapshot (LootService.Populate runs before the bots spawn).
+function BotService.Loot.heatOf(spot, now)
+	local heat = BotService.Loot.dropHeat[spot]
+	if heat then
+		return heat
+	end
+	heat = 0
+	local near, nearCount = BotService.SpatialQuery.Loot(Vector3.new(spot.X, spot.Y or 0, spot.Z), 110, "gear", now)
+	for index = 1, nearCount do
+		if near[index].item.Name == "Chest" then
+			heat += 1
+		end
+	end
+	BotService.Loot.dropHeat[spot] = heat
+	return heat
+end
+
+-- Where this bot steers its canopy. Of the five drop spots nearest where it opened (glide reach),
+-- a hot lander takes the one with the most chests, counting bots already headed there against it a
+-- little; a quiet lander takes the one with the fewest chests and the fewest bots. Which it is this
+-- time is a roll against dropHotLanding, so a Flanker (0.6) drops hot three times in five and a
+-- Survivor (0) never. Hot landers come down 14-34 studs off the spot, quiet ones 30-60 out on the edge.
+function BotService.Loot.pickDrop(bot, targets, from)
+	if not targets or #targets == 0 then
+		return nil
+	end
+	local now = os.clock()
+	local ranked = {}
+	for _, spot in ipairs(targets) do
+		local dx, dz = spot.X - from.X, spot.Z - from.Z
+		table.insert(ranked, { spot = spot, distance = math.sqrt(dx * dx + dz * dz) })
+	end
+	table.sort(ranked, function(a, b)
+		return a.distance < b.distance
+	end)
+	local hot = math.random() < BotService.Loot.dial(bot, "dropHotLanding")
+	local pick, pickScore = nil, nil
+	for index = 1, math.min(5, #ranked) do
+		local entry = ranked[index]
+		local heat = BotService.Loot.heatOf(entry.spot, now)
+		local crowd = BotService.Loot.dropClaims[entry.spot] or 0
+		local score
+		if hot then
+			score = heat - crowd * 0.6 - entry.distance / 400
+		else
+			score = -(heat + crowd * 1.5) - entry.distance / 400
+		end
+		if not pick or score > pickScore then
+			pick, pickScore = entry.spot, score
+		end
+	end
+	BotService.Loot.dropClaims[pick] = (BotService.Loot.dropClaims[pick] or 0) + 1
+	if hot then
+		STATS.dropHot += 1
+	else
+		STATS.dropQuiet += 1
+	end
+	bot.dropSpot = pick
+	bot.dropHot = hot
+	local angle = math.random() * math.pi * 2
+	local reach = hot and (14 + math.random() * 20) or (30 + math.random() * 30)
+	return Vector3.new(pick.X + math.cos(angle) * reach, pick.Y or 0, pick.Z + math.sin(angle) * reach)
+end
+
+--------------------------------------------------------------------------------
+-- Zone rotation
+--------------------------------------------------------------------------------
+
+-- Storm pressure at which the bot starts rotating: BotStormRotate (0.6) x (1.1 - 0.9 x rotateEarly),
+-- so a Survivor (1) moves at 0.25 and a Rusher (0.2) at 0.55. Nobody rotates LATER than the old
+-- single dial (the upper clamp is BotStormRotate itself), and BotStormUrgent stays what it is for
+-- everyone: nobody waits until the storm is on them.
+function BotService.Loot.rotateAt(bot)
+	return math.clamp(MatchConfig.BotStormRotate * (1.1 - 0.9 * BotService.Loot.dial(bot, "rotateEarly")), 0.25, MatchConfig.BotStormRotate)
+end
+
+-- Where in the next circle to head: on the bot's own side of it like stormGoal, but early movers
+-- (rotateEarly >= 0.6) go deep, 20-60% of the radius in, where the circle after this one will
+-- still be, and edge holders sit in the outer half, 50-65% of the radius, toward the cover the edge
+-- of a circle passes through. Not further out: updateBot and runForCircle treat a goal past 85% of
+-- the radius as stale and re-pick it (a goal at 90% was re-rolled every think and the bot never
+-- settled on a leg), and at 70-82% tools/bot_loot_sim.py's rotation-only pair spent a quarter more
+-- time outside the circle than the old single goal. No storm: stormGoal's wander.
+function BotService.Loot.rotationGoal(bot, position)
+	local center, radius = safeCircle()
+	if not center then
+		return stormGoal(position)
+	end
+	local fromCenter = flat(position - center)
+	local base = fromCenter.Magnitude > 1 and math.atan2(fromCenter.Z, fromCenter.X) or math.random() * math.pi * 2
+	local angle = base + (math.random() - 0.5) * math.rad(120)
+	local share
+	if BotService.Loot.dial(bot, "rotateEarly") >= 0.6 then
+		share = 0.2 + math.random() * 0.4
+	else
+		share = 0.5 + math.random() * 0.15
+	end
+	local distance = math.max(10, radius * share)
+	return center + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
+end
+
+-- The road segments of the map, read once per match from workspace.Map.Roads (the parts
+-- DropMapService.RoadSegments draws), at most BotService.Loot.ROAD_MAX of them, sampled evenly.
+function BotService.Loot.roadPoints(now)
+	if BotService.Loot.roads and now - BotService.Loot.roadsAt < 120 then
+		return BotService.Loot.roads
+	end
+	BotService.Loot.roadsAt = now
+	local points = {}
+	local map = workspace:FindFirstChild("Map")
+	local roads = map and map:FindFirstChild("Roads")
+	if roads then
+		local parts = {}
+		for _, part in ipairs(roads:GetDescendants()) do
+			if part:IsA("BasePart") and part.Size.Y < 3 and (part.Name == "Road" or part.Name == "RoadCurve") then
+				table.insert(parts, part)
+			end
+		end
+		local step = math.max(1, #parts / BotService.Loot.ROAD_MAX)
+		local cursor = 1
+		while cursor <= #parts and #points < BotService.Loot.ROAD_MAX do
+			table.insert(points, parts[math.floor(cursor)].Position)
+			cursor += step
+		end
+	end
+	BotService.Loot.roads = points
+	return points
+end
+
+-- Someone about: hit in the last 10 s, a memory of a target, or a living enemy within 140 studs.
+function BotService.Loot.threatened(bot, position, now)
+	if bot.threat and now - bot.threat.at < 10 then
+		return true
+	end
+	if bot.memory and now < bot.memory.expires then
+		return true
+	end
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
+			and (entry.position - position).Magnitude <= 140 then
+			return true
+		end
+	end
+	return false
+end
+
+-- The next leg toward `goal`: nextLeg's straight line, moved onto a road within BotService.Loot.ROAD_SNAP of it
+-- when someone is about and the road still makes real progress (20 studs nearer the goal than we
+-- are). A bot crossing open ground with an enemy near it is the easy kill; the roads run town to
+-- town past walls, cars and lamps. `urgent` (the storm is on it) takes the straight line regardless.
+function BotService.Loot.leg(bot, from, goal, now, urgent)
+	local point = nextLeg(from, goal)
+	if urgent or not BotService.Loot.threatened(bot, from, now) then
+		return point
+	end
+	local roads = BotService.Loot.roadPoints(now)
+	local best, bestDistance = nil, BotService.Loot.ROAD_SNAP
+	local goalDistance = flatDistance(from, goal) - 20
+	for _, road in ipairs(roads) do
+		local distance = flatDistance(road, point)
+		if distance < bestDistance and flatDistance(road, goal) < goalDistance then
+			best, bestDistance = road, distance
+		end
+	end
+	if best then
+		STATS.roadLegs += 1
+		return Vector3.new(best.X, MapGenerator.GroundHeightAt(best.X, best.Z) + 3, best.Z)
+	end
+	return point
 end
 
 local function updateBot(bot)
@@ -2576,17 +5380,18 @@ local function updateBot(bot)
 	end
 	bot.lastHealth = humanoid.Health
 
-	-- BOT VEHICLES (section above): at the wheel of an armed vehicle, or walking to one.
-	if botVehicleThink(bot, humanoid, root, head, now) then
+	-- BOT VEHICLES (section above): in a vehicle (at the wheel, on the gun, riding), or walking to one.
+	if Vehicles.botVehicleThink(bot, humanoid, root, head, now) then
 		return
 	end
 
-	-- Slow out-of-combat regen: the fallback for a bot with no heal items left.
+	-- Slow out-of-combat regen: the fallback for a bot with no heal items left. Over the time since
+	-- the last think, not a fixed interval: a far-from-players bot thinks every other turn (LOD) and
+	-- must heal at the same rate as one thinking every turn.
 	if humanoid.Health < humanoid.MaxHealth and now - bot.lastCombatAt > MatchConfig.BotRegenDelay then
-		humanoid.Health = math.min(
-			humanoid.MaxHealth,
-			humanoid.Health + MatchConfig.BotRegenPerSecond * MatchConfig.BotThinkInterval
-		)
+		local since = bot.thoughtAt and math.min(now - bot.thoughtAt, MatchConfig.BotThinkInterval * 3)
+			or MatchConfig.BotThinkInterval
+		humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + MatchConfig.BotRegenPerSecond * since)
 	end
 
 	if now >= bot.strafeFlipAt then
@@ -2598,19 +5403,64 @@ local function updateBot(bot)
 	finishReload(bot, now)
 	local pressure = stormPressure(root.Position)
 
+	-- BOT ARCHETYPES: a team bot checks its role against its side's once it knows which side that is.
+	if bot.archetypeBalancedFor ~= bot.character then
+		local state = BotService.ModeState(bot)
+		if state then
+			bot.archetypeBalancedFor = bot.character
+			local teams = lazy("ModeTeams")
+			if teams and teams.TeamOf then
+				ARCH.balance(bot, state.team, ARCH.Mix[ARCH.modeIdNow()] or ARCH.Mix.TeamDeathmatch, teams.TeamOf)
+			end
+		end
+	end
+
 	-- Nothing to shoot with means nothing counts as a target: an unarmed bot falls through to
 	-- looting (or running) instead of squaring up to someone empty-handed.
 	local candidate = bot.weapon and findTarget(bot, root, head, now) or nil
+	-- Two guns: the one that suits this range comes out before the range check below (BotService.Loot.swapGunFor).
+	if candidate then
+		BotService.Loot.swapGunFor(bot, candidate.distance, now)
+	end
 	if candidate and candidate.distance > bot.weapon.range then
 		-- Seen but out of reach: close in on where they are rather than plinking at nothing.
 		remember(bot, candidate.token, candidate.root.Position, root, now)
 		candidate = nil
+	end
+	-- BOT ARCHETYPES: a Survivor (avoidUnforced) fights only when it has to: the target is shooting
+	-- it, is inside its own range, or is at a team objective it stands on. Anyone else it lets go,
+	-- ducking out of their sight if they could see it. It does not remember them to hunt.
+	if candidate and ARCH.dialsOf(bot).avoidUnforced then
+		local forced = now - bot.lastHurtAt < THREAT_WINDOW or candidate.distance <= ARCH.dialsOf(bot).range * 1.1
+			or (bot.objectiveKind == "hold" or bot.objectiveKind == "contest") and bot.wanderGoal
+				and flatDistance(root.Position, bot.wanderGoal) < 30
+		if not forced then
+			STATS.avoided += 1
+			bot.branch = "avoid"
+			bot.target = nil
+			bot.acquiredAt = 0
+			-- Nor does it hunt them from a memory an earlier (forced) fight left, or wander into their range.
+			if bot.memory and bot.memory.token == candidate.token then
+				bot.memory = nil
+			end
+			ARCH.steerClear(bot, root, candidate.root.Position, ARCH.dialsOf(bot).range * 1.1, now)
+			local threatEye = candidate.root.Position + Vector3.new(0, 1.5, 0)
+			if exposedTo(bot, root, threatEye) then
+				local cover, direct = seekCover(bot, root, threatEye, now, candidate.character)
+				if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+					setSprint(bot, true)
+					return
+				end
+			end
+			candidate = nil
+		end
 	end
 	if candidate then
 		bot.branch = "fight"
 		fight(bot, humanoid, root, head, candidate, pressure, now)
 		return
 	end
+	bot.fightState = nil
 
 	bot.target = nil
 	bot.acquiredAt = 0
@@ -2662,6 +5512,31 @@ local function updateBot(bot)
 	-- Behind cover or our own barricade: hold there while the heals go in, then carry on. Down low
 	-- while doing it: the bot isn't going anywhere, and something is shooting at it.
 	if bot.coverUntil > now then
+		-- BOT ARCHETYPES: a peeker with a target it lost a moment ago steps out to the side of its cover
+		-- to look for it (peekPhase), and back in again; the moment the target is seen, fight() runs
+		-- the same cycle with the gun. Everyone else waits it out.
+		local dials = ARCH.dialsOf(bot)
+		local memory = bot.memory
+		if (dials.peek or dials.peekStyle == "hold") and bot.weapon and memory and now - memory.at < 6 then
+			local peek = ARCH.peekPhase(bot, now)
+			local toward = flat(memory.position - root.Position)
+			if peek.exposed and toward.Magnitude > 1 then
+				bot.branch = "peek"
+				setCrouch(bot, false)
+				local right = Vector3.new(-toward.Unit.Z, 0, toward.Unit.X)
+				local from = bot.coverAt or root.Position
+				humanoid:MoveTo(from + right * peek.side * 5 + toward.Unit * 2)
+				BotNav.Progress(bot, humanoid, root, nil, now)
+				facePoint(bot, humanoid, root, memory.position)
+				return
+			end
+			if bot.coverAt and flatDistance(root.Position, bot.coverAt) > 1.5 then
+				setCrouch(bot, true)
+				humanoid:MoveTo(bot.coverAt)
+				BotNav.Progress(bot, humanoid, root, nil, now)
+				return
+			end
+		end
 		setCrouch(bot, true)
 		holdStill(bot, humanoid, root, now)
 		BotNav.Drop(bot)
@@ -2679,7 +5554,7 @@ local function updateBot(bot)
 
 	-- Unarmed, or too hurt to go looking for whoever's shooting: get out of their sight. A pickup
 	-- right at our feet is still worth grabbing on the way.
-	local low = humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth
+	local low = humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotFleeHealth
 	local grabbing = bot.lootTarget and (bot.lootTarget.Position - root.Position).Magnitude < 13
 	if shotAtRecently and (not bot.weapon or low) and not grabbing then
 		-- Unarmed, a gun close by is the better way out, as long as it isn't toward the shooter: go and
@@ -2719,8 +5594,11 @@ local function updateBot(bot)
 		remember(bot, threat.token, threat.position, root, now)
 	end
 
+	-- When a bot starts rotating is its archetype's (BotService.Loot.rotateAt): early movers at a third of the
+	-- pressure the rest wait for.
+	local rotateAt = BotService.Loot.rotateAt(bot)
 	local center, circleRadius = nil, nil
-	if pressure >= MatchConfig.BotStormRotate then
+	if pressure >= rotateAt then
 		center, circleRadius = safeCircle()
 	end
 
@@ -2733,11 +5611,14 @@ local function updateBot(bot)
 
 	-- Hunting: go to where the target was last seen, look around, and let it go if nobody's there.
 	local memory = bot.memory
-	if memory and bot.weapon and now < memory.expires and (not center or insideCircle(memory.position, center, circleRadius)) then
+	if memory and bot.weapon and now < memory.expires and (not center or insideCircle(memory.position, center, circleRadius))
+		and not BotService.Loot.finishingGrab(bot, root, now) then
 		bot.branch = "hunt"
 		releaseLoot(bot)
 		setSprint(bot, false)
-		local grenadeReady = now - memory.at < 4
+		-- A frag onto where they went, from a gun that can't just shoot round the corner (BOT ARCHETYPES:
+		-- noFrags classes keep theirs; a shotgun flushing a corner is the point of it).
+		local grenadeReady = now - memory.at < 4 and not ARCH.dialsOf(bot).noFrags
 		if grenadeReady then
 			tryThrow(bot, root, head, "grenade", memory.position, now)
 		end
@@ -2852,56 +5733,13 @@ local function updateBot(bot)
 		end
 	end
 
-	if not bot.lootTarget and now - bot.lootCheckedAt > (empty and 1.5 or 5) then
+	if not bot.lootTarget and now - bot.lootCheckedAt > (empty and 1.5 or BotService.Loot.lootInterval(bot, now)) then
 		bot.lootCheckedAt = now
-		-- A landed supply drop is worth contesting at any armament level; ordinary loot only
-		-- while under-armed.
-		-- Team modes: bots fight, they don't tour the map for crates (#134). Supply drops and armed
-		-- chest runs are Battle Royale only; an under-armed team bot still grabs gear nearby.
-		local teamMode = BotService.ModeState(bot) ~= nil
-		local item = not teamMode and SupplyDropService.FindNearest(root.Position, SUPPLY_SEEK_RANGE) or nil
-		if item and not lootAllowed(bot, item, (item.Position - root.Position).Magnitude, center, circleRadius, now) then
-			item = nil
-		end
-		if not item and underArmed then
-			item = findLoot(bot, root.Position, empty and LOOT_SEEK_RANGE * 1.6 or LOOT_SEEK_RANGE, false, center, circleRadius, now)
-		end
-		-- Team modes: raid the home base's stock first (upgrades, chests, heals).
-		if not item and teamMode then
-			local modeState = BotService.ModeState(bot)
-			if modeState then
-				item = BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now)
-			end
-		end
-		-- Oliver 15:27: "bots dont open crates or supply drops". An armed bot now also opens the nearest
-		-- unopened chest in range, not just a bot that is short of guns.
-		if not item and not teamMode then
-			local bestDistance = LOOT_SEEK_RANGE
-			for _, entry in ipairs(lootItems(now)) do
-				local chest = entry.item
-				if chest.Name == "Chest" and chest.Parent and not chest:GetAttribute("Claimed") then
-					local distance = (entry.position - root.Position).Magnitude
-					if distance < bestDistance and lootAllowed(bot, chest, distance, center, circleRadius, now) then
-						item, bestDistance = chest, distance
-					end
-				end
-			end
-		end
-		-- Empty-handed with nothing inside that sweep: walk to the nearest gun ANYWHERE rather than
-		-- wandering. A bot that lands in a corner of a 1280-stud map had nothing within 320 studs and
-		-- milled about picking random wander goals until a fight found it; the pickups are already in
-		-- the shared snapshot, so reaching further costs nothing but the walk.
-		if not item and empty then
-			item = findLoot(bot, root.Position, math.huge, false, center, circleRadius, now)
-			if item then
-				STATS.lootFarReach += 1
-			end
-		end
-		-- Hurt and carrying nothing to fix it: a loose Bandage or Med Kit is worth a detour.
-		local carryingHeals = bot.heals.Bandage + bot.heals.MedKit > 0
-		if not item and not carryingHeals and humanoid.Health < humanoid.MaxHealth * MatchConfig.BotHealBelow then
-			item = findLoot(bot, root.Position, HEAL_SEEK_RANGE, true, center, circleRadius, now)
-		end
+		-- What to go for, in the archetype's order: a supply crate, a gun while under-armed, the team
+		-- base's stock, an upgrade or a chest while still in the looting phase after landing, heals,
+		-- shields and throwables up to the archetype's stock targets, then the nearest gun anywhere
+		-- while empty-handed (BOT LOOTING & ROTATION, BotService.Loot.pickLoot).
+		local item = BotService.Loot.pickLoot(bot, humanoid, root, underArmed, empty, center, circleRadius, now)
 		if item then
 			setLootTarget(bot, item)
 		end
@@ -2951,8 +5789,20 @@ local function updateBot(bot)
 			bot.wanderTarget = nil
 		end
 		-- Holding the hill: stand on the ring, low, facing out. Pacing around it reads as aimless and
-		-- walks bots off the zone.
+		-- walks bots off the zone. BOT ARCHETYPES: an Anchor fortifies it, a wall toward where the
+		-- enemy was last seen (or toward the enemy's own objective when nobody has been seen yet).
 		if objectiveKind == "hold" and flatDistance(root.Position, objective) < 6 then
+			local sighting = bot.focusTeam and teamSightings[bot.focusTeam]
+			local toward = sighting and now - sighting.at < 60 and sighting.position or nil
+			if not toward and modeState.hill then
+				local away = flat(root.Position - modeState.hill)
+				toward = away.Magnitude > 1 and root.Position + away.Unit * 40 or nil
+			end
+			if toward and ARCH.tryBuildFortify(bot, humanoid, root, toward, now) then
+				holdStill(bot, humanoid, root, now)
+				facePoint(bot, humanoid, root, toward)
+				return
+			end
 			setCrouch(bot, true)
 			holdStill(bot, humanoid, root, now)
 			return
@@ -2964,18 +5814,18 @@ local function updateBot(bot)
 	local goalReached = bot.wanderGoal and flatDistance(root.Position, bot.wanderGoal) < 24
 
 	if not objective and (goalStale or goalReached or now - bot.wanderAt > 30) then
-		bot.wanderGoal = stormGoal(root.Position)
+		bot.wanderGoal = BotService.Loot.rotationGoal(bot, root.Position)
 		bot.wanderAt = now
 		bot.wanderTarget = nil
 	end
 
 	if not bot.wanderTarget or flatDistance(root.Position, bot.wanderTarget) < 16 then
-		bot.wanderTarget = nextLeg(root.Position, bot.wanderGoal)
+		bot.wanderTarget = BotService.Loot.leg(bot, root.Position, bot.wanderGoal, now)
 	end
 
 	bot.branch = "wander"
-	setSprint(bot, pressure >= MatchConfig.BotStormRotate)
-	local result = navigate(bot, humanoid, root, bot.wanderTarget, pressure >= MatchConfig.BotStormRotate
+	setSprint(bot, pressure >= rotateAt)
+	local result = navigate(bot, humanoid, root, bot.wanderTarget, pressure >= rotateAt
 		and BotNav.Priority.Urgent or BotNav.Priority.Wander, now)
 	if result == "abandon" or bot.nav.failures >= 2 then
 		-- That way doesn't go anywhere: try another heading.
@@ -3006,9 +5856,16 @@ end
 -- Where a dropping bot steers for: the nearest of the map's towns and landmarks to where it
 -- opened its canopy (the second nearest now and then), somewhere on its outskirts rather than
 -- on the fountain — so fifty bots don't all land in one square.
-local function pickDropTarget(targets, from)
+local function pickDropTarget(targets, from, bot)
 	if not targets or #targets == 0 then
 		return Vector3.new(from.X, 0, from.Z)
+	end
+	-- With a bot to ask, its archetype picks: a busy town or a quiet edge (BotService.Loot.pickDrop).
+	if bot then
+		local chosen = BotService.Loot.pickDrop(bot, targets, from)
+		if chosen then
+			return chosen
+		end
 	end
 	local ranked = {}
 	for _, spot in ipairs(targets) do
@@ -3046,6 +5903,10 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 
 	local names = shuffled(BOT_NAMES)
 	local spawned = {}
+	-- BOT ARCHETYPES: one deck for the batch holds the mode's mix exactly; a bot dealt singly (a
+	-- replacement) takes the top card of a one-card deck and is rebalanced against its team on its
+	-- first think (ARCH.balance).
+	local deck = ARCH.deck(count, ARCH.Mix[ARCH.modeIdNow()] or ARCH.Mix.BattleRoyale)
 
 	for index = 1, count do
 		local character = rig:Clone()
@@ -3123,6 +5984,12 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				escapeScanAt = 0,
 				coverBlockedUntil = 0,
 				throwReadyAt = {},
+				-- BOT LOOTING & ROTATION
+				backup = nil, -- second gun, of another class than `weapon` (BotService.Loot.takeGun)
+				backupMag = nil,
+				gunSwapAt = 0,
+				landedAt = os.clock(), -- reset when a dropped-in bot lands
+				lootKind = nil, -- the archetype's name as the loot code last read it (BotService.Loot.archetypeOf)
 				-- Perception
 				target = nil,
 				sight = {},
@@ -3140,9 +6007,24 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				sprinting = false,
 				crouching = false,
 				nextSlideAt = 0,
+				-- BOT ARCHETYPES (dealt below): the personality, and its dials merged with the gun held
+				archetype = nil,
+				dials = nil,
+				archetypeBalancedFor = nil,
+				coverRoll = nil, -- rolled per fight against coverUse / buildRate
+				buildRoll = nil,
+				flankDir = 1,
+				shotsFromSpot = 0, -- shots since the last deliberate reposition (the class's repositionAfterShots)
+				relocateUntil = nil,
+				peek = nil, -- the peek cycle's phase row (peekPhase)
+				coverAt = nil, -- the cover spot the bot last reached, to peek from and step back to
+				thirdPartyFrom = nil,
+				focusTeam = nil,
+				fightState = nil, -- what fight() decided this think: engage/strafe/open/cover/peekHide/peekShoot/push/retreat/thirdParty
 			}
 			nextSlot += 1
 			BotNav.Attach(bot)
+			BotService.AssignArchetype(bot, deck[index] or ARCH.Order[math.random(1, #ARCH.Order)])
 
 			-- Everything that doesn't need the rig in the world is set up before parenting, so the
 			-- bot replicates once, fully built, already at its spawn point. Parenting first sent
@@ -3235,9 +6117,11 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 
 			if options.dropIn then
 				bot.dropping = true
-				local target = pickDropTarget(options.dropTargets, character:GetPivot().Position)
+				local target = pickDropTarget(options.dropTargets, character:GetPivot().Position, bot)
 				if not MovementService.BotDrop(character, target, function()
 					bot.dropping = false
+					-- The looting phase (BotService.Loot.lootPhase) runs from the landing.
+					bot.landedAt = os.clock()
 					-- The canopy came off, so the assembly changed; claim it again.
 					claimPhysics(character)
 				end) then
@@ -3271,6 +6155,47 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 	return spawned
 end
 
+-- LEVEL OF DETAIL. A bot no player is anywhere near is being simulated for the match's sake, not
+-- for anyone to watch: it thinks every LodSkip-th turn instead of every turn, so at the drop (fifty
+-- bots spread over the map, players in two or three places) a slice carries about half its thinks.
+-- Never deferred: a bot that is fighting, fleeing, dodging or in the storm (its last branch), one
+-- that has taken damage since it last thought, or one within LodDistance of a living player. Bot
+-- fights far from players therefore run at full rate; only the walking and looting between them is
+-- coarser. Time-based behaviour reads elapsed time (bot.thoughtAt), so regen and timers are
+-- unchanged. tools/perf_bot_cost.py checks the far/idle period and that no fighting or hurt bot
+-- is ever deferred; tools/perf_tick_probe.lua runs Studio with LodEnabled on and off.
+BotService.LodEnabled = true
+BotService.LodDistance = 300
+BotService.LodSkip = 2
+BotService.LodActiveBranches = { fight = true, flee = true, dodge = true, storm = true }
+
+function BotService.LodDefers(bot, now)
+	if not BotService.LodEnabled or BotService.LodSkip <= 1 then
+		return false
+	end
+	if BotService.LodActiveBranches[bot.lastBranch] then
+		return false
+	end
+	local humanoid = bot.humanoid
+	if humanoid and humanoid.Health < bot.lastHealth then
+		return false
+	end
+	if bot.threat and now - bot.threat.at < FLEE_WINDOW then
+		return false
+	end
+	local root = bot.character and bot.character:FindFirstChild("HumanoidRootPart")
+	if not root or BotService.SpatialQuery.NearestPlayerDistance(root.Position) <= BotService.LodDistance then
+		return false
+	end
+	bot.lodTurn = (bot.lodTurn or 0) + 1
+	if bot.lodTurn % BotService.LodSkip == 0 then
+		STATS.lodThinks += 1
+		return false
+	end
+	STATS.lodSkips += 1
+	return true
+end
+
 -- Bots think every BotThinkInterval, but not all in the same frame: they are split into
 -- THINK_SLICES groups that take turns, one group every BotThinkInterval / THINK_SLICES, so each bot
 -- still thinks once an interval and the worst frame carries 1/THINK_SLICES of the bots. It was two
@@ -3298,10 +6223,11 @@ function BotService.Start()
 			local started = os.clock()
 			local startedWall = tick()
 			BotNav.Pump()
+			-- Also opens the frame's ray budget: every ray this slice casts is counted against it.
 			refreshCombatants()
 			local updated = 0
 			for index, bot in ipairs(bots) do
-				if index % THINK_SLICES == slice then
+				if index % THINK_SLICES == slice and not BotService.LodDefers(bot, started) then
 					updated += 1
 					bot.branch = "idle"
 					local began = os.clock()
@@ -3309,6 +6235,8 @@ function BotService.Start()
 					if not ok then
 						warn("[BotService] Bot update failed: " .. tostring(err))
 					end
+					bot.lastBranch = bot.branch
+					bot.thoughtAt = began
 					-- Where the think time goes, for tools/bot_probe.lua; the slowest single think and
 					-- its branch, for tools/perf_tick_probe.lua (the 42.6 ms tick is still unexplained).
 					local took = os.clock() - began
@@ -3355,8 +6283,10 @@ function BotService.Clear()
 	BotNav.Clear()
 	table.clear(lootClaims)
 	table.clear(teamSightings)
-	table.clear(combatantList)
-	table.clear(botDrivers)
+	table.clear(teamFocus)
+	BotService.SpatialQuery.Clear()
+	table.clear(riders)
+	BotService.Loot.clear()
 	lootSnapshot.at = -math.huge
 	table.clear(bots)
 end

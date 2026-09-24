@@ -33,6 +33,25 @@ EventBanner.CardSize = Vector2.new(880, 160)
 EventBanner.PillSize = Vector2.new(236, 56)
 EventBanner.Hold = 3.2
 
+-- THE VOTE REVEAL HIDES THE CARD (#86). The event is announced on the same server beat as the vote
+-- closes, and the 3 s "NEXT MATCH" reveal is an opaque panel in PreMatchUi at DisplayOrder 30, over
+-- this card's BrrHud: on a 720p/768p screen the card's description line sat under the panel for 3 of
+-- its 3.2 s. So VoteDropClient calls HoldFor(REVEAL_SECONDS) when a reveal starts, and a card
+-- announced inside the hold waits it out -- in either order: an Announce during the hold is deferred,
+-- and a card already up when the hold starts is announced again once it ends, for its full time.
+-- tick(), not os.clock() (CPU time in Roblox). 0 = no hold, which is every gallery and probe.
+EventBanner.holdUntil = 0
+local liveBanners = {}
+
+function EventBanner.HoldFor(seconds)
+	EventBanner.holdUntil = math.max(EventBanner.holdUntil, tick() + seconds)
+	for _, banner in ipairs(liveBanners) do
+		if banner.event and banner.phase == "card" then
+			banner:Announce(banner.event)
+		end
+	end
+end
+
 local CARD_W, CARD_H = EventBanner.CardSize.X, EventBanner.CardSize.Y
 local PILL_W, PILL_H = EventBanner.PillSize.X, EventBanner.PillSize.Y
 local ICON_BADGE = 116
@@ -370,6 +389,7 @@ end
 function EventBanner.new(parent, options)
 	options = options or {}
 	local self = setmetatable({}, EventBanner)
+	table.insert(liveBanners, self)
 	self.options = options
 	self.viewport = Vector2.new(1920, 1080)
 	self.dock = "slot"
@@ -822,6 +842,23 @@ end
 function EventBanner:Announce(event)
 	if not event then
 		self:Clear()
+		return
+	end
+	local wait = EventBanner.holdUntil - tick()
+	if wait > 0 then
+		-- Deferred, and only if nothing newer has been announced or cleared by then (the token).
+		self.token += 1
+		local token = self.token
+		self.event = nil
+		self.phase = "hidden"
+		self.card.Visible = false
+		self.pill.Visible = false
+		self.pillButton.Visible = false
+		task.delay(wait + 0.05, function()
+			if self.token == token then
+				self:Announce(event)
+			end
+		end)
 		return
 	end
 	self.event = event

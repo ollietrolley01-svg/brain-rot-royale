@@ -1911,11 +1911,14 @@ local function curveBand(model, curve, count, r0, r1, top, thickness, color, mat
 	end
 end
 
--- A marking round a curve: a chord of the band's middle for each piece, trimmed a hair at both ends
--- so two of them never overlap where the radii turn between them.
+-- A marking round a curve: a chord of the band's middle for each piece, trimmed at both ends just
+-- enough that the inside corners of two neighbours meet where the radii turn between them rather
+-- than overlap (half the width times the tangent of half the turn), and a hair more so the two
+-- never share a sliver of face. The hair was 0.02 a side, which left a 0.09 break in the line's
+-- middle at every joint of a tight curve; 0.005 keeps them apart and leaves 0.06.
 local function curveMarks(model, curve, count, radius, width, top, color, name)
 	local step = curve.sweep / count
-	local trim = width / 2 * math.abs(math.tan(step / 2)) + 0.02
+	local trim = width / 2 * math.abs(math.tan(step / 2)) + 0.005
 	for index = 1, count do
 		local from = curvePoint({ centre = curve.centre, radius = radius, a1 = curve.a1 + step * (index - 1), sweep = 0 }, 0)
 		local to = curvePoint({ centre = curve.centre, radius = radius, a1 = curve.a1 + step * index, sweep = 0 }, 0)
@@ -1941,8 +1944,12 @@ local function buildCurve(parent, node)
 	local pieces = math.max(4, math.ceil(math.abs(curve.sweep) / CURVE_MAX_TURN), math.ceil(math.abs(curve.sweep) * curve.radius / CURVE_PIECE))
 	curve.pieces = pieces
 	curveBand(model, curve, pieces, curve.radius - HALF, curve.radius + HALF, top, THICKNESS, ASPHALT, Enum.Material.Asphalt, "RoadCurve")
+	-- The edge lines' middles are EDGE_INSET in from the carriageway's edge, exactly where a straight
+	-- lays them (buildMarkings) and a junction box does (MapDecor.Junction). Measured from the line's
+	-- inner side, as they once were, they stepped sideways by half a line's width where every curve met
+	-- its straights (tools/roads_check.py, edgeline_gap).
 	for _, side in ipairs({ -1, 1 }) do
-		curveMarks(model, curve, pieces, curve.radius + side * (HALF - EDGE_INSET - EDGE_WIDTH / 2), EDGE_WIDTH, top, EDGE_LINE, "RoadEdge")
+		curveMarks(model, curve, pieces, curve.radius + side * (HALF - EDGE_INSET), EDGE_WIDTH, top, EDGE_LINE, "RoadEdge")
 	end
 	-- Dashes on the centre line, spaced along the arc as they are along a straight.
 	local length = math.abs(curve.sweep) * curve.radius
@@ -2145,13 +2152,15 @@ end
 -- Audit
 --------------------------------------------------------------------------------
 
--- Every surface a road or street is made of, by part name.
-local SURFACES = { RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true }
+-- Every surface a road or street is made of, by part name. The curves' pieces are RoadCurve: left off
+-- this list, every stud round every curve read as a hole (2040 on one TralalaTown build under
+-- tools/roads_check.py's harness), which the gallery then printed as the roads' own number.
+local SURFACES = { RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true, RoadCurve = true }
 -- Everything that makes up a road, a street or a square: surfaces, markings, kerbs and paving.
 local ROAD_PARTS = {
 	RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true, RoadEdge = true, RoadDash = true,
 	RoadCentreLine = true, StopLine = true, Dash = true, Crossing = true, Kerb = true, Pavement = true, Paving = true,
-	Cobbles = true,
+	Cobbles = true, RoadCurve = true, DroppedKerb = true,
 }
 
 -- A part's solid corners: eight for a box, six for a wedge, whose top face is cut away from its

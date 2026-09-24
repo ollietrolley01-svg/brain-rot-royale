@@ -1,0 +1,1818 @@
+"""The central battleground (ServerScriptService/Modules/TeamBattleground.lua), checked without Studio.
+
+Runs the REAL TeamBattleground source (its Layout, the whole geometry, and its Build on a mock town),
+the real ReplicatedStorage/Shared/ZFight.lua, the real DestructibleService and the real BotNav
+(FindCover and CanStep, against a raycaster over the built parts) under the lupa mock of
+tools/team_base_ruins_check.py, then measures what was built:
+
+  budget      900..1400 parts (said, with the count per section)
+  mirror      team 2's half is team 1's reflected in z = 0, part for part (a wedge's slope the right way
+              round); every piece on the mirror is its own reflection; no pool tag is shared
+  zfight      ZFight.Scan finds nothing at source and nothing after ZFight.Fix
+  floating    every part connects, through parts it touches, to the ground
+  cylinders   every Cylinder is round on Y/Z (its length is X)
+  doorways    4 wide and 7 tall for a player and 5 wide for a bot (PathfindingService's agent), clear
+  walk        a multi-level grid of where an R15 body can stand (2 wide, 5.2 tall, steps of 1.5): from
+              each team's end it reaches both objectives, every piece of high ground, every loot spot,
+              every zipline handle and every built cover spot, and both teams' walks are the same length
+  bots        the same for PathfindingService's agent (5 wide, 6 tall) with one-way drops of up to 14:
+              nothing it can get into that it cannot get out of again
+  high ground every power position has two or more separate ways up, and stays reachable with any one
+              of them taken away
+  sightlines  the longest unbroken eye-level line straight down each lane
+  cover       the longest stretch of each route with nothing at crouch height within 6 studs
+  objectives  on the mirror (so equidistant from both bases) and on the floor built for them; every
+              point BotService sends a bot to (15.4 out, all round) is floor a bot can stand on
+  vehicles    the cut's corridor (6 either side of its line, 0.7 to 8 up) clear, and away from the keep
+  loot        each spot on a floor with room round it, off the vehicle route; the rarer the floor, the
+              more exposed the spot
+  ziplines    a rider's body clears everything from top to bottom; the handle is in reach of the floor
+  destruct    the real DestructibleService: walls, sandbags, crates, containers and props break; no
+              floor, stair, ramp or structure does
+  seed        the same seed builds the same battleground twice; more seeds pass the geometry checks
+  build       Build on a mock town: scenery cleared, streets cut back to the disc, landmarks, roads and
+              bases kept, the height FlattenPad returns used (and its town-level retry), a river site
+              refused, four ziplines hung
+  botnav      the real BotNav.FindCover, handed the battleground's cover, takes it; every spot it
+              returns is hidden from the threat by this file's own rays
+
+    python3 tools/team_battleground_check.py [repo]            the checks
+    python3 tools/team_battleground_check.py [repo] --plant    and the planted faults
+    python3 tools/team_battleground_check.py [repo] --plant-only [words]   only the plants (those named)
+
+tools/team_battleground_preview.py draws the layout offline (a plan and eye-level views, PNG).
+"""
+
+import math
+import sys
+from collections import deque
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import team_base_ruins_check as TBR  # noqa: E402
+from vehicle_models_axis_check import luau_to_lua  # noqa: E402
+
+from lupa import LuaRuntime  # noqa: E402
+
+BUDGET = (900, 1400)
+RADIUS = 126.0
+EXTENT = 132.0
+GRID = 0.5
+STEP = 1.5
+# A body: its radius and height, how steep the stairs round it may climb, and the steepest surface it
+# can stand on (the normal's Y: 60 degrees for a player, PathfindingService's 55 for a bot).
+R15 = dict(radius=1.0, height=5.2, slope=1.0, floorNormal=math.cos(math.radians(60)))
+BOT = dict(radius=2.5, height=6.0, slope=math.tan(math.radians(55)), floorNormal=math.cos(math.radians(55)))
+BOT_DROP = 14.0
+EYE = 5.2
+LANE_SIGHT = {"left": (-110, -50), "centre": (-36, 36), "right": (50, 110)}
+SIGHT_LIMIT = 80.0
+COVER_REACH, COVER_HIGH, COVER_GAP = 6.0, 2.4, 15.0
+CAR_HALF, CAR_LOW, CAR_HIGH = 6.0, 0.7, 8.0
+HILL_RADIUS, HILL_SPREAD = 28.0, 0.55
+DOOR_WIDTH, DOOR_HEIGHT, BOT_WIDTH = 4.0, 7.0, 5.0
+TOUCH = 0.12
+SEED = 20260924
+
+EXTRA = r"""
+table.clone = function(t) local c = {} for k, v in pairs(t) do c[k] = v end return c end
+do
+    -- Clone: the properties and attributes, no children (what ClearSite's street cutting needs).
+    local meta = getmetatable(Instance.new("Part"))
+    local previous = meta.__index
+    meta.__index = function(i, k)
+        if k == "Clone" then
+            return function(self)
+                local copy = Instance.new(self.ClassName)
+                for key, value in pairs(rawget(self, "props")) do
+                    if key ~= "Parent" then rawget(copy, "props")[key] = value end
+                end
+                for key, value in pairs(rawget(self, "attrs")) do rawget(copy, "attrs")[key] = value end
+                return copy
+            end
+        end
+        return previous(i, k)
+    end
+end
+function dumpAll(model)
+    local out = {}
+    for _, p in ipairs(model:GetDescendants()) do
+        if p:IsA("BasePart") then
+            local c, s = p.CFrame, p.Size
+            local col = p.Color or {}
+            local names = {}
+            local node = p.Parent
+            while node and node ~= model do table.insert(names, 1, node.Name); node = node.Parent end
+            table.insert(out, { p.Name, p.ClassName, tostring(p.Shape), s.X, s.Y, s.Z,
+                c.p.X, c.p.Y, c.p.Z, c.r.X, c.r.Y, c.r.Z, c.u.X, c.u.Y, c.u.Z, c.b.X, c.b.Y, c.b.Z,
+                p.CanCollide and 1 or 0, p.CanQuery and 1 or 0, p.Transparency or 0,
+                tostring(p:GetAttribute("Destructible")), p:GetAttribute("DestructibleHealth") or 0,
+                table.concat(names, "/"), col.R or 0, col.G or 0, col.B or 0, tostring(p.Material) })
+        end
+    end
+    return out
+end
+function vecList(list)
+    local out = {}
+    for i, v in ipairs(list) do out[i] = { v.X, v.Y, v.Z } end
+    return out
+end
+"""
+
+
+def sources(repo):
+    root = Path(repo)
+    return {
+        "bg": (root / "ServerScriptService/Modules/TeamBattleground.lua").read_text(),
+        "zfight": (root / "ReplicatedStorage/Shared/ZFight.lua").read_text(),
+        "destruct": (root / "ServerScriptService/Modules/DestructibleService.lua").read_text(),
+        "botnav": (root / "ServerScriptService/Modules/BotNav.lua").read_text(),
+    }
+
+
+class Runtime:
+    """One Lua runtime with the modules loaded. Each is a different server as far as math.random goes
+    (as team_base_ruins_check's Build is): runtimes made in one process start from the same
+    math.random stream otherwise, and the seed check's second build could not see a layout that
+    reads it."""
+
+    servers = 0
+
+    def __init__(self, src):
+        self.lua = LuaRuntime(unpack_returned_tuples=True)
+        Runtime.servers += 1
+        self.lua.execute("math.randomseed(%d)" % (7919 * Runtime.servers))
+        mock = TBR.MOCK.replace("local PARTS = { Part = true, WedgePart = true }",
+                                "local PARTS = { Part = true, WedgePart = true, TrussPart = true }")
+        self.lua.execute(mock + TBR.EXTRA_MOCK + TBR.DUMP + EXTRA)
+        modules = self.lua.eval("function() MODULES = {}; return MODULES end")()
+        modules["ZFight"] = self.lua.execute(luau_to_lua(src["zfight"]))
+        self.zfight = modules["ZFight"]
+        modules["MapTerrain"] = self.lua.eval("{}")
+        modules["Remotes"] = self.lua.eval("{ Event = function() return { FireAllClients = function() end } end }")
+        modules["CombatService"] = self.lua.eval("{}")
+        self.bg = self.lua.execute(luau_to_lua(src["bg"]))
+        self.src = src
+        self._destruct = None
+
+    def layout(self, seed, x=0.0, y=0.0, z=0.0, yaw=0.0):
+        g = self.lua.globals()
+        return self.bg.Layout(g.makeFrame(x, y, z, yaw), seed)
+
+    def dump(self, model):
+        rows = self.lua.globals().dumpAll(model)
+        parts = []
+        for i in range(1, len(rows) + 1):
+            r = rows[i]
+            v = [r[j] for j in range(1, 29)]
+            shape = v[2]
+            kind = "box"
+            if v[1] == "WedgePart":
+                kind = "wedge"
+            elif shape.endswith("Cylinder"):
+                kind = "cyl"
+            elif shape.endswith("Ball"):
+                kind = "ball"
+            p = {
+                "name": v[0], "cls": v[1], "shape": shape, "kind": kind, "size": tuple(v[3:6]),
+                "pos": tuple(v[6:9]), "axes": (tuple(v[9:12]), tuple(v[12:15]), tuple(v[15:18])),
+                "collide": bool(v[18]), "query": bool(v[19]), "transparency": v[20],
+                "tag": v[21], "health": v[22], "path": v[23], "color": tuple(v[24:27]), "material": v[27],
+            }
+            p["aabb"] = TBR.aabb(p)
+            parts.append(p)
+        return parts
+
+    def vecs(self, lst):
+        rows = self.lua.globals().vecList(lst)
+        return [tuple(rows[i][j] for j in range(1, 4)) for i in range(1, len(rows) + 1)]
+
+    def destruct(self):
+        return TBR.Build.destruct(self)
+
+
+def vec(v):
+    return (v.X, v.Y, v.Z)
+
+
+def read_info(rt, info):
+    """The Lua info table as plain Python (local-space lists)."""
+    out = {"objectives": rt.vecs(info.objectivesLocal), "cover": rt.vecs(info.coverLocal), "loot": [], "doorways": [],
+           "routes": {}, "power": [], "lanes": {}, "zips": []}
+    spots = info.lootSpots
+    for i in range(1, len(spots) + 1):
+        s = spots[i]
+        out["loot"].append({"name": s.name, "at": vec(s.localPosition), "kind": s.kind, "floor": s.floor})
+    doors = info.doorways
+    for i in range(1, len(doors) + 1):
+        d = doors[i]
+        out["doorways"].append({k: d[k] for k in ("name", "x0", "x1", "z0", "z1", "floor", "top")})
+    for name, points in info.routes.items():
+        out["routes"][name] = rt.vecs(points)
+    for name, points in info.lanes.items():
+        out["lanes"][name] = rt.vecs(points)
+    power = info.power
+    for i in range(1, len(power) + 1):
+        p = power[i]
+        b = p.box
+        out["power"].append({"name": p.name, "point": vec(p.point), "box": (b[1], b[2], b[3], b[4]), "minY": p.minY})
+    zips = info.zips
+    for i in range(1, len(zips) + 1):
+        z = zips[i]
+        out["zips"].append({"name": z.name, "fromTop": vec(z.fromTopLocal), "to": vec(z.toLocal)})
+    return out
+
+
+# ------------------------------------------------------------------------------------------------
+# Columns: every solid part cut by the vertical line through each cell of a grid
+# ------------------------------------------------------------------------------------------------
+
+class Columns:
+    """Solid intervals on the vertical line through each grid cell's centre, merged per cell, with the
+    ground (the flattened pad, top at 0) solid under everything. LO/HI are (K, NX, NZ), padded with +inf."""
+
+    def __init__(self, parts, extent=EXTENT, grid=GRID, want=lambda p: p["collide"]):
+        self.grid = grid
+        self.x0 = self.z0 = -extent
+        self.n = int(round(2 * extent / grid)) + 1
+        xs = self.x0 + np.arange(self.n) * grid
+        self.xs = xs
+        cells, los, his, nys, owners = [], [], [], [], []
+        for index, p in enumerate(parts):
+            if not want(p):
+                continue
+            lo_b, hi_b = p["aabb"]
+            pad = grid / 2  # vertical_interval thickens thin boards to a cell; look that far round them
+            i0 = max(0, int(math.ceil((lo_b[0] - pad - self.x0) / grid - 1e-9)))
+            i1 = min(self.n - 1, int(math.floor((hi_b[0] + pad - self.x0) / grid + 1e-9)))
+            k0 = max(0, int(math.ceil((lo_b[2] - pad - self.z0) / grid - 1e-9)))
+            k1 = min(self.n - 1, int(math.floor((hi_b[2] + pad - self.z0) / grid + 1e-9)))
+            if i1 < i0 or k1 < k0:
+                continue
+            ii, kk = np.meshgrid(np.arange(i0, i1 + 1), np.arange(k0, k1 + 1), indexing="ij")
+            ii, kk = ii.ravel(), kk.ravel()
+            lo, hi, ny = vertical_interval(p, xs[ii], xs[kk])
+            ok = hi > lo + 1e-6
+            if ok.any():
+                cells.append(ii[ok] * self.n + kk[ok])
+                los.append(lo[ok])
+                his.append(hi[ok])
+                nys.append(ny[ok])
+                owners.append(np.full(int(ok.sum()), index))
+        allcells = np.arange(self.n * self.n)
+        cells.append(allcells)
+        los.append(np.full(allcells.size, -60.0))
+        his.append(np.zeros(allcells.size))
+        nys.append(np.ones(allcells.size))
+        owners.append(np.full(allcells.size, -1))
+        cell = np.concatenate(cells)
+        lo = np.concatenate(los)
+        hi = np.concatenate(his)
+        ny = np.concatenate(nys)
+        owner = np.concatenate(owners)
+        # Merge per cell: sort by (cell, lo); a key that puts each cell in its own band keeps the running
+        # maximum of the tops from leaking between cells.
+        band = 1000.0
+        order = np.lexsort((lo, cell))
+        cell, lo, hi, ny, owner = cell[order], lo[order], hi[order], ny[order], owner[order]
+        klo, khi = lo + cell * band, hi + cell * band
+        run = np.maximum.accumulate(khi)
+        start = np.ones(cell.size, bool)
+        start[1:] = klo[1:] > run[:-1] + 1e-9
+        group = np.cumsum(start) - 1
+        mlo = klo[start] - cell[start] * band
+        mhi_key = np.zeros(group[-1] + 1)
+        np.maximum.at(mhi_key, group, khi)
+        mcell = cell[start]
+        mhi = mhi_key - mcell * band
+        # Whose top each merged solid's top is, and how steep it is there: the raw interval with the
+        # highest top in each group.
+        top_order = np.lexsort((khi, group))
+        last = np.ones(top_order.size, bool)
+        last[:-1] = group[top_order][1:] != group[top_order][:-1]
+        winner = top_order[last]
+        mny = ny[winner]
+        mowner = owner[winner]
+        # Layer index within each cell.
+        first = np.ones(mcell.size, bool)
+        first[1:] = mcell[1:] != mcell[:-1]
+        idx = np.arange(mcell.size) - np.maximum.accumulate(np.where(first, np.arange(mcell.size), 0))
+        self.K = int(idx.max()) + 1
+        self.LO = np.full((self.K, self.n * self.n), np.inf)
+        self.HI = np.full((self.K, self.n * self.n), np.inf)
+        self.NY = np.ones((self.K, self.n * self.n))
+        self.OWNER = np.full((self.K, self.n * self.n), -1, np.int64)
+        self.LO[idx, mcell] = mlo
+        self.HI[idx, mcell] = mhi
+        self.NY[idx, mcell] = mny
+        self.OWNER[idx, mcell] = mowner
+        self.LO = self.LO.reshape(self.K, self.n, self.n)
+        self.HI = self.HI.reshape(self.K, self.n, self.n)
+        self.NY = self.NY.reshape(self.K, self.n, self.n)
+        self.OWNER = self.OWNER.reshape(self.K, self.n, self.n)
+
+    def cell(self, x, z):
+        return int(round((x - self.x0) / self.grid)), int(round((z - self.z0) / self.grid))
+
+    def solid_at(self, x, z, y):
+        i, k = self.cell(x, z)
+        return bool(((self.LO[:, i, k] <= y) & (self.HI[:, i, k] >= y)).any())
+
+
+def vertical_interval(p, X, Z):
+    """Where the vertical line through each (X, Z) passes through part p's solid: (lo, hi, ny) arrays,
+    lo >= hi for a miss, and ny the Y of the surface's normal where the line leaves the top (1 for a
+    level top; a wheel's round side or a tipped slab is steeper). Boxes and trusses exactly, a wedge
+    with its slope, a cylinder and a ball exactly."""
+    c = np.array(p["pos"])
+    axes = np.array(p["axes"])
+    h = np.array(p["size"]) / 2
+    # A board thinner than the grid could slip between two cell centres and vanish: across any mostly
+    # horizontal axis, every part is at least one cell thick.
+    if p["kind"] in ("box", "wedge"):
+        for i in range(3):
+            if abs(axes[i][1]) < 0.7:
+                h[i] = max(h[i], GRID / 2 + 1e-6)
+    n = X.size
+    lo = np.full(n, -np.inf)
+    hi = np.full(n, np.inf)
+    ny = np.ones(n)
+    a = axes[:, 0][:, None] * (X - c[0])[None, :] + axes[:, 2][:, None] * (Z - c[2])[None, :] - axes[:, 1][:, None] * c[1]
+    b = axes[:, 1]
+
+    def top(t, normal_y):
+        nonlocal hi, ny
+        lower = t < hi
+        hi = np.where(lower, t, hi)
+        ny = np.where(lower, normal_y, ny)
+
+    def slab(i, half):
+        nonlocal lo
+        if abs(b[i]) < 1e-9:
+            miss = np.abs(a[i]) > half
+            lo = np.where(miss, np.inf, lo)
+        else:
+            t1 = (-half - a[i]) / b[i]
+            t2 = (half - a[i]) / b[i]
+            lo = np.maximum(lo, np.minimum(t1, t2))
+            top(np.maximum(t1, t2), abs(b[i]))
+
+    kind = p["kind"]
+    if kind == "ball":
+        r = h.min()
+        d2 = (X - c[0]) ** 2 + (Z - c[2]) ** 2
+        miss = d2 > r * r
+        root = np.sqrt(np.where(miss, 0, r * r - d2))
+        lo = np.where(miss, np.inf, c[1] - root)
+        hi = c[1] + root
+        ny = root / r
+    elif kind == "cyl":
+        slab(0, h[0])
+        r = min(h[1], h[2])
+        A = b[1] ** 2 + b[2] ** 2
+        if A < 1e-12:
+            lo = np.where(a[1] ** 2 + a[2] ** 2 > r * r, np.inf, lo)
+        else:
+            B = 2 * (a[1] * b[1] + a[2] * b[2])
+            C = a[1] ** 2 + a[2] ** 2 - r * r
+            disc = B * B - 4 * A * C
+            miss = disc < 0
+            root = np.sqrt(np.where(miss, 0, disc))
+            t1 = (-B - root) / (2 * A)
+            t2 = (-B + root) / (2 * A)
+            lo = np.where(miss, np.inf, np.maximum(lo, t1))
+            ly, lz = a[1] + b[1] * t2, a[2] + b[2] * t2
+            top(t2, (b[1] * ly + b[2] * lz) / r)
+    else:
+        for i in range(3):
+            slab(i, h[i])
+        if kind == "wedge":
+            # solid where ly <= hy * lz / hz (the tall face is +Z)
+            k = h[1] / h[2]
+            coef = b[1] - k * b[2]
+            const = a[1] - k * a[2]
+            if abs(coef) < 1e-9:
+                lo = np.where(const > 0, np.inf, lo)
+            else:
+                t = -const / coef
+                if coef > 0:
+                    top(np.full(n, t) if np.ndim(t) == 0 else t, coef / math.sqrt(1 + k * k))
+                else:
+                    lo = np.maximum(lo, t)
+    return lo, hi, ny
+
+
+# ------------------------------------------------------------------------------------------------
+# Walking
+# ------------------------------------------------------------------------------------------------
+
+def disc_offsets(radius, grid):
+    r = int(math.ceil(radius / grid))
+    out = []
+    for di in range(-r, r + 1):
+        for dk in range(-r, r + 1):
+            d = math.hypot(di, dk) * grid
+            if d <= radius + 1e-9:
+                out.append((di, dk, d))
+    return out
+
+
+def shifted(arr, di, dk, fill):
+    """arr[..., i + di, k + dk] at [i, k], `fill` past the edge."""
+    out = np.full_like(arr, fill)
+    n = arr.shape[-1]
+    si0, si1 = max(0, di), min(n, n + di)
+    ti0, ti1 = max(0, -di), min(n, n - di)
+    sk0, sk1 = max(0, dk), min(n, n + dk)
+    tk0, tk1 = max(0, -dk), min(n, n - dk)
+    out[..., ti0:ti1, tk0:tk1] = arr[..., si0:si1, sk0:sk1]
+    return out
+
+
+class Walk:
+    """Nodes: (layer k, cell) where a body stands on top of merged solid k with room above it.
+    Edges: to the 8 neighbours at a height within STEP (both ways), and for bots drops of up to BOT_DROP
+    (one way)."""
+
+    def __init__(self, cols, body, drops=False):
+        with np.errstate(invalid="ignore"):
+            self._build(cols, body, drops)
+
+    def _build(self, cols, body, drops):
+        self.cols = cols
+        K, n = cols.K, cols.n
+        S = cols.HI  # the top of each merged solid is a surface
+        # ...and one a body can stand on only where it is no steeper than the body's own limit.
+        valid = np.isfinite(S) & (S > -50) & (cols.NY >= body["floorNormal"])
+        stand = valid.copy()
+        H, slope = body["height"], body["slope"]
+        for di, dk, d in disc_offsets(body["radius"], cols.grid):
+            LOn = shifted(cols.LO, di, dk, np.inf)
+            HIn = shifted(cols.HI, di, dk, np.inf)
+            for k in range(K):
+                s = S[k]
+                low = s + STEP + d * slope
+                top = s + H
+                hit = ((LOn < top[None]) & (HIn > low[None])).any(axis=0)
+                stand[k] &= ~hit
+        self.stand = stand
+        self.S = S
+        ids = np.full((K, n, n), -1, np.int64)
+        count = int(stand.sum())
+        ids[stand] = np.arange(count)
+        self.ids = ids
+        self.count = count
+        where = np.argwhere(stand)
+        self.node_k, self.node_i, self.node_j = where[:, 0], where[:, 1], where[:, 2]
+        self.node_y = S[stand]
+        self.node_owner = cols.OWNER[stand]
+        self.node_x = cols.x0 + self.node_i * cols.grid
+        self.node_z = cols.z0 + self.node_j * cols.grid
+        src, dst = [], []
+        for di, dk in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            idn = shifted(ids, di, dk, -1)
+            Sn = shifted(S, di, dk, np.nan)
+            LOn = shifted(cols.LO, di, dk, np.inf)
+            for k1 in range(K):
+                a = ids[k1]
+                for k2 in range(K):
+                    b = idn[k2]
+                    rise = Sn[k2] - S[k1]
+                    ok = (a >= 0) & (b >= 0) & (np.abs(rise) <= STEP)
+                    if drops:
+                        # down off an edge: the neighbour's column is clear from its floor to our head
+                        above = LOn[k2 + 1] if k2 + 1 < K else np.full_like(rise, np.inf)
+                        ok |= (a >= 0) & (b >= 0) & (rise < -STEP) & (rise >= -BOT_DROP) & (above >= S[k1] + H)
+                    if ok.any():
+                        src.append(a[ok])
+                        dst.append(b[ok])
+        if drops:
+            self._far_drops(cols, body, ids, S, src, dst)
+        src = np.concatenate(src)
+        dst = np.concatenate(dst)
+        self.src, self.dst = src, dst
+        self.indptr, self.indices = csr(src, dst, count)
+        self.rindptr, self.rindices = csr(dst, src, count)
+
+    def _far_drops(self, cols, body, ids, S, src, dst):
+        """Drops that land further out than the next cell. Beside a wall or a platform's face the
+        cells within a body's radius are no place to stand, so off an edge into a pocket beside it
+        there is no neighbour to drop to -- but a body walking off the edge carries on and lands
+        there. Up to radius + a cell out, straight along one of the 8 directions, where every
+        column passed over is clear from a step above the edge to head height."""
+        K = cols.K
+        H = body["height"]
+        reach = int(math.ceil(body["radius"] / cols.grid)) + 1
+        for di, dk in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            for k1 in range(K):
+                a = ids[k1]
+                if not (a >= 0).any():
+                    continue
+                s = S[k1]
+                clear = np.ones_like(a, dtype=bool)
+                for t in range(1, reach + 1):
+                    LOt = shifted(cols.LO, t * di, t * dk, np.inf)
+                    HIt = shifted(cols.HI, t * di, t * dk, np.inf)
+                    if t >= 2:
+                        idn = shifted(ids, t * di, t * dk, -1)
+                        Sn = shifted(S, t * di, t * dk, np.nan)
+                        for k2 in range(K):
+                            b = idn[k2]
+                            rise = Sn[k2] - s
+                            above = LOt[k2 + 1] if k2 + 1 < K else np.full_like(rise, np.inf)
+                            ok = clear & (a >= 0) & (b >= 0) & (rise < -STEP) & (rise >= -BOT_DROP) & (above >= s + H)
+                            if ok.any():
+                                src.append(a[ok])
+                                dst.append(b[ok])
+                    # this column, passed over on the way to anything further out
+                    clear &= ~((LOt < (s + H)[None]) & (HIt > (s + STEP)[None])).any(axis=0)
+                    if not clear.any():
+                        break
+
+    def near(self, x, y, z, reach=1.0, rise=1.6):
+        """Node ids standing within `reach` (flat) of (x, z) at a height within `rise` of y."""
+        c = self.cols
+        i, k = c.cell(x, z)
+        r = int(math.ceil(reach / c.grid))
+        out = []
+        for di in range(-r, r + 1):
+            for dk in range(-r, r + 1):
+                a, b = i + di, k + dk
+                if 0 <= a < c.n and 0 <= b < c.n and math.hypot(di, dk) * c.grid <= reach + 1e-9:
+                    for layer in range(c.K):
+                        node = self.ids[layer, a, b]
+                        if node >= 0 and abs(self.S[layer, a, b] - y) <= rise:
+                            out.append(int(node))
+        return out
+
+    def bfs(self, starts, reverse=False, banned=None):
+        indptr, indices = (self.rindptr, self.rindices) if reverse else (self.indptr, self.indices)
+        dist = np.full(self.count, -1, np.int64)
+        starts = np.unique(np.array(starts, np.int64))
+        if banned is not None:
+            starts = starts[~banned[starts]]
+        dist[starts] = 0
+        frontier = starts
+        depth = 0
+        while frontier.size:
+            depth += 1
+            counts = indptr[frontier + 1] - indptr[frontier]
+            total = int(counts.sum())
+            if total == 0:
+                break
+            base = np.repeat(indptr[frontier], counts)
+            offs = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+            nb = indices[base + offs]
+            nb = nb[dist[nb] < 0]
+            if banned is not None:
+                nb = nb[~banned[nb]]
+            nb = np.unique(nb)
+            dist[nb] = depth
+            frontier = nb
+        return dist
+
+
+def csr(src, dst, n):
+    order = np.argsort(src, kind="stable")
+    s, d = src[order], dst[order]
+    indptr = np.zeros(n + 1, np.int64)
+    np.add.at(indptr, s + 1, 1)
+    indptr = np.cumsum(indptr)
+    return indptr, d
+
+
+def entries(walk, side):
+    """Where a team walks in: the edge of the disc on its side (side -1 is team 1, at -Z)."""
+    starts = []
+    for x in np.arange(-100, 101, 4.0):
+        z = side * math.sqrt(max(0.0, (RADIUS - 2) ** 2 - x * x))
+        starts += walk.near(x, 0.0, z, reach=1.5)
+    return starts
+
+
+def mirror(p):
+    return (p[0], p[1], -p[2])
+
+
+# ------------------------------------------------------------------------------------------------
+# The checks
+# ------------------------------------------------------------------------------------------------
+
+def check_budget(parts, log):
+    counts = {}
+    for p in parts:
+        bits = p["path"].split("/")
+        key = bits[1] if len(bits) > 1 else bits[0]
+        counts[key] = counts.get(key, 0) + 1
+    log("parts: %d  (%s)" % (len(parts), ", ".join("%s %d" % kv for kv in sorted(counts.items(), key=lambda kv: -kv[1]))))
+    if not BUDGET[0] <= len(parts) <= BUDGET[1]:
+        return ["budget: %d parts, outside %d..%d" % (len(parts), *BUDGET)]
+    return []
+
+
+def reflect_axes(axes):
+    return tuple((a[0], a[1], -a[2]) for a in axes)
+
+
+def same_box(a, b, tol=1e-4):
+    """Whether part b is part a reflected in z = 0 (as solids): mirrored centre, and each of a's
+    reflected axes parallel to one of b's with the same half-size. A wedge's slope is not symmetric in
+    its own Y or Z, so there the reflected Y and Z axes must match b's exactly (not just up to sign)."""
+    if abs(a["pos"][0] - b["pos"][0]) > tol or abs(a["pos"][1] - b["pos"][1]) > tol or abs(a["pos"][2] + b["pos"][2]) > tol:
+        return False
+    ra = reflect_axes(a["axes"])
+    for i in range(3):
+        found = False
+        for j in range(3):
+            dot = sum(ra[i][t] * b["axes"][j][t] for t in range(3))
+            if abs(abs(dot) - 1) < 1e-4 and abs(a["size"][i] - b["size"][j]) < tol:
+                if a["kind"] == "cyl" and i == 0 and j != 0:
+                    continue
+                if a["kind"] == "wedge" and i > 0 and (j != i or dot < 0):
+                    continue
+                found = True
+                break
+        if not found:
+            return False
+    return True
+
+
+def base_tag(tag):
+    if ":" in tag and tag[-1] in "sn":
+        return tag[:-1]
+    return tag
+
+
+def check_mirror(parts, log):
+    problems = []
+    one = [p for p in parts if p["path"].startswith("Team1Half")]
+    two = [p for p in parts if p["path"].startswith("Team2Half")]
+    middle = [p for p in parts if p["path"].startswith("Middle")]
+    if len(one) != len(two):
+        problems.append("mirror: %d parts in team 1's half, %d in team 2's" % (len(one), len(two)))
+    buckets = {}
+    for q in two:
+        key = (round(q["pos"][0], 2), round(q["pos"][1], 2), round(-q["pos"][2], 2))
+        buckets.setdefault(key, []).append(q)
+    unmatched = 0
+    for p in one:
+        key = (round(p["pos"][0], 2), round(p["pos"][1], 2), round(p["pos"][2], 2))
+        match = None
+        for q in buckets.get(key, []):
+            if q["name"] == p["name"] and q["cls"] == p["cls"] and q["kind"] == p["kind"] and same_box(p, q) \
+                    and q["color"] == p["color"] and q["material"] == p["material"] and q["collide"] == p["collide"] \
+                    and base_tag(q["tag"]) == base_tag(p["tag"]) and q["path"].split("/")[1:] == p["path"].split("/")[1:]:
+                match = q
+                break
+        if match is None:
+            unmatched += 1
+            if unmatched <= 5:
+                problems.append("mirror: %s (%s) at %.2f, %.2f, %.2f has no reflection in team 2's half"
+                                % (p["name"], p["path"], *p["pos"]))
+        else:
+            buckets[key].remove(match)
+    selfless = [p for p in middle if not same_box(p, p)]
+    for p in selfless[:5]:
+        problems.append("mirror: %s on the mirror is not its own reflection" % p["name"])
+    tags_one = {p["tag"] for p in one if ":" in p["tag"]}
+    tags_two = {p["tag"] for p in two if ":" in p["tag"]}
+    shared = tags_one & tags_two
+    if shared:
+        problems.append("mirror: pool tags shared by both halves: %s" % sorted(shared)[:4])
+    log("mirror: %d parts in each half compared, %d without a reflection; %d on the mirror, %d not their own "
+        "reflection; %d pool tags, %d shared" % (len(one), unmatched, len(middle), len(selfless), len(tags_one) + len(tags_two), len(shared)))
+    return problems
+
+
+def check_floating(parts, log):
+    n = len(parts)
+    grounded = [p["aabb"][0][1] <= 0.1 and math.hypot(p["pos"][0], p["pos"][2]) <= RADIUS + 4 for p in parts]
+    boxes = [TBR.obb(p) for p in parts]
+    cell = 8.0
+    buckets = {}
+    for i, p in enumerate(parts):
+        lo, hi = p["aabb"]
+        for gx in range(int(math.floor((lo[0] - TOUCH) / cell)), int(math.floor((hi[0] + TOUCH) / cell)) + 1):
+            for gz in range(int(math.floor((lo[2] - TOUCH) / cell)), int(math.floor((hi[2] + TOUCH) / cell)) + 1):
+                buckets.setdefault((gx, gz), []).append(i)
+    adj = [set() for _ in range(n)]
+    for members in buckets.values():
+        for a_i in range(len(members)):
+            i = members[a_i]
+            for b_i in range(a_i + 1, len(members)):
+                j = members[b_i]
+                if j in adj[i]:
+                    continue
+                la, ha = parts[i]["aabb"]
+                lb, hb = parts[j]["aabb"]
+                if any(la[k] > hb[k] + TOUCH or lb[k] > ha[k] + TOUCH for k in range(3)):
+                    continue
+                if TBR.obb_overlap(boxes[i], boxes[j], TOUCH):
+                    adj[i].add(j)
+                    adj[j].add(i)
+    seen = [False] * n
+    queue = deque(i for i in range(n) if grounded[i])
+    for i in queue:
+        seen[i] = True
+    while queue:
+        i = queue.popleft()
+        for j in adj[i]:
+            if not seen[j]:
+                seen[j] = True
+                queue.append(j)
+    loose = [parts[i] for i in range(n) if not seen[i]]
+    log("floating: %d parts examined, %d not connected to the ground" % (n, len(loose)))
+    return ["floating: %s (%s) at %.2f, %.2f, %.2f" % (p["name"], p["path"], *p["pos"]) for p in loose[:8]]
+
+
+def check_cylinders(parts, log):
+    cyl, bad = TBR.check_cylinders(parts)
+    log("cylinders: %d examined, %d not round on Y/Z" % (len(cyl), len(bad)))
+    return ["cylinder %s sized %s: its length must be X" % (p["name"], p["size"]) for p in bad[:5]]
+
+
+def check_doorways(parts, doors, log):
+    problems = []
+    for d in doors:
+        width = max(d["x1"] - d["x0"], d["z1"] - d["z0"])
+        # A half-built doorway on the mirror (the other half is the reflection) is as wide as both.
+        if abs(d["z0"]) < 1e-6 or abs(d["z1"]) < 1e-6:
+            width = max(d["x1"] - d["x0"], 2 * (d["z1"] - d["z0"]))
+        height = d["top"] - d["floor"]
+        if width < max(DOOR_WIDTH, BOT_WIDTH) - 1e-6:
+            problems.append("doorway %s only %.2f wide" % (d["name"], width))
+        if height < DOOR_HEIGHT - 1e-6:
+            problems.append("doorway %s only %.2f tall" % (d["name"], height))
+        lo = (d["x0"] + 0.05, d["floor"] + 0.05, d["z0"] + 0.05)
+        hi = (d["x1"] - 0.05, min(d["top"], d["floor"] + 9) - 0.05, d["z1"] - 0.05)
+        inside = TBR.hits_box(parts, lo, hi, lambda p: p["collide"])
+        if inside:
+            problems.append("doorway %s blocked by %s" % (d["name"], ", ".join(sorted({p["name"] for p in inside}))))
+    log("doorways: %d examined (4 wide / 7 tall for a player, 5 wide for a bot), %d problems" % (len(doors), len(problems)))
+    return problems
+
+
+def targets_of(info):
+    out = []
+    for i, o in enumerate(info["objectives"]):
+        out.append(("objective " + "AB"[i], o))
+    for p in info["power"]:
+        out.append(("high ground " + p["name"], p["point"]))
+    for s in info["loot"]:
+        out.append(("loot " + s["name"], s["at"]))
+    return out
+
+
+def check_walk(walk, info, log, label="walk"):
+    problems = []
+    one = entries(walk, -1)
+    two = entries(walk, 1)
+    if not one or not two:
+        return ["%s: no way in at a team's end (%d, %d entry cells)" % (label, len(one), len(two))], None, None
+    d1 = walk.bfs(one)
+    d2 = walk.bfs(two)
+    reached1 = int((d1 >= 0).sum())
+    unreached = []
+    unequal = []
+    for name, p in targets_of(info):
+        # An objective is a ring 28 across: its floor is anywhere near its middle (B's middle is the
+        # fountain itself).
+        nodes = walk.near(p[0], p[1], p[2], reach=7.0 if name.startswith("objective") else 1.5, rise=0.8)
+        a = [d1[n] for n in nodes if d1[n] >= 0]
+        b = [d2[n] for n in nodes if d2[n] >= 0]
+        if not a or not b:
+            unreached.append(name)
+            continue
+        if name.startswith("objective") and abs(min(a) - min(b)) > 1:
+            unequal.append("%s: %d vs %d steps" % (name, min(a), min(b)))
+    for c in info["cover"]:
+        nodes = walk.near(c[0], c[1], c[2], reach=1.0, rise=0.9)
+        if not any(d1[n] >= 0 for n in nodes):
+            unreached.append("cover spot (%.1f, %.1f, %.1f)" % c)
+    log("%s: %d cells reachable from team 1's end; %d targets (objectives, high ground, loot) and %d cover spots, "
+        "%d unreached; objectives %s" % (label, reached1, len(targets_of(info)), len(info["cover"]), len(unreached),
+                                          "equal from both ends" if not unequal else "UNEQUAL"))
+    problems += ["%s: cannot reach %s" % (label, t) for t in unreached[:10]]
+    problems += ["%s: %s" % (label, u) for u in unequal]
+    return problems, d1, d2
+
+
+def check_traps(walk, log):
+    """Nodes a bot can get into (from either end, walking and dropping) and not get back out of."""
+    starts = entries(walk, -1) + entries(walk, 1)
+    fwd = walk.bfs(starts)
+    back = walk.bfs(starts, reverse=True)
+    trapped = np.nonzero((fwd >= 0) & (back < 0))[0]
+    problems = []
+    if trapped.size:
+        xs, zs, ys = walk.node_x[trapped], walk.node_z[trapped], walk.node_y[trapped]
+        groups = cluster(list(zip(xs, ys, zs)), 3.0)
+        for g in groups[:6]:
+            problems.append("bots: a trap of %d cells round (%.1f, %.1f, %.1f)" % (len(g), *np.mean(np.array(g), axis=0)))
+    log("bots: %d cells a bot can reach, %d it could not get back out of" % (int((fwd >= 0).sum()), trapped.size))
+    return problems
+
+
+def cluster(points, gap):
+    """Single-linkage clusters of (x, y, z) points, `gap` apart on the flat."""
+    pts = np.array(points)
+    if len(pts) == 0:
+        return []
+    left = set(range(len(pts)))
+    groups = []
+    while left:
+        seed = left.pop()
+        group = [seed]
+        queue = [seed]
+        while queue:
+            i = queue.pop()
+            near = [j for j in left if math.hypot(pts[i][0] - pts[j][0], pts[i][2] - pts[j][2]) <= gap and abs(pts[i][1] - pts[j][1]) < 4]
+            for j in near:
+                left.discard(j)
+                group.append(j)
+                queue.append(j)
+        groups.append([tuple(pts[i]) for i in group])
+    groups.sort(key=len, reverse=True)
+    return groups
+
+
+def check_high_ground(walk, info, log):
+    """Every power position: the ways up into it from the ground network -- edges from outside its region
+    into it, grouped by the part the climber stands on just before (a stair's top step, a lintel, the
+    bridge) and, within one part, by where they are (3 studs apart) -- number two or more, and with any
+    one of them taken away it can still be reached."""
+    problems = []
+    starts = entries(walk, -1) + entries(walk, 1)
+    whole = walk.bfs(starts)
+    lines = []
+    for p in info["power"]:
+        x0, x1, z0, z1 = p["box"]
+        inside = (walk.node_x >= x0 - 0.01) & (walk.node_x <= x1 + 0.01) & (walk.node_z >= z0 - 0.01) & (walk.node_z <= z1 + 0.01) \
+            & (walk.node_y >= p["minY"])
+        ground = walk.bfs(starts, banned=inside)
+        into = inside[walk.dst] & ~inside[walk.src] & (ground[walk.src] >= 0)
+        srcs, ends = walk.src[into], walk.dst[into]
+        by_owner = {}
+        for s_id, d_id in zip(srcs, ends):
+            owner = int(walk.node_owner[s_id])
+            if owner < 0:
+                owner = int(walk.node_owner[d_id])
+            by_owner.setdefault(owner, []).append(int(d_id))
+        groups = []
+        for owner, ids in by_owner.items():
+            pts = [(float(walk.node_x[i]), float(walk.node_y[i]), float(walk.node_z[i])) for i in ids]
+            for g in cluster(pts, 3.0):
+                gset = {(round(q[0], 3), round(q[2], 3)) for q in g}
+                groups.append((g, [i for i in ids if (round(float(walk.node_x[i]), 3), round(float(walk.node_z[i]), 3)) in gset]))
+        point = walk.near(*p["point"], reach=1.5, rise=0.8)
+        if not any(whole[n] >= 0 for n in point):
+            problems.append("high ground %s cannot be reached at all" % p["name"])
+            continue
+        fragile = []
+        for index, (g, ids) in enumerate(groups):
+            # Take this way up away: ban the cells it arrives on.
+            ban = np.zeros(walk.count, bool)
+            ban[ids] = True
+            left = walk.bfs(starts, banned=ban)
+            if not any(left[n] >= 0 for n in point if not ban[n]):
+                fragile.append(index)
+        where = ["(%.0f, %.0f, %.0f)" % tuple(np.mean(np.array(g), axis=0)) for g, _ in groups]
+        lines.append("%s %d [%s]" % (p["name"], len(groups), " ".join(where)))
+        if len(groups) < 2:
+            problems.append("high ground %s: %d way(s) up (%s)" % (p["name"], len(groups), ", ".join(where)))
+        elif fragile:
+            problems.append("high ground %s: cut off if the way up at %s goes" % (p["name"], where[fragile[0]]))
+    log("high ground: %d positions; ways up: %s" % (len(info["power"]), "; ".join(lines)))
+    return problems
+
+
+def longest_clear(flags, step):
+    best, run, best_end = 0.0, 0.0, 0
+    for index, clear in enumerate(flags):
+        if clear:
+            run += step
+            if run > best:
+                best, best_end = run, index
+        else:
+            run = 0.0
+    return best, best_end
+
+
+def check_sightlines(cols, log, limit=SIGHT_LIMIT):
+    problems = []
+    lines = []
+    y = EYE
+    for lane, (xa, xb) in LANE_SIGHT.items():
+        worst = (0.0, None, None)
+        for x in np.arange(xa, xb + 0.01, 1.0):
+            span = math.sqrt(max(0.0, RADIUS ** 2 - x * x))
+            i = int(round((x - cols.x0) / cols.grid))
+            ks = np.nonzero(np.abs(cols.xs) <= span)[0]
+            zs = cols.xs[ks]
+            lo, hi = cols.LO[:, i, ks], cols.HI[:, i, ks]
+            flags = list(~((lo <= y) & (hi >= y)).any(axis=0))
+            length, end = longest_clear(flags, cols.grid)
+            if length > worst[0]:
+                worst = (length, x, zs[end] - length)
+        lines.append("%s %.0f (x %.0f from z %.0f)" % (lane, worst[0], worst[1], worst[2]))
+        if worst[0] > limit:
+            problems.append("sightline: %s lane has a clear eye-level line %.0f long down x = %.0f from z = %.0f"
+                            % (lane, worst[0], worst[1], worst[2]))
+    log("sightlines: longest eye-level line (%.1f up) straight down each lane: %s (limit %.0f)" % (y, "; ".join(lines), limit))
+    return problems
+
+
+def polyline_samples(points, step=1.0):
+    out = []
+    for a, b in zip(points, points[1:]):
+        length = math.dist((a[0], a[2]), (b[0], b[2]))
+        count = max(1, int(length / step))
+        for i in range(count):
+            t = i / count
+            out.append(tuple(a[j] + (b[j] - a[j]) * t for j in range(3)))
+    out.append(points[-1])
+    return out
+
+
+def check_cover(cols, info, log):
+    problems = []
+    lines = []
+    r = int(math.ceil(COVER_REACH / cols.grid))
+    offs = [(di, dk) for di in range(-r, r + 1) for dk in range(-r, r + 1) if math.hypot(di, dk) * cols.grid <= COVER_REACH]
+    for name, points in sorted(info["routes"].items()):
+        samples = polyline_samples(points, 1.0)
+        covered = []
+        for x, y, z in samples:
+            i, k = cols.cell(x, z)
+            found = False
+            for di, dk in offs:
+                a, b = i + di, k + dk
+                if 0 <= a < cols.n and 0 <= b < cols.n:
+                    lo, hi = cols.LO[:, a, b], cols.HI[:, a, b]
+                    if ((lo <= y + 1.0) & (hi >= y + COVER_HIGH)).any():
+                        found = True
+                        break
+            covered.append(found)
+        gap, end = longest_clear([not c for c in covered], 1.0)
+        lines.append("%s %.0f" % (name, gap))
+        if gap > COVER_GAP:
+            at = samples[end]
+            problems.append("cover: route %s runs %.0f studs with nothing at crouch height within %.0f (to %.0f, %.0f)"
+                            % (name, gap, COVER_REACH, at[0], at[2]))
+    log("cover: longest stretch with no cover %.1f+ high within %.0f studs, per route: %s (limit %.0f)"
+        % (COVER_HIGH, COVER_REACH, ", ".join(lines), COVER_GAP))
+    return problems
+
+
+def check_objectives(walk, cols, info, log):
+    problems = []
+    a, b = info["objectives"]
+    for name, o in (("A", a), ("B", b)):
+        if abs(o[2]) > 1e-6:
+            problems.append("objective %s is off the mirror (z %.3f): not equidistant from the bases" % (name, o[2]))
+        for base in (500.0, 900.0):
+            d1 = math.dist(o, (0, 0, -base))
+            d2 = math.dist(o, (0, 0, base))
+            if abs(d1 - d2) > 1e-6:
+                problems.append("objective %s: %.3f from base 1, %.3f from base 2" % (name, d1, d2))
+        nodes = walk.near(o[0], o[1], o[2], reach=7.0, rise=0.3)
+        if not nodes:
+            problems.append("objective %s: no floor a body stands on within 7 of its middle at its height %.2f" % (name, o[1]))
+        bad = []
+        for step in range(24):
+            ang = step * math.pi * 2 / 24
+            px, pz = o[0] + math.cos(ang) * HILL_RADIUS * HILL_SPREAD, o[2] + math.sin(ang) * HILL_RADIUS * HILL_SPREAD
+            if not walk.near(px, o[1], pz, reach=0.5, rise=0.6):
+                bad.append("%.0f deg" % math.degrees(ang))
+        if bad:
+            problems.append("objective %s: BotService's hold points not standable at %s" % (name, ", ".join(bad[:6])))
+    gap = math.dist(a, b)
+    log("objectives: A (%.1f, %.2f, %.1f) and B (%.1f, %.2f, %.1f), %.0f apart, both on the mirror; 24 bot hold points "
+        "round each checked" % (*a, *b, gap))
+    return problems
+
+
+def lane_polyline(info):
+    south = info["lanes"]["S"]
+    north = info["lanes"]["N"]
+    return south + list(reversed(north))[1:]
+
+
+def check_vehicles(cols, info, log):
+    problems = []
+    line = lane_polyline(info)
+    samples = polyline_samples(line, 0.5)
+    r = int(math.ceil(CAR_HALF / cols.grid))
+    offs = [(di, dk) for di in range(-r, r + 1) for dk in range(-r, r + 1) if math.hypot(di, dk) * cols.grid <= CAR_HALF]
+    blocked = []
+    for x, _, z in samples:
+        if math.hypot(x, z) > RADIUS + 6:
+            continue
+        i, k = cols.cell(x, z)
+        for di, dk in offs:
+            a, b = i + di, k + dk
+            lo, hi = cols.LO[:, a, b], cols.HI[:, a, b]
+            if ((lo < CAR_HIGH) & (hi > CAR_LOW)).any():
+                blocked.append((cols.x0 + a * cols.grid, cols.z0 + b * cols.grid))
+                break
+    for p in blocked[:6]:
+        problems.append("vehicles: the cut is blocked at (%.1f, %.1f)" % p)
+    # Round the core, not through it: nowhere near the keep or objective A's ring.
+    nearest = min(math.hypot(x, z) for x, _, z in samples)
+    if nearest < HILL_RADIUS + CAR_HALF + 20:
+        problems.append("vehicles: the cut passes %.0f from the keep's middle" % nearest)
+    turns = []
+    for a, b, c in zip(line, line[1:], line[2:]):
+        u = (b[0] - a[0], b[2] - a[2])
+        v = (c[0] - b[0], c[2] - b[2])
+        cosang = (u[0] * v[0] + u[1] * v[1]) / (math.hypot(*u) * math.hypot(*v))
+        turns.append(math.degrees(math.acos(max(-1, min(1, cosang)))))
+    straights = [math.dist((a[0], a[2]), (b[0], b[2])) for a, b in zip(line, line[1:])]
+    if max(turns) > 50:
+        problems.append("vehicles: a bend of %.0f degrees in the cut" % max(turns))
+    log("vehicles: the cut, %d samples of a corridor %.0f wide and %.1f..%.0f up: %d blocked; bends %s deg; straights %s; "
+        "nearest the keep's middle %.0f" % (len(samples), CAR_HALF * 2, CAR_LOW, CAR_HIGH, len(blocked),
+                                           "/".join("%.0f" % t for t in turns), "/".join("%.0f" % s for s in straights), nearest))
+    return problems
+
+
+def exposure(cols, walk, x, y, z, reach=60.0, stride=4):
+    """How exposed a spot is to the other team: of the places a player could stand within `reach` (every
+    `stride` cells, every storey) on the far side of the mirror from the spot (the side the other team
+    holds; both sides for a spot on the mirror), how many see a body crouched on it (eye 4.5 up there,
+    the spot's middle 2.5 up)."""
+    side = 0 if abs(z) < 1e-6 else (1 if z > 0 else -1)
+    far = (walk.node_z * side <= 0) if side else np.ones(walk.count, bool)
+    sel = far & (np.abs(walk.node_x - x) <= reach) & (np.abs(walk.node_z - z) <= reach) \
+        & (walk.node_i % stride == 0) & (walk.node_j % stride == 0)
+    ex, ey, ez = walk.node_x[sel], walk.node_y[sel] + 4.5, walk.node_z[sel]
+    d = np.hypot(ex - x, ez - z)
+    keep = (d <= reach) & (d > 3)
+    ex, ey, ez = ex[keep], ey[keep], ez[keep]
+    ty = y + 2.5
+    samples = np.linspace(0.02, 0.97, 160)
+    px = ex[:, None] + (x - ex)[:, None] * samples[None, :]
+    py = ey[:, None] + (ty - ey)[:, None] * samples[None, :]
+    pz = ez[:, None] + (z - ez)[:, None] * samples[None, :]
+    i = np.clip(np.rint((px - cols.x0) / cols.grid).astype(int), 0, cols.n - 1)
+    k = np.clip(np.rint((pz - cols.z0) / cols.grid).astype(int), 0, cols.n - 1)
+    lo = cols.LO[:, i, k]
+    hi = cols.HI[:, i, k]
+    blocked = ((lo <= py[None]) & (hi >= py[None])).any(axis=0).any(axis=1)
+    return int((~blocked).sum())
+
+
+RANK = {None: 0, "Common": 1, "Uncommon": 2, "Rare": 3, "Epic": 4, "Legendary": 5}
+
+
+def check_loot(walk, cols, parts, info, log):
+    problems = []
+    lane = polyline_samples(lane_polyline(info), 1.0)
+    tiers = {}
+    for s in info["loot"]:
+        x, y, z = s["at"]
+        if not walk.near(x, y, z, reach=0.8, rise=0.35):
+            problems.append("loot %s: no floor at (%.1f, %.2f, %.1f)" % (s["name"], x, y, z))
+        clear = 2.4 if s["kind"] == "chest" else 1.5
+        inside = TBR.hits_box(parts, (x - clear, y + 0.35, z - clear), (x + clear, y + 3.0, z + clear), lambda p: p["collide"])
+        if inside:
+            problems.append("loot %s: not clear (%s)" % (s["name"], ", ".join(sorted({p["name"] for p in inside}))))
+        if any(math.hypot(x - lx, z - lz) < TBR_LANE_CLEAR for lx, _, lz in lane):
+            problems.append("loot %s: on the vehicle route" % s["name"])
+        if s["kind"] == "weapon":
+            tiers.setdefault(s["floor"], []).append((exposure(cols, walk, x, y, z), s["name"]))
+    means = {k: sum(e for e, _ in v) / len(v) for k, v in tiers.items()}
+    order = sorted(means, key=lambda k: RANK.get(k, 0))
+    for lower, higher in zip(order, order[1:]):
+        if means[higher] <= means[lower]:
+            problems.append("loot: %s spots (seen from %.0f places on average) are no more exposed than %s spots (%.0f)"
+                            % (higher, means[higher], lower or "unfloored", means[lower]))
+    log("loot: %d spots; weapon spots by rarity floor, seen from how many places a player can stand within 60: %s"
+        % (len(info["loot"]), "; ".join("%s %.0f [%s]" % (k or "any", means[k], " ".join("%s %d" % (n, e) for e, n in tiers[k]))
+                                        for k in order)))
+    return problems
+
+
+TBR_LANE_CLEAR = 7.0
+HANG, BODY_UP, BODY_DOWN, POST = 4.4, 2.2, 3.0, 9.0
+
+
+def check_ziplines(walk, cols, info, log):
+    problems = []
+    lines = []
+    for z in info["zips"]:
+        top_a = z["fromTop"]
+        to = z["to"]
+        top_b = (to[0], to[1] + POST, to[2])
+        if top_b[1] >= top_a[1] - 4:
+            problems.append("zipline %s: not a drop (%.1f to %.1f)" % (z["name"], top_a[1], top_b[1]))
+        length = math.dist(top_a, top_b)
+        hits = []
+        for t in np.arange(0.0, 1.0001, 0.5 / length):
+            px, py, pz = (top_a[i] + (top_b[i] - top_a[i]) * t for i in range(3))
+            root = py - HANG
+            lo_y, hi_y = root - BODY_DOWN, root + BODY_UP
+            for dx, dz in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                i, k = cols.cell(px + dx, pz + dz)
+                if ((cols.LO[:, i, k] < hi_y) & (cols.HI[:, i, k] > lo_y)).any():
+                    hits.append((px, py, pz))
+                    break
+            if hits:
+                break
+        if hits:
+            problems.append("zipline %s: a rider hits something at (%.1f, %.1f, %.1f)" % (z["name"], *hits[0]))
+        direction = [(top_b[i] - top_a[i]) / length for i in range(3)]
+        handle = tuple(top_a[i] + direction[i] * 2 for i in range(3))
+        reach = [n for n in walk.near(handle[0], handle[1] - 4, handle[2], reach=10, rise=6)]
+        if not reach:
+            problems.append("zipline %s: no floor within reach of the handle" % z["name"])
+        # the foot: post, plate and mat on clear ground
+        i, k = cols.cell(to[0], to[2])
+        rr = int(3.5 / cols.grid)
+        foot = cols.LO[:, i - rr:i + rr + 1, k - rr:k + rr + 1], cols.HI[:, i - rr:i + rr + 1, k - rr:k + rr + 1]
+        if ((foot[0] < to[1] + POST) & (foot[1] > to[1] + 0.3)).any():
+            problems.append("zipline %s: its foot at (%.1f, %.1f) is not on clear ground" % (z["name"], to[0], to[2]))
+        lines.append("%s %.0f long, %.1f drop" % (z["name"], length, top_a[1] - top_b[1]))
+    log("ziplines: %d (%s)" % (len(info["zips"]), "; ".join(lines)))
+    return problems
+
+
+NEVER_TOPS = {"Keep", "Gatehouse", "Pit", "Gantry", "Bridge", "Crane", "SahurColossus", "RotKiosk", "Middle", "Paving"}
+MUST_BREAK = {"Wall", "Sandbag", "Crate", "Container", "Barrier", "Tyre", "Drum", "WreckBody", "StallCounter", "StallPost",
+              "SignPost", "RotColaMachine", "BrazierBowl", "Hedgehog"}
+
+
+def check_destruct(rt, model, parts, log):
+    lua = rt.lua
+    service = rt.destruct()
+    map_folder = lua.eval('Instance.new("Folder")')
+    map_folder.Name = "Map"
+    map_folder.Parent = lua.globals().workspace
+    model.Parent = map_folder
+    live = [p for p in model.GetDescendants(model).values() if p.IsA(p, "BasePart")]
+    problems = []
+    breakable = 0
+    must = 0
+    names_never = {"Foundation", "Paving", "GalleryFloor", "KeepStair", "KeepRamp", "KeepBalcony", "ScaffoldDeck", "ScaffoldStair",
+                   "PitRim", "BermStep", "RimStair", "GateWalk", "GateTower", "GateStair", "GantryDeck", "GantryStair", "BridgeDeck",
+                   "BridgePier", "KeepWall", "Plinth"}
+    same = lua.eval("function(a, b) return rawequal(a, b) end")  # two lupa proxies of one table are not ==
+    for part in live:
+        chain = []
+        node = part.Parent
+        while node is not None and not same(node, model):
+            chain.append(node.Name)
+            node = node.Parent
+        can = service.FromPart(part) is not None
+        breakable += can
+        if part.Name in MUST_BREAK and part.CanCollide:
+            must += 1
+            if not can:
+                problems.append("destruct: %s (%s) does not break" % (part.Name, "/".join(reversed(chain))))
+        if can and (part.Name in names_never or (NEVER_TOPS & set(chain) and not isinstance(part.GetAttribute(part, "Destructible"), str))):
+            problems.append("destruct: %s (%s) breaks, and must not" % (part.Name, "/".join(reversed(chain))))
+    pools = {}
+    for p in parts:
+        if ":" in p["tag"]:
+            pools.setdefault(p["tag"], []).append(p)
+    for tag, members in pools.items():
+        lo = [min(m["aabb"][0][i] for m in members) for i in range(3)]
+        hi = [max(m["aabb"][1][i] for m in members) for i in range(3)]
+        if max(hi[0] - lo[0], hi[2] - lo[2]) > 90:
+            problems.append("destruct: pool %s spans more than 90" % tag)
+        parents = {m["path"] for m in members}
+        if len(parents) > 1:
+            problems.append("destruct: pool %s is split across %s (a pool is one parent's children)" % (tag, sorted(parents)))
+    log("destruct: %d parts examined, %d breakable, %d that must break, %d tagged pools" % (len(live), breakable, must, len(pools)))
+    if must < 100:
+        problems.append("destruct: only %d breakable pieces found to check" % must)
+    model.Parent = None
+    return problems
+
+
+def check_zfight(rt, model, log):
+    return TBR.check_zfight(rt, model, log)
+
+
+def local_rows(parts):
+    return [(p["name"], p["cls"], p["size"], p["pos"], p["axes"], p["color"]) for p in parts]
+
+
+# ------------------------------------------------------------------------------------------------
+# Build on a mock town
+# ------------------------------------------------------------------------------------------------
+
+SMOKE = r"""
+function smoke(BG, mode)
+    local out = {}
+    local function fail(msg) table.insert(out, msg) end
+    local ws = Instance.new("Workspace")
+    workspace = ws
+    rawget(ws, "props").Terrain = Instance.new("Terrain")
+    local map = Instance.new("Folder")
+    map.Name = "Map"
+    map.Parent = ws
+    local all = {}
+    local function inst(class, name, parent)
+        local i = Instance.new(class)
+        i.Name = name
+        i.Parent = parent
+        return i
+    end
+    local function part(name, parent, size, cf)
+        local p = inst("Part", name, parent)
+        p.Size = size
+        p.CFrame = cf
+        table.insert(all, p)
+        return p
+    end
+    local centre = Vector3.new(300, 0, -200)
+    local town = inst("Model", "Town", map)
+    town:SetAttribute("TownName", "Rotville")
+    local shop = inst("Model", "Building", town)
+    rawget(shop, "props").Extents = Vector3.new(30, 20, 24)
+    part("Wall", shop, Vector3.new(30, 12, 1), CFrame.new(centre + Vector3.new(40, 6, 30)))
+    local far = inst("Model", "Building", town)
+    rawget(far, "props").Extents = Vector3.new(30, 20, 24)
+    part("Wall", far, Vector3.new(30, 12, 1), CFrame.new(centre + Vector3.new(400, 6, 0)))
+    -- A street along X straight through the middle, 420 long: cut back to the disc's edge each side.
+    local street = part("Asphalt", town, Vector3.new(420, 0.4, 18), CFrame.new(centre + Vector3.new(0, 0.2, 12)))
+    local theme = inst("Model", "Theme", town)
+    theme:SetAttribute("FootingGroup", true)
+    local piece = inst("Model", "SetPiece", theme)
+    rawget(piece, "props").Extents = Vector3.new(40, 20, 40)
+    part("Statue", piece, Vector3.new(4, 10, 4), CFrame.new(centre + Vector3.new(-30, 5, -20)))
+    local landmarks = inst("Model", "Landmarks", map)
+    local tower = inst("Model", "Tower", landmarks)
+    rawget(tower, "props").Extents = Vector3.new(140, 60, 120)
+    part("TowerWall", tower, Vector3.new(10, 40, 10), CFrame.new(centre + Vector3.new(120, 20, 60)))
+    local roads = inst("Model", "Roads", map)
+    local road = part("Road", roads, Vector3.new(20, 1, 300), CFrame.new(centre + Vector3.new(-140, 0.5, 0)))
+    local vehicles = inst("Model", "Vehicles", map)
+    local car = inst("Model", "Car", vehicles)
+    rawget(car, "props").Extents = Vector3.new(9, 6, 17)
+    part("Body", car, Vector3.new(8, 3, 16), CFrame.new(centre + Vector3.new(-60, 1.5, 40)))
+    local wilds = inst("Model", "Wilds", map)
+    local woods = inst("Model", "Woods", wilds)
+    woods:SetAttribute("FootingSkip", true)
+    rawget(woods, "props").Extents = Vector3.new(600, 40, 600)
+    local tree = inst("Model", "Tree", woods)
+    rawget(tree, "props").Extents = Vector3.new(8, 20, 8)
+    part("Trunk", tree, Vector3.new(2, 14, 2), CFrame.new(centre + Vector3.new(90, 7, -70)))
+    local base = inst("Model", "TeamBase1", map)
+    rawget(base, "props").Extents = Vector3.new(90, 20, 90)
+    part("Wall", base, Vector3.new(10, 8, 1), CFrame.new(centre + Vector3.new(0, 4, -135)))
+    local loot = inst("Folder", "Loot", ws)
+    local pickup = part("GroundWeapon", loot, Vector3.new(2, 1, 2), CFrame.new(centre + Vector3.new(10, 0.5, 10)))
+    function ws:GetPartBoundsInBox() local list = {} for _, p in ipairs(all) do if p.Parent then table.insert(list, p) end end return list end
+    function ws:FindFirstChild(name) for _, kid in ipairs(rawget(self, "kids")) do if kid.Name == name then return kid end end end
+    function ws:Raycast() return nil end
+    OverlapParams = { new = function() return {} end }
+    RaycastParams = { new = function() return {} end }
+    local flatCalls = {}
+    MODULES.MapTerrain.FlattenPad = function(site, size, options)
+        table.insert(flatCalls, options.height)
+        if mode == "pad" and #flatCalls == 1 then return nil, "pad" end
+        if mode == "bumpy" or mode == "flatstand" then return nil, "road" end
+        if mode == "pad" then return options.height end
+        return 3.25
+    end
+    MODULES.MapTerrain.PadAt = function() return 0.5 end
+    MODULES.MapTerrain.PadCost = function() if mode == "bumpy" then return 1, 9, 5 end return 2.0, 2.8, 2.4 end
+    MODULES.MapTerrain.InRiver = function(river, x, z) return mode == "river" and math.abs(x - 350) < 5 end
+    local zips = {}
+    MODULES.ZiplineService = { Create = function(parent, from, to, fromTop)
+        table.insert(zips, { parent = parent, to = to, fromTop = fromTop })
+        local m = Instance.new("Model"); m.Name = "Zipline"; m.Parent = parent; return m end }
+    local toTeamOne = Vector3.new(math.cos(0.6), 0, math.sin(0.6))
+    local at = CFrame.lookAt(centre, centre + toTeamOne)
+    local info, why = BG.Build(at, { map = map, river = mode == "river" and {} or nil }, 77)
+    out.why = why
+    if mode == "river" then
+        if info then fail("built across a river") end
+        if why ~= "river" then fail("refused for " .. tostring(why) .. ", not the river") end
+        return out
+    end
+    if mode == "bumpy" then
+        if info then fail("built on ground it could not level (1..9)") end
+        return out
+    end
+    if not info then fail("not built: " .. tostring(why)) return out end
+    local want = ({ flat = 3.25, pad = 0.5, flatstand = 2.4 })[mode]
+    if math.abs(info.height - want) > 1e-6 then fail(("stands at %.2f, want %.2f"):format(info.height, want)) end
+    if mode == "pad" and flatCalls[2] ~= 0.5 then fail("the retry did not ask for the town's pad level") end
+    if info.model.Parent ~= map then fail("the battleground is not in the map") end
+    if shop.Parent then fail("a building in the disc was left standing") end
+    if not far.Parent then fail("a building far outside the apron was removed") end
+    if piece.Parent then fail("a themes set piece in the disc was left standing") end
+    if not theme.Parent then fail("the town's whole themes group went") end
+    if not tower.Parent then fail("a landmark too big to clear was removed") end
+    if not road.Parent then fail("a road piece was removed") end
+    if car.Parent then fail("a parked car in the disc was left") end
+    if tree.Parent then fail("a tree in the disc was left") end
+    if not woods.Parent then fail("a whole woods group went") end
+    if not base.Parent then fail("a team base was touched") end
+    if pickup.Parent then fail("loot in the disc was left lying") end
+    -- The street: two pieces, each ending at the disc's edge (plus half its width), the rest kept.
+    local pieces = {}
+    for _, kid in ipairs(town:GetChildren()) do if kid.Name == "Asphalt" then table.insert(pieces, kid) end end
+    if #pieces ~= 2 then fail(#pieces .. " pieces of the street left, want 2") else
+        local cut = BG.Radius + BG.Margin + 2
+        for _, p in ipairs(pieces) do
+            local inner = math.min(math.abs(p.CFrame.p.X - p.Size.X / 2 - centre.X), math.abs(p.CFrame.p.X + p.Size.X / 2 - centre.X))
+            local reach = math.sqrt(inner * inner + 12 * 12)
+            if math.abs(reach - (cut + 9)) > 0.05 then fail(("a street piece ends %.2f from the middle, want %.2f"):format(reach, cut + 9)) end
+            local outer = math.max(math.abs(p.CFrame.p.X - p.Size.X / 2 - centre.X), math.abs(p.CFrame.p.X + p.Size.X / 2 - centre.X))
+            if math.abs(outer - 210) > 0.05 then fail("a street piece lost its far end") end
+        end
+    end
+    -- Facing: team 1 along the LookVector, the objectives on the mirror at the floor heights.
+    local lookFrame = info.frame
+    local l = lookFrame.LookVector
+    if math.abs(l.X - toTeamOne.X) > 1e-6 or math.abs(l.Z - toTeamOne.Z) > 1e-6 then fail("the frame does not face team 1") end
+    local a = info.objectives[1]
+    if math.abs(a.X - centre.X) > 1e-6 or math.abs(a.Z - centre.Z) > 1e-6 or math.abs(a.Y - (want + 0.8)) > 1e-6 then
+        fail(("objective A at %s, want the middle at floor %.2f"):format(tostring(a), want + 0.8)) end
+    if #zips ~= 4 then fail(#zips .. " ziplines hung, want 4") end
+    for i, z in ipairs(zips) do
+        local w = info.zips[i]
+        if (z.fromTop - w.fromTop).Magnitude > 1e-6 or (z.to - w.to).Magnitude > 1e-6 then fail("zipline " .. i .. " not where Layout put it") end
+    end
+    local unmarked = 0
+    for _, p in ipairs(info.model:GetDescendants()) do
+        if p:IsA("BasePart") and not p:GetAttribute("TeamBattleground") then unmarked = unmarked + 1 end
+    end
+    if unmarked > 0 then fail(unmarked .. " parts not marked TeamBattleground") end
+    -- CoverNear: nearest first, within the radius, a storey only.
+    local near = BG.CoverNear(info, centre + Vector3.new(0, want + 0.8, -30), 20)
+    local last = -1
+    for _, p in ipairs(near) do
+        local d = (Vector3.new(p.X, 0, p.Z) - Vector3.new(centre.X, 0, centre.Z - 30)).Magnitude
+        if d > 20 + 1e-6 then fail("CoverNear gave a spot outside its radius") break end
+    end
+    if #near == 0 then fail("CoverNear found nothing 30 from the middle") end
+    BG.Destroy(info)
+    if info.model.Parent then fail("Destroy left the model") end
+    if #BG.CoverNear(info, centre, 60) ~= 0 then fail("CoverNear still answers after Destroy") end
+    workspace = nil
+    return out
+end
+"""
+
+
+def check_build(src, log):
+    problems = []
+    for mode in ("flat", "pad", "flatstand", "bumpy", "river"):
+        rt = Runtime(src)
+        rt.lua.execute(SMOKE)
+        found = rt.lua.globals().smoke(rt.bg, mode)
+        problems += ["build (%s): %s" % (mode, found[i]) for i in range(1, len(found) + 1)]
+    log("build: on a mock town (levelled, the pad-level retry, flat enough to stand as it is, too rough, a river), %d problems"
+        % len(problems))
+    return problems
+
+
+# ------------------------------------------------------------------------------------------------
+# The real BotNav, finding cover among the built parts
+# ------------------------------------------------------------------------------------------------
+
+class Raycaster:
+    """workspace:Raycast over the built parts (boxes, wedges by their slope, cylinders and balls by their
+    boxes) and the flat ground at y = 0."""
+
+    def __init__(self, parts):
+        self.parts = [p for p in parts if p["collide"]]
+        self.c = np.array([p["pos"] for p in self.parts])
+        self.ax = np.array([p["axes"] for p in self.parts])
+        self.h = np.array([p["size"] for p in self.parts]) / 2
+        self.wedge = np.array([p["kind"] == "wedge" for p in self.parts])
+
+    def cast(self, origin, direction):
+        o = np.array(origin, float)
+        d = np.array(direction, float)
+        length = np.linalg.norm(d)
+        if length < 1e-9:
+            return None
+        u = d / length
+        rel = o[None, :] - self.c
+        lo = np.einsum("nij,nj->ni", self.ax, rel)
+        ld = np.einsum("nij,j->ni", self.ax, u)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t1 = (-self.h - lo) / ld
+            t2 = (self.h - lo) / ld
+        tmin = np.where(np.abs(ld) < 1e-12, np.where(np.abs(lo) <= self.h, -np.inf, np.inf), np.minimum(t1, t2))
+        tmax = np.where(np.abs(ld) < 1e-12, np.where(np.abs(lo) <= self.h, np.inf, -np.inf), np.maximum(t1, t2))
+        enter = tmin.max(axis=1)
+        leave = tmax.min(axis=1)
+        axis_in = tmin.argmax(axis=1)
+        best, normal = None, None
+        # Wedges: clip with the slope plane ly <= (hy/hz) lz.
+        for n in np.nonzero((enter <= leave) & (leave >= 0) & (enter <= length))[0]:
+            t0 = max(enter[n], 0.0)
+            nrm = None
+            if self.wedge[n]:
+                k = self.h[n][1] / self.h[n][2]
+                f0 = lo[n][1] - k * lo[n][2]
+                fd = ld[n][1] - k * ld[n][2]
+                # inside the half-space where f(t) = f0 + fd t <= 0
+                if abs(fd) < 1e-12:
+                    if f0 > 0:
+                        continue
+                else:
+                    tp = -f0 / fd
+                    if fd > 0:
+                        if tp < t0:
+                            continue
+                        leave_n = min(leave[n], tp)
+                        if leave_n < t0:
+                            continue
+                    else:
+                        if tp > leave[n]:
+                            continue
+                        if tp > t0:
+                            t0 = tp
+                            local_n = np.array([0.0, 1.0, -k])
+                            nrm = self.ax[n].T @ (local_n / np.linalg.norm(local_n))
+            if t0 > length:
+                continue
+            if best is None or t0 < best:
+                best = t0
+                if nrm is None:
+                    i = axis_in[n]
+                    sign = -1.0 if ld[n][i] > 0 else 1.0
+                    nrm = self.ax[n][i] * sign
+                normal = nrm
+        # the ground
+        if u[1] < -1e-9:
+            tg = -o[1] / u[1]
+            if 0 <= tg <= length and (best is None or tg < best):
+                best, normal = tg, np.array([0.0, 1.0, 0.0])
+        if best is None:
+            return None
+        p = o + u * best
+        return tuple(p), tuple(normal)
+
+    def hidden(self, threat, eye):
+        hit = self.cast(threat, tuple(np.array(eye) - np.array(threat)))
+        return hit is not None and math.dist(hit[0], eye) > 2
+
+
+BOTNAV_MOCK = r"""
+RaycastParams = { new = function() return {} end }
+OverlapParams = { new = function() return {} end }
+function botnavWorld(cast, around)
+    local ws = { }
+    function ws:Raycast(origin, direction, params)
+        local hit = cast(origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z)
+        if not hit then return nil end
+        return { Position = Vector3.new(hit[1], hit[2], hit[3]), Normal = Vector3.new(hit[4], hit[5], hit[6]), Material = "Grass" }
+    end
+    function ws:GetPartBoundsInRadius(point, radius) local n = around(point.X, point.Y, point.Z, radius) local t = {} for i = 1, n do t[i] = i end return t end
+    function ws:FindFirstChild() return nil end
+    workspace = ws
+end
+function botCharacter(x, y, z)
+    local humanoid = { HipHeight = 2, ClassName = "Humanoid" }
+    local root = { Position = Vector3.new(x, y, z), Size = Vector3.new(2, 2, 1) }
+    local character = { }
+    function character:FindFirstChildOfClass(c) if c == "Humanoid" then return humanoid end end
+    return character, root
+end
+function findCover(BotNav, x, y, z, tx, ty, tz)
+    local character, root = botCharacter(x, y, z)
+    local point, direct = BotNav.FindCover(root, character, Vector3.new(tx, ty, tz), { 10, 18, 28 })
+    if not point then return nil end
+    return { point.X, point.Y, point.Z, direct and 1 or 0 }
+end
+"""
+
+
+def check_botnav(src, parts, info, log, hints=True):
+    """The real BotNav.FindCover from points down every route, the threat 35 studs further on toward the
+    middle: how often it finds cover, how often that cover is the battleground's own, and whether every spot
+    it returns is hidden from the threat by this file's own rays."""
+    rc = Raycaster(parts)
+    lua = LuaRuntime(unpack_returned_tuples=True)
+    mock = TBR.MOCK.replace("local PARTS = { Part = true, WedgePart = true }",
+                            "local PARTS = { Part = true, WedgePart = true, TrussPart = true }")
+    lua.execute(mock + TBR.EXTRA_MOCK + BOTNAV_MOCK)
+
+    def cast(ox, oy, oz, dx, dy, dz):
+        hit = rc.cast((ox, oy, oz), (dx, dy, dz))
+        if hit is None:
+            return None
+        return lua.table_from(list(hit[0]) + list(hit[1]))
+
+    boxes = [TBR.obb(p) for p in rc.parts]
+
+    def around(x, y, z, r):
+        probe = ((x, y, z), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (r, r, r))
+        return sum(1 for b in boxes if abs(b[0][0] - x) < 40 and abs(b[0][2] - z) < 40 and TBR.obb_overlap(b, probe))
+
+    lua.globals().botnavWorld(cast, around)
+    botnav = lua.execute(luau_to_lua(src["botnav"]))
+    cover = [tuple(c) for c in info["cover"]]
+    if hints:
+        def near(ox, oy, oz, radius):
+            found = sorted((math.hypot(c[0] - ox, c[2] - oz), c) for c in cover
+                           if math.hypot(c[0] - ox, c[2] - oz) <= radius and abs(c[1] - oy) < 12)
+            return lua.table_from([lua.eval("Vector3.new")(c[0], c[1], c[2]) for _, c in found[:16]])
+        lua.execute("function setHints(f) BotNavRef.CoverHints = function(o, r) return f(o.X, o.Y, o.Z, r) end end")
+        lua.globals().BotNavRef = botnav
+        lua.globals().setHints(near)
+    tries = found = built = hidden = 0
+    problems = []
+    for name, points in sorted(info["routes"].items()):
+        samples = polyline_samples(points, 1.0)
+        for index in range(0, len(samples) - 36, 9):
+            x, y, z = samples[index]
+            ahead = samples[index + 35]
+            tries += 1
+            result = lua.globals().findCover(botnav, x, y + 3, z, ahead[0], ahead[1] + 4.5, ahead[2])
+            if result is None:
+                continue
+            found += 1
+            px, py, pz = result[1], result[2], result[3]
+            if any(abs(px - c[0]) < 1e-6 and abs(pz - c[2]) < 1e-6 for c in cover):
+                built += 1
+            if rc.hidden((ahead[0], ahead[1] + 4.5, ahead[2]), (px, py + 1.5, pz)):
+                hidden += 1
+            else:
+                problems.append("botnav: cover at (%.1f, %.1f, %.1f) is in view of the threat" % (px, py, pz))
+    log("botnav: FindCover from %d points on the routes: found cover %d times, %d of them the battleground's own spots, "
+        "%d hidden by this file's rays%s" % (tries, found, built, hidden, "" if hints else " (no CoverHints)"))
+    if hints and found and built < found * 0.5:
+        problems.append("botnav: only %d of %d cover spots were the battleground's own" % (built, found))
+    return problems[:6], (tries, found, built)
+
+
+# ------------------------------------------------------------------------------------------------
+
+def run(src, log, deep=True):
+    problems = []
+    rt = Runtime(src)
+    model, info_lua = rt.layout(SEED)
+    info = read_info(rt, info_lua)
+    # The geometry as built, before the z-fight pass nudges anything by its hundredths.
+    parts = rt.dump(model)
+    problems += check_zfight(rt, model, log)
+    problems += check_budget(parts, log)
+    problems += check_mirror(parts, log)
+    problems += check_floating(parts, log)
+    problems += check_cylinders(parts, log)
+    problems += check_doorways(parts, info["doorways"], log)
+    cols = Columns(parts)
+    walk = Walk(cols, R15)
+    found, _, _ = check_walk(walk, info, log)
+    problems += found
+    bots = Walk(cols, BOT, drops=True)
+    found, _, _ = check_walk(bots, info, log, label="bots")
+    problems += [f for f in found if "cover spot" not in f]
+    problems += check_traps(bots, log)
+    problems += check_high_ground(walk, info, log)
+    problems += check_sightlines(cols, log)
+    problems += check_cover(cols, info, log)
+    problems += check_objectives(bots, cols, info, log)
+    problems += check_vehicles(cols, info, log)
+    problems += check_loot(walk, cols, parts, info, log)
+    problems += check_ziplines(walk, cols, info, log)
+    problems += check_destruct(rt, model, parts, log)
+    if deep:
+        again = Runtime(src)
+        model2, _ = again.layout(SEED)
+        again.zfight.Fix(again.lua.table_from([model2]))
+        rt.zfight.Fix(rt.lua.table_from([model]))
+        a = local_rows(rt.dump(model))
+        b = local_rows(again.dump(model2))
+        diff = TBR.same_rows(a, b)
+        log("seed: rebuilt with the same seed, %d parts differ" % len(diff))
+        problems += ["seed: " + d for d in diff]
+        problems += check_build(src, log)
+        found, _ = check_botnav(src, parts, info, log)
+        problems += found
+    return problems
+
+
+def sweep_seeds(src, seeds, log):
+    problems, counts = [], []
+    for seed in seeds:
+        rt = Runtime(src)
+        model, info_lua = rt.layout(seed)
+        info = read_info(rt, info_lua)
+        quiet = lambda *_: None  # noqa: E731
+        parts = rt.dump(model)
+        found = check_zfight(rt, model, quiet)
+        found += check_mirror(parts, quiet)
+        found += check_floating(parts, quiet)
+        cols = Columns(parts)
+        walk = Walk(cols, R15)
+        f, _, _ = check_walk(walk, info, quiet)
+        found += f
+        found += check_budget(parts, quiet)
+        counts.append(len(parts))
+        problems += ["seed %d: %s" % (seed, line) for line in found]
+    log("seeds: %d more seeds swept (z-fighting, mirror, floating, walk, budget), %d problems, %d..%d parts"
+        % (len(seeds), len(problems), min(counts), max(counts)))
+    return problems
+
+
+# ------------------------------------------------------------------------------------------------
+# Planted faults. Each is an edit to a source (the battleground's own unless said), the checks that
+# must catch it, and a piece of the failure they must give: a plant that trips some other check
+# instead has not been caught by the one meant for it. Only the named checks run, on SEED, so the
+# whole list takes minutes, not an hour.
+
+def run_only(src, names, log=lambda *_: None):
+    rt = Runtime(src)
+    model, info_lua = rt.layout(SEED)
+    info = read_info(rt, info_lua)
+    parts = rt.dump(model)
+    cache = {}
+
+    def cols():
+        if "cols" not in cache:
+            cache["cols"] = Columns(parts)
+        return cache["cols"]
+
+    def walk():
+        if "walk" not in cache:
+            cache["walk"] = Walk(cols(), R15)
+        return cache["walk"]
+
+    def bots():
+        if "bots" not in cache:
+            cache["bots"] = Walk(cols(), BOT, drops=True)
+        return cache["bots"]
+
+    def seed():
+        again = Runtime(src)
+        model2, _ = again.layout(SEED)
+        diff = TBR.same_rows(local_rows(parts), local_rows(again.dump(model2)))
+        return ["seed: " + d for d in diff]
+
+    checks = {
+        "zfight": lambda: check_zfight(rt, model, log),
+        "budget": lambda: check_budget(parts, log),
+        "mirror": lambda: check_mirror(parts, log),
+        "floating": lambda: check_floating(parts, log),
+        "cylinders": lambda: check_cylinders(parts, log),
+        "doorways": lambda: check_doorways(parts, info["doorways"], log),
+        "walk": lambda: check_walk(walk(), info, log)[0],
+        "traps": lambda: check_traps(bots(), log),
+        "high_ground": lambda: check_high_ground(walk(), info, log),
+        "sightlines": lambda: check_sightlines(cols(), log),
+        "cover": lambda: check_cover(cols(), info, log),
+        "objectives": lambda: check_objectives(bots(), cols(), info, log),
+        "vehicles": lambda: check_vehicles(cols(), info, log),
+        "loot": lambda: check_loot(walk(), cols(), parts, info, log),
+        "ziplines": lambda: check_ziplines(walk(), cols(), info, log),
+        "destruct": lambda: check_destruct(rt, model, parts, log),
+        "seed": seed,
+        "build": lambda: check_build(src, log),
+        "botnav": lambda: check_botnav(src, parts, info, log)[0],
+    }
+    found = []
+    for name in names:
+        found += checks[name]()
+    return found
+
+
+# The bot trap: a ramp up to a platform 10 high on the clear ground by the pit approach, and past it
+# a walled pocket 10 down -- a bot walks up, drops in (a drop PathfindingService takes) and never gets
+# out. Both halves get one.
+TRAP = """	box(approach, "TrapPlatform", -71, -63, 0, 10, -57, -49, STONE, MAT.Slate, NEVER)
+	put(approach, "TrapRamp", Vector3.new(8, 10, 14), CFrame.new(-78, 5, -53) * CFrame.Angles(0, math.pi / 2, 0), STONE, MAT.Slate,
+		{ class = "WedgePart", tag = false })
+	box(approach, "TrapWall", -63, -56, 0, 12, -58, -57, STONE, MAT.Slate, NEVER)
+	box(approach, "TrapWall", -63, -56, 0, 12, -49, -48, STONE, MAT.Slate, NEVER)
+	box(approach, "TrapWall", -57, -56, 0, 12, -57, -49, STONE, MAT.Slate, NEVER)
+"""
+
+KEEP_DOOR = '\tdoorway("KeepDoor", -15, -9, -22, -20, KF, 9.8)\n'
+
+
+def after_keep_door(line):
+    return [(KEEP_DOOR, KEEP_DOOR + "\t" + line + "\n")]
+
+
+PLANTS = [
+    ("the second half from its own seed", "bg",
+     [("B.rng = Random.new(seed or 1)", "B.rng = Random.new((seed or 1) + (mirror and 1 or 0))")], ["mirror"], "mirror"),
+    ("a piece in one half only", "bg",
+     [('\tlocal court = folder(root, "Forecourt")\n',
+       '\tlocal court = folder(root, "Forecourt")\n\tif not B.mirror then box(court, "Odd", 30, 31, 0, 2, -60, -59, STONE, MAT.Slate, NEVER) end\n')],
+     ["mirror"], "mirror"),
+    ("a coplanar plate on the keep floor", "bg",
+     after_keep_door('box(keep, "Paving", -19.9, -12.1, 0.5, KF, -19.9, -10, BASALT, MAT.Slate, NEVER)'), ["zfight"], "zfight"),
+    ("a lamp in mid-air", "bg", after_keep_door('box(keep, "Lamp", 0, 1, 30, 31, -10, -9, WARM, MAT.Neon, NEVER)'), ["floating"], "Lamp"),
+    ("cylinders stood on end", "bg",
+     [("return put(parent, name, Vector3.new((b - a).Magnitude, diameter, diameter), rodFrame(a, b)",
+       "return put(parent, name, Vector3.new(diameter, (b - a).Magnitude, diameter), rodFrame(a, b)")], ["cylinders"], "ylinder"),
+    ("a post in the keep's door", "bg",
+     after_keep_door('box(keep, "Post", -12.6, -11.4, KF, 9.8, -21.6, -20.4, STONE, MAT.Slate, NEVER)'), ["doorways"], "KeepDoor"),
+    ("the gatehouse's east stair gone", "bg",
+     [('\tflightZ(gate, "GateStair", 20, 26, -80.6, -68, 0, GATE_TOP, 10, STONE_DARK, MAT.Cobblestone, -0.5)\n', "")],
+     ["high_ground"], "Gatehouse"),
+    ("a bot trap", "bg",
+     [('\ttramCar(approach, -84, -62, -41, -36, "RotTramA", true)\n', '\ttramCar(approach, -84, -62, -41, -36, "RotTramA", true)\n' + TRAP)],
+     ["traps"], "trap"),
+    ("the colossus's pedestal gone", "bg",
+     [('local pedestal = folder(court, "ColossusPedestal", true)', 'local pedestal = Instance.new("Model")')], ["sightlines"], "centre"),
+    ("the entry's dragon's teeth gone", "bg",
+     [("\tteeth(entry, 3.2, -116, 2)\n\tteeth(entry, -6.4, -104, 2)\n\tteeth(entry, 3.2, -94, 2)\n", "")], ["cover"], "cover"),
+    ("objective A off the mirror", "bg",
+     [("TeamBattleground.ObjectivesLocal = { Vector3.new(0, KF, 0),", "TeamBattleground.ObjectivesLocal = { Vector3.new(0, KF, -3),")],
+     ["objectives"], "objective"),
+    ("a pillar where bots hold A", "bg",
+     after_keep_door('box(keep, "Pillar", 13, 15.5, KF, 9, -8, -5.5, STONE, MAT.Slate, NEVER)'), ["objectives"], "objective"),
+    ("a crate on the vehicle route", "bg",
+     [("local function buildLane(root)\n", 'local function buildLane(root)\n\tbox(root, "Crate", 69, 71, 0, 2, -101, -99, WOOD, MAT.Wood, NEVER)\n')],
+     ["vehicles"], "vehicle"),
+    ("forecourt loot inside the kiosk", "bg",
+     [('lootSpot("Forecourt", 1.5, TILE, -38.5, "weapon")', 'lootSpot("Forecourt", 9.5, TILE, -38, "weapon")')], ["loot"], "Forecourt"),
+    ("the best loot in the safest spot", "bg",
+     [('lootSpot("KeepHall", -15.5, KF, -6.5, "heal")', 'lootSpot("KeepHall", -15.5, KF, -6.5, "weapon", "Legendary")')], ["loot"], "Legendary"),
+    ("zipline masts cut down", "bg", [("local ZIP_TOP = GAL + 9.6", "local ZIP_TOP = GAL + 3")], ["ziplines"], "zip"),
+    # (A string tag is what DestructibleService breaks, and it never breaks a part named Paving,
+    # Foundation, Plinth, Deck... whatever it carries: so the plants are on the pieces it does not
+    # protect by name, which only this file's flags keep standing.)
+    ("the keep's ramp tagged to break", "bg",
+     [('CFrame.new(25, GAL / 2, -19.5), STONE, MAT.Cobblestone, { class = "WedgePart", tag = false })',
+       'CFrame.new(25, GAL / 2, -19.5), STONE, MAT.Cobblestone, { class = "WedgePart", tag = "Ramp" })')],
+     ["destruct"], "break"),
+    ("the gallery floor tagged to break", "bg",
+     [('box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, NEVER)',
+       'box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, { tag = "Floor", health = 100 })')],
+     ["destruct"], "break"),
+    ("unseeded wear", "bg", [("B.rng = Random.new(seed or 1)", "B.rng = Random.new((seed or 1) + math.random(1, 100000))")], ["seed"], "seed"),
+    ("over budget", "bg",
+     [('\tlocal middle = folder(root, "Middle", true)\n',
+       '\tlocal middle = folder(root, "Middle", true)\n\tfor i = 1, 30 do box(middle, "Junk", -0.5, 0.5, 0, 1, 150 + i * 2, 151 + i * 2, STONE, MAT.Slate, NEVER) end\n')],
+     ["budget"], "budget"),
+    ("the site not cleared", "bg", [("\tTeamBattleground.ClearSite(site, map)\n", "")], ["build"], "build"),
+    ("streets not cut back", "bg",
+     [("local function trimPart(part, centre, radius)\n", "local function trimPart(part, centre, radius)\n\tdo return 1 end\n")], ["build"], "build"),
+    ("the levelled height ignored", "bg",
+     [("local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)",
+       "local frame = CFrame.new(position.X, position.Y, position.Z) * CFrame.Angles(0, yaw, 0)")], ["build"], "build"),
+    ("no town-level retry", "bg", [('if not height and why == "pad" then', "if false then")], ["build"], "build"),
+    ("a river site accepted", "bg", [("local refusal = TeamBattleground.SiteRefusal(site, mapInfo)", "local refusal = nil")], ["build"], "build"),
+    ("no ziplines hung", "bg",
+     [("ok, line = pcall(ZiplineService.Create, lines, zip.fromTop, zip.to, zip.fromTop)", 'ok, line = false, "cut"')], ["build"], "zipline"),
+    ("BotNav ignores the hints", "botnav", [("\tif BotNav.CoverHints then\n", "\tif false then\n")], ["botnav"], "botnav"),
+    ("BotNav takes a hint the threat can see", "botnav",
+     # The hints loop's own hidden test (five tabs deep; the rings' copy below it is four). Since the ray
+     # budget (#131) it is a line of its own ahead of the CanStep test.
+     [("\t\t\t\t\tif hit and (hit.Position - eye).Magnitude > 2 then\n\t\t\t\t\t\tlocal ok, reason = BotNav.CanStep(",
+       "\t\t\t\t\tif true then\n\t\t\t\t\t\tlocal ok, reason = BotNav.CanStep(")], ["botnav"], "botnav"),
+]
+
+
+def run_plants(src, only=None):
+    caught = 0
+    chosen = [p for p in PLANTS if not only or any(o in p[0] for o in only)]
+    for label, key, edits, names, expect in chosen:
+        planted = dict(src)
+        text = planted[key]
+        moved = [old for old, _ in edits if text.count(old) != 1]
+        if moved:
+            print("plant %-44s ANCHOR MOVED (%s...)" % (label + ":", moved[0][:50]), flush=True)
+            continue
+        for old, new in edits:
+            text = text.replace(old, new)
+        planted[key] = text
+        try:
+            found = run_only(planted, names)
+        except Exception as error:  # a crash is not a catch
+            print("plant %-44s CRASHED: %s" % (label + ":", str(error).splitlines()[0]), flush=True)
+            continue
+        hits = [f for f in found if expect.lower() in f.lower()]
+        caught += bool(hits)
+        print("plant %-44s %s%s" % (label + ":", "caught" if hits else "MISSED",
+                                    " (%s)" % (hits or found or ["no failure"])[0][:110]), flush=True)
+    print("team_battleground_check plants: %d of %d caught" % (caught, len(chosen)))
+    return caught == len(chosen)
+
+
+def main(argv):
+    repo = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else "."
+    src = sources(repo)
+    if "--plant-only" in argv:
+        # --plant-only [words...]: just the plants (those whose label holds one of the words).
+        words = argv[argv.index("--plant-only") + 1:]
+        return 0 if run_plants(src, words) else 1
+    problems = run(src, print)
+    problems += sweep_seeds(src, (1, 2, 3, 11, 777), print)
+    for line in problems:
+        print("  FAIL " + line)
+    print("team_battleground_check: %d problems" % len(problems))
+    ok = not problems
+    if "--plant" in argv:
+        ok &= run_plants(src)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

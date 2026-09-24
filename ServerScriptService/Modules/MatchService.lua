@@ -1228,29 +1228,61 @@ local function finishMatch()
 	end)
 end
 
+-- Where a body's drop goes: its HumanoidRootPart, or failing that wherever the body is. Only the root
+-- was asked before, and a death without one (a body that fell out of the world, a rig whose root came
+-- away) quietly dropped nothing at all.
+local function deathSpot(token)
+	local root = Combatants.GetRoot(token)
+	if root then
+		return root.Position
+	end
+	local character = Combatants.GetCharacter(token)
+	if character and character.Parent then
+		local ok, pivot = pcall(character.GetPivot, character)
+		if ok then
+			return pivot.Position
+		end
+	end
+	return nil
+end
+
+-- One piece of a death drop. Each goes down on its own, so a fault building one pickup costs that
+-- pickup only, not the rest of the body's gear, and never the elimination that called it (dropLoot
+-- runs first in eliminate(): a throw here used to lose the kill feed, the placement and the alive
+-- count along with the drop).
+local function dropSafely(drop, ...)
+	local ok, err = pcall(drop, ...)
+	if not ok then
+		warn("[MatchService] death drop failed: " .. tostring(err))
+	end
+end
+
 -- Put the victim's gear back on the map so a kill is worth pushing for.
 local function dropLoot(token)
-	local root = Combatants.GetRoot(token)
-	if not root then
+	local position = deathSpot(token)
+	if not position then
 		return
 	end
-	local position = root.Position
 
 	if Combatants.IsBot(token) then
 		if token.weapon then
-			LootService.DropWeapon(token.weapon.id, position)
+			dropSafely(LootService.DropWeapon, token.weapon.id, position)
+		end
+		-- The second gun a bot carries (BotService's BOT LOOTING & ROTATION, bot.backup) drops as well.
+		if token.backup and token.backup.id then
+			dropSafely(LootService.DropWeapon, token.backup.id, position)
 		end
 		-- Bots loot heals and shields now, so killing one pays out the same as killing a player.
 		local heals = token.heals
 		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
-			LootService.DropHeal(position)
+			dropSafely(LootService.DropHeal, position)
 		end
 		local shields = token.shields
 		if shields and (shields.MiniShield or 0) + (shields.ShieldPotion or 0) > 0 then
-			LootService.DropItem((shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
+			dropSafely(LootService.DropItem, (shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
 		end
 		if (token.defenses or 0) > 0 then
-			LootService.DropItem("RotBarricade", position, token.defenses)
+			dropSafely(LootService.DropItem, "RotBarricade", position, token.defenses)
 		end
 		return
 	end
@@ -1263,7 +1295,7 @@ local function dropLoot(token)
 	-- Everything they carried hits the floor: each gun with the ammo its owner had left (so a
 	-- death isn't an ammo refill), each item stack as one pickup.
 	for _, slot in pairs(loadout.slots) do
-		LootService.DropSlot(slot, position)
+		dropSafely(LootService.DropSlot, slot, position)
 	end
 end
 
@@ -1308,25 +1340,27 @@ end
 -- with it. Bots track a magazine but no reserve, so a dropped bot gun comes down full, the way the
 -- battle royale's do. Coins, XP and mastery are untouched: this is loot, not the reward economy.
 local function dropPickedUp(token)
-	local root = Combatants.GetRoot(token)
-	if not root then
+	local position = deathSpot(token)
+	if not position then
 		return
 	end
-	local position = root.Position
 	if Combatants.IsBot(token) then
 		if token.weapon and token.weapon.id and token.weapon.id ~= token.issuedWeaponId then
-			LootService.DropWeapon(token.weapon.id, position)
+			dropSafely(LootService.DropWeapon, token.weapon.id, position)
+		end
+		if token.backup and token.backup.id and token.backup.id ~= token.issuedWeaponId then
+			dropSafely(LootService.DropWeapon, token.backup.id, position)
 		end
 		local heals = token.heals
 		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
-			LootService.DropHeal(position)
+			dropSafely(LootService.DropHeal, position)
 		end
 		local shields = token.shields
 		if shields and (shields.MiniShield or 0) + (shields.ShieldPotion or 0) > 0 then
-			LootService.DropItem((shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
+			dropSafely(LootService.DropItem, (shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
 		end
 		if (token.defenses or 0) > 0 then
-			LootService.DropItem("RotBarricade", position, token.defenses)
+			dropSafely(LootService.DropItem, "RotBarricade", position, token.defenses)
 		end
 		return
 	end
@@ -1336,7 +1370,7 @@ local function dropPickedUp(token)
 	end
 	for _, slot in pairs(loadout.slots) do
 		if not slot.issued then
-			LootService.DropSlot(slot, position)
+			dropSafely(LootService.DropSlot, slot, position)
 		end
 	end
 end
@@ -1397,6 +1431,7 @@ local function eliminate(token, killerToken, method, weaponId)
 	killFeed:FireAllClients({
 		victim = Combatants.GetName(token),
 		killer = killerToken and Combatants.GetName(killerToken) or nil,
+		killerUserId = killerToken and Combatants.GetUserId(killerToken) or nil,
 		method = killerToken and method or nil,
 		placement = placements[token],
 	})
@@ -1408,7 +1443,8 @@ local function eliminate(token, killerToken, method, weaponId)
 		if Combatants.IsPlayer(killerToken) and killerToken ~= token and participants[killerToken] then
 			RewardService.AwardBonusCoins(killerToken, reward, "bounty on " .. Combatants.GetName(token))
 			QuestService.Progress(killerToken, "bounties", 1)
-			bounty:FireAllClients({ claimed = true, name = Combatants.GetName(token), by = Combatants.GetName(killerToken), reward = reward })
+			bounty:FireAllClients({ claimed = true, name = Combatants.GetName(token), userId = Combatants.GetUserId(token),
+				by = Combatants.GetName(killerToken), reward = reward })
 		else
 			bounty:FireAllClients(nil)
 		end
@@ -1448,7 +1484,8 @@ local function eliminate(token, killerToken, method, weaponId)
 		if streak.total >= bountyMinKills and (killerToken == bountyToken or streak.total > leaderKills) and alive[killerToken] then
 			bountyToken = killerToken
 			bountyReward = math.floor((BOUNTY_BASE + BOUNTY_PER_KILL * streak.total) * bountyMultiplier)
-			bounty:FireAllClients({ name = Combatants.GetName(killerToken), kills = streak.total, reward = bountyReward })
+			bounty:FireAllClients({ name = Combatants.GetName(killerToken), userId = Combatants.GetUserId(killerToken),
+				kills = streak.total, reward = bountyReward })
 		end
 	end
 
@@ -1619,6 +1656,10 @@ local function startMatch()
 	MapGenerator.ApplyLightingOverride(event.lighting)
 	LootService.Populate(mapInfo)
 	BotService.Clear()
+	-- The map's RoadNetwork, so bot drivers route along the roads (BotService.SetRoads).
+	if BotService.SetRoads then
+		BotService.SetRoads(mapInfo and mapInfo.roads)
+	end
 
 	participants = {}
 	alive = {}
@@ -1772,7 +1813,10 @@ local function startMatch()
 				end
 				character:PivotTo(spawnAt + Vector3.new(0, MatchConfig.DropHeight, 0))
 				MovementService.DropIn(player, character)
-				StateSync.Notify(player, "Dropping in — steer with WASD, look for a landmark")
+				-- The drop glides in "steer" mode: straight down with nothing held, so doing what the old
+				-- toast said (hold W) carried the player off the spot they had just picked (#86).
+				StateSync.Notify(player, picked and "Dropping in over your spot — hold nothing to land there, or steer with WASD"
+					or "Dropping in — steer with WASD, look for a landmark")
 			end
 			watchDeath(player, humanoid)
 		end)
@@ -1949,9 +1993,15 @@ function MatchService.Start()
 			task.wait(1)
 
 			if state == "Waiting" then
-				if #readyPlayers() >= MatchConfig.MinPlayers then
+				local readyNow = #readyPlayers()
+				if readyNow >= MatchConfig.MinPlayers then
 					state = "Countdown"
-					countdown = MatchConfig.LobbyCountdown
+					-- Everyone already ready (a solo player, always): start at the short count. Starting at
+					-- the full one and cutting it on the next tick showed "STARTING IN 15" then "7", a
+					-- clock that skipped eight seconds with no word why (#86).
+					countdown = readyNow >= #Players:GetPlayers()
+						and math.min(MatchConfig.LobbyCountdown, MatchConfig.AllReadyCountdown)
+						or MatchConfig.LobbyCountdown
 					VoteService.Open()
 				end
 				broadcast()

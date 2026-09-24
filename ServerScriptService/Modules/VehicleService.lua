@@ -1,11 +1,18 @@
 -- Vehicles: drivable cars and motorbikes parked along the roads and around the towns.
 --
---   VehicleService.Create(parent, position, yaw, kind) -> model   kind "car" or "bike"
---     (an optional fifth argument { model = "TralalaGT", scheme = 2 } picks both, for tests)
+--   VehicleService.Create(parent, position, yaw, kind, options) -> model   kind "car" or "bike";
+--       options: model, scheme, rng, inward, exact (stand exactly at `position`, no parkOn)
+--     (an optional fifth argument { model = "TralalaGT", scheme = 2 } picks both, for tests;
+--      { inward = Vector3 } says which way, and how far, level ground lies if the spot is not level)
 --   VehicleService.Start()                                         (once, from Bootstrap)
 --   VehicleService.Count()                                         registered vehicles, for tests
 --   VehicleService.ApplyBlast(centre, radius, damage)              throw vehicles clear of a blast
 --   VehicleService.Get(model)                                      the service's entry for a model
+--   VehicleService.FootingAt(parent, centre, yaw, size)            parkOn's level test, asked in advance
+--   VehicleService.VehiclesNear(position, radius)                  { { model, entry, distance } } a bot may get into
+--   VehicleService.SeatsOf(model)                                  { driver, gunner, passengers }
+--   VehicleService.BotSit(humanoid, seat)                          sit a bot, with a player's checks
+--   VehicleService.BotYield                                        set by BotService (TAKING OVER below)
 --
 -- Bodies come from Shared/VehicleModels and handling from Shared/VehicleDynamics; this file owns
 -- everything around them: seats and prompts, who simulates the physics, keeping drivers honest,
@@ -21,10 +28,18 @@
 -- player-driven vehicle: sustained speed well past the model's top speed, or a jump further than it
 -- could have travelled, takes the physics back and puts the vehicle where it last was sane.
 --
--- RIDERS. Sitting is by prompt (Drive, Ride), never by walking into a seat. A rider's parts go
--- massless while seated so they can't tip the vehicle, and the Player carries InVehicle (and
--- VehicleRole "Driver" or "Passenger") so the combat camera stands down. Jump gets you out, put
--- down at the first clear spot beside the vehicle.
+-- RIDERS. Sitting is by prompt (Drive, Ride, Man the gun), never by walking into a seat. A rider's
+-- parts go massless while seated so they can't tip the vehicle, and the Player carries InVehicle (and
+-- VehicleRole "Driver", "Gunner" or "Passenger") so the combat camera stands down. Jump gets you
+-- out, put down at the first clear spot beside the vehicle. An armed vehicle has a seat at its gun
+-- (GunnerSeat, VehicleWeapons says who fires).
+--
+-- TAKING OVER. A bot at the wheel (or on the gun) does not lock a player out of the vehicle: that
+-- seat's prompt stays up while a bot holds it, reading "Take over", and triggering it asks
+-- VehicleService.BotYield (BotService's rules: a teammate always may, and with no teams, anyone the
+-- bot is not fighting). If it may, the bot stops the car, gets out beside it, and the player is sat in
+-- the seat it left. VehicleClient hides the prompt from anyone the same rules refuse; the server
+-- decides either way.
 --
 -- RNG. Create makes exactly one call to the global math.random, as it always has (it used to pick a
 -- paint colour). That roll seeds a local Random which picks the model, paint and everything else,
@@ -141,6 +156,8 @@ local function makePrompt(chassis, name, localPosition, actionText, objectText)
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = PROMPT_DISTANCE
 	prompt.RequiresLineOfSight = false
+	-- B on a controller, like the loot prompts: X is Reload (#86).
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 	prompt.Parent = attachment
 	return prompt
 end
@@ -223,6 +240,16 @@ local function findExit(entry, character, preferSide)
 	return CFrame.lookAt(at, at + flat)
 end
 
+-- Whether `seat` is the driving seat or the gun's seat, held by a bot (not a player).
+local function botHeld(entry, seat)
+	if seat ~= entry.seat and seat ~= entry.gunnerSeat then
+		return false
+	end
+	local occupant = seat.Occupant
+	local character = occupant and occupant.Parent
+	return character ~= nil and Players:GetPlayerFromCharacter(character) == nil and Combatants.FromCharacter(character) ~= nil
+end
+
 local function onSeatChanged(entry, seat)
 	local previous = entry.occupants[seat]
 	local current = seat.Occupant
@@ -282,7 +309,7 @@ local function onSeatChanged(entry, seat)
 		entry.riders[seat] = { character = character, player = player }
 		if player then
 			player:SetAttribute("InVehicle", true)
-			player:SetAttribute("VehicleRole", seat == entry.seat and "Driver" or "Passenger")
+			player:SetAttribute("VehicleRole", seat == entry.seat and "Driver" or (seat == entry.gunnerSeat and "Gunner" or "Passenger"))
 		end
 		-- A rider who dies would otherwise stay welded in.
 		entry.deaths[seat] = current.Died:Connect(function()
@@ -303,24 +330,70 @@ local function onSeatChanged(entry, seat)
 	-- event later -- caught by vehicle_health_probe.lua's check named
 	-- "the drive prompt is disabled once wrecked" (verbatim, so a grep for the check name finds
 	-- both the proof and the guard it proves).
+	-- A bot's driving or gun seat keeps its prompt, as "Take over" (TAKING OVER in the header).
 	if not entry.wrecked then
 		for promptSeat, prompt in pairs(entry.prompts) do
-			prompt.Enabled = promptSeat.Occupant == nil
+			local held = botHeld(entry, promptSeat)
+			prompt.Enabled = promptSeat.Occupant == nil or held
+			prompt.ActionText = held and "Take over" or entry.promptText[promptSeat] or prompt.ActionText
 		end
 	end
+end
+
+-- A player asking for a seat a bot holds. BotService's VehicleService.BotYield(bot, player, seat,
+-- model) says whether this player may have it and, if so, gets the bot out (stopping the car first
+-- from the driving seat); this waits for the seat to come free. While it waits the seat is spoken for
+-- (entry.takeover), so no other bot sits in it first. True once the seat is free for the player.
+local TAKEOVER_WAIT = 3
+local function takeOver(entry, player, seat)
+	if not botHeld(entry, seat) or entry.takeover then
+		return false
+	end
+	local occupant = seat.Occupant
+	local token = Combatants.FromCharacter(occupant.Parent)
+	local yield = VehicleService.BotYield
+	if type(yield) ~= "function" then
+		return false
+	end
+	entry.takeover = { player = player, seat = seat }
+	local ok, allowed = pcall(yield, token, player, seat, entry.model)
+	if not ok then
+		warn("VehicleService: BotYield failed: " .. tostring(allowed))
+	end
+	if not ok or not allowed then
+		entry.takeover = nil
+		return false
+	end
+	local deadline = tick() + TAKEOVER_WAIT
+	while seat.Occupant == occupant and tick() < deadline do
+		task.wait(0.05)
+	end
+	return seat.Occupant == nil
 end
 
 local function trySit(entry, player, seat)
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or humanoid.Health <= 0 or not root or seat.Occupant then
+	if not humanoid or humanoid.Health <= 0 or not root then
 		return
 	end
 	if (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 6 then
 		return
 	end
 	if entry.rig.chassis.CFrame.UpVector.Y < 0.4 then
+		return
+	end
+	-- Someone in it: only a bot, only in the seats it can be asked out of (TAKING OVER).
+	if seat.Occupant then
+		local freed = takeOver(entry, player, seat)
+		entry.takeover = nil
+		-- The car was brought to a stop for this, so a little more reach than the prompt's.
+		if not freed or humanoid.Health <= 0 or not root.Parent
+			or (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 12 then
+			return
+		end
+	elseif entry.takeover and entry.takeover.seat == seat and entry.takeover.player ~= player then
 		return
 	end
 	-- Moving seats within the same vehicle: get up first. Seated anywhere else: no.
@@ -349,6 +422,55 @@ local function trySit(entry, player, seat)
 	seat:Sit(humanoid)
 end
 
+-- Sits a bot's humanoid in `seat` with the checks trySit makes for a player: alive, near it, the
+-- vehicle upright and not wrecked, the seat empty and not spoken for by a player taking it over.
+function VehicleService.BotSit(humanoid, seat)
+	local model = seat and seat.Parent
+	local entry = model and byModel[model]
+	local character = humanoid and humanoid.Parent
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not entry or not root or humanoid.Health <= 0 or humanoid.SeatPart or seat.Occupant then
+		return false
+	end
+	if entry.wrecked or entry.takeover or entry.rig.chassis.CFrame.UpVector.Y < 0.4 then
+		return false
+	end
+	if (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 2 then
+		return false
+	end
+	seat:Sit(humanoid)
+	return true
+end
+
+-- The seats of a vehicle this service made: { driver, gunner (or nil), passengers = { ... } }.
+function VehicleService.SeatsOf(model)
+	local entry = byModel[model]
+	if not entry then
+		return nil
+	end
+	return { driver = entry.seat, gunner = entry.gunnerSeat, passengers = entry.passengers }
+end
+
+-- Vehicles a bot could get into near `position`: in the world, not wrecked, on their wheels, not
+-- being taken over. Nearest first: { { model, entry, distance }, ... }.
+function VehicleService.VehiclesNear(position, radius)
+	local found = {}
+	for _, entry in ipairs(active) do
+		local chassis = entry.rig and entry.rig.chassis
+		if chassis and chassis.Parent and not entry.wrecked and not entry.takeover and entry.seat
+			and entry.model:IsDescendantOf(workspace) and chassis.CFrame.UpVector.Y > 0.4 then
+			local distance = (chassis.Position - position).Magnitude
+			if distance <= radius then
+				table.insert(found, { model = entry.model, entry = entry, distance = distance })
+			end
+		end
+	end
+	table.sort(found, function(a, b)
+		return a.distance < b.distance
+	end)
+	return found
+end
+
 --------------------------------------------------------------------------------
 -- Where a parked vehicle stands
 --------------------------------------------------------------------------------
@@ -374,13 +496,19 @@ local function groundUnder(x, z, aboveY)
 	return hit and hit.Position.Y or nil
 end
 
--- The four corners of a vehicle's footprint, and how far apart the ground under them is.
+-- The corners and edge midpoints of a vehicle's footprint, and how far apart the ground under them is.
+-- The midpoints catch a kerb or a bank edge running under the middle of a long side, which four
+-- corners either side of it read as level.
+local FOOTING_POINTS = {
+	Vector3.new(1, 0, 1), Vector3.new(-1, 0, 1), Vector3.new(1, 0, -1), Vector3.new(-1, 0, -1),
+	Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 0, -1),
+}
 local function footingAt(centre, yaw, size)
 	local frame = CFrame.new(centre) * CFrame.Angles(0, yaw, 0)
-	local halfX, halfZ = size.X / 2, size.Z / 2
+	local half = Vector3.new(size.X / 2, 0, size.Z / 2)
 	local lowest, highest = math.huge, -math.huge
-	for _, corner in ipairs({ Vector3.new(halfX, 0, halfZ), Vector3.new(-halfX, 0, halfZ),
-		Vector3.new(halfX, 0, -halfZ), Vector3.new(-halfX, 0, -halfZ) }) do
+	for _, point in ipairs(FOOTING_POINTS) do
+		local corner = point * half
 		local at = frame:PointToWorldSpace(corner)
 		local y = groundUnder(at.X, at.Z, centre.Y)
 		if not y then
@@ -392,21 +520,56 @@ local function footingAt(centre, yaw, size)
 	return highest - lowest, highest
 end
 
-local function parkOn(parent, position, yaw, size, label)
+-- The same footing test parkOn makes, for a caller choosing between spots BEFORE it creates anything
+-- (ModeTeams' base vehicles): a spot that passes here is one parkOn keeps exactly where it was asked,
+-- rather than stepping it up to FOOTING_REACH studs aside. Returns the spread and the highest ground,
+-- or nil where some point of the footprint has no ground under it at all.
+function VehicleService.FootingAt(parent, centre, yaw, size)
+	footingParams.FilterDescendantsInstances = { parent }
+	return footingAt(centre, yaw, size)
+end
+VehicleService.FootingTolerance = FOOTING_TOLERANCE
+
+-- `inward` (optional) points from the spot towards somewhere known to be level, as far as the
+-- vehicle may go: MapGenerator's verge parking passes the way to its road, whose graded corridor is
+-- flat. A verge spot on the corridor's outer edge is then pulled in a stud or two, which keeps it on
+-- the verge, before the ring below goes looking eight studs away (onto the carriageway, as often as not).
+local function parkOn(parent, position, yaw, size, label, inward)
 	footingParams.FilterDescendantsInstances = { parent }
 	local spread, top = footingAt(position, yaw, size)
 	if spread and spread <= FOOTING_TOLERANCE then
 		return Vector3.new(position.X, top, position.Z), yaw
 	end
 
-	-- Step aside: a ring of nearby spots, nearest first, taking the first that is level. A candidate
-	-- also has to be at about the same height as where it was asked to park: a building roof and the
-	-- bottom of a ditch are both perfectly level, and a car parked on either is worse than a car on a
-	-- slope.
+	if typeof(inward) == "Vector3" and inward.Magnitude > 0 then
+		local steps = math.ceil(inward.Magnitude / 0.5)
+		for step = 1, steps do
+			local at = position + inward * (step / steps)
+			local otherSpread, otherTop = footingAt(at, yaw, size)
+			if otherSpread and otherSpread <= FOOTING_TOLERANCE and math.abs(otherTop - (top or position.Y)) <= 4 then
+				return Vector3.new(at.X, otherTop, at.Z), yaw
+			end
+		end
+	end
+
+	-- Step aside: nearby spots, nearest first, taking the first that is level. A candidate also has to
+	-- be at about the same height as where it was asked to park: a building roof and the bottom of a
+	-- ditch are both perfectly level, and a car parked on either is worse than a car on a slope. A spot
+	-- beside a road (one given `inward`) only steps along the road: a ring of spots round it would put
+	-- the car out in the lane on one side, or on the bank or in the field on the other.
+	local across = typeof(inward) == "Vector3" and inward.Magnitude > 0 and inward.Unit or nil
 	for _, reach in ipairs({ 8, 16, FOOTING_REACH }) do
-		for turn = 0, 7 do
-			local angle = turn * math.pi / 4
-			local at = position + Vector3.new(math.cos(angle) * reach, 0, math.sin(angle) * reach)
+		local candidates = {}
+		if across then
+			local alongRoad = Vector3.new(-across.Z, 0, across.X)
+			candidates = { position + alongRoad * reach, position - alongRoad * reach }
+		else
+			for turn = 0, 7 do
+				local angle = turn * math.pi / 4
+				table.insert(candidates, position + Vector3.new(math.cos(angle) * reach, 0, math.sin(angle) * reach))
+			end
+		end
+		for _, at in ipairs(candidates) do
 			local otherSpread, otherTop = footingAt(at, yaw, size)
 			if otherSpread and otherSpread <= FOOTING_TOLERANCE and math.abs(otherTop - (top or position.Y)) <= 4 then
 				return Vector3.new(at.X, otherTop, at.Z), yaw
@@ -632,6 +795,13 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	for index, frame in ipairs(info.seats.passengers or {}) do
 		table.insert(passengers, makeSeat("Seat", "PassengerSeat" .. index, model, chassis, frame, isBike))
 	end
+	-- An armed vehicle's gun seat (VehicleModels' `gunner` frame), named and marked as VehicleWeapons
+	-- and VehicleWeaponClient look for it.
+	local gunnerSeat = nil
+	if info.seats.gunner then
+		gunnerSeat = makeSeat("Seat", "GunnerSeat", model, chassis, info.seats.gunner, isBike)
+		gunnerSeat:SetAttribute("Gunner", true)
+	end
 
 	-- Prompts stand beside each seat's door (on a bike, beside the saddle), in chassis space.
 	local halfWidth = chassis.Size.X / 2
@@ -646,8 +816,29 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		table.insert(ridePrompts, makePrompt(chassis, "RidePrompt" .. index, promptSpot(passenger.CFrame, isBike and 1 or nil),
 			isBike and "Ride pillion" or "Ride", info.displayName))
 	end
+	-- The gun seat's prompt stands behind the tail, clear of the doors' prompts either side.
+	local gunnerPrompt = gunnerSeat and makePrompt(chassis, "GunnerPrompt", Vector3.new(0, 0.2, chassis.Size.Z / 2 + 1.4),
+		"Man the gun", info.displayName) or nil
 
-	position, yaw = parkOn(parent, position, yaw, chassis.Size, info.displayName)
+	-- The footing is judged under everything the vehicle stands over, not the chassis collider alone
+	-- (#39). The bumpers, arches and a yaw of a few degrees put a verge car's outer corners past the
+	-- chassis box and past the edge of its road's flat corridor, over the bank, where the four chassis
+	-- corners still read level: measured, 1 of 13 parked vehicles hung 1.48 studs at a corner.
+	local footprint = chassis.Size
+	local okExtents, extents = pcall(function()
+		return model:GetExtentsSize()
+	end)
+	if okExtents and typeof(extents) == "Vector3" then
+		footprint = Vector3.new(math.max(footprint.X, extents.X), footprint.Y, math.max(footprint.Z, extents.Z))
+	end
+	-- `options.exact`: the caller has measured the spot (a team base's painted bay, its floor read by
+	-- raycast) and it must be used as given. parkOn's step-aside ring would otherwise move a car off
+	-- its bay whenever one footing ray fell in a crack or on a wheel stop -- onto the next bay, where
+	-- the next car then spawned into it -- and could lay hardstanding inside a building.
+	if not (type(options) == "table" and options.exact) then
+		position, yaw = parkOn(parent, position, yaw, footprint, info.displayName,
+			type(options) == "table" and options.inward or nil)
+	end
 	model:PivotTo(CFrame.new(position + Vector3.new(0, SPAWN_LIFT, 0)) * CFrame.Angles(0, yaw, 0))
 	local rig = VehicleDynamics.Rig(model)
 	if not rig then
@@ -670,6 +861,10 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		rig = rig,
 		seat = seat,
 		passengers = passengers,
+		gunnerSeat = gunnerSeat,
+		-- A player taking a bot's seat over (TAKING OVER): { player, seat } while it happens.
+		takeover = nil,
+		promptText = {},
 		occupants = {},
 		riders = {},
 		-- This one IS state, not a cache: while it holds a humanoid, that humanoid is moving between
@@ -718,6 +913,12 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	for index, prompt in ipairs(ridePrompts) do
 		entry.prompts[passengers[index]] = prompt
 	end
+	if gunnerSeat then
+		entry.prompts[gunnerSeat] = gunnerPrompt
+	end
+	for promptSeat, prompt in pairs(entry.prompts) do
+		entry.promptText[promptSeat] = prompt.ActionText
+	end
 	drivePrompt.Triggered:Connect(function(player)
 		trySit(entry, player, seat)
 	end)
@@ -726,7 +927,16 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 			trySit(entry, player, passengers[index])
 		end)
 	end
-	for _, s in ipairs({ seat, table.unpack(passengers) }) do
+	if gunnerSeat then
+		gunnerPrompt.Triggered:Connect(function(player)
+			trySit(entry, player, gunnerSeat)
+		end)
+	end
+	local allSeats = { seat, table.unpack(passengers) }
+	if gunnerSeat then
+		table.insert(allSeats, gunnerSeat)
+	end
+	for _, s in ipairs(allSeats) do
 		s:GetPropertyChangedSignal("Occupant"):Connect(function()
 			onSeatChanged(entry, s)
 		end)
@@ -965,62 +1175,122 @@ function VehicleService.Start()
 	end)
 end
 
--- Parks vehicles on a town's declared parking bays, and returns how many it managed.
+-- Parks vehicles on the towns' declared parking bays, and returns how many it managed.
 --
 -- Oliver, twice: cars should stand in parking lots and spaces that make sense, not on random grass.
--- The towns declare where those are -- each town carries a `ParkingBays` attribute, a list of
--- { cf = CFrame, w = width, d = depth } in world space, built on made ground -- and this fills them.
--- It is written to do nothing at all while that attribute is absent, so it can land before the towns
--- do. A bay is used only if the ground under its own footprint is level: a declared bay that is not
--- (a town wired up wrongly, or a bay laid on a slope) is refused and said out loud, rather than
--- parking a car somewhere that looks worse than the verge it came from.
-function VehicleService.ParkInTowns(parent, map, wanted, rng)
+-- The towns declare where those are (ParkingLots) and this fills them. It does nothing at all while
+-- no town has any. A bay is used only if the ground under its own footprint is level: a declared bay
+-- that is not (a town wired up wrongly, or a bay laid on a slope) is refused and said out loud, rather
+-- than parking a car somewhere that looks worse than the verge it came from.
+--
+-- The way a real car park fills (Oliver 09-24, "make all the car placements make sense"): every
+-- town's car park gets its turn before any gets a second car, so they don't all go in the first
+-- town's; no more than LOT_DRIVABLE_SHARE of a car park is taken, and never its last bay, so what's
+-- left of it is MapDecor.ParkBays' to part-fill with parked scenery; the bays are taken at random, not
+-- from one end; and each car stands square in its bay, nose the bay's way, the middle of the car on
+-- the middle of the bay (a van's body runs further back than forward). Each bay taken is marked
+-- `ParkingBayTaken_<i>` on its town.
+local LOT_DRIVABLE_SHARE = 0.5
+-- The most a car stands off the middle of its bay, along it, so a row doesn't look stamped out.
+local BAY_JITTER = 0.3
+
+-- Moves a vehicle, keeping its yaw and height, so the middle of its bounding box is at `centre`
+-- (about its own axes: a model's box is turned to its PrimaryPart).
+local function centreModel(model, centre)
+	local pivot = model:GetPivot()
+	local box = model:GetBoundingBox()
+	local offset = pivot:PointToObjectSpace(box.Position)
+	local wanted = pivot:PointToObjectSpace(Vector3.new(centre.X, pivot.Y, centre.Z))
+	model:PivotTo(pivot * CFrame.new(wanted.X - offset.X, 0, wanted.Z - offset.Z))
+end
+
+-- `share` (optional, default LOT_DRIVABLE_SHARE) is the most of any one car park, counting what's
+-- already in it, that this call may fill.
+function VehicleService.ParkInTowns(parent, map, wanted, rng, share)
 	if not parent or not map or (wanted or 0) <= 0 then
 		return 0
 	end
+	local roll = rng or Random.new(math.random(1, 2147483646))
 	-- Flat attributes, because a Roblox attribute cannot hold a table: `ParkingBays` is the count and
 	-- each bay is `ParkingBay_<i>`, a CFrame whose position is the bay's centre on the hardstanding
 	-- and whose LookVector is the way a parked car's nose should point.
 	local towns = map:FindFirstChild("Towns") or map
-	local bays = {}
+	local lots = {}
 	for _, town in ipairs(towns:GetChildren()) do
 		local count = tonumber(town:GetAttribute("ParkingBays")) or 0
 		local size = town:GetAttribute("ParkingBaySize")
+		local lot = { town = town, bays = {}, used = 0, taken = {} }
 		for index = 1, count do
 			local cf = town:GetAttribute("ParkingBay_" .. index)
-			if typeof(cf) == "CFrame" then
-				table.insert(bays, {
+			if typeof(cf) == "CFrame" and town:GetAttribute("ParkingBayTaken_" .. index) then
+				lot.used += 1
+				table.insert(lot.taken, cf.Position)
+			elseif typeof(cf) == "CFrame" then
+				-- Shuffled in as they come, so the bays are taken in no particular order.
+				table.insert(lot.bays, roll:NextInteger(1, #lot.bays + 1), {
 					cf = cf,
+					index = index,
 					w = typeof(size) == "Vector3" and size.X or nil,
 					d = typeof(size) == "Vector3" and size.Z or nil,
-					lot = town:GetAttribute("ParkingBayLot_" .. index),
 				})
 			end
 		end
+		-- A town that says it has no cars (MapGenerator marks it) leaves its car park empty.
+		if count >= 2 and #lot.bays > 0 and not town:GetAttribute("NoParkedCars") then
+			lot.cap = math.min(count - 1, math.max(1, math.floor(count * (share or LOT_DRIVABLE_SHARE))))
+			table.insert(lots, lot)
+		end
 	end
-	if #bays == 0 then
+	if #lots == 0 then
 		return 0
 	end
 
 	local parked, refused = 0, 0
-	for _, bay in ipairs(bays) do
-		if parked >= wanted then
-			break
-		end
-		local roll = rng or Random.new(math.random(1, 2147483646))
-		-- A stud of jitter so a filled row does not look stamped out.
-		local at = bay.cf * CFrame.new(roll:NextNumber(-1, 1), 0, roll:NextNumber(-1, 1))
-		local yaw = math.atan2(-at.LookVector.X, -at.LookVector.Z)
-		-- The bay's own size if the town gave one, otherwise the biggest vehicle in the set plus a
-		-- stud each side (the Crocodilo Ranger, 6.9 across and 14.6 long).
-		local size = Vector3.new(bay.w or 8.9, 1, bay.d or 16.6)
-		footingParams.FilterDescendantsInstances = { parent }
-		local spread = footingAt(at.Position, yaw, size)
-		if spread and spread <= FOOTING_TOLERANCE then
-			VehicleService.Create(parent, at.Position, yaw, roll:NextNumber() < 0.3 and "bike" or "car", { rng = roll })
-			parked += 1
-		else
-			refused += 1
+	local progress = true
+	while parked < wanted and progress do
+		progress = false
+		for _, lot in ipairs(lots) do
+			if parked >= wanted then
+				break
+			end
+			while lot.used < lot.cap and #lot.bays > 0 do
+				-- The next bay with nobody either side of it, if there is one: drivers spread out while a
+				-- car park is empty, and two big cars side by side are mirror to mirror.
+				local pickAt = #lot.bays
+				for index = #lot.bays, 1, -1 do
+					local free = true
+					for _, taken in ipairs(lot.taken) do
+						if (taken - lot.bays[index].cf.Position).Magnitude < (lot.bays[index].w or 8.9) + 0.5 then
+							free = false
+							break
+						end
+					end
+					if free then
+						pickAt = index
+						break
+					end
+				end
+				local bay = table.remove(lot.bays, pickAt)
+				local yaw = math.atan2(-bay.cf.LookVector.X, -bay.cf.LookVector.Z)
+				-- The bay's own size if the town gave one, otherwise TownKinds.Bay's.
+				local size = Vector3.new(bay.w or 8.9, 1, bay.d or 16.6)
+				footingParams.FilterDescendantsInstances = { parent }
+				local spread, _ = footingAt(bay.cf.Position, yaw, size)
+				if spread and spread <= FOOTING_TOLERANCE then
+					local model = VehicleService.Create(parent, bay.cf.Position, yaw, roll:NextNumber() < 0.3 and "bike" or "car",
+						{ rng = roll, exact = true }) -- the bay's footing was just checked (critic C4)
+					if model then
+						centreModel(model, (bay.cf * CFrame.new(0, 0, roll:NextNumber(-BAY_JITTER, BAY_JITTER))).Position)
+						lot.town:SetAttribute("ParkingBayTaken_" .. bay.index, true)
+						table.insert(lot.taken, bay.cf.Position)
+						lot.used += 1
+						parked += 1
+						progress = true
+					end
+					break
+				end
+				refused += 1
+			end
 		end
 	end
 	if refused > 0 then

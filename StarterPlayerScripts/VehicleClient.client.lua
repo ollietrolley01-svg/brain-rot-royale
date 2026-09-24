@@ -101,13 +101,17 @@ local function watchFolder(folder)
 	folder.ChildAdded:Connect(track)
 end
 
+-- The map's parked vehicles ("Vehicles") and a team match's base vehicles ("TeamBaseVehicles",
+-- ModeTeams.SpawnBaseVehicles), which otherwise never had their wheels turned or their riders posed.
+local VEHICLE_FOLDERS = { Vehicles = true, TeamBaseVehicles = true }
 local function watchMap(map)
-	local vehicles = map:FindFirstChild("Vehicles")
-	if vehicles then
-		watchFolder(vehicles)
+	for _, child in ipairs(map:GetChildren()) do
+		if VEHICLE_FOLDERS[child.Name] then
+			watchFolder(child)
+		end
 	end
 	map.ChildAdded:Connect(function(child)
-		if child.Name == "Vehicles" then
+		if VEHICLE_FOLDERS[child.Name] then
 			watchFolder(child)
 		end
 	end)
@@ -228,6 +232,57 @@ healthWarning.TextStrokeTransparency = 0.3
 healthWarning.Text = ""
 healthWarning.Visible = false
 healthWarning.Parent = gui
+
+-- On a touch screen PhoneLayout owns the HUD, and has a block for the driving HUD (`Rects().vehicle`,
+-- `vehicleHint`, `vehicleWarning`; the gun panel beside it is VehicleWeaponClient's). The literals above
+-- are the desktop spots, above the hotbar: on an 844x390 phone they put this panel over the crosshair
+-- and the hint across the top of the screen, and upright they ran the hint across the hotbar row (#80,
+-- measured by tools/hud_layout_check.py). Everything goes back to the literals on a desktop screen.
+-- Under pcall: if PhoneLayout fails to load, the desktop spots stand.
+do
+	local ok, err = pcall(function()
+		local PhoneLayout = require(script.Parent:WaitForChild("PhoneLayout"))
+		local pieces = {
+			{ gui = panel, key = "vehicle", natural = Vector2.new(250, 78) },
+			{ gui = hint, key = "vehicleHint", natural = Vector2.new(300, 18) },
+			{ gui = healthWarning, key = "vehicleWarning", natural = Vector2.new(260, 20) },
+		}
+		for _, piece in ipairs(pieces) do
+			piece.anchor, piece.position, piece.size = piece.gui.AnchorPoint, piece.gui.Position, piece.gui.Size
+			piece.scale = Instance.new("UIScale")
+			piece.scale.Parent = piece.gui
+		end
+		local function place()
+			local viewport = camera.ViewportSize
+			local spots = PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport) or nil
+			for _, piece in ipairs(pieces) do
+				local spot = spots and spots[piece.key]
+				if spot then
+					-- Drawn at its natural size and scaled to the slot. The hint's natural box is the 300 its
+					-- touch wording needs, not its 420-wide desktop box; the text lines up on the block's
+					-- left edge like the panels under it.
+					piece.gui.Size = UDim2.fromOffset(piece.natural.X, piece.natural.Y)
+					if piece.gui:IsA("TextLabel") then
+						piece.gui.TextXAlignment = Enum.TextXAlignment.Left
+					end
+					PhoneLayout.Place(piece.gui, spot, piece.natural, piece.scale, 0, true)
+				else
+					piece.gui.AnchorPoint, piece.gui.Position, piece.gui.Size = piece.anchor, piece.position, piece.size
+					if piece.gui:IsA("TextLabel") then
+						piece.gui.TextXAlignment = Enum.TextXAlignment.Center
+					end
+					piece.scale.Scale = 1
+				end
+			end
+		end
+		place()
+		camera:GetPropertyChangedSignal("ViewportSize"):Connect(place)
+		UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(place)
+	end)
+	if not ok then
+		warn("[VehicleClient] the phone layout didn't load; the driving HUD keeps its desktop spots: " .. tostring(err))
+	end
+end
 
 local function updateHealthWarning(model)
 	if model:GetAttribute("Wrecked") then
@@ -666,6 +721,96 @@ RunService.Stepped:Connect(function(_, dt)
 				poseRiders(model, distance)
 				updateEngine(model, rig, distance)
 				updateLamps(model, distance)
+			end
+		end
+	end
+end)
+
+--------------------------------------------------------------------------------
+-- Taking a bot's seat over (VehicleService's TAKING OVER)
+--------------------------------------------------------------------------------
+-- The server keeps a bot's driving and gun seats' prompts up ("Take over") for anyone who may have
+-- the seat; this hides them from anyone who may not, by the same rules the server holds the request
+-- to (BotService.TakeoverAllowed): with teams, a teammate of the bot always may and nobody else; with
+-- no teams, anyone the bot is not fighting (its character's BotFoes, ",userId,userId,"). The server
+-- decides either way; this only keeps a prompt that would be refused off the screen.
+--
+-- Hidden by shrinking its reach to nothing, locally: the server never changes a vehicle prompt's
+-- MaxActivationDistance after making it, so nothing it replicates undoes this, and Enabled (which the
+-- server does set) is left alone. A prompt hidden here is looked at again every TAKEOVER_RECHECK
+-- seconds and given its reach back once the rules allow it (the bot got out, the fight is over).
+
+local ProximityPromptService = game:GetService("ProximityPromptService")
+
+local TAKEOVER_RECHECK = 0.3
+
+-- Whether this player may take `seat` (a DriverSeat or GunnerSeat) from whoever holds it. A free seat
+-- is the ordinary prompt, and a player's seat never shows one.
+local function mayTakeOver(seat, character, userId)
+	local occupant = seat.Occupant
+	local holder = occupant and occupant.Parent
+	if not holder then
+		return true
+	end
+	if Players:GetPlayerFromCharacter(holder) then
+		return false
+	end
+	local mine = character and character:GetAttribute("Team")
+	local theirs = holder:GetAttribute("Team")
+	if mine ~= nil or theirs ~= nil then
+		return mine ~= nil and mine == theirs
+	end
+	local foes = holder:GetAttribute("BotFoes")
+	return not (type(foes) == "string" and string.find(foes, "," .. tostring(userId) .. ",", 1, true) ~= nil)
+end
+
+-- The seat a vehicle prompt is for, or nil for any other prompt.
+local function takeoverSeat(prompt)
+	local seatName = (prompt.Name == "DrivePrompt" and "DriverSeat") or (prompt.Name == "GunnerPrompt" and "GunnerSeat") or nil
+	local attachment = seatName and prompt.Parent
+	local chassis = attachment and attachment.Parent
+	local model = chassis and chassis.Parent
+	return model and model:FindFirstChild(seatName) or nil
+end
+
+local hiddenReach = {} -- prompt -> the reach it had; STRONG keys, dropped when checked and gone
+
+local function judgePrompt(prompt)
+	local seat = takeoverSeat(prompt)
+	if not seat then
+		return
+	end
+	local allowed = mayTakeOver(seat, player.Character, player.UserId)
+	if allowed and hiddenReach[prompt] then
+		prompt.MaxActivationDistance = hiddenReach[prompt]
+		hiddenReach[prompt] = nil
+	elseif not allowed and not hiddenReach[prompt] then
+		hiddenReach[prompt] = prompt.MaxActivationDistance
+		prompt.MaxActivationDistance = 0
+	end
+end
+
+-- Prompts on screen now: a seat can change hands while its prompt is up (a bot gets in beside you).
+local shownNow = {} -- prompt -> true; STRONG keys, dropped on PromptHidden
+
+ProximityPromptService.PromptShown:Connect(function(prompt)
+	shownNow[prompt] = true
+	judgePrompt(prompt)
+end)
+ProximityPromptService.PromptHidden:Connect(function(prompt)
+	shownNow[prompt] = nil
+end)
+task.spawn(function()
+	while true do
+		task.wait(TAKEOVER_RECHECK)
+		for _, list in ipairs({ hiddenReach, shownNow }) do
+			for prompt in pairs(list) do
+				if prompt.Parent then
+					judgePrompt(prompt)
+				else
+					hiddenReach[prompt] = nil
+					shownNow[prompt] = nil
+				end
 			end
 		end
 	end

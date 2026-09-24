@@ -87,6 +87,29 @@ local function rect(x, y, w, h)
 	return { x = x, y = y, w = w, h = h, x1 = x + w, y1 = y + h }
 end
 
+-- The driving HUD, laid out inside a region: VehicleClient's speed panel (250x78 as drawn on a desktop)
+-- and VehicleWeaponClient's gun panel (150x78) side by side, or the gun panel under the speed panel when
+-- that lets both be bigger; the damage line (260x20) above them and the controls hint (300x18, which the
+-- touch wording needs) below. `vehicleScale` is the panels' scale. On a desktop screen those pieces sit
+-- above the hotbar at their own literals; on a touch screen those literals put them over the crosshair
+-- (844x390) and across the hotbar (upright) (#80, tools/hud_layout_check.py).
+local function vehicleRects(out, x, y, w, h)
+	local beside = math.min(w / 408, (h - 4) / 116)
+	local stacked = math.min(w / 250, (h - 6) / 194)
+	local k = math.min(math.max(beside, stacked), 1)
+	local kw, kh = math.min(k, w / 260), math.min(k, w / 300)
+	out.vehicleScale = k
+	out.vehicleWarning = rect(x, y, 260 * kw, 20 * kw)
+	local panelY = out.vehicleWarning.y1 + 2
+	out.vehicle = rect(x, panelY, 250 * k, 78 * k)
+	if beside >= stacked then
+		out.vehicleGun = rect(x + 258 * k, panelY, 150 * k, 78 * k)
+	else
+		out.vehicleGun = rect(x, out.vehicle.y1 + 2, 150 * k, 78 * k)
+	end
+	out.vehicleHint = rect(x, math.max(out.vehicle.y1, out.vehicleGun.y1) + 2, 300 * kh, 18 * kh)
+end
+
 -- Portrait is not the landscape layout turned on its side. Roblox owns the lower half of a portrait
 -- screen -- the thumbstick's zone is the left 40% below a third of the way down, and the fire buttons
 -- climb the right side from the jump button -- so there is no band between them for a hotbar, and
@@ -138,8 +161,15 @@ local function portraitRects(W, H)
 	local compY = pillY + 28
 	out.companion = rect(16, compY, math.clamp(W - g - pillW - 6 - 16, 96, 138), 24)
 	out.petIcon = rect(16, compY + 28, 56, 56)
-	out.toast = rect(16, pillY + pillH + 6, W - 32, 22)
-	out.useBar = rect(W / 2 - 110, stormY + 18 + 6, 220, 30)
+	-- The toast and the use prompt are full-width-ish strips, and the top of an upright screen has no such
+	-- row left under the coin chip, the companion strip, the pet tile and the event pills: at the old
+	-- spots the toast lay across the companion strip and the pet tile, and the prompt across the coin chip
+	-- and the event pill (#80, measured by tools/hud_layout_check.py). They go under the crosshair's box
+	-- instead, where nothing else of ours is drawn on an upright screen. The prompt's rect is what
+	-- HudClient actually draws there (250x46 at 0.8), not a guess.
+	local crossBottom = H / 2 + 32 + 12
+	out.toast = rect(16, crossBottom, W - 32, 22)
+	out.useBar = rect(W / 2 - 100, crossBottom + 22 + 4, 200, 37)
 
 	-- The hotbar row: the Inventory button and as many slots as fit between the thumbstick's zone and
 	-- the right edge, above the buttons and clear of the crosshair's band.
@@ -176,6 +206,18 @@ local function portraitRects(W, H)
 	local readoutW = math.clamp(clusterLeft - 6 - 16, 96, 138)
 	out.health = rect(16, healthY, readoutW, 30)
 	out.stamina = rect(16, healthY - 4 - 14, readoutW, 14)
+	-- Driving: the left-hand block between the use prompt (and the hotbar row, when it is there) and the
+	-- health readout, left of the buttons. The stamina bar that sits in it is hidden in a vehicle.
+	local driveTop = out.useBar.y1 + 6
+	if out.hotbar then
+		driveTop = math.max(driveTop, out.inventory.y1 + 6)
+	end
+	vehicleRects(out, 16, driveTop, clusterLeft - 6 - 16, math.max(out.health.y - 6 - driveTop, 40))
+	-- The companion-buffs panel (BoonHud): down the left edge under the pet tile, narrow enough to stay
+	-- left of the crosshair's box, and no lower than the toast. A readout, so the thumbstick's zone is
+	-- allowed; BoonHud scales it down to fit the height when there are many buffs.
+	local boonsY = out.petIcon.y1 + 6
+	out.boons = rect(16, boonsY, math.min(152, W / 2 - 44 - 16), math.max(crossBottom - 6 - boonsY, 40))
 	out.inset = GuiService:GetGuiInset().Y
 	return out
 end
@@ -273,14 +315,20 @@ function PhoneLayout.Rects(viewport)
 		feedBottom = underTop + pillH + 4 + feedH
 	end
 	out.useBar = rect(W / 2 - 110 * k, topStripBottom + 6, 220 * k, 30 * k)
-	out.toast = rect(W / 2 - 143 * k, topStripBottom + 6 + 30 * k, 286 * k, 22 * k)
+	-- Below the kill feed's slot too: the toast is centred and 286 wide, and reaches into the right-hand
+	-- column the feed starts (#80: 3 px into its second row at 844x390, 5 px at 1024x768).
+	out.toast = rect(W / 2 - 143 * k, math.max(topStripBottom + 6 + 30 * k, out.killFeed.y1 + 4), 286 * k, 22 * k)
 	-- The bounty and location lines, right-aligned under the kill feed, never under the button cluster
 	-- and never back into the left column.
 	local textRight = math.min(pillRight, clusterLeft - g)
 	local leftColumnRight = 16 + math.max(mm, 120 * k + 6 + 160 * k) + 8
 	local textW = math.max(textRight - math.max(textRight - 200 * k, leftColumnRight), 120)
-	out.bounty = rect(textRight - textW, feedBottom + 4, textW, 19 * k)
-	out.location = rect(textRight - textW, feedBottom + 4 + 19 * k + 2, textW, 17 * k)
+	-- Below the toast as well as the feed: the toast is centred and 286 wide, and on a phone its right
+	-- end reaches into this column (#80: 104x14 px over the bounty line at 844x390, the very moment the
+	-- bounty's own toast is up).
+	local textY = math.max(feedBottom, out.toast.y1) + 4
+	out.bounty = rect(textRight - textW, textY, textW, 19 * k)
+	out.location = rect(textRight - textW, textY + 19 * k + 2, textW, 17 * k)
 
 	-- Left edge: the minimap under Roblox's bar, then the two things the owner asked to keep but shrink
 	-- (the coin chip and the companion strip) sharing one row, then the pet tile above the thumbstick's
@@ -341,6 +389,15 @@ function PhoneLayout.Rects(viewport)
 	local pill = 84 * k
 	out.stamina = rect(x0, sy, gridW - pill - 6, 14 * k)
 	out.speedPill = rect(x0 + gridW - pill, sy - 6 * k, pill, 20 * k)
+	-- The companion-buffs panel (BoonHud): right of the pet tile, under the coin chip and the companion
+	-- strip, and clear of the thumbstick's rest and of the health row. A readout, so the thumbstick's zone
+	-- is allowed; BoonHud scales it down to fit the height when there are many buffs.
+	local boonsX, boonsY = out.petIcon.x1 + 6, statusY + statusH + 6
+	out.boons = rect(boonsX, boonsY, math.min(152 * k, out.health.x - 6 - boonsX), math.max(out.stick.y - 6 - boonsY, 40))
+	-- Driving: the block right of the pet tile, from under the coin chip and companion strip down to the
+	-- thumbstick's rest, left of the health row. The buffs panel that shares it hides in a vehicle
+	-- (BoonHud), which is why the block can be this big.
+	vehicleRects(out, boonsX, boonsY, out.health.x - 6 - boonsX, math.max(out.stick.y - 6 - boonsY, 40))
 
 	out.inset = GuiService:GetGuiInset().Y
 	return out

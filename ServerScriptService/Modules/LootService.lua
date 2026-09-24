@@ -93,6 +93,11 @@ local function makePrompt(parent, actionText, objectText)
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = 10
 	prompt.RequiresLineOfSight = false
+	-- B, not Roblox's default X: X is Reload (CombatClient), so a pad player reloading within ten
+	-- studs of a floor gun also picked it up -- and with the bag full, swapped away the gun they were
+	-- reloading (#86). Every other face button and d-pad direction is already a match control; B is
+	-- only the menu's close, and the menu is shut while a prompt is being used.
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 	prompt.Parent = parent
 
 	-- Bots read this so they give way to a player who's already mid-hold, instead of taking
@@ -111,6 +116,30 @@ end
 -- than ten times the length of the Pocket Popper it was naming, so from a standing eye the banner was
 -- the pickup and the gun was a smudge under it (measured in scratchpad/guns_f0_out/ground2). TextScaled
 -- keeps it legible at the smaller size, and it still fades out at MaxDistance the way it always did.
+-- A gun's type in a word, from its `style`. A copy of the table in StarterPlayerScripts/InventoryPanel.lua
+-- (the HUD and the bag say the same word; a server module cannot require that one), and
+-- tools/player_eye_check.py ("gunword") fails the moment the two differ or a style has no word.
+local GUN_TYPE_WORDS = {
+	pistol = "PISTOL", revolver = "REVOLVER", smg = "SMG", rifle = "RIFLE", dmr = "MARKSMAN",
+	shotgun = "SHOTGUN", doublebarrel = "SHOTGUN", crossbow = "CROSSBOW", sniper = "SNIPER",
+	blaster = "BLASTER", launcher = "LAUNCHER", lmg = "MACHINE GUN", minigun = "MINIGUN",
+	cannon = "CANNON", railgun = "RAILGUN",
+}
+
+-- The word, or nil when the name already says it (without case or spaces, so "Double Barrel" matches).
+local function gunTypeWord(name, style)
+	local word = style and GUN_TYPE_WORDS[style]
+	if not word then
+		return nil
+	end
+	local flat = string.gsub(string.lower(name or ""), "%s", "")
+	local wordFlat = string.gsub(string.lower(word), "%s", "")
+	if string.find(flat, wordFlat, 1, true) or string.find(flat, style, 1, true) then
+		return nil
+	end
+	return word
+end
+
 local function label(parent, text, color, height)
 	local billboard = Instance.new("BillboardGui")
 	billboard.Size = UDim2.fromScale(3.2, 0.64)
@@ -171,10 +200,35 @@ local lastPickup = nil
 local MAX_DROPPED = 50
 local dropped = {}
 
+-- A dropped pickup can't be taken for its first second on the ground (Oliver, 2026-09-24: "the supply
+-- drops still deposit straight to inventory"). A crate is opened by HOLDING the key for 1.2 s and its
+-- spill lands a few studs in front of the opener, well inside a pickup prompt's 10-stud reach; those
+-- prompts need no hold, and the key was still down as they appeared, so the whole spill went into the
+-- bag in the same moment it hit the floor. Settling keeps the prompt off until the key has been let go
+-- (a chest's 0.8 s hold, a swap's dropped slot and a body's drop go the same way), so taking what fell
+-- out is a fresh press. The server refuses a take while `Settling` is set, whatever a client does.
+local DROP_SETTLE = 1
+
+local function settle(base)
+	local prompt = base:FindFirstChildOfClass("ProximityPrompt")
+	if not prompt then
+		return
+	end
+	prompt.Enabled = false
+	base:SetAttribute("Settling", true)
+	task.delay(DROP_SETTLE, function()
+		if base.Parent then
+			base:SetAttribute("Settling", nil)
+			prompt.Enabled = true
+		end
+	end)
+end
+
 local function trackDrop(base)
 	if not base or not base.Parent then
 		return
 	end
+	settle(base)
 	table.insert(dropped, base)
 	-- Forget ones already picked up or cleared, then trim the oldest down to the cap.
 	local live = {}
@@ -276,8 +330,12 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 	-- The tier in words, not only in the colour. A player deciding whether a gun on the floor beats the
 	-- one in their hands reads this from a distance, and colour alone asks them to have learnt seven
 	-- shades -- and excludes anyone who cannot tell two of them apart.
-	label(base, string.format("%s %s", def.rarity, def.name), color)
-	local prompt = makePrompt(base, "Pick Up", string.format("%s %s", def.rarity, def.name))
+	-- And the KIND of gun (#86 C39): "Scrolla Scrolla Brrrap" could be anything. Left off where the
+	-- name already says it ("Rot SMG").
+	local word = gunTypeWord(def.name, def.style)
+	local title = string.format("%s %s", def.rarity, def.name) .. (word and (" · " .. word) or "")
+	label(base, title, color)
+	local prompt = makePrompt(base, "Pick Up", title)
 
 	-- Parented once everything is attached, so the pickup replicates as one piece; the z-fight
 	-- pass runs after, in the world, so a pad whose top meets the ground on a slope is lifted.
@@ -288,7 +346,7 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 	ZFight.Fix(pad)
 
 	prompt.Triggered:Connect(function(player)
-		if not base.Parent then
+		if not base.Parent or base:GetAttribute("Settling") then
 			return
 		end
 		-- A gun someone dropped keeps the ammo it had. Refilling it — or topping up every
@@ -301,8 +359,11 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 
 		local ok, message, replaced = WeaponService.GiveWeapon(player, def.id, carried)
 		if ok then
-			if not carried then
-				WeaponService.GiveAmmo(player, 0.25)
+			-- The toast says what the pickup did for the rest of the bag: a map gun tops up every gun's
+			-- reserve, and nothing on screen said so, so players never learned floor guns ARE the ammo
+			-- supply (#86).
+			if not carried and WeaponService.GiveAmmo(player, 0.25) then
+				message = message .. "  •  +ammo for your guns"
 			end
 			-- Swapping puts whatever was held down where the new gun was, instead of deleting it.
 			if replaced then
@@ -392,7 +453,7 @@ local function spawnConsumable(position, itemId, amount)
 	end
 
 	prompt.Triggered:Connect(function(player)
-		if not base.Parent or base:GetAttribute("Claimed") then
+		if not base.Parent or base:GetAttribute("Claimed") or base:GetAttribute("Settling") then
 			return
 		end
 		local added = WeaponService.GiveConsumable(player, itemId, amount)
@@ -496,7 +557,7 @@ local function spawnChest(cframe)
 			table.insert(dropped, def.name)
 		end
 
-		WeaponService.GiveAmmo(player, 0.4 + math.random() * 0.5)
+		local refilled = WeaponService.GiveAmmo(player, 0.4 + math.random() * 0.5)
 
 		local function giveItem(item)
 			LootService.DropItem(item.id, spill, item.pickup, chest.Position)
@@ -519,7 +580,8 @@ local function spawnChest(cframe)
 			giveItem(ItemData.RollThrowable())
 		end
 
-		StateSync.Notify(player, "Chest: " .. table.concat(dropped, ", ") .. " on the ground")
+		StateSync.Notify(player, "Chest: " .. table.concat(dropped, ", ") .. " on the ground"
+			.. (refilled and "  •  +ammo for your guns" or ""))
 		QuestService.Progress(player, "chests", 1)
 		if nearLandmark(chest.Position) then
 			QuestService.Progress(player, "landmarkChests", 1)
@@ -661,8 +723,10 @@ end
 
 -- What a base cache is made of, per team. GameMode stocks it once at the start and tops it back up
 -- while the match runs, so a team that respawns later still finds gear at home.
--- Chests 3 -> 8 (Oliver, 2026-09-23 14:38: "i wanted chests"), so most of a team gets one on the way out.
-LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 8 }
+-- Chests 3 -> 8 (Oliver, 2026-09-23 14:38: "i wanted chests"), so most of a team gets one on the way out;
+-- 8 -> 14 (Oliver, 2026-09-24: "add more chests"), one for each named chest spot in a team's compound
+-- (TeamBaseRuins; tools/team_base_ruins_check.py fails if the two numbers part).
+LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 14 }
 LootService.BaseRadius = 85
 
 local function baseKind(item)

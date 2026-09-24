@@ -22,7 +22,7 @@
 --                    Slider      slides along its own Y (a fork's lower legs)
 --                    Swing       swings about its own X (a swingarm)
 --                    SteerWheel  turns about its own Z by Ratio times the steering angle
---   info.seats     driver and passenger seat frames, model space
+--   info.seats     driver and passenger seat frames, model space (and `gunner`, an armed model's gun seat)
 --   info.exits     where an occupant is put down, model space, tried in order
 --   info.pose      how a rider sits (read by VehicleClient to pose them)
 -- Nothing is named Wall, Floor, Roof, Gable, Parapet, Stair, Crate, Table, Shelf or WindowGlass:
@@ -558,6 +558,12 @@ function Builder:castWheel(name, center, radius, width, opts)
 			end
 			self:cyl(name .. "_Cap" .. n, 0.3, 0.34, axle * CF(s * (face + 0.22 - 0.15), 0, 0), "alloy")
 			local disc = opts.discs == "twin" or (opts.discs == "right" and s > 0) or (opts.discs == "left" and s < 0)
+			if disc or opts.sprocket == s then
+				-- The carrier the disc or sprocket is bolted to. They stand 0.32 off the face, past the cap
+				-- (which ends at 0.22), so without it they hung 0.08 clear of the wheel: a floating disc,
+				-- with its caliper holding it up.
+				self:cyl(name .. "_Carrier" .. n, 0.34, 0.46, axle * CF(s * (face + 0.155), 0, 0), "alloy")
+			end
 			if disc then
 				self:cyl(name .. "_Disc" .. n, 0.05, radius * 1.12, axle * CF(s * (face + 0.32), 0, 0), "disc")
 			elseif opts.sprocket == s then
@@ -940,7 +946,11 @@ VehicleModels.Models.PatapimScrambler = {
 		b:with(steer, function()
 			for _, s in ipairs({ -1, 1 }) do
 				local n = s < 0 and "L" or "R"
-				b:tube("ForkUpper" .. n, P(-0.42, s * 0.36), P(1.45, s * 0.36), 0.3, "gold")
+				-- Down to 2.0 along the fork (it was 1.45), so the lower leg (on the slider, which
+				-- VehicleDynamics slides 0.89 out and 1.34 in along the fork) stays inside it: with a
+				-- 0.25 overlap the wheel, lowers and fender came right off the bike with the front
+				-- wheel hanging (vehicle_models_runtime_check).
+				b:tube("ForkUpper" .. n, P(-0.42, s * 0.36), P(2.0, s * 0.36), 0.3, "gold")
 			end
 			b:box("ClampTop", V(1.06, 0.16, 0.5), onAxis(-0.3), "alloy")
 			b:box("ClampBottom", V(1.06, 0.22, 0.56), onAxis(0.5), "alloy")
@@ -980,8 +990,10 @@ VehicleModels.Models.PatapimScrambler = {
 			b:box("FenderBridge", V(0.84, 0.12, 0.36), CF(axle) * A(24, 0, 0) * CF(0, fenderRadius + 0.08, 0), "trim")
 			for _, s in ipairs({ -1, 1 }) do
 				local n = s < 0 and "L" or "R"
-				b:tube("ForkLower" .. n, P(1.2, s * 0.36), P(2.84, s * 0.36), 0.22, "chrome")
-				b:beam("ForkGuard" .. n, P(1.55, s * 0.36) + V(0, 0, -0.16), P(2.5, s * 0.36) + V(0, 0, -0.16), 0.16, 0.08, "accent")
+				-- From 0.95: at full compression its top is still under the top clamp, at full extension
+				-- still 0.16 up inside the upper.
+				b:tube("ForkLower" .. n, P(0.95, s * 0.36), P(2.84, s * 0.36), 0.22, "chrome")
+				b:beam("ForkGuard" .. n, P(2.05, s * 0.36) + V(0, 0, -0.16), P(2.62, s * 0.36) + V(0, 0, -0.16), 0.16, 0.08, "accent")
 				b:box("AxleFoot" .. n, V(0.26, 0.36, 0.42), onAxis(2.84, s * 0.36), "trim")
 			end
 			b:box("Caliper", V(0.14, 0.34, 0.3), CF(-0.24, fr + 0.36, fz + 0.3) * A(30, 0, 0), "gold")
@@ -1845,6 +1857,13 @@ VehicleModels.Models.BananiniScoot = {
 			b:box("MudguardCrest", V(0.24, 0.14, 0.9), CF(axle) * A(-30, 0, 0) * CF(0, 1.42, 0), "stripe")
 		end)
 		b:with(slider, function()
+			-- A sleeve that slides on the column, with brackets out to the link and the damper. The
+			-- link and damper used to start 0.36 to the side of the column with nothing joining them
+			-- to it, so with the front wheel hanging (the slider 0.37 down the column) the whole
+			-- front wheel assembly hung clear of the scooter (vehicle_models_runtime_check).
+			b:tube("ForkSleeve", P(1.7), P(2.55), 0.34, "chrome")
+			b:beam("LinkBracket", P(2.45), P(2.45, -0.42), 0.14, 0.14, "engine")
+			b:beam("DamperBracket", P(1.9), P(1.9, -0.42), 0.14, 0.14, "engine")
 			b:beam("TrailingLink", P(2.45, -0.36), V(-0.4, r, fz), 0.12, 0.26, "engine")
 			b:tube("Damper", P(1.9, -0.36), V(-0.4, r + 0.3, fz + 0.35), 0.16, "chrome")
 		end)
@@ -1906,7 +1925,12 @@ VehicleModels.Models.BananiniScoot = {
 		-- The engine and silencer swing with the back wheel, as a scooter's do.
 		local swing = b:pivot("Swing_R", CF(0, 1.35, 0.5), "Swing")
 		b:with(swing, function()
-			b:box("Transmission", V(0.34, 0.55, 1.3), V(-0.98, 1.1, 1.25), "engine")
+			-- The pivot bolt the engine swings on, and a transmission case long enough to reach the
+			-- back axle, with the axle itself: the case stopped 0.25 short of the axle and 0.1 short of
+			-- the pivot, so the engine and the back wheel swung round points in thin air.
+			b:cyl("SwingPivotBolt", 1.0, 0.22, CF(-0.6, 1.35, 0.5), "alloy")
+			b:box("Transmission", V(0.34, 0.55, 1.75), V(-0.98, 1.1, 1.475), "engine")
+			b:cyl("RearAxle", 0.7, 0.2, CF(-0.5, r, rz), "alloy")
 			b:cyl("FanCover", 0.1, 0.6, CF(-1.12, 1.15, 0.95), "alloy")
 			b:pipe("ExhaustPipe", { V(-0.1, 1.05, 0.62), V(0.5, 0.85, 1.3), V(0.81, 1.12, 1.78) }, 0.2, "chrome")
 			b:tube("Silencer", V(0.8, 1.1, 1.65), V(0.82, 1.35, 2.6), 0.34, "chrome")
@@ -1984,7 +2008,9 @@ VehicleModels.Models.BrrStreetfighter = {
 		b:with(slider, function()
 			for _, s in ipairs({ -1, 1 }) do
 				local n = s < 0 and "L" or "R"
-				b:tube("ForkLower" .. n, P(1.35, s * 0.8), P(2.92, s * 0.8), 0.22, "chrome")
+				-- From 0.95 (was 1.35): the slider runs 0.38 out along the fork with the wheel hanging, and
+				-- a 0.2 overlap left a gap between the legs. Inside the upper, the extra length never shows.
+				b:tube("ForkLower" .. n, P(0.95, s * 0.8), P(2.92, s * 0.8), 0.22, "chrome")
 				b:box("AxleFoot" .. n, V(0.24, 0.34, 0.4), onAxis(2.92, s * 0.8), "trim")
 				b:box("Caliper" .. n, V(0.14, 0.5, 0.26), CF(s * 0.67, r + 0.5, fz + 0.4) * A(30, 0, 0), "tail")
 			end
@@ -2076,6 +2102,10 @@ VehicleModels.Models.BrrStreetfighter = {
 			b:beam("Swingarm", V(-0.45, 2.3, 0.45), V(-0.95, r, rz), 0.24, 0.55, "alloy")
 			b:beam("SwingarmBrace", V(-0.45, 2.0, 0.6), V(-0.95, r - 0.2, rz - 0.4), 0.14, 0.2, "alloy")
 			b:cyl("AxleNut", 0.2, 0.5, CF(-1.12, r, rz), "alloy")
+			-- The axle the wheel hangs on: the single-sided arm ends 0.37 short of the wheel's left face,
+			-- and without this the rear wheel had nothing joining it to the bike (it hung in the air
+			-- beside the arm, which shows the moment the swingarm swings).
+			b:cyl("RearAxle", 0.9, 0.24, CF(-0.6, r, rz), "chrome")
 			-- The chain's front end goes round a sprocket; without one it stopped in the air by the engine.
 			b:cyl("FrontSprocket", 0.06, 0.5, CF(-0.72, 1.95, 0.35), "alloy")
 			b:beam("ChainTop", V(-0.72, 2.2, 0.35), V(-0.72, r + 0.48, rz), 0.07, 0.09, "dash")
@@ -2110,8 +2140,12 @@ VehicleModels.Models.BrrStreetfighter = {
 VehicleModels.Mounts = {
 	-- A pintle gun on the hatch roof, clear of the roof panel, behind the driver's head.
 	Rotster = { style = "gun", base = V(0, 6.0, 2.0) },
-	-- A rocket pod on a tall pedestal in the bed, high enough to fire forward over the cab.
-	CrocodiloRanger = { style = "pod", base = V(0, 3.1, 4.9), column = 3.9 },
+	-- A rocket pod on a ring mount clamped across the top of the bed's roll bar (its crossbar tops
+	-- out at 7.01), high enough to fire forward over the cab with nothing under it but the roll bar
+	-- the truck already had. It used to stand on a 3.9-stud, 0.5-thick post in the middle of the bed,
+	-- which is exactly what "the Ranger still has poles sticking out" describes. The bed behind the
+	-- roll bar (z 3.3 to 6.5) is left clear for a gunner.
+	CrocodiloRanger = { style = "pod", base = V(0, 7.0, 2.75), column = 0.2 },
 	-- A mortar on a plinth at the back of the roof rack, between the last rack bar and the rail ends.
 	-- The plinth is 0.9 tall so the tube clears the bat and the drum wherever it points: on a 0.4
 	-- plinth, swung 30-40 degrees left at its lowest pitch (10) it went straight through the bat's
@@ -2120,13 +2154,26 @@ VehicleModels.Mounts = {
 	SahurVan = { style = "mortar", base = V(0, 7.8, 5.2), column = 0.9 },
 }
 
+-- Each armed model's gun seat, model space (Oliver, 2026-09-24: "make the bots not drive away if they
+-- have a gun on their car, wait till it's manned"). VehicleService makes it a Seat named GunnerSeat
+-- with a true Gunner attribute, and whoever sits there works the gun (VehicleWeapons; VehicleWeaponClient
+-- reads the same name and attribute). Behind the mount, facing the front, so a rider there is at the
+-- gun: in the Rotster's hatch under its roof gun, on the Ranger's bed floor behind the roll bar (the
+-- clear stretch z 3.3 to 6.5), on the van's roof behind the mortar's plinth. A seat is an invisible,
+-- non-colliding part welded to the chassis; nothing about the metal changes.
+VehicleModels.GunnerSeats = {
+	Rotster = CF(0, 4.1, 3.3),
+	CrocodiloRanger = CF(0, 3.3, 5.2),
+	SahurVan = CF(0, 7.9, 6.5),
+}
+
 local function buildMount(b, mount)
 	local base = mount.base
 	local column = mount.column or 0
 	if column > 0 then
 		if mount.style == "pod" then
-			b:tube("TurretColumn", base, base + V(0, column, 0), 0.5, "trim")
-			b:box("TurretFoot", V(1.6, 0.2, 1.6), base + V(0, 0.1 + 0.02, 0), "trim")
+			-- A flat cradle clamped on the roll bar, as wide as the ring it carries.
+			b:box("TurretCradle", V(2.0, column, 0.9), base + V(0, column / 2, 0), "trim")
 		else
 			b:box("TurretPlinth", V(1.4, column, 1.2), base + V(0, column / 2, 0), "trim")
 		end
@@ -2141,8 +2188,9 @@ local function buildMount(b, mount)
 	local pitch = b:pivot("TurretPitch", CF(pitchAt), "TurretPitch", yaw)
 	local muzzleZ
 
+	-- How far apart the cheeks stand (the trunnion spans them).
+	local spread = mount.style == "pod" and 1.8 or 0.8
 	b:with(yaw, function()
-		local spread = mount.style == "pod" and 1.8 or 0.8
 		b:box("TurretYoke", V(spread + 0.3, 0.2, 0.9), yawAt + V(0, 0.1, 0), "accent")
 		for _, s in ipairs({ -1, 1 }) do
 			b:box(s < 0 and "TurretCheekL" or "TurretCheekR", V(0.16, pitchAt.Y - yawAt.Y + 0.25, 0.7),
@@ -2152,6 +2200,9 @@ local function buildMount(b, mount)
 
 	b:with(pitch, function()
 		local at = pitchAt
+		-- The trunnion the weapon tips on, cheek to cheek. Without it the Rotster's gun hung between
+		-- its cheeks with 0.25 of air either side, joined to nothing (vehicle_models_runtime_check).
+		b:cyl("TurretTrunnion", spread + 0.2, 0.18, CF(at), "trim")
 		if mount.style == "gun" then
 			-- 1.1 long, from the barrel's root back: at 1.6 its back end dug into the Rotster's roof
 			-- with the gun turned round and tipped up.
@@ -2314,6 +2365,15 @@ function VehicleModels.Build(modelId, rng, opts)
 	if VehicleModels.Mounts[modelId] and def.kind ~= "bike" and not opts.unarmed then
 		buildMount(b, VehicleModels.Mounts[modelId])
 		model:SetAttribute("Armed", true)
+		-- The gun's own seat, alongside the driver's and the passengers'.
+		local gunner = VehicleModels.GunnerSeats[modelId]
+		if gunner and layout.seats then
+			local seats = { gunner = gunner }
+			for key, value in pairs(layout.seats) do
+				seats[key] = value
+			end
+			layout.seats = seats
+		end
 		-- VehicleWeapons finds empty armed vehicles for bots by this tag.
 		game:GetService("CollectionService"):AddTag(model, "ArmedVehicle")
 	end

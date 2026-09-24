@@ -8,19 +8,33 @@
 -- server keeps the rest pose for hit detection.
 --
 -- Everything here is a pure function of time, so the gallery can render a clip mid-swing on an
--- anchored build and the probe can check clip timing without a client.
+-- anchored build and the checks can hold clip timing to the server's without a client.
 --
---   CompanionAnimations.Rig(model)                 -> rig, or nil if the model isn't rigged
---   CompanionAnimations.Idle(rig, now)             -> pose parameters
---   CompanionAnimations.Layer(pose, rig, clip, t)  -> adds a clip at time t onto a pose
---   CompanionAnimations.Transforms(pose)           -> { group = CFrame } joint transforms
---   CompanionAnimations.Apply(rig, pose)           -> sets the joints' Transforms
---   CompanionAnimations.Duration(kind, travel)     -> how long a clip runs
+--   CompanionAnimations.Rig(model)                        -> rig, or nil if the model isn't rigged
+--   CompanionAnimations.Idle(rig, now)                    -> pose parameters
+--   CompanionAnimations.Layer(pose, body, clip, t, scale) -> adds a clip at time t onto a pose
+--   CompanionAnimations.Transforms(pose)                  -> { group = CFrame } joint transforms
+--   CompanionAnimations.Apply(rig, pose)                  -> sets the joints' Transforms
+--   CompanionAnimations.Duration(kind, travel, style)     -> how long a clip runs
+--   CompanionAnimations.Phases(kind, travel, style)       -> { strike, lands, duration }
+--   CompanionAnimations.Glow(kind, t, travel, style)      -> 0-1, how hard the creature is glowing
 --
--- A clip is { kind = "Spit" | "Bonk" | "Zap" | "Chain" | "Lob" | "Shockwave" | "Cheer",
--- start = os.clock(), target = Vector3 (the target in the root's space, from the Body pivot),
--- travel = seconds }. Attacks connect `Windup` seconds in (the server delays the damage by the same
--- amount), so the strike, the beam or the launch always lines up with the hit.
+-- A clip is { kind = "Spit" | "Bonk" | "Zap" | "Chain" | "Lob" | "Shockwave" | "Blast" | "Cheer",
+-- start = seconds, target = Vector3 (the target in the root's space, from the Body pivot),
+-- travel = seconds, style = BrainrotData.AbilityStyles name or nil }.
+--
+-- Every move is four beats (2026-09-24, Oliver: "make way better quality and cool animations for
+-- the brainrots' abilities"):
+--
+--   anticipation  0 .. Windup: the wind-up pose, a squash as it gathers itself, the glow building
+--   action        at Windup: the lunge, spin, rear-up, slam or recoil -- the frame the server
+--                 applies the damage (it waits the same Windup), so the strike never lies
+--   follow-through the overshoot past the action, and the settle back through it
+--   recovery      back to exactly nothing by Duration, so the clip hands back to the idle without
+--                 a pop (tools/companion_fx_check.py holds every clip to that on every body)
+--
+-- A blast brainrot's move explodes the moment it is used (ProjectileService.Explode, no windup), so
+-- its "Blast" clip has no anticipation: it recoils from the frame it starts.
 
 local CompanionAnimations = {}
 
@@ -72,32 +86,245 @@ local function bump(t, a, b)
 	return math.sin(math.pi * (t - a) / (b - a))
 end
 
+--------------------------------------------------------------------------------
+-- Tracks: a channel of a clip as keys, eased between
+--------------------------------------------------------------------------------
+
+-- `keys` is { { time, value, ease }, ... } in time order; `ease` shapes the stretch that ENDS at that
+-- key: "in" accelerates into it (a slam), "out" decelerates into it (a leap reaching its top),
+-- anything else is smoothstep. Every clip's tracks start at 0 at time 0 and end at 0 at its
+-- Duration, which is what makes a clip start and finish on the idle pose.
+local EASE = {
+	["in"] = function(x)
+		return x * x * x
+	end,
+	out = function(x)
+		local inv = 1 - x
+		return 1 - inv * inv * inv
+	end,
+}
+
+local function track(keys, t)
+	local first = keys[1]
+	if t <= first[1] then
+		return first[2]
+	end
+	for index = 2, #keys do
+		local key = keys[index]
+		if t <= key[1] then
+			local previous = keys[index - 1]
+			local width = key[1] - previous[1]
+			local x = width > 0 and (t - previous[1]) / width or 1
+			local shape = EASE[key[3]]
+			x = shape and shape(x) or smooth(x)
+			return previous[2] + (key[2] - previous[2]) * x
+		end
+	end
+	return keys[#keys][2]
+end
+CompanionAnimations.Track = track
+
+-- The beats every clip is written against. `W` is the windup; D the clip's own length.
+local W = WINDUP
+
+-- Clip lengths before any style changes them.
+local BASE_DURATION = {
+	Spit = 0.62,
+	Zap = 0.58,
+	Chain = 0.75,
+	Lob = 0.78,
+	Shockwave = 0.85,
+	Blast = 0.6,
+	Cheer = 0.45,
+}
+-- A Bonk's length depends on how far it flies: the windup, the flight, then this to land and hop home.
+local BONK_RECOVER = 0.6
+
+-- How much faster a Quick style's follow-through and recovery run (the windup never changes: the
+-- server's damage waits for it).
+local QUICK_TAIL = 0.72
+
+-- The tracks of each move, as keys. Channel names are pose fields; `fwd` is a lunge along the way
+-- the creature faces (scaled by its size), `y` a rise (scaled too), `swing`/`raise` move both arms.
+local D = BASE_DURATION
+local TRACKS = {
+	Spit = {
+		-- Rears back and gathers (squash) over the windup, snaps forward stretched on the strike, bounces
+		-- back past its rest and settles.
+		pitch = { { 0, 0 }, { W * 0.8, 0.42 }, { W + 0.06, -0.5, "out" }, { W + 0.2, 0.14 }, { W + 0.34, -0.04 }, { D.Spit, 0 } },
+		squash = { { 0, 0 }, { W * 0.8, 0.65 }, { W + 0.05, -0.6, "out" }, { W + 0.16, 0.25 }, { W + 0.3, 0 }, { D.Spit, 0 } },
+		fwd = { { 0, 0 }, { W * 0.8, -0.14 }, { W + 0.06, 0.45, "out" }, { W + 0.22, 0.04 }, { D.Spit, 0 } },
+		y = { { 0, 0 }, { W * 0.8, 0.06 }, { W + 0.06, 0.1 }, { D.Spit, 0 } },
+		nod = { { 0, 0 }, { W * 0.8, -0.4 }, { W + 0.06, 0.55, "out" }, { W + 0.22, -0.1 }, { D.Spit, 0 } },
+		swing = { { 0, 0 }, { W * 0.8, -0.6 }, { W + 0.06, 1.0, "out" }, { W + 0.25, 0.1 }, { D.Spit, 0 } },
+		flap = { { 0, 0 }, { W, 0.3 }, { W + 0.08, 0.8 }, { W + 0.3, 0 }, { D.Spit, 0 } },
+		lift = { { 0, 0 }, { W * 0.8, -0.3 }, { W + 0.08, 0.6 }, { W + 0.3, 0 }, { D.Spit, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { W + 0.1, 0 }, { D.Spit, 0 } },
+	},
+	Zap = {
+		-- Charges on the spot (a shiver, the arm coming up to point), then the beam's kick pushes it
+		-- back on its heels.
+		y = { { 0, 0 }, { W, 0.14 }, { W + 0.1, 0.02 }, { D.Zap, 0 } },
+		squash = { { 0, 0 }, { W * 0.85, 0.45 }, { W + 0.03, -0.35, "out" }, { W + 0.16, 0.15 }, { W + 0.3, 0 }, { D.Zap, 0 } },
+		fwd = { { 0, 0 }, { W, 0.08 }, { W + 0.05, -0.5, "out" }, { W + 0.25, -0.1 }, { D.Zap, 0 } },
+		pitch = { { 0, 0 }, { W, -0.12 }, { W + 0.05, 0.32, "out" }, { W + 0.22, -0.06 }, { D.Zap, 0 } },
+		swingR = { { 0, 0 }, { W * 0.7, 1.5 }, { W + 0.2, 1.5 }, { W + 0.34, 0.3 }, { D.Zap, 0 } },
+		swingL = { { 0, 0 }, { W * 0.7, 0.5 }, { W + 0.2, 0.5 }, { D.Zap, 0 } },
+		flap = { { 0, 0 }, { W, 0.9 }, { W + 0.1, 0.3 }, { D.Zap, 0 } },
+		nod = { { 0, 0 }, { W + 0.05, 0.25 }, { D.Zap, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { W + 0.08, 0.2 }, { D.Zap, 0 } },
+		shiver = { { 0, 0 }, { W, 1, "in" }, { W + 0.03, 0 }, { D.Zap, 0 } },
+	},
+	Chain = {
+		-- The Zap's charge, then a full spin that flings the chain out, arms thrown wide.
+		y = { { 0, 0 }, { W, 0.14 }, { W + 0.2, 0.18 }, { W + 0.45, 0 }, { D.Chain, 0 } },
+		squash = { { 0, 0 }, { W * 0.85, 0.5 }, { W + 0.04, -0.4, "out" }, { W + 0.3, -0.1 }, { W + 0.48, 0.15 }, { D.Chain, 0 } },
+		fwd = { { 0, 0 }, { W, 0.08 }, { W + 0.05, -0.35, "out" }, { W + 0.3, -0.1 }, { D.Chain, 0 } },
+		pitch = { { 0, 0 }, { W, -0.12 }, { W + 0.05, 0.25 }, { W + 0.3, -0.05 }, { D.Chain, 0 } },
+		swingR = { { 0, 0 }, { W * 0.7, 1.5 }, { W + 0.1, 1.2 }, { W + 0.4, 0.2 }, { D.Chain, 0 } },
+		swingL = { { 0, 0 }, { W * 0.7, 0.5 }, { W + 0.4, 0.2 }, { D.Chain, 0 } },
+		raise = { { 0, 0 }, { W, 0.2 }, { W + 0.2, 1.0 }, { W + 0.45, 0 }, { D.Chain, 0 } },
+		flap = { { 0, 0 }, { W, 0.9 }, { W + 0.3, 0.6 }, { D.Chain, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { W + 0.3, 0.3 }, { D.Chain, 0 } },
+		shiver = { { 0, 0 }, { W, 1, "in" }, { W + 0.03, 0 }, { D.Chain, 0 } },
+		-- One full turn, from the strike: 2*pi is the same pose as 0, so it ends where it began.
+		spinTurn = { { 0, 0 }, { W, 0 }, { W + 0.45, 1 }, { D.Chain, 1 } },
+	},
+	Lob = {
+		-- Arms right back over its head and a crouch; the toss throws it up and forward, stretched,
+		-- and it lands back into a little squash.
+		swing = { { 0, 0 }, { W * 0.9, 2.7 }, { W + 0.1, 1.2, "out" }, { W + 0.3, 0.2 }, { D.Lob, 0 } },
+		pitch = { { 0, 0 }, { W * 0.9, 0.45 }, { W + 0.08, -0.42, "out" }, { W + 0.25, 0.08 }, { D.Lob, 0 } },
+		squash = { { 0, 0 }, { W * 0.9, 0.55 }, { W + 0.06, -0.55, "out" }, { W + 0.2, 0.2 }, { W + 0.36, 0 }, { D.Lob, 0 } },
+		y = { { 0, 0 }, { W * 0.9, -0.08 }, { W + 0.1, 0.4, "out" }, { W + 0.3, 0 }, { D.Lob, 0 } },
+		nod = { { 0, 0 }, { W * 0.9, -0.3 }, { W + 0.1, 0.35 }, { D.Lob, 0 } },
+		flap = { { 0, 0 }, { W + 0.1, 0.8 }, { W + 0.35, 0 }, { D.Lob, 0 } },
+		lift = { { 0, 0 }, { W * 0.9, 0.4 }, { W + 0.12, -0.3 }, { D.Lob, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { W + 0.1, 0 }, { D.Lob, 0 } },
+	},
+	Shockwave = {
+		-- Rears up, stretched, arms high; drops (accelerating) to slam on the windup; a big squash,
+		-- a tremble and back up.
+		y = { { 0, 0 }, { W * 0.6, 0.95, "out" }, { W, 0, "in" }, { W + 0.06, -0.22 }, { W + 0.2, 0.04 }, { D.Shockwave, 0 } },
+		squash = { { 0, 0 }, { W * 0.6, -0.5 }, { W, -0.3, "in" }, { W + 0.05, 0.9 }, { W + 0.18, -0.15 }, { W + 0.32, 0.05 }, { D.Shockwave, 0 } },
+		raise = { { 0, 0 }, { W * 0.6, 1.7 }, { W, 1.5 }, { W + 0.08, 0.2 }, { D.Shockwave, 0 } },
+		flap = { { 0, 0 }, { W * 0.6, 1.0 }, { W + 0.1, 0 }, { D.Shockwave, 0 } },
+		step = { { 0, 0 }, { W, 0 }, { W + 0.05, 0.25 }, { W + 0.2, 0 }, { D.Shockwave, 0 } },
+		pitch = { { 0, 0 }, { W * 0.6, -0.12 }, { W, 0 }, { W + 0.05, 0.12 }, { W + 0.25, 0 }, { D.Shockwave, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { W + 0.12, 0 }, { D.Shockwave, 0 } },
+		tremble = { { 0, 0 }, { W, 0 }, { W + 0.04, 1 }, { W + 0.24, 0 }, { D.Shockwave, 0 } },
+	},
+	-- The spinners' Shockwave: a wind-up turn, a small hop and the slam.
+	ShockwaveSpin = {
+		y = { { 0, 0 }, { W * 0.6, 0.4, "out" }, { W, 0, "in" }, { W + 0.05, -0.12 }, { D.Shockwave, 0 } },
+		squash = { { 0, 0 }, { W * 0.6, -0.3 }, { W + 0.05, 0.7 }, { W + 0.2, -0.1 }, { D.Shockwave, 0 } },
+		raise = { { 0, 0 }, { W * 0.6, 1.5 }, { W + 0.08, 0.2 }, { D.Shockwave, 0 } },
+		flap = { { 0, 0 }, { W * 0.6, 1.0 }, { W + 0.1, 0 }, { D.Shockwave, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { W + 0.12, 0 }, { D.Shockwave, 0 } },
+		tremble = { { 0, 0 }, { W, 0 }, { W + 0.04, 1 }, { W + 0.24, 0 }, { D.Shockwave, 0 } },
+		spinTurn = { { 0, 0 }, { W + 0.22, 1 }, { D.Shockwave, 1 } },
+	},
+	-- No windup: kicked straight back by its own explosion.
+	Blast = {
+		fwd = { { 0, 0 }, { 0.05, -0.6, "out" }, { 0.25, -0.15 }, { D.Blast, 0 } },
+		pitch = { { 0, 0 }, { 0.05, 0.45, "out" }, { 0.22, -0.1 }, { 0.36, 0.04 }, { D.Blast, 0 } },
+		squash = { { 0, 0 }, { 0.04, -0.6, "out" }, { 0.14, 0.7 }, { 0.3, -0.1 }, { D.Blast, 0 } },
+		y = { { 0, 0 }, { 0.06, 0.25, "out" }, { 0.2, 0 }, { D.Blast, 0 } },
+		raise = { { 0, 0 }, { 0.05, 1.2 }, { 0.3, 0.1 }, { D.Blast, 0 } },
+		flap = { { 0, 0 }, { 0.05, 1.0 }, { 0.3, 0 }, { D.Blast, 0 } },
+		glow = { { 0, 0 }, { 0.03, 1 }, { 0.22, 0 }, { D.Blast, 0 } },
+		tremble = { { 0, 0 }, { 0.03, 1 }, { 0.3, 0 }, { D.Blast, 0 } },
+	},
+	Cheer = {
+		y = { { 0, 0 }, { 0.2, 0.32, "out" }, { D.Cheer, 0, "in" } },
+		squash = { { 0, 0 }, { 0.06, 0.35 }, { 0.2, -0.3 }, { 0.38, 0.2 }, { D.Cheer, 0 } },
+		raise = { { 0, 0 }, { 0.2, 1.1 }, { D.Cheer, 0 } },
+		flap = { { 0, 0 }, { 0.2, 0.9 }, { D.Cheer, 0 } },
+		wiggle = { { 0, 0 }, { 0.1, 1 }, { 0.35, 1 }, { D.Cheer, 0 } },
+	},
+}
+CompanionAnimations.Tracks = TRACKS
+
+-- The anticipation and recovery of a Bonk; the flight itself is worked out from the target.
+local function bonkKeys(travel, recover)
+	local land = W + travel
+	local d = land + recover
+	return {
+		squash = { { 0, 0 }, { W * 0.85, 0.8 }, { W + 0.05, -0.55, "out" }, { land - 0.02, -0.3 }, { land + 0.04, 1.0, "in" },
+			{ land + 0.16, -0.2 }, { land + 0.3, 0.1 }, { d, 0 } },
+		crouch = { { 0, 0 }, { W * 0.85, 1 }, { W + 0.04, 0 }, { d, 0 } },
+		arms = { { 0, 0 }, { W * 0.85, 2.2 }, { W + 0.05, 2.4 }, { land, 2.4 }, { land + 0.12, 0.4 }, { d, 0 } },
+		glow = { { 0, 0 }, { W, 1, "in" }, { land, 0.5 }, { land + 0.15, 0 }, { d, 0 } },
+		tremble = { { 0, 0 }, { land, 0 }, { land + 0.03, 1 }, { land + 0.2, 0 }, { d, 0 } },
+	}
+end
+
+--------------------------------------------------------------------------------
+-- Timing
+--------------------------------------------------------------------------------
+
+-- Whether a move's damage travels after the strike (and so lands `travel` later).
+local TRAVELS = { Spit = true, Bonk = true, Lob = true }
+CompanionAnimations.Travels = TRAVELS
+
+-- How long a clip runs. `style` is optional: a Quick style runs its follow-through faster.
+function CompanionAnimations.Duration(kind, travel, style)
+	travel = travel or 0.35
+	local base
+	if kind == "Bonk" then
+		base = WINDUP + travel + BONK_RECOVER
+	else
+		base = BASE_DURATION[kind] or 0.5
+	end
+	if style == "Quick" and kind ~= "Cheer" then
+		local strike = kind == "Blast" and 0 or WINDUP
+		local tail = base - strike
+		-- A Bonk's flight is the server's, not the creature's: only what comes after it speeds up.
+		if kind == "Bonk" then
+			return strike + travel + BONK_RECOVER * QUICK_TAIL
+		end
+		return strike + tail * QUICK_TAIL
+	end
+	return base
+end
+
+-- The beats the client times its effects to, from the same numbers as the clip:
+--   strike  the action frame: the launch, the beam, the stomp (the server's windup; 0 for a Blast)
+--   lands   when the server applies the damage: the strike, plus the flight for Spit, Bonk and Lob
+--   duration when the creature is back on its idle
+function CompanionAnimations.Phases(kind, travel, style)
+	local strike = kind == "Blast" and 0 or WINDUP
+	local lands = strike + ((TRAVELS[kind] and (travel or 0)) or 0)
+	return { strike = strike, lands = lands, duration = CompanionAnimations.Duration(kind, travel, style) }
+end
+
+-- The clock a style's clip reads: a Quick style's tail runs faster, the windup never does.
+local function styledTime(kind, t, style)
+	if style ~= "Quick" or kind == "Cheer" then
+		return t
+	end
+	local strike = kind == "Blast" and 0 or WINDUP
+	if t <= strike then
+		return t
+	end
+	return strike + (t - strike) / QUICK_TAIL
+end
+
+--------------------------------------------------------------------------------
+-- Clips
+--------------------------------------------------------------------------------
+
 function CompanionAnimations.Blank()
 	return {
 		x = 0, y = 0, z = 0, yaw = 0, spin = 0, pitch = 0, roll = 0,
 		swingL = 0, swingR = 0, raiseL = 0, raiseR = 0,
 		flap = 0, sweep = 0, wag = 0, lift = 0, nod = 0, turn = 0, stepL = 0, stepR = 0,
+		-- squash > 0 gathers (body sinks, feet and arms splay, the head settles); < 0 stretches.
+		squash = 0,
+		-- 0-1: how hard the creature is glowing (read by the effects, not by a joint).
+		glow = 0,
+		scale = 1,
 	}
-end
-
-function CompanionAnimations.Duration(kind, travel)
-	travel = travel or 0.35
-	if kind == "Spit" then
-		return 0.6
-	elseif kind == "Zap" then
-		return 0.55
-	elseif kind == "Chain" then
-		return 0.7
-	elseif kind == "Lob" then
-		return 0.72
-	elseif kind == "Shockwave" then
-		return 0.8
-	elseif kind == "Bonk" then
-		return WINDUP + travel + 0.55
-	elseif kind == "Cheer" then
-		return 0.45
-	end
-	return 0.5
 end
 
 -- Moves the body `amount` along the way it's facing.
@@ -106,89 +333,125 @@ local function forward(pose, amount)
 	pose.z -= math.cos(pose.yaw) * amount
 end
 
+-- A style's own flourish on top of the move, always back to 0 by the end: a Daze wobble, a Leech's
+-- gulp as the health comes back, a Long move holding its aim tall through the windup. (A Wide move's
+-- bigger stomp is its clip's `amp`; a Quick one's snappier tail is `styledTime`.)
+local function styleFlourish(pose, style, kind, t, d, s)
+	if not style then
+		return
+	end
+	local strike = kind == "Blast" and 0 or WINDUP
+	local after = math.max(t - strike, 0)
+	local tail = math.max(d - strike, 0.01)
+	if style == "Daze" then
+		pose.roll += math.sin(after * 22) * 0.1 * bump(t, strike, d)
+	elseif style == "Leech" then
+		pose.squash += 0.35 * bump(t, strike + tail * 0.45, strike + tail * 0.8)
+	elseif style == "Slow" then
+		pose.x += math.sin(after * 70) * 0.03 * s * bump(t, strike, strike + tail * 0.5)
+	elseif style == "Burn" then
+		pose.y += 0.08 * s * bump(t, strike + tail * 0.2, strike + tail * 0.6)
+	elseif style == "Toxic" then
+		pose.nod += 0.25 * bump(t, strike + tail * 0.3, strike + tail * 0.85)
+	elseif style == "Long" then
+		-- Holds its aim a beat longer: stays stretched tall through the strike.
+		pose.squash -= 0.25 * bump(t, 0, strike + tail * 0.5)
+	elseif style == "Fork" then
+		pose.turn += 0.35 * bump(t, strike, strike + tail * 0.6)
+	end
+end
+
+-- One channel of a clip at time t; 0 for a channel the clip doesn't move.
+local function channel(keys, name, t)
+	local k = keys[name]
+	return k and track(k, t) or 0
+end
+
+-- Adds the tracks in `keys` at time t. `style` is the body's way of moving (STYLES), `amp` a Wide
+-- move's bigger body language.
+local function applyTracks(pose, keys, style, t, s, amp)
+	local body = amp or 1
+	forward(pose, channel(keys, "fwd", t) * s)
+	pose.y += channel(keys, "y", t) * s * style.hop * body
+	pose.pitch += channel(keys, "pitch", t) * style.tilt
+	pose.squash += channel(keys, "squash", t) * body
+	pose.nod += channel(keys, "nod", t)
+	local swing = channel(keys, "swing", t)
+	pose.swingL += swing + channel(keys, "swingL", t)
+	pose.swingR += swing + channel(keys, "swingR", t)
+	local raise = channel(keys, "raise", t) * body
+	pose.raiseL += raise
+	pose.raiseR += raise
+	pose.flap += channel(keys, "flap", t)
+	pose.lift += channel(keys, "lift", t)
+	local step = channel(keys, "step", t) * s * body
+	pose.stepL += step
+	pose.stepR += step
+	pose.glow = math.max(pose.glow, channel(keys, "glow", t))
+	local shiver = channel(keys, "shiver", t)
+	if shiver ~= 0 then
+		pose.x += math.sin(t * 90) * 0.05 * shiver * s
+	end
+	local tremble = channel(keys, "tremble", t)
+	if tremble ~= 0 then
+		pose.roll += math.sin(t * 40) * 0.07 * tremble
+	end
+	local turn = channel(keys, "spinTurn", t)
+	if turn ~= 0 then
+		pose.spin += math.pi * 2 * turn
+	end
+	local wiggle = channel(keys, "wiggle", t)
+	if wiggle ~= 0 then
+		pose.roll += math.sin(t * 28) * 0.12 * wiggle
+		pose.wag += math.sin(t * 30) * 0.5 * wiggle
+	end
+end
+
 local CLIPS = {}
 
-CLIPS.Spit = function(pose, style, t, s)
-	local rear = bump(t, 0, WINDUP + 0.03)
-	local snap = bump(t, WINDUP - 0.03, WINDUP + 0.24)
-	pose.pitch += (0.38 * rear - 0.5 * snap) * style.tilt
-	pose.y += 0.14 * rear * style.hop * s
-	forward(pose, 0.4 * snap * s)
-	pose.swingL += -0.4 * rear + 0.9 * snap
-	pose.swingR += -0.4 * rear + 0.9 * snap
-	pose.nod += -0.35 * rear + 0.5 * snap
-	pose.flap += 0.6 * snap
-	pose.lift += 0.4 * snap
-end
-
-CLIPS.Zap = function(pose, style, t, s)
-	local charge = smooth(span(t, 0, WINDUP)) * (1 - span(t, WINDUP, WINDUP + 0.04))
-	local recoil = bump(t, WINDUP, WINDUP + 0.32)
-	pose.x += math.sin(t * 90) * 0.05 * charge * s
-	pose.y += 0.12 * charge * s
-	forward(pose, -0.45 * recoil * s)
-	pose.pitch += 0.28 * recoil * style.tilt
-	local point = smooth(span(t, 0, WINDUP)) * (1 - smooth(span(t, WINDUP + 0.2, 0.55)))
-	pose.swingR += 1.45 * point
-	pose.swingL += 0.5 * point
-	pose.nod += 0.2 * recoil
-	pose.flap += 0.8 * charge
-end
-
-CLIPS.Chain = function(pose, style, t, s)
-	CLIPS.Zap(pose, style, t, s)
-	pose.spin += math.pi * 2 * smooth(span(t, WINDUP, WINDUP + 0.45))
-	pose.raiseL += 0.9 * bump(t, WINDUP, WINDUP + 0.45)
-	pose.raiseR += 0.9 * bump(t, WINDUP, WINDUP + 0.45)
-end
-
-CLIPS.Lob = function(pose, style, t, s)
-	local wind = smooth(span(t, 0, WINDUP)) * (1 - smooth(span(t, WINDUP, WINDUP + 0.1)))
-	local toss = bump(t, WINDUP, WINDUP + 0.32)
-	pose.pitch += (0.42 * wind - 0.38 * toss) * style.tilt
-	pose.y += (0.36 * toss * style.hop - 0.08 * wind) * s
-	pose.swingL += 2.6 * wind + 1.1 * toss
-	pose.swingR += 2.6 * wind + 1.1 * toss
-	pose.nod += -0.3 * wind + 0.35 * toss
-	pose.flap += 0.7 * toss
-end
-
-CLIPS.Shockwave = function(pose, style, t, s)
-	local slam = bump(t, WINDUP, WINDUP + 0.18)
-	if style.spinner then
-		pose.spin += math.pi * 2 * smooth(span(t, 0, WINDUP + 0.22))
-		pose.y += (0.4 * bump(t, 0, WINDUP) - 0.12 * slam) * s
-	else
-		-- Up fast, down faster, landing on the windup.
-		local rise = t < WINDUP * 0.65 and math.sin(span(t, 0, WINDUP * 0.65) * math.pi / 2)
-			or 1 - span(t, WINDUP * 0.65, WINDUP) ^ 2
-		if t >= WINDUP then
-			rise = 0
-		end
-		pose.y += (0.95 * rise * style.hop - 0.2 * slam) * s
-		pose.pitch += (style.tumble and 0.25 or -0.1) * slam * style.tilt
+for _, kind in ipairs({ "Spit", "Zap", "Chain", "Lob", "Blast", "Cheer" }) do
+	CLIPS[kind] = function(pose, style, t, s)
+		applyTracks(pose, TRACKS[kind], style, t, s)
 	end
-	local up = t < WINDUP and smooth(span(t, 0, WINDUP * 0.6)) or 1 - smooth(span(t, WINDUP, WINDUP + 0.1))
-	pose.raiseL += 1.6 * up
-	pose.raiseR += 1.6 * up
-	pose.flap += 1.0 * up
-	pose.stepL += 0.25 * slam * s
-	pose.stepR += 0.25 * slam * s
-	pose.roll += math.sin(t * 40) * 0.06 * slam
+end
+
+CLIPS.Shockwave = function(pose, style, t, s, clip)
+	local amp = clip.style == "Wide" and 1.25 or 1
+	if style.spinner then
+		applyTracks(pose, TRACKS.ShockwaveSpin, style, t, s, amp)
+	else
+		applyTracks(pose, TRACKS.Shockwave, style, t, s, amp)
+		pose.pitch += (style.tumble and 0.25 or 0) * bump(t, W, W + 0.18) * style.tilt
+	end
 end
 
 CLIPS.Bonk = function(pose, style, t, s, clip)
 	local target = clip.target or Vector3.new(0, 0, -6)
 	local travel = clip.travel or 0.35
-	local crouch = bump(t, 0, WINDUP + 0.03)
+	local recover = clip.style == "Quick" and BONK_RECOVER * QUICK_TAIL or BONK_RECOVER
+	-- Built once per clip (the flight time is fixed when the move is used), not every frame.
+	local keys = clip.bonkKeys
+	if not keys or clip.bonkTravel ~= travel or clip.bonkRecover ~= recover then
+		keys = bonkKeys(travel, recover)
+		clip.bonkKeys, clip.bonkTravel, clip.bonkRecover = keys, travel, recover
+	end
+	local amp = clip.style == "Wide" and 1.2 or 1
+	local crouch = track(keys.crouch, t)
 	pose.y -= 0.2 * crouch * s
 	pose.pitch += 0.28 * crouch * style.tilt
-	pose.swingL += 2.2 * crouch
-	pose.swingR += 2.2 * crouch
+	pose.squash += track(keys.squash, t) * amp
+	local arms = track(keys.arms, t)
+	pose.swingL += arms
+	pose.swingR += arms
+	pose.glow = math.max(pose.glow, track(keys.glow, t))
+	local tremble = track(keys.tremble, t)
+	if tremble ~= 0 then
+		pose.roll += math.sin(t * 60) * 0.1 * tremble
+	end
 
 	local land = WINDUP + travel
 	local horizontal = Vector3.new(target.X, 0, target.Z).Magnitude
-	local arc = 1.5 + horizontal * 0.12
+	local arc = (1.5 + horizontal * 0.12) * amp
 	if t >= WINDUP and t < land then
 		local a = span(t, WINDUP, land)
 		local at = target * a
@@ -200,34 +463,15 @@ CLIPS.Bonk = function(pose, style, t, s, clip)
 		else
 			pose.pitch -= 0.55 * bump(a, 0, 1) * style.tilt
 		end
-		pose.swingL += 2.4
-		pose.swingR += 2.4
 		pose.flap += math.sin(a * math.pi * 6) * 0.8
-	elseif t >= land and t < land + 0.12 then
-		local dip = bump(t, land, land + 0.12)
-		pose.x += target.X
-		pose.y += target.Y - 0.25 * dip * s
-		pose.z += target.Z
-		pose.swingL += 2.4 * (1 - dip)
-		pose.swingR += 2.4 * (1 - dip)
-		pose.roll += math.sin(t * 60) * 0.1 * dip
-	elseif t >= land + 0.12 then
-		local b = smooth(span(t, land + 0.12, land + 0.52))
+	elseif t >= land then
+		-- Home again: a smaller hop back over the recovery.
+		local b = smooth(span(t, land + 0.12, land + recover - 0.05))
 		local at = target * (1 - b)
 		pose.x += at.X
 		pose.y += at.Y + arc * 0.3 * 4 * b * (1 - b)
 		pose.z += at.Z
 	end
-end
-
-CLIPS.Cheer = function(pose, style, t, s)
-	local hop = bump(t, 0, 0.45)
-	pose.y += 0.32 * hop * style.hop * s
-	pose.roll += math.sin(t * 28) * 0.12 * hop
-	pose.raiseL += 1.1 * hop
-	pose.raiseR += 1.1 * hop
-	pose.flap += 0.9 * hop
-	pose.wag += math.sin(t * 30) * 0.5 * hop
 end
 
 -- Where the clip wants the creature to face: toward its target, blended in at the start and out
@@ -245,16 +489,37 @@ end
 -- Adds `clip` at `t` seconds into it onto `pose`. Returns false once the clip has finished.
 function CompanionAnimations.Layer(pose, body, clip, t, scale)
 	local fn = CLIPS[clip.kind]
-	local duration = CompanionAnimations.Duration(clip.kind, clip.travel)
+	local duration = CompanionAnimations.Duration(clip.kind, clip.travel, clip.style)
 	if not fn or t < 0 or t > duration then
 		return false
 	end
 	local style = STYLES[body] or STYLES.Blob
+	local s = scale or 1
 	-- Facing turns the body about its base; a Bonk's leap is a translation in the root's frame,
 	-- which the turn doesn't rotate, so it faces its target and still lands on it.
 	pose.yaw += facing(clip, t, duration)
-	fn(pose, style, t, scale or 1, clip)
+	-- A Bonk's flight runs on the real clock (the server's travel); everything else reads the
+	-- styled clock, so a Quick follow-through is quicker without the windup moving.
+	local clipTime = clip.kind == "Bonk" and t or styledTime(clip.kind, t, clip.style)
+	fn(pose, style, clipTime, s, clip)
+	styleFlourish(pose, clip.style, clip.kind, t, duration, s)
 	return true
+end
+
+-- How hard a move's creature glows `t` seconds in: the build-up peaks on the strike. The effects
+-- light the creature from this, so its glow and its pose are one curve.
+-- One scratch pose and clip, reused: the effects ask this every frame for every charging creature.
+local glowPose = CompanionAnimations.Blank()
+local glowClip = {}
+function CompanionAnimations.Glow(kind, t, travel, style)
+	for key in pairs(glowPose) do
+		glowPose[key] = 0
+	end
+	glowClip.kind, glowClip.travel, glowClip.style = kind, travel, style
+	if not CompanionAnimations.Layer(glowPose, "Blob", glowClip, t, 1) then
+		return 0
+	end
+	return clamp01(glowPose.glow)
 end
 
 -- Always-on life: a breathing bob and sway, arms swinging a little, wings fluttering, tail
@@ -269,6 +534,7 @@ function CompanionAnimations.IdlePose(body, now, seed, scale, into)
 			pose[key] = 0
 		end
 	end
+	pose.scale = s
 	pose.y = math.sin(t * 2.1) * (style.floats and 0.1 or 0.05) * s
 	pose.roll = math.sin(t * 1.3) * (style.wobble and 0.07 or 0.035)
 	pose.pitch = math.sin(t * 1.7) * 0.025
@@ -279,31 +545,39 @@ function CompanionAnimations.IdlePose(body, now, seed, scale, into)
 	pose.flap = math.sin(t * (style.floats and 9 or 6.5)) * 0.3
 	pose.wag = math.sin(t * 3.2) * 0.35
 	pose.nod = math.sin(t * 1.9) * 0.06
+	-- A slow breath: in and out a little.
+	pose.squash = math.sin(t * 2.1 + 1.2) * 0.06
 	return pose
 end
 
 local JOINT_NAMES = { "Body", "Head", "ArmR", "ArmL", "WingR", "WingL", "Tail", "FootR", "FootL" }
+CompanionAnimations.JointNames = JOINT_NAMES
 
--- One joint's transform from the pose.
+-- One joint's transform from the pose. Squash can't scale a part, so it is shown the way a
+-- puppeteer would: the body sinks, the head settles into it, the feet and arms splay; a stretch
+-- does the opposite.
 local function transformFor(name, pose)
+	local s = pose.scale or 1
+	local squash = pose.squash or 0
 	if name == "Body" then
-		return CFrame.new(pose.x, pose.y, pose.z) * CFrame.Angles(0, pose.yaw + pose.spin, 0) * CFrame.Angles(pose.pitch, 0, pose.roll)
+		return CFrame.new(pose.x, pose.y - 0.1 * squash * s, pose.z) * CFrame.Angles(0, pose.yaw + pose.spin, 0)
+			* CFrame.Angles(pose.pitch, 0, pose.roll)
 	elseif name == "Head" then
-		return CFrame.Angles(pose.nod, pose.turn, 0)
+		return CFrame.new(0, -0.16 * squash * s, 0) * CFrame.Angles(pose.nod, pose.turn, 0)
 	elseif name == "ArmR" then
-		return CFrame.Angles(pose.swingR, 0, pose.raiseR)
+		return CFrame.Angles(pose.swingR, 0, pose.raiseR + 0.3 * squash)
 	elseif name == "ArmL" then
-		return CFrame.Angles(pose.swingL, 0, -pose.raiseL)
+		return CFrame.Angles(pose.swingL, 0, -pose.raiseL - 0.3 * squash)
 	elseif name == "WingR" then
-		return CFrame.Angles(0, pose.sweep, pose.flap)
+		return CFrame.Angles(0, pose.sweep, pose.flap + 0.25 * squash)
 	elseif name == "WingL" then
-		return CFrame.Angles(0, -pose.sweep, -pose.flap)
+		return CFrame.Angles(0, -pose.sweep, -pose.flap - 0.25 * squash)
 	elseif name == "Tail" then
 		return CFrame.Angles(pose.lift, pose.wag, 0)
 	elseif name == "FootR" then
-		return CFrame.new(0, pose.stepR, 0)
+		return CFrame.new(0.1 * squash * s, pose.stepR, 0)
 	elseif name == "FootL" then
-		return CFrame.new(0, pose.stepL, 0)
+		return CFrame.new(-0.1 * squash * s, pose.stepL, 0)
 	end
 	return nil
 end

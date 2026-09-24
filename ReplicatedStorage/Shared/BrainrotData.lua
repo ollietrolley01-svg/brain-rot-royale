@@ -167,6 +167,17 @@ BrainrotData.AbilityPower = 2.3
 BrainrotData.MaxAbilityDamage = 95
 BrainrotData.AbilityCooldown = 1.8
 
+-- The most one use of a companion's move can take off any one target, health and shield together:
+-- every hit of the use (a fork, a splash) and the DoT or venom it starts, counted after the level,
+-- stars, style and MatchConfig.CombatDamageScale (Oliver, 2026-09-24: "make the companions other
+-- than Secret ones not one-shot"). The 95 per-hit cap above never counted the DoT, so a Toxic or
+-- venom Mythic could take a full-health player from 100 to 0 with one press. Every number is under
+-- 100, so no use kills a full-health player on its own, but two uses (or a teammate's shots) still
+-- can. Set near the top of what each rarity lands at level 1, so the buff's feel is kept and the cap
+-- mostly bites on levelled, merged copies. Secret has no entry: a Secret may still one-shot.
+-- Enforced in CompanionService (per use, per target); tools/companion_ability_check.py sweeps it.
+BrainrotData.MaxUseDamage = { Common = 34, Uncommon = 42, Rare = 50, Epic = 60, Legendary = 70, Mythic = 80 }
+
 --------------------------------------------------------------------------------
 -- Boons: what a companion does FOR its owner
 --------------------------------------------------------------------------------

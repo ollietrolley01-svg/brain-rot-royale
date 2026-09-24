@@ -43,7 +43,7 @@ local function defaultData()
 		Brainrots = {},
 		Crates = {
 			Common = 0, Uncommon = 0, Rare = 0, Epic = 0, Legendary = 0, Mythic = 0,
-			Accessory = 0, Skin = 0, Aura = 0, Super = 0, Parachute = 0,
+			Accessory = 0, Skin = 0, Aura = 0, Super = 0, Parachute = 0, DeathEffect = 0,
 			-- The Style Crate tiers (2026-09-18). Additive: an older save simply has none of them.
 			Style = 0, DeluxeStyle = 0, PrestigeStyle = 0,
 		},
@@ -54,6 +54,8 @@ local function defaultData()
 		Pass = { xp = 0, claimedFree = {}, claimedPremium = {} },
 		Daily = { lastClaimDay = 0, streak = 0 },
 		Stats = { wins = 0, kills = 0, matches = 0 },
+		-- Team-mode record (lifetime team wins, matches, current win streak): team rewards v2.
+		TeamRewards = { wins = 0, matches = 0, streak = 0 },
 		-- One-match boosts: Health/Speed from the shop and the Starter Bundle, the Pro pair
 		-- (2x health, 1.5x speed) from the Pro Bundle.
 		Consumables = { Health = 0, Speed = 0, HealthPro = 0, SpeedPro = 0 },
@@ -197,6 +199,7 @@ local function reconcile(saved)
 
 	copyNumbers(data.Crates, saved.Crates)
 	copyNumbers(data.Stats, saved.Stats)
+	copyNumbers(data.TeamRewards, saved.TeamRewards)
 	copyNumbers(data.Consumables, saved.Consumables)
 
 	if type(saved.Cosmetics) == "table" then

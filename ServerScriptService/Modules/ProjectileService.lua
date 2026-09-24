@@ -901,6 +901,8 @@ api = {
 	Explode = explode,
 	Burst = burst,
 	DealDamage = CombatService.DealDamage,
+	-- The owner to credit a hit to, or nil once they have left (a round's own hits, as burst credits them).
+	Creditable = creditable,
 	Targets = targets,
 	Exposure = exposure,
 	Report = report,

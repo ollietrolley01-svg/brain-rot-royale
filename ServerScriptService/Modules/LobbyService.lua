@@ -551,11 +551,15 @@ local function buildPier(lobby, base)
 		column(lobby, 12, 1.2, base + Vector3.new(x, 0, 96), WOOD_DARK, Enum.Material.Wood)
 	end
 	local arch = part(lobby, Vector3.new(27, 3.4, 1), CFrame.new(base + Vector3.new(0, 12.6, 96)), WOOD_DARK, Enum.Material.WoodPlanks)
+	-- The greeting faces the pier. Everyone arrives on the +Z side (the spawn pad is at z 110,
+	-- SpawnOffset; the airship docks there too) looking towards the plaza, so the face they walk up to
+	-- is Back (+Z); Front (-Z) is the one seen from the plaza on the way out. It was the other way
+	-- round, and the welcome faced the people leaving (#86).
 	surfaceText(arch, Enum.NormalId.Back, {
-		{ y = 0.05, h = 0.9, text = "ROT ISLAND", color = GOLD },
+		{ y = 0.05, h = 0.9, text = "WELCOME TO ROT ISLAND", color = GOLD },
 	}, 30, 200)
 	surfaceText(arch, Enum.NormalId.Front, {
-		{ y = 0.05, h = 0.9, text = "WELCOME TO ROT ISLAND", color = GOLD },
+		{ y = 0.05, h = 0.9, text = "ROT ISLAND", color = GOLD },
 	}, 30, 200)
 	for index = 0, 8 do
 		-- Bulbs sitting on the arch's top edge (at 14.3), not hovering over it.
@@ -2132,7 +2136,7 @@ local function buildArena(lobby, base)
 	local practiceAnchor = decor(part(lobby, Vector3.new(0.2, 0.2, 0.2), CFrame.new(center + Vector3.new(22, ARENA_HEIGHT + 14, 0)), DARK,
 		Enum.Material.SmoothPlastic))
 	practiceAnchor.Transparency = 1
-	billboard(practiceAnchor, "COMPANION PRACTICE", GOLD, Vector3.new(0, 0.9, 0), 14, 2, MatchConfig.LobbySignDistance)
+	billboard(practiceAnchor, "TARGET PRACTICE", GOLD, Vector3.new(0, 0.9, 0), 14, 2, MatchConfig.LobbySignDistance)
 	keyHint(billboard(practiceAnchor, "Stand near a target and use your companion's move", WHITE, Vector3.new(0, -0.65, 0), 14, 1,
 		MatchConfig.LobbySignDistance), "Stand near a target and press [{Companion}]")
 
@@ -2205,7 +2209,10 @@ local function buildArena(lobby, base)
 			-- The labels stand clear over the gun's highest point, whatever the gun.
 			local labelAt = math.max(2, top + 0.75)
 			billboard(display, def.name, color, Vector3.new(0, labelAt + 1, 0), 9, 1.2)
-			billboard(display, "LEGENDARY  •  chest loot only", WHITE, Vector3.new(0, labelAt, 0), 9, 0.9)
+			-- Says where the real ones come from (supply drops roll Legendary 28%; a chest about 2%) and
+			-- that this one can be taken: "chest loot only" read as a display case, and sent players to
+			-- the wrong source (#86).
+			billboard(display, "LEGENDARY  •  take it and shoot the targets", WHITE, Vector3.new(0, labelAt, 0), 9, 0.9)
 		end
 	end
 	local arenaAnchor = decor(part(lobby, Vector3.new(0.2, 0.2, 0.2), CFrame.new(center + Vector3.new(0, ARENA_HEIGHT + 20, 0)), DARK,
@@ -3260,6 +3267,10 @@ local function buildCloudClimb(lobby, base)
 		{ y = 0.72, h = 0.26, text = "", color = GREEN, font = Enum.Font.GothamBold },
 	}, 30)
 	obbyBestLabel = labels[4]
+	-- Names the sprint key where the player is told to sprint: nothing else on screen ever does, and
+	-- the sprint leaps cannot be made without it (#86). Filled per player by KeyHintClient; a pad or a
+	-- touch screen keeps the key-free line above.
+	keyHint(labels[3], string.format("Hold [{Sprint}] for the long leaps  -  %d checkpoints  -  the Sap Lantern takes you back", checkpoints))
 	renderObbyBest()
 
 	local lanternPosition = base + rootAt + outward * 4 - sideways * 6
@@ -3307,8 +3318,11 @@ local function buildCloudClimb(lobby, base)
 	over.Name = "StartOver"
 	over.ActionText = "Start over"
 	over.ObjectText = "Cloud Climb"
-	over.KeyboardKeyCode = Enum.KeyCode.F
-	over.GamepadKeyCode = Enum.KeyCode.ButtonY
+	-- H and B: F is the Ready key (Settings), and within 11 studs of the lantern the ready key showed a
+	-- Start-over ring and a held press wiped the run; Y is the companion's (CombatClient). Neither H
+	-- nor B is bound to anything a player does beside the lantern (#86).
+	over.KeyboardKeyCode = Enum.KeyCode.H
+	over.GamepadKeyCode = Enum.KeyCode.ButtonB
 	over.HoldDuration = 0.8
 	over.MaxActivationDistance = 11
 	over.RequiresLineOfSight = false

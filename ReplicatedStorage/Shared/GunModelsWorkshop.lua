@@ -109,7 +109,9 @@ Builders.YardWorkBlower = function(g, K)
 		g:cyl("StartCord", 60, 6, CF(-46, 24, 148) * A(0, 90, 0), plastic(K, 226, 226, 220))
 	end)
 	g:travel("charge", 90)
-	g:hand("ChargeHand", V(-62, 26, 120), V(0.25, -1, 0.3), V(-0.4, 0.2, 1))
+	-- Turned 0 degrees on the palm and tilted 30 so the wrist is not bent past 77 degrees working it (it was 92): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(-62, 26, 120), V(0.38, -0.9, -0.21), V(-0.2, -0.31, 0.93))
 
 	-- Sights: a post on a band round the tube, an aperture on the housing, both on y = 70.
 	g:cyl("SightBand", 16, 62, CF(0, 0, -300), dark)
@@ -126,19 +128,21 @@ Builders.YardWorkBlower = function(g, K)
 	g.model:SetAttribute("Optic", "iron")
 	g.model:SetAttribute("EyeRelief", 0.5)
 
-	-- The leaf bag, hung under the housing: the magazine, with leaves showing in its mouth.
+	-- The leaf bag, hung under the housing: the magazine, with leaves showing in its mouth. 40 mm ahead of
+	-- where it first hung: there its back stood against the grip's front strap and the trigger hand's
+	-- fingers, even lying open, were inside it -- a bare palm on the grip (#92, tools/fps_arms_check.py).
 	g:group("mag", function()
-		g:rounded("Magazine", V(84, 128, 118), CF(0, -92, 80), 22, fabric(K, 74, 108, 56))
-		g:box("MagazineStrap", V(88, 14, 26), CF(0, -44, 80), fabric(K, 52, 74, 40))
+		g:rounded("Magazine", V(84, 128, 118), CF(0, -92, 40), 22, fabric(K, 74, 108, 56))
+		g:box("MagazineStrap", V(88, 14, 26), CF(0, -44, 40), fabric(K, 52, 74, 40))
 		g:detail(function()
 			for index = 0, 3 do
-				g:box("MagazineLeaf", V(24, 4, 16), CF(-18 + index * 12, -34, 60 + index * 9) * A(12 * index, 20 * index, 8),
+				g:box("MagazineLeaf", V(24, 4, 16), CF(-18 + index * 12, -34, 20 + index * 9) * A(12 * index, 20 * index, 8),
 					plastic(K, 126, 186, 74))
 			end
 		end)
 	end)
-	g:key("MagWell", CF(0, -40, 80))
-	g:hand("MagHand", V(-58, -104, 80), V(0.6, 0.5, -0.1), V(-1, 0, 0))
+	g:key("MagWell", CF(0, -40, 40))
+	g:hand("MagHand", V(-58, -104, 40), V(0.6, 0.5, -0.1), V(-1, 0, 0))
 
 	-- Trigger on the rear grip, and the bail handle under the tube for the other hand.
 	trigger(g, K, 96, -54, dark, shell)
@@ -294,7 +298,9 @@ Builders.RageQuitCarbine = function(g, K)
 		g:box("SpacebarStem", V(10, 8, 20), CF(48, 4, 70), braid)
 	end)
 	g:travel("charge", 60)
-	g:hand("ChargeHand", V(74, 8, 70), V(-0.2, -1, 0.1), V(1, 0.2, 0))
+	-- Turned 15 degrees on the palm and tilted -30 so the wrist is not bent past 76 degrees working it (it was 108): #11,
+	-- tools/fps_arms_check.py --clips.
+	g:hand("ChargeHand", V(74, 8, 70), V(0.33, -0.94, -0.12), V(0.94, 0.32, 0.12))
 
 	-- A red dot on a riser, its line well above the keycaps.
 	g:box("SightRail", V(26, 8, 120), CF(0, 22, -20), case)
@@ -542,18 +548,19 @@ Builders.DustDevilRotary = function(g, K)
 	-- On the bore, where the hoses converge, the way the chaingun's is.
 	g:key("Muzzle", CF(0, 0, -412))
 
-	-- The dust bag under it: the magazine, with a zip and a window of fluff.
+	-- The dust bag under it: the magazine, with a zip and a window of fluff. 20 mm ahead of where it first
+	-- hung, clear of the grip's front strap so the trigger hand's fingers can close (#92).
 	g:group("mag", function()
-		g:rounded("Magazine", V(84, 110, 130), CF(0, -92, 80), 20, bag)
-		g:box("MagazineZip", V(88, 10, 30), CF(0, -52, 80), steel)
+		g:rounded("Magazine", V(84, 110, 130), CF(0, -92, 60), 20, bag)
+		g:box("MagazineZip", V(88, 10, 30), CF(0, -52, 60), steel)
 		g:detail(function()
 			for index = 0, 2 do
-				g:ball("MagazineFluff", 26, CF(-22 + index * 22, -40, 60 + index * 10), bag)
+				g:ball("MagazineFluff", 26, CF(-22 + index * 22, -40, 40 + index * 10), bag)
 			end
 		end)
 	end)
-	g:key("MagWell", CF(0, -46, 80))
-	g:hand("MagHand", V(-58, -104, 80), V(0.6, 0.5, -0.1), V(-1, 0, 0))
+	g:key("MagWell", CF(0, -46, 60))
+	g:hand("MagHand", V(-58, -104, 60), V(0.6, 0.5, -0.1), V(-1, 0, 0))
 
 	-- A red dot on the canister's spine, clear of the hoses.
 	g:box("SightRail", V(26, 10, 120), CF(0, 56, 10), steel)

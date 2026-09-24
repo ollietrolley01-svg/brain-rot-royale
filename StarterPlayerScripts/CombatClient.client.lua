@@ -434,6 +434,51 @@ end
 
 local spectateLabel = nil
 
+-- The hands the player is using now, for the spectate line (#86, the player's-eye review). It used to
+-- name keyboard keys to everyone: a phone player was told to press E, which does not exist on a
+-- phone, and a pad had no NEXT at all. Same test as KeyHintClient's.
+local function spectateInputKind()
+	local last = UserInputService:GetLastInputType()
+	if last == Enum.UserInputType.Touch then
+		return "touch"
+	elseif string.find(last.Name, "Gamepad", 1, true) then
+		return "gamepad"
+	end
+	return UserInputService.KeyboardEnabled and "keyboard" or "touch"
+end
+
+local function spectateText(name)
+	local kind = spectateInputKind()
+	local nextKey, leaveKey
+	if kind == "touch" then
+		if name then
+			return string.format("Spectating %s   •   tap NEXT or LEAVE", name)
+		end
+		return "No one left to watch   •   tap LEAVE for the lobby"
+	elseif kind == "gamepad" then
+		nextKey = Settings.GamepadLabel("SpectateNext") or "?"
+		leaveKey = Settings.GamepadLabel("SpectateLeave") or "?"
+	else
+		nextKey, leaveKey = Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave")
+	end
+	if name then
+		return string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, nextKey, leaveKey)
+	end
+	return string.format("No one left to watch   •   [%s] back to the lobby", leaveKey)
+end
+
+local spectateName = nil
+local function refreshSpectateText()
+	if spectateLabel then
+		spectateLabel.Text = spectateText(spectateName)
+	end
+end
+UserInputService.LastInputTypeChanged:Connect(refreshSpectateText)
+
+-- Forward-declared: the phone buttons below fire these, and they are defined further down.
+local cycleSpectate
+local leaveSpectate
+
 local function setSpectating(value)
 	spectating = value
 
@@ -476,45 +521,80 @@ local function setSpectating(value)
 	corner.CornerRadius = UDim.new(0, 10)
 	corner.Parent = spectateLabel
 
-	local name = applySpectateTarget()
-	spectateLabel.Text = name
-		and string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave"))
-		or string.format("No one left to watch   •   [%s] back to the lobby", Settings.KeyLabel("SpectateLeave"))
+	-- NEXT and LEAVE for a touch screen: plain TextButtons on this gui, not ContextActionService touch
+	-- buttons -- the match already binds about seven of those (FIRE, AIM, RUN, RELOAD, PET, CROUCH,
+	-- MOVE), which is CAS's cap, and these must show while every one of those is idle. 44 px tall,
+	-- UiKit.Touch, above the label. They go with the gui when spectating ends.
+	if UserInputService.TouchEnabled then
+		local function touchButton(text, xOffset, onTap)
+			local button = Instance.new("TextButton")
+			button.Name = "Spectate" .. text
+			button.AnchorPoint = Vector2.new(0.5, 1)
+			button.Position = UDim2.new(0.5, xOffset, 1, -80)
+			button.Size = UDim2.fromOffset(120, 44)
+			button.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
+			button.BackgroundTransparency = 0.15
+			button.BorderSizePixel = 0
+			button.Font = Enum.Font.GothamBold
+			button.TextColor3 = Color3.fromRGB(240, 242, 248)
+			button.TextSize = 16
+			button.Text = text
+			button.Parent = gui
+			local round = Instance.new("UICorner")
+			round.CornerRadius = UDim.new(0, 10)
+			round.Parent = button
+			button.Activated:Connect(onTap)
+		end
+		touchButton("NEXT", -66, function()
+			cycleSpectate(1)
+		end)
+		touchButton("LEAVE", 66, function()
+			leaveSpectate()
+		end)
+	end
+
+	spectateName = applySpectateTarget()
+	refreshSpectateText()
 end
 
-local function cycleSpectate(step)
+function cycleSpectate(step)
 	if not spectating then
 		return
 	end
 	spectateIndex += step
-	local name = applySpectateTarget()
-	if spectateLabel then
-		spectateLabel.Text = name
-			and string.format("Spectating %s   •   [%s] next   •   [%s] leave", name, Settings.KeyLabel("SpectateNext"), Settings.KeyLabel("SpectateLeave"))
-			or string.format("No one left to watch   •   [%s] back to the lobby", Settings.KeyLabel("SpectateLeave"))
-	end
+	spectateName = applySpectateTarget()
+	refreshSpectateText()
 end
 
 spectateRemote.OnClientEvent:Connect(setSpectating)
 
+-- ButtonR1 on a pad: it is NextSlot's too, but NextSlot does nothing while spectating (inCombat() is
+-- false), and both return Pass, so neither steals the press from the other.
 Settings.Bind("BRR_SpectateNext", "SpectateNext", function(_, inputState)
 	if inputState == Enum.UserInputState.Begin and spectating then
 		cycleSpectate(1)
 	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.ButtonR1)
 
 -- #102: the way OUT. The server owns the decision (MatchService.LeaveSpectate refuses anyone who is
 -- not spectating, and the remote is rate-limited) and answers with Spectate(false) BEFORE the new body,
 -- so the camera is handed back first; nothing is torn down here on the press.
 local leaveSpectateRemote = Remotes.Event("LeaveSpectate")
-Settings.Bind("BRR_SpectateLeave", "SpectateLeave", function(_, inputState)
-	if inputState == Enum.UserInputState.Begin and spectating then
+function leaveSpectate()
+	if spectating then
 		Sfx.Play("UiClick", 0.08)
 		leaveSpectateRemote:FireServer()
 	end
+end
+-- ButtonB on a pad. MenuShell also closes an open menu on B, so a press with the menu up is left to
+-- the menu rather than also throwing the player back to the lobby.
+Settings.Bind("BRR_SpectateLeave", "SpectateLeave", function(_, inputState)
+	if inputState == Enum.UserInputState.Begin and not player:GetAttribute("MenuOpen") then
+		leaveSpectate()
+	end
 	return Enum.ContextActionResult.Pass
-end)
+end, nil, Enum.KeyCode.ButtonB)
 
 -- Follow someone else automatically when the current subject dies.
 task.spawn(function()
@@ -1426,6 +1506,7 @@ end
 
 -- The gun on your character says how it's dressed (WeaponService marks it), so the one in your hands
 -- wears the same skin.
+local warnedViewmodel = false
 local function buildViewmodel(source, def, key)
 	destroyViewmodel()
 	local skinned = source:GetAttribute("Skinned") == true
@@ -1442,7 +1523,16 @@ local function buildViewmodel(source, def, key)
 		end
 	end
 	-- The gun is held in your own avatar's arms: the HeldGun's parent is your character.
-	local vm = Viewmodel.new(def, { color = color, material = material, skinned = skinned, character = source.Parent, onEvent = onViewmodelEvent })
+	-- One throw in Viewmodel.new cost the whole first-person gun every frame (critic C5): build with the
+	-- avatar's arms, and on failure say why once and fall back to stand-in arms.
+	local ok, vm = pcall(Viewmodel.new, def, { color = color, material = material, skinned = skinned, character = source.Parent, onEvent = onViewmodelEvent })
+	if not ok then
+		if not warnedViewmodel then
+			warnedViewmodel = true
+			warn("[CombatClient] viewmodel with your avatar's arms failed, using stand-in arms: " .. tostring(vm))
+		end
+		vm = Viewmodel.new(def, { color = color, material = material, skinned = skinned, onEvent = onViewmodelEvent })
+	end
 	viewmodel = { vm = vm, source = source, key = key, id = def.id, scopedIn = false }
 	if vm.laserEmitter then
 		viewmodel.laserBeam, viewmodel.laserDot = laserParts(vm.model)
@@ -1676,7 +1766,18 @@ local function buildItemView(slot, character)
 		offsets = offsets,
 		glows = glows,
 		grip = gripPart and offsets[gripPart].Position or Vector3.zero,
-		arms = Viewmodel.Arms.new(model, character),
+		-- Guarded like buildViewmodel (critic C5): a failed avatar copy falls back to stand-in arms.
+		arms = (function()
+			local ok, arms = pcall(Viewmodel.Arms.new, model, character)
+			if ok then
+				return arms
+			end
+			if not warnedViewmodel then
+				warnedViewmodel = true
+				warn("[CombatClient] item viewmodel with your avatar's arms failed, using stand-in arms: " .. tostring(arms))
+			end
+			return Viewmodel.Arms.new(model, nil)
+		end)(),
 		startedAt = os.clock(),
 	}
 end
@@ -1948,11 +2049,38 @@ local function gunMuzzle(gun)
 	return attachment and attachment.WorldCFrame or nil
 end
 
-shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity)
+-- `segment`: the rest of a shot that did not leave the muzzle -- a ricochet glancing off a wall
+-- (CombatService.BroadcastSegment). Its tracer starts where it is sent from, with the ricochet's whine there
+-- and no report, flash or first-person muzzle.
+local function drawSegment(shooter, origin, endPoints)
+	local character = typeof(shooter) == "Instance" and shooter:IsA("Player") and shooter.Character or nil
+	local gun = character and character:FindFirstChild("HeldGun", true) or nil
+	local kind = (gun and gun:GetAttribute("Tracer")) or "bullet"
+	local eye = camera.CFrame.Position
+	if (origin - eye).Magnitude < EFFECT_CULL_DISTANCE then
+		Sfx.PlayAt("Ricochet", origin, 0.1, endPoints[1])
+	end
+	for _, endPoint in ipairs(endPoints) do
+		GunFx.Tracer(origin, endPoint, kind, function()
+			local hit = markImpact(origin, endPoint)
+			if hit then
+				GunFx.Impact(hit.Position, hit.Normal)
+			end
+		end)
+	end
+end
+
+shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, segment)
+	if segment then
+		drawSegment(shooter, origin, endPoints)
+		return
+	end
 	local mine = shooter == player
 	local gun = shooterGun(shooter, origin)
 	local flash = gun and gun:GetAttribute("Flash") or "rifle"
-	local cue = SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
+	-- A signature gun (GunModelsSignature) names its own report and tracer on the model (ShotCue, Tracer), so a
+	-- new one needs no entry here; everything else goes by weapon id, then by flash kind.
+	local cue = (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
 
 	if mine then
 		-- In first person the body — and the gun on it — sits below and beside the camera,
@@ -1997,9 +2125,11 @@ shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity)
 
 	-- Bubbles pop without a trace, and water, snow, noodles, gumballs and squeaks don't chip a wall;
 	-- rockets and grenades have their own explosion, so no chip either.
-	local kind = TRACER_KIND_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or TRACER_KIND[flash] or "bullet"
+	-- A signature gun (GunModelsSignature) names its tracer on the model too.
+	local kind = (gun and gun:GetAttribute("Tracer")) or TRACER_KIND_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or TRACER_KIND[flash] or "bullet"
 	local chips = not ({ bubble = true, rocket = true, grenade = true, droplets = true, snow = true, noodle = true,
 		gumball = true, squeak = true, leaf = true, waterjet = true, streamer = true, dustbunny = true })[kind]
+		and not GunFx.SoftTracer(kind)
 	for _, endPoint in ipairs(endPoints) do
 		GunFx.Tracer(origin, endPoint, kind, chips and function()
 			local hit = markImpact(origin, endPoint)

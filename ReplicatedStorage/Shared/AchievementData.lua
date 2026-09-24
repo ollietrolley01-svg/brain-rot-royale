@@ -65,11 +65,11 @@ AchievementData.List = {
 	{ id = "rank100", name = "Fully Rotted", title = "Fully Rotted", stat = "rankScore", target = 100, coins = 5000,
 		description = "Reach Rot Rank 100." },
 	{ id = "prestige1", name = "Born Again", title = "Reborn", stat = "rankScore", target = 101, coins = 5000,
-		description = "Prestige for the first time (rank score = prestige × 100 + rank)." },
+		description = "Prestige for the first time." },
 	{ id = "prestige5", name = "Rot Royalty", title = "Rot Royalty", stat = "rankScore", target = 501, coins = 9000,
-		description = "Reach Prestige 5 (rank score = prestige × 100 + rank)." },
+		description = "Reach Prestige 5." },
 	{ id = "prestige10", name = "Eternal Rot", title = "Rot Eternal", stat = "rankScore", target = 1001, coins = 25000,
-		description = "Reach Prestige 10, the highest there is (rank score = prestige × 100 + rank)." },
+		description = "Reach Prestige 10, the highest there is." },
 	{ id = "mastered1", name = "Gun Nerd", title = "Gun Nerd", stat = "mastered", target = 1, coins = 1500,
 		description = "Reach Gold mastery with any gun." },
 	{ id = "mastered10", name = "Armory", title = "Armorer", stat = "mastered", target = 10, coins = 6000,
@@ -106,16 +106,32 @@ function AchievementData.Value(data, stat)
 end
 
 -- For the menu: every achievement with progress and whether it's unlocked, plus the worn title.
+-- The rank rows count in "rank score" (prestige × 100 + rank), a unit nothing else on screen uses:
+-- a Rot Rank 37 player read "37 / 101" towards Born Again and "37 / 1,001" towards Eternal Rot. So
+-- those rows say it in the Rank page's own words instead (#86). nil for every other stat, and the
+-- menu falls back to the plain count.
+function AchievementData.ProgressText(achievement, progress)
+	if achievement.stat ~= "rankScore" then
+		return nil
+	end
+	if achievement.target > 100 then
+		return string.format("Prestige %d / %d", math.floor(progress / 100), math.floor(achievement.target / 100))
+	end
+	return string.format("Rank %d / %d", progress, achievement.target)
+end
+
 function AchievementData.Snapshot(data)
 	local list = {}
 	for _, achievement in ipairs(AchievementData.List) do
+		local progress = math.min(achievement.target, AchievementData.Value(data, achievement.stat))
 		table.insert(list, {
+			progressText = AchievementData.ProgressText(achievement, progress),
 			id = achievement.id,
 			name = achievement.name,
 			title = achievement.title,
 			description = achievement.description,
 			target = achievement.target,
-			progress = math.min(achievement.target, AchievementData.Value(data, achievement.stat)),
+			progress = progress,
 			coins = achievement.coins,
 			unlocked = data.Achievements[achievement.id] == true,
 		})

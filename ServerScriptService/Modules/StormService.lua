@@ -18,6 +18,21 @@ local StormService = {}
 
 local stormChanged = Remotes.Event("StormChanged")
 
+-- Set by Bootstrap to CombatService.RecordEnvironmentDamage (CombatService is not required here, to
+-- keep this module's requires to the shared ones). Storm ticks go straight to TakeDamage, never
+-- through DealDamage, so without this a player shot and then finished by the storm was told a bot
+-- killed them with a shotgun from 40 studs, and the storm was named nowhere (#86).
+StormService.OnDamage = nil
+
+local function stormHit(token, humanoid, amount)
+	local before = humanoid.Health
+	humanoid:TakeDamage(amount)
+	local dealt = before - humanoid.Health
+	if dealt > 0 and StormService.OnDamage then
+		pcall(StormService.OnDamage, token, dealt, "Storm")
+	end
+end
+
 local running = false
 local generation = 0
 
@@ -186,7 +201,7 @@ function StormService.StartStatic(center, radius, damagePerSecond, label)
 						local humanoid = character:FindFirstChildOfClass("Humanoid")
 						local root = character:FindFirstChild("HumanoidRootPart")
 						if humanoid and root and humanoid.Health > 0 and eligible(token) and StormService.IsOutside(root.Position) then
-							humanoid:TakeDamage(state.damagePerSecond)
+							stormHit(token, humanoid, state.damagePerSecond)
 						end
 					end
 				end
@@ -283,7 +298,7 @@ function StormService.Start(radius)
 						local humanoid = character:FindFirstChildOfClass("Humanoid")
 						local root = character:FindFirstChild("HumanoidRootPart")
 						if humanoid and root and humanoid.Health > 0 and eligible(token) and StormService.IsOutside(root.Position) then
-							humanoid:TakeDamage(state.damagePerSecond)
+							stormHit(token, humanoid, state.damagePerSecond)
 						end
 					end
 				end

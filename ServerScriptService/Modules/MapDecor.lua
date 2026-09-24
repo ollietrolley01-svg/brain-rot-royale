@@ -104,6 +104,9 @@ MapDecor.PavingTop = 0.4
 MapDecor.CobblesTop = 0.46
 MapDecor.PavementTop = 0.35
 local KERB = 0.8
+-- How far every kerb and pavement reaches under the ground it stands on (from -0.06), so nothing
+-- standing at ground level shares its underside.
+local KERB_SINK = 0.06
 
 -- A flat right triangle, `thickness` thick: the right angle at `corner`, one leg `lengthU` long
 -- along `u * signU`, the other `lengthV` long along `v * signV`, with `u` and `v` unit vectors at
@@ -305,7 +308,17 @@ local DETAILED_CARS_PER_TOWN = math.huge
 -- placed by (the middle of the wheelbase, which is not the middle of a van: its body runs a stud
 -- further back than forward, so it counts as twice its longer end). The plain car's is fixed; a
 -- real design's is measured once per server off a static build.
-local PLAIN_FOOTPRINT = { length = 12.9, width = 7.3 }
+-- Kerbside parking (MapDecor.Town): only on streets at least this wide, so a lane stays clear beside a
+-- parked car (18 less the widest car with its mirrors leaves 9); no nearer a street's end than this,
+-- where its junction, crossing or stop line is (a real street keeps ten metres or so of kerb clear
+-- there); and this gap between two cars in a row.
+local KERB_PARKING_WIDTH = 18
+local KERB_END_CLEAR = 22
+local KERB_GAP = 2
+-- A driveway's top, above the ground it's laid on (clear of the grass, like the pavement).
+local DRIVEWAY_TOP = 0.12
+
+local PLAIN_FOOTPRINT = { length = 12.9, width = 7.3, centre = Vector3.zero, span = 12.9 }
 local footprints = {}
 
 local function footprintOf(modelId)
@@ -316,6 +329,11 @@ local function footprintOf(modelId)
 		footprints[modelId] = {
 			length = 2 * (math.abs(box.Position.Z) + size.Z / 2),
 			width = 2 * (math.abs(box.Position.X) + size.X / 2),
+			-- Where the middle of the car is from the point it's placed by (its own axes), so a car
+			-- can be centred in a bay or on a driveway rather than its wheelbase.
+			centre = Vector3.new(box.Position.X, 0, box.Position.Z),
+			-- Its real end-to-end length, for spacing cars in a row.
+			span = size.Z,
 		}
 	end
 	return footprints[modelId]
@@ -662,6 +680,59 @@ function MapDecor.Street(parent, a, b, width, sidewalk, ends)
 			MapDecor.CentreLineColor, Enum.Material.SmoothPlastic))
 	end
 	currentName = "Part"
+end
+
+-- A dropped kerb: where a driveway or a car park's aisle meets a street, the kerb between them comes
+-- down to the carriageway's own height, so the way in reads as a way in and not as a car park behind
+-- a kerb. `parent` holds the street's kerbs (its town); `centre` is any point on the line vehicles
+-- cross the kerb along, `across` that line's level direction, and `halfWidth` half the opening.
+--
+-- Every kerb the line crosses square-on, within `reach` studs of `centre`, is cut into the kerb either
+-- side of the opening and a lower piece across it: the same length, line and underside, its top at
+-- RoadLift instead of standing 0.1 proud. Cut rather than laid over, so no two pieces share any
+-- volume or face. The pavement behind stays as it is -- it's where people walk. Returns how many
+-- kerbs it dropped.
+function MapDecor.DropKerb(parent, centre, across, halfWidth, reach)
+	reach = reach or 12
+	local dropped = 0
+	for _, kerb in ipairs(parent:GetChildren()) do
+		if kerb.Name == "Kerb" and kerb:IsA("BasePart") then
+			local cf, size = kerb.CFrame, kerb.Size
+			-- The kerb's length is its longer level axis; the crossing has to run square across it.
+			local lengthAxis = size.Z >= size.X and cf.LookVector or cf.RightVector
+			local length = math.max(size.X, size.Z)
+			local offset = kerb.Position - centre
+			local along = offset.X * lengthAxis.X + offset.Z * lengthAxis.Z
+			local out = offset.X * across.X + offset.Z * across.Z
+			if math.abs(lengthAxis.X * across.X + lengthAxis.Z * across.Z) < 0.01 and math.abs(out) <= reach then
+				-- The opening along the kerb, from the kerb's own middle, clipped to its ends.
+				local o0 = math.max(-length / 2, -along - halfWidth)
+				local o1 = math.min(length / 2, -along + halfWidth)
+				if o1 - o0 > 0.05 then
+					local frame = CFrame.lookAt(kerb.Position, kerb.Position + Vector3.new(lengthAxis.X, 0, lengthAxis.Z))
+					local width, height = math.min(size.X, size.Z), size.Y
+					local bottom = kerb.Position.Y - height / 2
+					local function strip(name, from, to, top, color)
+						if to - from > 0.05 then
+							currentName = name
+							-- Local -Z runs along lengthAxis, so a distance `d` along it is local z = -d.
+							clutter(makePart(parent, Vector3.new(width, top - bottom, to - from),
+								frame * CFrame.new(0, (bottom + top) / 2 - kerb.Position.Y, -(from + to) / 2), color, kerb.Material))
+						end
+					end
+					strip("Kerb", -length / 2, o0, bottom + height, kerb.Color)
+					strip("Kerb", o1, length / 2, bottom + height, kerb.Color)
+					-- Down to the carriageway's top: every kerb starts KERB_SINK under the ground it
+					-- stands on, as the asphalt beside it starts at that ground.
+					strip("DroppedKerb", o0, o1, bottom + KERB_SINK + MapDecor.RoadLift, kerb.Color)
+					kerb:Destroy()
+					dropped += 1
+				end
+			end
+		end
+	end
+	currentName = "Part"
+	return dropped
 end
 
 -- The box where streets or roads meet, and its corners, laid so every piece butts the arms
@@ -1277,26 +1348,64 @@ function MapDecor.Town(town, center, preset, spread, streets, townName, groundHe
 		bin(town, position)
 	end)
 
-	-- Cars parked along the edge of the street, facing the way traffic would go. The first few are
-	-- real designs (DETAILED_CARS_PER_TOWN). Each is chosen before its spot is looked for, so the
-	-- claim fits it, and it stands as far in from the asphalt's edge as its own width needs: the
-	-- outer side 0.25 past the edge, where the plain car's wheels always were.
+	-- Cars parked at the kerb (#16 / #94), the way a real street has them: on one side of the street
+	-- only, and only on a street wide enough to leave a lane clear beside them (KERB_PARKING_WIDTH);
+	-- parallel to the kerb and nose along the traffic on their side (traffic drives on the right, see
+	-- MapDecor.Street); never near the street's ends, where the junctions and crossings are; a couple
+	-- of studs apart when in a row; and often in twos and threes rather than evenly spaced, with bare
+	-- kerb between. Each car's design is chosen before its spot is looked for, so the claim fits it,
+	-- and it stands with its outer side just over the asphalt's edge (a mirror over the kerb face).
+	local parkingStreets = {}
+	for _, street in ipairs(streets) do
+		local delta = Vector3.new(street.b.X - street.a.X, 0, street.b.Z - street.a.Z)
+		if street.width >= KERB_PARKING_WIDTH and delta.Magnitude >= 2 * KERB_END_CLEAR + 24 then
+			table.insert(parkingStreets, {
+				street = street,
+				length = delta.Magnitude,
+				direction = delta.Unit,
+				-- One side of each street is its parking side, and the lane beside it is kept clear.
+				side = math.random() < 0.5 and 1 or -1,
+			})
+		end
+	end
 	local detailedLeft = DETAILED_CARS_PER_TOWN
-	for _ = 1, #streets > 0 and count("cars", 4) or 0 do
+	local last = nil
+	for _ = 1, #parkingStreets > 0 and count("cars", 4) or 0 do
 		local design = parkedCarDesign(detailedLeft > 0)
 		local radius, reach = design.radius, design.reach
-		for _ = 1, 16 do
-			local flat, direction, side, entry, surface = besideStreet(-(design.halfWidth + 2.25))
-			if flat then
-				local front, back = flat + direction * reach, flat - direction * reach
-				if space:IsFree(front.X, front.Z, radius, entry) and space:IsFree(back.X, back.Z, radius, entry) then
+		local half = design.footprint.span / 2
+		for attempt = 1, 16 do
+			-- Behind or ahead of the last car, a short gap away, about half the time; otherwise anywhere
+			-- on a parking street.
+			local lane, along
+			if last and attempt <= 4 and math.random() < 0.55 then
+				lane = last.lane
+				local sign = math.random() < 0.5 and 1 or -1
+				along = last.along + sign * (last.half + KERB_GAP + math.random() * 2 + half)
+			else
+				lane = pick(parkingStreets)
+				along = KERB_END_CLEAR + half + math.random() * (lane.length - 2 * (KERB_END_CLEAR + half))
+			end
+			local street, direction = lane.street, lane.direction
+			if along >= KERB_END_CLEAR + half and along <= lane.length - KERB_END_CLEAR - half then
+				-- `side` is the kerb the car stands at: +1 is the right of `direction`, so a car there faces
+				-- along it, and one at the other kerb faces back the other way.
+				local side = Vector3.new(-direction.Z, 0, direction.X) * lane.side
+				local facing = direction * lane.side
+				local lateral = street.width / 2 + 0.1 - design.halfWidth
+				local flat = Vector3.new(street.a.X, 0, street.a.Z) + direction * along + side * lateral
+				local front, back = flat + facing * reach, flat - facing * reach
+				-- KERB_GAP more than its own claim, so the next car in a row keeps that gap.
+				if space:IsFree(front.X, front.Z, radius + KERB_GAP, street.entry)
+					and space:IsFree(back.X, back.Z, radius + KERB_GAP, street.entry) then
 					space:AddCircle(front.X, front.Z, radius)
 					space:AddCircle(back.X, back.Z, radius)
-					local position = Vector3.new(flat.X, groundHeightAt(flat.X, flat.Z) + surface, flat.Z)
-					parkedCar(town, position, yawFacing(direction), design)
+					local position = Vector3.new(flat.X, groundHeightAt(flat.X, flat.Z) + MapDecor.RoadLift, flat.Z)
+					parkedCar(town, position, yawFacing(facing), design)
 					if design.id then
 						detailedLeft -= 1
 					end
+					last = { lane = lane, along = along, half = half }
 					table.insert(spots, position + side * (design.halfWidth + 1.15))
 					break
 				end
@@ -1344,6 +1453,197 @@ function MapDecor.Town(town, center, preset, spread, streets, townName, groundHe
 	end
 
 	return spots
+end
+
+-- A parked car stood so the middle of its footprint (not the point it's built about) is at `frame`'s
+-- position, nose along `frame`'s look: centred in a bay or on a driveway, whichever end is longer.
+local function parkCentred(parent, frame, design)
+	local centre = design.footprint.centre or Vector3.zero
+	local at = frame * CFrame.new(-centre.X, 0, -centre.Z)
+	return parkedCar(parent, at.Position, yawFacing(frame.LookVector), design)
+end
+
+-- Whether a turned rectangle is clear in `space`, as a grid of small circles over it: a stud or less
+-- apart, each just big enough to cover its cell, and the grid set in by a quarter stud so no circle
+-- pokes past the rectangle's edge -- a driveway laid flush against the back of the pavement (the
+-- street's claim) still reads clear.
+local function rectClear(space, frame, halfX, halfZ)
+	halfX, halfZ = math.max(0.5, halfX - 0.25), math.max(0.5, halfZ - 0.25)
+	local columns = math.max(1, math.ceil(halfX * 2))
+	local rows = math.max(1, math.ceil(halfZ * 2))
+	local cellX, cellZ = halfX * 2 / columns, halfZ * 2 / rows
+	local radius = math.sqrt(cellX * cellX + cellZ * cellZ) / 2
+	for column = 1, columns do
+		for row = 1, rows do
+			local p = frame * Vector3.new(-halfX + (column - 0.5) * cellX, 0, -halfZ + (row - 0.5) * cellZ)
+			if not space:IsFree(p.X, p.Z, radius) then
+				return false
+			end
+		end
+	end
+	return true
+end
+
+local DRIVEWAY_COLOR = Color3.fromRGB(150, 148, 142)
+-- How far the car stands in from the back of the pavement, and the clearance kept to the house.
+local DRIVEWAY_BACK = 0.8
+local DRIVEWAY_WALL = 0.6
+
+-- Driveways (Oliver 09-24: "cars in driveways by houses"). A house may get one down the side gap next
+-- to it: a concrete strip from the back of the pavement, a car on it nose-in, parallel to the house.
+-- Only where the whole strip and the car are clear ground in `space` -- the gap to the next building
+-- has to be wide enough, and nothing (a crate, a fence, a set piece) may be in it -- and it is then
+-- claimed, together with its mouth: the pavement in front of it and the kerb lane beyond, so no bench,
+-- lamp or kerbside car blocks the way out. Built after the buildings and before the street furniture.
+--
+-- `houses` are MapGenerator's placed buildings ({ lot, plan, yaw }, local -Z facing the street);
+-- `setback` is the gap from the back of the pavement to a building's front, `sidewalk` the pavement's
+-- width, `lane` how far the mouth claim reaches out into the street past the kerb. `chance` is per
+-- house, `cap` the most in the town. Returns how many it built.
+function MapDecor.Driveways(town, houses, setback, sidewalk, lane, groundHeightAt, space, chance, cap)
+	local built = 0
+	if chance <= 0 or cap <= 0 then
+		return 0
+	end
+	for _, house in ipairs(houses) do
+		if built >= cap then
+			break
+		end
+		local plan = house.plan
+		if plan.archetype == "house" and math.random() < chance then
+			local design = parkedCarDesign(true)
+			local halfW, span = design.halfWidth, design.footprint.span
+			local turn = CFrame.new(house.lot.X, 0, house.lot.Z) * CFrame.Angles(0, house.yaw, 0)
+			-- Local -Z is the street: the back of the pavement is `setback` in front of the house.
+			local pavementBack = -plan.depth / 2 - setback
+			local centreZ = pavementBack + DRIVEWAY_BACK + span / 2
+			local slabFrom, slabTo = pavementBack, centreZ + span / 2 + 1
+			for _, sideSign in ipairs(math.random() < 0.5 and { 1, -1 } or { -1, 1 }) do
+				-- Beside the building's own claim (its walls plus 1.5), DRIVEWAY_WALL clear of it.
+				local x = sideSign * (plan.width / 2 + 1.5 + DRIVEWAY_WALL + halfW)
+				local slab = turn * CFrame.new(x, 0, (slabFrom + slabTo) / 2)
+				local halfSlabX, halfSlabZ = halfW + DRIVEWAY_WALL / 2, (slabTo - slabFrom) / 2
+				-- The mouth: across the pavement and out into the street's kerb lane.
+				local mouthFrom, mouthTo = pavementBack - sidewalk - lane, pavementBack
+				local mouth = turn * CFrame.new(x, 0, (mouthFrom + mouthTo) / 2)
+				if rectClear(space, slab, halfSlabX, halfSlabZ) then
+					space:AddRect(slab.X, slab.Z, halfSlabX, halfSlabZ, house.yaw)
+					space:AddRect(mouth.X, mouth.Z, halfSlabX, (mouthTo - mouthFrom) / 2, house.yaw)
+					local ground = groundHeightAt(slab.X, slab.Z)
+					currentName = "Driveway"
+					local strip = makePart(town, Vector3.new(halfSlabX * 2, 0.3, halfSlabZ * 2),
+						CFrame.new(slab.X, ground + DRIVEWAY_TOP - 0.15, slab.Z) * slab.Rotation, DRIVEWAY_COLOR, Enum.Material.Concrete)
+					strip.CanCollide = false
+					currentName = "Part"
+					-- The kerb at the foot of the driveway comes down, so it runs out to the street
+					-- rather than stopping behind a kerb (roads_check.py, driveway access).
+					local kerbLine = turn * CFrame.new(x, 0, pavementBack - sidewalk)
+					MapDecor.DropKerb(town, kerbLine.Position, turn.LookVector, halfSlabX, 2)
+					-- Nose-in: facing the way the house faces away from the street (local +Z).
+					local carAt = turn * CFrame.new(x, 0, centreZ)
+					local frame = CFrame.lookAt(Vector3.new(carAt.X, ground + DRIVEWAY_TOP, carAt.Z),
+						Vector3.new(carAt.X, ground + DRIVEWAY_TOP, carAt.Z) + (turn.LookVector * -1))
+					parkCentred(town, frame, design)
+					built += 1
+					break
+				end
+			end
+		end
+	end
+	return built
+end
+
+-- Static cars in a town's car park, round whatever drivable ones VehicleService.ParkInTowns already
+-- stood there (it marks each bay it takes, `ParkingBayTaken_<i>`), so the car park reads as in use:
+-- filled to somewhere between LOT_FILL_MIN and LOT_FILL_MAX of its bays, never every one, the bays
+-- taken at random rather than in a row. Kept to about half full because each of these is a real
+-- design (#121: 200 to 290 parts a car), and a town's kerb, driveways and car park together should
+-- cost about what its four kerbside cars used to. Each car is square to its bay, nose the bay's way, centred in
+-- it. `fill` (optional) fixes the share, for tests. Returns how many it parked.
+local LOT_FILL_MIN, LOT_FILL_MAX = 0.35, 0.6
+local BOX_CORNERS = {}
+for _, x in ipairs({ -1, 1 }) do
+	for _, y in ipairs({ -1, 1 }) do
+		for _, z in ipairs({ -1, 1 }) do
+			table.insert(BOX_CORNERS, Vector3.new(x, y, z))
+		end
+	end
+end
+-- How far a model's visible parts reach along two level directions: { a0, a1, b0, b1 }. What two
+-- parked cars are tested with: a real design's mirrors, bull bar or roof load vary with its roll, so
+-- the only sure footprint is the one it was built with.
+local function reach(model, a, b)
+	local a0, a1, b0, b1 = math.huge, -math.huge, math.huge, -math.huge
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Transparency < 1 then
+			local half, cf = part.Size / 2, part.CFrame
+			for _, corner in ipairs(BOX_CORNERS) do
+				local p = cf * (corner * half)
+				local u, v = p:Dot(a), p:Dot(b)
+				a0, a1, b0, b1 = math.min(a0, u), math.max(a1, u), math.min(b0, v), math.max(b1, v)
+			end
+		end
+	end
+	return { a0, a1, b0, b1 }
+end
+local function touching(one, other)
+	return one[1] < other[2] + 0.2 and other[1] < one[2] + 0.2 and one[3] < other[4] + 0.2 and other[3] < one[4] + 0.2
+end
+
+-- `others` (optional) are models already standing in the car parks (VehicleService's), which the
+-- parked cars keep off.
+function MapDecor.ParkBays(town, others, fill)
+	local count = tonumber(town:GetAttribute("ParkingBays")) or 0
+	if count < 2 then
+		return 0
+	end
+	local taken, free = 0, {}
+	for index = 1, count do
+		if town:GetAttribute("ParkingBayTaken_" .. index) then
+			taken += 1
+		elseif typeof(town:GetAttribute("ParkingBay_" .. index)) == "CFrame" then
+			table.insert(free, index)
+		end
+	end
+	local share = fill or (LOT_FILL_MIN + math.random() * (LOT_FILL_MAX - LOT_FILL_MIN))
+	local target = math.clamp(math.floor(count * share + 0.5), 1, count - 1)
+	-- Every car park's bays share their axes (a row faces one way or the other), so any bay's frame
+	-- measures them all. What's already standing near the car park, measured once.
+	local first = town:GetAttribute("ParkingBay_" .. (free[1] or 1))
+	if typeof(first) ~= "CFrame" then
+		return 0
+	end
+	local across, along = first.RightVector, first.LookVector
+	local standing = {}
+	for _, other in ipairs(others or {}) do
+		if other:IsA("Model") and (other:GetPivot().Position - first.Position).Magnitude < 12 * count + 40 then
+			table.insert(standing, reach(other, across, along))
+		end
+	end
+	local parked = 0
+	while taken < target and #free > 0 do
+		local index = table.remove(free, math.random(1, #free))
+		local bay = town:GetAttribute("ParkingBay_" .. index)
+		local car = parkCentred(town, bay, parkedCarDesign(true))
+		local box = reach(car, across, along)
+		local clash = false
+		for _, other in ipairs(standing) do
+			if touching(box, other) then
+				clash = true
+				break
+			end
+		end
+		if clash then
+			-- Mirror to mirror with its neighbour: this bay stays empty.
+			car:Destroy()
+		else
+			table.insert(standing, box)
+			town:SetAttribute("ParkingBayTaken_" .. index, true)
+			taken += 1
+			parked += 1
+		end
+	end
+	return parked
 end
 
 --------------------------------------------------------------------------------
@@ -1499,9 +1799,38 @@ local function shed(parent, position, groundAt, lootSpots)
 	local width, depth, height = 14, 12, 9
 	local halfW, halfD = width / 2, depth / 2
 	local wood, roofColor = pick(SHED_WALLS), pick(SHED_ROOFS)
-	-- Sunk like the trees are, so a slope never leaves a shed standing on one corner.
-	local base = CFrame.new(position - Vector3.new(0, SINK, 0)) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
-	local wallHeight = height + SINK
+	-- Sunk like the trees are, and further by however far the ground falls away under its walls from
+	-- the point it was placed on: a rigid box on one sampled height stood a corner up to 17 studs over
+	-- a hillside (tools/foundation_check.py).
+	-- The door faces downhill (critic C9): a random yaw put it uphill as often as not, and the doorway
+	-- is cut to a fixed height, so on a slope the ground outside rose into it and the loot inside was
+	-- behind a buried door. Of eight directions the one whose ground is lowest out front, turned by up
+	-- to 15 degrees either way with the same one roll the random yaw took.
+	local jitter = (math.random() - 0.5) * math.rad(30)
+	local facing, lowest = 0, math.huge
+	if groundAt then
+		for step = 0, 7 do
+			local angle = step * math.pi / 4
+			local y = groundAt(position.X + math.sin(angle) * (halfD + 2), position.Z + math.cos(angle) * (halfD + 2))
+			if y and y < lowest then
+				facing, lowest = angle, y
+			end
+		end
+	end
+	-- Local -Z (the front) toward `facing`.
+	local turn = CFrame.Angles(0, facing + math.pi + jitter, 0)
+	local drop = 0
+	if groundAt then
+		for _, corner in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+			local at = (CFrame.new(position) * turn * CFrame.new(corner[1] * (halfW + 0.4), 0, corner[2] * (halfD + 0.4))).Position
+			local y = groundAt(at.X, at.Z)
+			if y then
+				drop = math.max(drop, position.Y - y)
+			end
+		end
+	end
+	local base = CFrame.new(position - Vector3.new(0, SINK + drop, 0)) * turn
+	local wallHeight = height + SINK + drop
 
 	currentName = "Wall"
 	makePart(parent, Vector3.new(width, wallHeight, 0.8), base * CFrame.new(0, wallHeight / 2, halfD), wood, Enum.Material.WoodPlanks)
@@ -1510,7 +1839,23 @@ local function shed(parent, position, groundAt, lootSpots)
 	end
 
 	-- The front, split round a doorway you can actually walk through.
-	local doorway, doorTop = 5, SINK + 7
+	-- The opening is 7 studs clear over the ground at the door itself, not over the ground at the
+	-- shed's middle, and never taller than the wall.
+	local doorway = 5
+	local doorGround = -math.huge
+	if groundAt then
+		-- Across the doorway, just outside it and just inside: a shed sunk into a slope has its own
+		-- ground rising inside the threshold too.
+		for _, x in ipairs({ -doorway / 2, 0, doorway / 2 }) do
+			for _, z in ipairs({ -halfD - 0.9, -halfD + 0.9 }) do
+				local at = (base * CFrame.new(x, 0, z)).Position
+				doorGround = math.max(doorGround, groundAt(at.X, at.Z) or position.Y)
+			end
+		end
+	else
+		doorGround = position.Y
+	end
+	local doorTop = math.min(wallHeight - 1, (doorGround - base.Position.Y) + 7)
 	local pier = (width - doorway) / 2
 	for _, side in ipairs({ -1, 1 }) do
 		makePart(parent, Vector3.new(pier, wallHeight, 0.8), base * CFrame.new(side * (width - pier) / 2, wallHeight / 2, -halfD),
