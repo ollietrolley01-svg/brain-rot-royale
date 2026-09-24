@@ -243,6 +243,20 @@ function ModeKingOfTheHill.Start(currentMode, mapInfo)
 	ModeKingOfTheHill.Stop()
 	mode = currentMode
 
+	-- With the battleground standing (TeamBattleground), its two objectives: A in the middle of the
+	-- keep's floor and B at the pit's fountain. Both sit on the plane halfway between the bases, so
+	-- each is exactly as far from one base as the other, and each is given at its floor's own height
+	-- (the keep's floor is not the terrain), so the ring lies on what was built. SITE_GAP is for sites
+	-- picked across the open arena; these two were placed as a pair, 84 apart with the keep's west
+	-- door and the pit's berm between them.
+	local battleground = ModeTeams.Battleground and ModeTeams.Battleground()
+	if battleground and battleground.objectives and #battleground.objectives >= 2 then
+		for index, point in ipairs(battleground.objectives) do
+			objectives[index] = buildObjective(index, point)
+		end
+		return #objectives
+	end
+
 	local centre, arena = ModeTeams.Arena()
 	local function flat(v)
 		return Vector3.new(v.X, 0, v.Z)

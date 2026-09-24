@@ -259,6 +259,10 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	if ruins[1] and ruins[2] then
 		ModeTeams.BaseVehicleBays = ModeTeams.RuinBays
 	end
+	-- The battleground in the middle (BEGIN BATTLEGROUND, below), after the bases so it faces them.
+	if withRuins then
+		ModeTeams.BuildBattleground(mapInfo, axis, ruinSeed)
+	end
 
 	-- After the pads (it keeps clear of them) and before GameMode seeds the base loot, which then
 	-- keeps clear of the vehicles through RefusePad's blocked test. A failure here costs the base its
@@ -508,6 +512,7 @@ end
 
 function ModeTeams.Teardown()
 	ModeTeams.StopBaseVehicles()
+	ModeTeams.ClearBattleground()
 	ModeTeams.ClearRuins()
 	if ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then
 		ModeTeams.BaseVehicleBays = nil
@@ -520,6 +525,68 @@ function ModeTeams.Teardown()
 	table.clear(downed)
 	pads = { {}, {} }
 end
+
+--------------------------------------------------------------------------------
+-- BEGIN BATTLEGROUND
+--------------------------------------------------------------------------------
+-- The battleground in the middle of a team match (TeamBattleground; Oliver, 2026-09-24: "make a way
+-- better quality and more fun to play around battleground in the centre of the maps for the team
+-- gamemodes"). Everything for it is in this block, apart from one call in Setup and one in Teardown.
+-- tools/team_battleground_modeteams_check.py runs it.
+
+local TeamBattleground = require(script.Parent:WaitForChild("TeamBattleground"))
+local BotNav = require(script.Parent:WaitForChild("BotNav"))
+local battleground = nil
+
+-- Builds it at the arena's centre facing the bases (team 1's along the frame's LookVector, so the
+-- mirror between its halves is the plane halfway between the two bases), from the match's one seed.
+-- Returns it, or nil and why (warned when it was tried and failed): a failure costs the match its
+-- battleground, never its start.
+function ModeTeams.BuildBattleground(mapInfo, axis, seed)
+	ModeTeams.ClearBattleground()
+	if not (TeamBattleground and mapInfo and mapInfo.map and seed) then
+		return nil, "no map or no seed"
+	end
+	local at = Vector3.new(arenaCentre.X, terrainAt(arenaCentre.X, arenaCentre.Z) or 0, arenaCentre.Z)
+	local toTeamOne = Vector3.new(math.cos(axis), 0, math.sin(axis))
+	local ok, built, why = pcall(TeamBattleground.Build, CFrame.lookAt(at, at + toTeamOne), mapInfo, seed)
+	if not ok or type(built) ~= "table" then
+		local reason = tostring(ok and why or built)
+		warn("ModeTeams: no battleground: " .. reason)
+		return nil, reason
+	end
+	battleground = built
+	local seeded, problem = pcall(TeamBattleground.SeedLoot, built)
+	if not seeded then
+		warn("ModeTeams: battleground loot failed: " .. tostring(problem))
+	end
+	-- The bots take cover behind what it built (BotNav.FindCover asks this first).
+	if BotNav then
+		BotNav.CoverHints = function(origin, radius)
+			return TeamBattleground.CoverNear(built, origin, radius)
+		end
+	end
+	return built
+end
+
+-- The battleground standing in this match ({ model, objectives, cover, lootSpots, ... }), or nil.
+function ModeTeams.Battleground()
+	return active and battleground or nil
+end
+
+function ModeTeams.ClearBattleground()
+	if BotNav then
+		BotNav.CoverHints = nil
+	end
+	if battleground then
+		TeamBattleground.Destroy(battleground)
+		battleground = nil
+	end
+end
+
+--------------------------------------------------------------------------------
+-- END BATTLEGROUND
+--------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 -- BEGIN BASE VEHICLES

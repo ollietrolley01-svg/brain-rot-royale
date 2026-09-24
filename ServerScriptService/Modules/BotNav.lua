@@ -431,6 +431,9 @@ end
 -- directions each starting straight away from the threat; callers rate-limit this. `threatCharacter`,
 -- when given, is left out of the sight line: the shooter's own gun or arm hides nothing.
 local COVER_DIRECTIONS = 8
+-- (origin, radius) -> { floor point... } nearest first, or nil. Set by ModeTeams while a team match's
+-- battleground stands (TeamBattleground.CoverNear), cleared at its teardown.
+BotNav.CoverHints = nil
 function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, threatCharacter)
 	local params = stepParams(character)
 	local los = RaycastParams.new()
@@ -452,6 +455,31 @@ function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, thr
 	room.RespectCanCollide = true
 
 	local origin = root.Position
+
+	-- BEGIN BATTLEGROUND COVER. Built cover first: while a team match's battleground stands
+	-- (TeamBattleground, via ModeTeams) it hands over the spots behind its walls, sandbags, crates and
+	-- containers, and one of those the threat cannot see beats a point on a ring, which is as likely to
+	-- be the middle of a lane. Each is floor-level; a spot more than a step above or below the bot's
+	-- feet is someone else's storey. Same hidden test and the same straight-walk test as the rings.
+	if BotNav.CoverHints then
+		local standing = footHeight(character, root)
+		local feet = origin.Y - standing
+		local ok, hints = pcall(BotNav.CoverHints, origin, (radii and radii[#radii]) or 28)
+		for _, floorPoint in ipairs(ok and type(hints) == "table" and hints or {}) do
+			if math.abs(floorPoint.Y - feet) <= 3 then
+				local point = Vector3.new(floorPoint.X, floorPoint.Y + standing, floorPoint.Z)
+				if not isAllowed or isAllowed(point) then
+					local eye = point + Vector3.new(0, 1.5, 0)
+					local hit = workspace:Raycast(threatPosition, eye - threatPosition, los)
+					if hit and (hit.Position - eye).Magnitude > 2 and BotNav.CanStep(root, character, point, params) then
+						return point, true
+					end
+				end
+			end
+		end
+	end
+	-- END BATTLEGROUND COVER
+
 	local away = flat(origin - threatPosition)
 	local baseAngle = away.Magnitude > 0.1 and math.atan2(away.Z, away.X) or 0
 	-- A spot that needs a route round the back is the fallback, and only after every ring has been
