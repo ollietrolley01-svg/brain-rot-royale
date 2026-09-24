@@ -335,7 +335,7 @@ local function gripShape(offsets, keyFrame, sight)
 					if hit then
 						return hit
 					end
-					if inSight(point) then
+					if inSight(point.Position) then
 						return SIGHT_LINE
 					end
 				end
