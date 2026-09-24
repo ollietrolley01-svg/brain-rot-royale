@@ -180,9 +180,10 @@ local function gunnerSeatOf(vehicle)
 	return nil
 end
 
--- The armed vehicle whose gun this player works, with its spec, or nil. That is the driver when the
--- vehicle has no gunner's seat, and whoever sits in the gunner's seat when it has one (the driver then
--- only drives). The name is kept from when only the driver could fire.
+-- The armed vehicle whose gun this player works, with its spec, or nil: whoever sits in the gunner's
+-- seat, and the driver while that seat is empty (or there is none), so a player alone in an armed
+-- vehicle can still fire it. The same rule as the server's VehicleWeapons.DrivenBy. The name is kept
+-- from when only the driver could fire.
 local function drivenVehicle()
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -196,12 +197,10 @@ local function drivenVehicle()
 		return nil
 	end
 	local gunner = gunnerSeatOf(vehicle)
-	if gunner then
-		if seat ~= gunner then
+	if seat ~= gunner then
+		if not seat:IsA("VehicleSeat") or (gunner ~= nil and gunner.Occupant ~= nil) then
 			return nil
 		end
-	elseif not seat:IsA("VehicleSeat") then
-		return nil
 	end
 	return vehicle, spec
 end
@@ -449,7 +448,8 @@ RunService.RenderStepped:Connect(function(dt)
 			local other = VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"))
 			if other then
 				local seat = vehicle:FindFirstChild("DriverSeat")
-				local manned = seat and seat:IsA("VehicleSeat") and seat.Occupant ~= nil
+				local gunner = gunnerSeatOf(vehicle)
+				local manned = (seat and seat:IsA("VehicleSeat") and seat.Occupant ~= nil) or (gunner ~= nil and gunner.Occupant ~= nil)
 				local yaw = manned and vehicle:GetAttribute("AimYaw") or 0
 				local pitch = manned and vehicle:GetAttribute("AimPitch") or other.restPitch or 0
 				swingTurret(vehicle, other, yaw, pitch, dt)

@@ -101,13 +101,17 @@ local function watchFolder(folder)
 	folder.ChildAdded:Connect(track)
 end
 
+-- The map's parked vehicles ("Vehicles") and a team match's base vehicles ("TeamBaseVehicles",
+-- ModeTeams.SpawnBaseVehicles), which otherwise never had their wheels turned or their riders posed.
+local VEHICLE_FOLDERS = { Vehicles = true, TeamBaseVehicles = true }
 local function watchMap(map)
-	local vehicles = map:FindFirstChild("Vehicles")
-	if vehicles then
-		watchFolder(vehicles)
+	for _, child in ipairs(map:GetChildren()) do
+		if VEHICLE_FOLDERS[child.Name] then
+			watchFolder(child)
+		end
 	end
 	map.ChildAdded:Connect(function(child)
-		if child.Name == "Vehicles" then
+		if VEHICLE_FOLDERS[child.Name] then
 			watchFolder(child)
 		end
 	end)

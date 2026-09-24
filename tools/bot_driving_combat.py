@@ -242,18 +242,33 @@ function seatRules()
   driverSeat:Sit(dh); passengerSeat:Sit(rh)
   local aim = Vector3.new(500, 3, -40)
   local r = {}
+  -- The client's own rule (VehicleWeaponClient's drivenVehicle, which decides whether the gun's
+  -- controls and HUD come up) must agree with the server's at every step.
+  r.clientAgrees = true
+  local function client(humanoid, serverSays)
+    if CLIENT_DRIVEN then
+      CLIENT_PLAYER.Character = { FindFirstChildOfClass = function() return humanoid end }
+      local says = CLIENT_DRIVEN() ~= nil
+      if says ~= serverSays then r.clientAgrees = false end
+    end
+  end
   CLOCK = CLOCK + 1
   r.driverSolo = VW.Fire(driver, aim) == true
+  client(dh, r.driverSolo)
   gun:Sit(gh)
   CLOCK = CLOCK + 1
   r.gunnerFires = VW.Fire(gunner, aim) == true
+  client(gh, r.gunnerFires)
   CLOCK = CLOCK + 1
   r.driverRefusedManned = select(2, VW.Fire(driver, aim)) == "not driving"
+  client(dh, not r.driverRefusedManned)
   CLOCK = CLOCK + 1
   r.passengerRefused = select(2, VW.Fire(rider, aim)) == "not driving"
+  client(rh, not r.passengerRefused)
   gun.Occupant = nil; gh.SeatPart = nil
   CLOCK = CLOCK + 1
   r.driverAgain = VW.Fire(driver, aim) == true
+  client(dh, r.driverAgain)
   return r
 end
 """
@@ -281,6 +296,7 @@ def build(vw_src, data_src, bot_src, cfg_src):
     lua.execute("MatchConfig = (function() " + luau(cfg_src) + " end)()")
     lua.execute(bot_pieces(bot_src))
     lua.execute(SCENARIOS)
+    lua.execute(client_rule(CLIENT_SOURCE[0] or read(CLIENT)))
     return lua
 
 
@@ -370,7 +386,7 @@ def run(vw_src, data_src, bot_src, cfg_src):
 
     # SEATS
     seats = G.seatRules()
-    res["seats"] = {k: bool(seats[k]) for k in ("driverSolo", "gunnerFires", "driverRefusedManned", "passengerRefused", "driverAgain")}
+    res["seats"] = {k: bool(seats[k]) for k in ("driverSolo", "gunnerFires", "driverRefusedManned", "passengerRefused", "driverAgain", "clientAgrees")}
     for key, ok in res["seats"].items():
         if not ok:
             P.append(f"SEATS: {key} failed")
@@ -378,6 +394,16 @@ def run(vw_src, data_src, bot_src, cfg_src):
 
 
 BOT = "ServerScriptService/Modules/BotService.lua"
+CLIENT = "StarterPlayerScripts/VehicleWeaponClient.client.lua"
+CLIENT_SOURCE = [None]  # a planted copy of the client, while a plant runs
+
+
+def client_rule(src):
+    # gunnerSeatOf and drivenVehicle, as the client has them, over a mock player.
+    a = src.index("local function gunnerSeatOf(vehicle)")
+    b = src.index("-- What's under the middle of the view")
+    return ("CLIENT_PLAYER = {}\nlocal player = CLIENT_PLAYER\nlocal VehicleWeaponData = MODULES.VehicleWeaponData\n"
+            + luau(src[a:b]) + "\nCLIENT_DRIVEN = drivenVehicle\n")
 VW = "ServerScriptService/Modules/VehicleWeapons.lua"
 PLANTS = [
     ("laser: every roll a hit", BOT, "local hit = math.random() < Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)",
@@ -393,6 +419,8 @@ PLANTS = [
     ("the arc ignored", BOT, "\tif not VehicleWeapons.InArc(vehicle, targetRoot.Position) then\n\t\treturn\n\tend\n", ""),
     ("the gun seat ignored", VW, 'if child:IsA("Seat") and (child.Name == "GunnerSeat" or child:GetAttribute("Gunner") == true) then',
      "if false then"),
+    ("the client keeps the driver off an unmanned gun", CLIENT, "if not seat:IsA(\"VehicleSeat\") or (gunner ~= nil and gunner.Occupant ~= nil) then",
+     "if not seat:IsA(\"VehicleSeat\") or gunner ~= nil then"),
     ("a solo driver cannot fire", VW, "local manned = gunner ~= nil and gunner.Occupant ~= nil", "local manned = gunner ~= nil"),
 ]
 
@@ -420,7 +448,7 @@ def main():
     for p in res["problems"]:
         print("PROBLEM", p)
 
-    sources = {BOT: bot_src, VW: vw_src}
+    sources = {BOT: bot_src, VW: vw_src, CLIENT: read(CLIENT)}
     caught = 0
     for label, path, before, after in PLANTS:
         text = sources[path]
@@ -429,10 +457,12 @@ def main():
             continue
         planted = dict(sources)
         planted[path] = text.replace(before, after)
+        CLIENT_SOURCE[0] = planted[CLIENT]
         try:
             found = run(planted[VW], data_src, planted[BOT], cfg_src)["problems"]
         except Exception as err:  # an error is a failed check, not a pass
             found = [f"error: {str(err).splitlines()[0]}"]
+        CLIENT_SOURCE[0] = None
         caught += bool(found)
         print(f"  plant {'CAUGHT' if found else 'MISSED'}: {label} -> {found[0] if found else 'passed'}")
     print(f"planted faults: {caught}/{len(PLANTS)} caught")
