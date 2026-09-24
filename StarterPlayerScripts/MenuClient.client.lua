@@ -1326,18 +1326,26 @@ local function renderCrates()
 	stockHeader(0, crateLuck > 1
 		and string.format("CRATE SHOP  •  %dx CRATE LUCK ACTIVE: every open rolls %d times and keeps the rarest, and the odds below include it", crateLuck, crateLuck)
 		or "CRATE SHOP  •  rarer crates are in stock less often")
-	for index, tier in ipairs(CrateData.Order) do
+	-- Two cards this tab should not draw (#86), filtered before the loop.
+	-- The Style tiers have their own STYLE CRATES tab,
+	-- and here the "You own" line counted CosmeticData.OfKind("Cosmetic") -- no such kind -- so a
+	-- crate selling for 8,000 coins read "You own 0 / 0". And a Robux-only crate whose product id
+	-- is still 0 is hidden the way the Robux Shop hides it (shopVisible), not shown as a first card
+	-- whose only button is a greyed price beside "ALWAYS IN STOCK". Studio still shows it.
+	local function drawn(tier)
 		local crate = CrateData.Get(tier)
-		-- Two cards this tab should not draw (#86). The Style tiers have their own STYLE CRATES tab,
-		-- and here the "You own" line counted CosmeticData.OfKind("Cosmetic") -- no such kind -- so a
-		-- crate selling for 8,000 coins read "You own 0 / 0". And a Robux-only crate whose product id
-		-- is still 0 is hidden the way the Robux Shop hides it (shopVisible), not shown as a first card
-		-- whose only button is a greyed price beside "ALWAYS IN STOCK". Studio still shows it.
 		local robuxProduct = crate.robuxOnly and crate.productKey and GamepassConfig.Products[crate.productKey]
-		if crate.category == "Cosmetic"
-			or (crate.robuxOnly and not (robuxProduct and robuxProduct.id > 0) and not RunService:IsStudio()) then
-			continue
+		return not (crate.category == "Cosmetic"
+			or (crate.robuxOnly and not (robuxProduct and robuxProduct.id > 0) and not RunService:IsStudio()))
+	end
+	local tiers = {}
+	for _, tier in ipairs(CrateData.Order) do
+		if drawn(tier) then
+			table.insert(tiers, tier)
 		end
+	end
+	for index, tier in ipairs(tiers) do
+		local crate = CrateData.Get(tier)
 		local owned = profile and (profile.crates[tier] or 0) or 0
 		local inStock = ShopRotation.IsCrateInStock(tier)
 		local color = crate.color or Rarity.Color(tier)
