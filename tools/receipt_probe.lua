@@ -84,6 +84,10 @@ PlayerData.Save = function(who)
 	stored = deepCopy(data)
 	return true
 end
+-- Receipts save through SaveAndWait (it waits out an in-flight save); same stub.
+PlayerData.SaveAndWait = function(...)
+	return PlayerData.Save(...)
+end
 PlayerData.CanSave = function(who)
 	return who == player and canSave
 end

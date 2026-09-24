@@ -574,9 +574,10 @@ end
 -- coins and pass XP for a win, a draw or a loss (MatchConfig.TeamModeRewards). Kills are paid as they
 -- happen, in MatchService's respawn branch.
 local function awardResult(player, rank)
-	local team = ModeTeams.TeamOf(player)
+	-- From the rank MatchService read before StopWorld: the team table is cleared by then, so TeamOf
+	-- here was nil for everyone and every winner was paid as a loss. Rank 1 is the winning team.
 	local winner = leader()
-	local outcome = winner == nil and "draw" or (team == winner and "win" or "loss")
+	local outcome = winner == nil and "draw" or (rank == 1 and "win" or "loss")
 	local ok, reward = pcall(RewardService.AwardTeamResult, player, outcome, rank)
 	if not ok then
 		warn("[GameMode] team reward failed for " .. player.Name .. ": " .. tostring(reward))

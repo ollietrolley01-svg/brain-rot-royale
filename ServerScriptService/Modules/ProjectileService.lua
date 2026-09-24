@@ -355,11 +355,18 @@ local function explode(blast)
 			if victim.token == blast.owner then
 				amount *= SELF_SCALE
 			end
-			local taken = CombatService.DealDamage(owner, victim.token, amount, blast.weaponId, headshot)
+			local taken = 0
+			-- A thrower who has left is no longer creditable, but their team still is: friendly fire
+			-- stays off for their round rather than reaching teammates as ownerless damage.
+			if owner ~= nil or blast.owner == nil or not CombatService.DamageVeto
+				or not CombatService.DamageVeto(blast.owner, victim.token, blast.weaponId) then
+				taken = CombatService.DealDamage(owner, victim.token, amount, blast.weaponId, headshot)
+			end
 			table.insert(dealt, { token = victim.token, amount = taken, scale = scale, reach = reach, headshot = headshot })
 
 			local strength = scale * reach
-			if KNOCKBACK and strength >= KNOCK_MIN and victim.humanoid.Health > 0 then
+			-- No shove where the hit was refused (a teammate, spawn protection): a vetoed frag mustn't fling them.
+			if KNOCKBACK and taken > 0 and strength >= KNOCK_MIN and victim.humanoid.Health > 0 then
 				local away = victim.root.Position - centre
 				away = Vector3.new(away.X, 0, away.Z)
 				away = away.Magnitude > 0.1 and away.Unit or Vector3.zero
@@ -805,7 +812,9 @@ local function stepCooks()
 			cooks[player] = nil
 		elseif clock - cook.startedAt >= spec.fuse - COOK_MARGIN then
 			-- Too late. Using it now goes through the normal spend, and throwFromPlayer sees the cook.
-			if not WeaponService.StartUse(player, nil) then
+			-- A refusal can be momentary (the instant-item cooldown, a use in progress), so try again
+			-- next step rather than quietly handing back a fresh fuse; give up a second past it.
+			if not WeaponService.StartUse(player, nil) and clock - cook.startedAt >= spec.fuse + 1 then
 				cooks[player] = nil
 			end
 		end
