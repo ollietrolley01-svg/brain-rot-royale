@@ -3051,6 +3051,58 @@ function ARCH.peekPhase(bot, now)
 	return peek
 end
 
+-- BOT ARCHETYPES: an avoidUnforced bot letting someone go must not then walk into them. Its wander
+-- (or the leg it is on) heading closer to `threat` than it already is, and inside `reach` (+6) of them,
+-- would make them "close" by its own doing and start the very fight it chose not to. Such a goal is
+-- swapped for another rotation goal that keeps its distance, or failing four of those, a point
+-- straight away from them. tools/bot_archetype_sim.py's AVOID scenario is the check.
+function ARCH.steerClear(bot, root, threat, reach, now)
+	local from = flat(root.Position)
+	local toThreat = flat(threat) - from
+	local gap = toThreat.Magnitude
+	local function closes(goal)
+		if not goal then
+			return false
+		end
+		local seg = flat(goal) - from
+		local len2 = seg:Dot(seg)
+		local t = len2 > 0.01 and math.clamp(toThreat:Dot(seg) / len2, 0, 1) or 0
+		local nearest = (toThreat - seg * t).Magnitude
+		return nearest < reach + 6 and nearest < gap - 1
+	end
+	if not (closes(bot.wanderGoal) or closes(bot.wanderTarget)) then
+		return
+	end
+	local goal = nil
+	for _ = 1, 4 do
+		local option = BotService.Loot.rotationGoal(bot, root.Position)
+		if not closes(option) then
+			goal = option
+			break
+		end
+	end
+	if not goal and gap > 1 then
+		goal = root.Position - toThreat.Unit * 60
+	end
+	bot.wanderGoal = goal
+	bot.wanderAt = now
+	bot.wanderTarget = nil
+end
+
+-- BOT ARCHETYPES: the third-party rule (Opportunist), asked by fight() on every think past the reaction
+-- and before it arms the timed first shot (quickFirstShot). True while the target is busy with somebody
+-- else (hit by another within THREAT_WINDOW) and still over thirdPartyBelow, nobody is shooting us, and
+-- the wait (thirdPartyWait, from acquiring the target) has not run out.
+function ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now)
+	if not (dials.thirdParty and targetHumanoid and now - bot.lastHurtAt >= THREAT_WINDOW
+		and targetHumanoid.Health >= targetHumanoid.MaxHealth * (dials.thirdPartyBelow or 0.6)
+		and now - (bot.thirdPartyFrom or now) < (dials.thirdPartyWait or 8)) then
+		return false
+	end
+	local attacker, _, hitAt = CombatService.GetLastAttacker(target)
+	return attacker ~= nil and attacker ~= bot and hitAt ~= nil and now - hitAt < THREAT_WINDOW
+end
+
 -- Seen and noticed, gun in range: fight. Returns having issued this think's movement.
 -- Reaction time is a time, not a count of thinks (#75/#81). A bot thinks every ~0.267 s (BotThinkInterval,
 -- rounded up to frames by the THINK_SLICES waits), so a reaction ending between two thinks used to
@@ -3241,27 +3293,22 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	-- let them wear each other down; go in once the target is under thirdPartyBelow, once the wait
 	-- (thirdPartyWait) runs out, or the moment we are hit. tools/bot_archetype_sim.py measures how
 	-- much later an Opportunist's first shot comes than a Rusher's from the same spot.
-	if dials.thirdParty and reacted and targetHumanoid and now - bot.lastHurtAt >= THREAT_WINDOW
-		and targetHumanoid.Health >= targetHumanoid.MaxHealth * (dials.thirdPartyBelow or 0.6)
-		and now - (bot.thirdPartyFrom or now) < (dials.thirdPartyWait or 8) then
-		local attacker, _, hitAt = CombatService.GetLastAttacker(target)
-		if attacker and attacker ~= bot and hitAt and now - hitAt < THREAT_WINDOW then
-			STATS.thirdPartyHolds += 1
-			bot.fightState = "thirdParty"
-			local cover, direct = seekCover(bot, root, eye, now, candidate.character)
-			if cover and goToCover(bot, humanoid, root, cover, direct, now) then
-				if flatDistance(root.Position, cover) < 3 then
-					bot.coverPoint = nil
-					bot.coverUntil = now + BOT_COVER_TIME
-					bot.coverAt = root.Position
-				end
-			else
-				holdStill(bot, humanoid, root, now)
+	if reacted and ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now) then
+		STATS.thirdPartyHolds += 1
+		bot.fightState = "thirdParty"
+		local cover, direct = seekCover(bot, root, eye, now, candidate.character)
+		if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+			if flatDistance(root.Position, cover) < 3 then
+				bot.coverPoint = nil
+				bot.coverUntil = now + BOT_COVER_TIME
+				bot.coverAt = root.Position
 			end
-			setCrouch(bot, distance > CROUCH_MIN_RANGE)
-			faceTarget(bot, humanoid, root, targetRoot)
-			return
+		else
+			holdStill(bot, humanoid, root, now)
 		end
+		setCrouch(bot, distance > CROUCH_MIN_RANGE)
+		faceTarget(bot, humanoid, root, targetRoot)
+		return
 	end
 
 	-- Hurt and being hit, reloading, or outnumbered: get behind something, or put something up.
@@ -3332,7 +3379,12 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	if now - bot.acquiredAt < MatchConfig.BotReactionTime then
 		holdStill(bot, humanoid, root, now)
 		faceTarget(bot, humanoid, root, targetRoot)
-		quickFirstShot(bot, candidate, head, now)
+		-- Not for a target the third-party rule (above) would have it hang back from: the timed shot goes
+		-- off at the end of the reaction, before that rule is ever asked, and would fire an Opportunist's
+		-- first round at a healthy target busy with someone else.
+		if not ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now) then
+			quickFirstShot(bot, candidate, head, now)
+		end
 		return
 	end
 
@@ -5387,6 +5439,11 @@ local function updateBot(bot)
 			bot.branch = "avoid"
 			bot.target = nil
 			bot.acquiredAt = 0
+			-- Nor does it hunt them from a memory an earlier (forced) fight left, or wander into their range.
+			if bot.memory and bot.memory.token == candidate.token then
+				bot.memory = nil
+			end
+			ARCH.steerClear(bot, root, candidate.root.Position, ARCH.dialsOf(bot).range * 1.1, now)
 			local threatEye = candidate.root.Position + Vector3.new(0, 1.5, 0)
 			if exposedTo(bot, root, threatEye) then
 				local cover, direct = seekCover(bot, root, threatEye, now, candidate.character)

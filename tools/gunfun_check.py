@@ -1,6 +1,7 @@
 """The gun rework's per-gun model gate: every existing model check, run on just the guns named.
 
     python3 tools/gunfun_check.py [repo] id [id ...]
+    python3 tools/gunfun_check.py [repo]              (no ids: the whole-arsenal gate run, see below)
 
 Runs, on only those ids, the project's own checks through their own code (nothing re-implemented):
   tube   tools/gun_tube_check.check_gun  -- floating tubes, loose rods, doubled barrels
@@ -9,6 +10,12 @@ Runs, on only those ids, the project's own checks through their own code (nothin
   sight  tools/gunfun_lab.sight_findings -- nothing solid on the sight line
 It is the quick loop while building; the full-arsenal runs of the same tools (and their planted faults)
 are the gate a commit has to pass.
+
+With no ids (how tools/quality_gate.py runs it) the tube, arms and body checks are NOT repeated: their
+full-arsenal runs are gate entries of their own (gun_tube_check.py, fps_arms_check.py,
+fps_arms_body_check.py, each with its planted faults). The sight line has no other gate entry, so this
+runs it over every gun in WeaponData, with its planted slab (tools/gunfun_lab.py sight), and fails on a
+finding or a missed plant.
 """
 
 import sys
@@ -19,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fps_arms_body_check  # noqa: E402
 import fps_arms_check  # noqa: E402
 import gun_tube_check  # noqa: E402
+import gunfun_lab  # noqa: E402
 from gunfun_lab import Lab, sight_findings  # noqa: E402
 
 
@@ -26,8 +34,10 @@ def main(argv):
     repo = argv[1] if len(argv) > 1 else "."
     ids = argv[2:]
     if not ids:
-        print(__doc__)
-        return 2
+        if repo in ("-h", "--help"):
+            print(__doc__)
+            return 2
+        return gunfun_lab.main([argv[0], "sight", repo])
     bad = 0
     guns = gun_tube_check.build(gun_tube_check.load_sources(repo), ids)
     for gid in ids:

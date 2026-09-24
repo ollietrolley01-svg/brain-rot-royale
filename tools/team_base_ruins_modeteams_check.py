@@ -383,7 +383,9 @@ PLANTS = [
     ("bays never handed out", ("\t\tModeTeams.BaseVehicleBays = ModeTeams.RuinBays\n", "\n")),
     ("one-sided start kept", ("\tif withRuins and not (ruins[1] and ruins[2]) then\n\t\tModeTeams.ClearRuins()",
                               "\tif false then\n\t\tModeTeams.ClearRuins()")),
-    ("compounds left standing", ("\tModeTeams.StopBaseVehicles()\n\tModeTeams.ClearRuins()", "\tModeTeams.StopBaseVehicles()")),
+    # Teardown's own ClearRuins (the battleground's teardown now sits between it and StopBaseVehicles).
+    ("compounds left standing", ("\tModeTeams.ClearBattleground()\n\tModeTeams.ClearRuins()\n\tif ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then",
+                                 "\tModeTeams.ClearBattleground()\n\tif ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then")),
     ("the rolled axis, road or not", ("\t\taxis, fraction = ModeTeams.PickBaseAxis(axis, mapInfo)", "\t\tlocal _ = 0")),
     ("busy pad reused", ("\t\t\tif not occupiedAt(other, except) then\n\t\t\t\treturn other", "\t\t\tif false then\n\t\t\t\treturn other")),
 ]

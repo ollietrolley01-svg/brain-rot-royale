@@ -18,8 +18,11 @@ What it measures, per archetype and per gun class, against the design (and print
               dmr < sniper), and rounds a second at a target it can't kill against the same run of
               the BEFORE source (the burst shape changed per class; the rounds a minute must not)
   FLANK       the largest angle a bot works round a target in 20 s (Flanker vs Rusher)
-  THIRD PARTY how much later an Opportunist watching two Rushers fight fires than a Rusher would
+  THIRD PARTY how much later an Opportunist watching two Rushers fight fires than a Rusher would, and
+              whether any first shot came while its rule said hold
   AVOID       whether a Survivor shoots a passive target 85 studs off (a Rusher does)
+  COVER ROLL  hurt and under fire with a wall beside it: in how many runs a Rusher (coverUse 0.25) takes
+              cover, against an Anchor (0.9)
   REPOSITION  share of shots a sniper Marksman fires from a new spot (a sniper Rusher: few)
   PEEK        share of an Anchor's fight spent hidden behind cover between bursts (a Rusher: none)
   SKIRMISH    3v3 team deathmatch: frags never land on a teammate, walls never go up on one, the
@@ -894,20 +897,45 @@ function SCEN.thirdParty(arch, seconds)
     SIM.run(1.5)
     local observer = SIM.makeBot("O", arch, "CrocodiloRifle", Vector3.new(0, 3, 0), nil)
     observer.character.root.CFrame.LookVector = Vector3.new(0, 0, 1)
-    local firstTargetHealth = -1
+    -- At its first shot: the target's health and share, whether somebody else had hit it inside
+    -- THREAT_WINDOW (busy), how long since the observer was last hurt, and how long it had been on that
+    -- target (thirdPartyFrom is stamped when it acquires one): everything the third-party rule reads.
+    local first = { health = -1, share = -1, busy = 0, hurtAgo = -1, heldFor = -1 }
     local realOnShot = SIM.onShot
     SIM.onShot = function(shooter, origin, endPoints)
-        if shooter == observer and firstTargetHealth < 0 then
+        if shooter == observer and first.health < 0 then
             local h = Combatants.GetHumanoid(observer.target)
-            firstTargetHealth = h and h.Health or -1
+            local attacker, _, hitAt = CombatService.GetLastAttacker(observer.target)
+            first.health = h and h.Health or -1
+            first.share = h and h.Health / h.MaxHealth or -1
+            first.busy = (attacker and attacker ~= observer and hitAt and CLOCK - hitAt < THREAT_WINDOW) and 1 or 0
+            first.hurtAgo = CLOCK - (observer.lastHurtAt or -math.huge)
+            first.heldFor = CLOCK - (observer.thirdPartyFrom or CLOCK)
         end
         realOnShot(shooter, origin, endPoints)
     end
     SIM.run(seconds - 1.5)
     SIM.onShot = realOnShot
     local m = SIM.metrics(observer)
-    m.firstTargetHealth = firstTargetHealth
+    m.firstTargetHealth = first.health
+    m.firstTargetShare = first.share
+    m.firstTargetBusy = first.busy
+    m.hurtAgo = first.hurtAgo
+    m.heldFor = first.heldFor
     return m
+end
+
+-- coverUse: hurt (60 health, under BotCoverHealth) and plinked every second by a shooter 45 studs off,
+-- with a wall either side. The cover rules fire in every run; the archetype's roll decides whether it
+-- goes. Does it ever reach the "cover" state?
+function SCEN.coverRoll(arch, seconds)
+    SIM.addWall(Vector3.new(-7, 2.5, 5), Vector3.new(5, 5, 1.5))
+    SIM.addWall(Vector3.new(7, 2.5, 5), Vector3.new(5, 5, 1.5))
+    local bot = SIM.makeBot("A", arch, "CrocodiloRifle", Vector3.new(0, 3, 0), nil, { health = 60 })
+    bot.character.root.CFrame.LookVector = Vector3.new(0, 0, 1)
+    SIM.makeDummy("D", Vector3.new(0, 3, 45), nil, { invulnerable = true, shooter = 2 })
+    SIM.run(seconds)
+    return SIM.metrics(bot)
 end
 
 -- A passive target 85 studs off. Does the bot start a fight it doesn't need?
@@ -1101,6 +1129,10 @@ class Runtime:
         # The aim expectation, from `aim_src`.
         g.CHANCE_AT = lua.execute(chance_source(aim_src))
         g.BOT_TABLE = lua.execute(bot_table_source(bot_src))
+        # "Busy with somebody else" is BotService's own window (a hit from another inside it).
+        m = re.search(r"^local THREAT_WINDOW = ([\d.]+)", bot_src, flags=re.M)
+        assert m, "BotService has no THREAT_WINDOW"
+        g.THREAT_WINDOW = float(m.group(1))
         # The module itself, with its locals the sim needs exported.
         src = perf.luau_to_lua(bot_src)
         assert src.rstrip().endswith("return BotService")
@@ -1200,14 +1232,25 @@ def measure(rt, runs, verbose):
     out["flank"] = {arch: mean(rt.run("flank", s * 3 + 1, arch, "CrocodiloRifle", 20.0)["maxFlank"] for s in range(runs))
                     for arch in ("Flanker", "Rusher", "Anchor")}
     # THIRD PARTY
+    # `early`: runs whose first shot came while the rule said hold (target busy with somebody else and
+    # over thirdPartyBelow, the observer unhurt for THREAT_WINDOW, inside thirdPartyWait). Only the
+    # Opportunist's count is judged; a Rusher has no such rule.
+    ow = rt.g.BotService.Archetypes.Opportunist
+    below, wait = float(ow.thirdPartyBelow or 0.6), float(ow.thirdPartyWait or 8)
     third = {}
     for arch in ("Opportunist", "Rusher"):
         rows = [rt.run("thirdParty", s * 13 + 5, arch, 25.0) for s in range(runs)]
         third[arch] = {"firstShot": mean(r["firstShotAt"] - r["firstFightAt"] for r in rows if r["firstShotAt"] > 0 and r["firstFightAt"] > 0),
                        "neverShot": sum(1 for r in rows if r["firstShotAt"] < 0),
                        "targetHealth": mean(r["firstTargetHealth"] for r in rows if r["firstTargetHealth"] >= 0),
-                       "thirdThinks": sum(r["thirdThinks"] for r in rows)}
+                       "thirdThinks": sum(r["thirdThinks"] for r in rows),
+                       "early": sum(1 for r in rows if r["firstTargetHealth"] >= 0 and r["firstTargetBusy"]
+                                    and r["firstTargetShare"] >= below and r["hurtAgo"] >= rt.g.THREAT_WINDOW
+                                    and r["heldFor"] < wait)}
     out["third"] = third
+    # COVER ROLL: runs (of `runs`) in which the bot took cover at all.
+    out["coverRoll"] = {arch: sum(1 for s in range(runs) if rt.run("coverRoll", s * 7 + 3, arch, 8.0).get("state_cover", 0) > 0)
+                        for arch in ("Rusher", "Anchor")}
     # AVOID
     out["avoid"] = {arch: sum(rt.run("avoid", s * 17 + 7, arch, "CrocodiloRifle", 15.0)["shots"] for s in range(runs))
                     for arch in ("Survivor", "Rusher")}
@@ -1300,12 +1343,29 @@ def checks(after, before):
     if not (f["Flanker"] > 40 and f["Flanker"] > f["Rusher"] + 20):
         fails.append(f"FLANK: Flanker works round {f['Flanker']:.0f} degrees, Rusher {f['Rusher']:.0f}: want > 40 and +20")
     t = after["third"]
-    if not (t["Opportunist"]["firstShot"] > t["Rusher"]["firstShot"] + 2):
-        fails.append(f"THIRD PARTY: Opportunist fires {t['Opportunist']['firstShot']:.1f} s into the fight, Rusher {t['Rusher']['firstShot']:.1f}: want 2 s later")
+    # The rule itself, run by run: no first shot while it says hold.
+    if t["Opportunist"]["early"]:
+        fails.append(f"THIRD PARTY: in {t['Opportunist']['early']} run(s) the Opportunist's first shot came while the rule said hold "
+                     f"(target busy with somebody else and over thirdPartyBelow, the Opportunist unhurt, inside thirdPartyWait)")
+    # And what it buys on the clock. How long the wait lasts is set by how fast two 300-health Rushers wear
+    # each other under 60%, not by the rule: over 40 seeds the Opportunist's mean first shot is 2.1 s
+    # later than a Rusher's (the first 8, 16 and 24 seeds: +1.7, +2.4, +2.1 s). The margin wanted used
+    # to be 2 s, the mean itself, so it passed or failed with the seed count (4 runs +2.06 s, 8 runs
+    # +1.72 s); 1 s is clear of that spread and of the 0 a missing wait gives. The run-by-run check
+    # above is the strict one.
+    if not (t["Opportunist"]["firstShot"] > t["Rusher"]["firstShot"] + 1):
+        fails.append(f"THIRD PARTY: Opportunist fires {t['Opportunist']['firstShot']:.1f} s into the fight, Rusher {t['Rusher']['firstShot']:.1f}: want 1 s later")
     if not (t["Opportunist"]["targetHealth"] < t["Rusher"]["targetHealth"]):
         fails.append(f"THIRD PARTY: Opportunist's first target was at {t['Opportunist']['targetHealth']:.0f} hp, Rusher's at {t['Rusher']['targetHealth']:.0f}: it should wait for the weaker moment")
     if not t["Opportunist"]["thirdThinks"] > 0:
         fails.append("THIRD PARTY: the Opportunist never held back")
+    # coverUse is rolled once a fight: a Rusher (0.25) goes for cover in about one run in four, an Anchor
+    # (0.9) in nearly all. (16 seeds: Rusher 2, Anchor 16; with the roll ignored, the Rusher 16.) The DUELS
+    # cover shares above are too small and too noisy to see the roll on their own.
+    cr = after["coverRoll"]
+    if not (cr["Rusher"] * 2 <= after["runs"] and cr["Anchor"] * 4 >= after["runs"] * 3):
+        fails.append(f"COVER ROLL: took cover in {cr['Rusher']} of {after['runs']} runs as a Rusher (want at most half), "
+                     f"{cr['Anchor']} as an Anchor (want at least 3/4)")
     a = after["avoid"]
     if a["Survivor"] != 0 or a["Rusher"] == 0:
         fails.append(f"AVOID: Survivor fired {a['Survivor']} shots at a passive target 85 studs off (want 0), Rusher {a['Rusher']} (want > 0)")
@@ -1368,7 +1428,9 @@ def report(label, m):
     print("  FLANK max angle worked round a passive target in 20 s: " + ", ".join(f"{k} {v:.0f}" for k, v in m["flank"].items()))
     t = m["third"]
     print("  THIRD PARTY first shot after the fight came into view: " + ", ".join(
-        f"{k} {v['firstShot']:.1f} s (target at {v['targetHealth']:.0f} hp, held {v['thirdThinks']} thinks)" for k, v in t.items()))
+        f"{k} {v['firstShot']:.1f} s (target at {v['targetHealth']:.0f} hp, held {v['thirdThinks']} thinks)" for k, v in t.items())
+        + f"; first shots while the rule said hold: {t['Opportunist']['early']}")
+    print(f"  COVER ROLL runs (of {m['runs']}) that took cover, hurt and under fire: " + ", ".join(f"{k} {v}" for k, v in m["coverRoll"].items()))
     print("  AVOID shots at a passive target 85 studs off: " + ", ".join(f"{k} {v}" for k, v in m["avoid"].items()))
     print("  REPOSITION (sniper) deliberate repositions a shot (share of shots from a new spot): " + ", ".join(
         f"{k} {v['repositions']:.2f} ({v['moved']:.2f}) of {v['shots']} at {v['dist']:.0f} studs" for k, v in m["reposition"].items()))
@@ -1393,7 +1455,11 @@ def report(label, m):
 
 
 PLANTS = [
-    (BOTSERVICE, "\tchance *= 0.9 + 0.15 * settle\n", "\tchance *= 1.0 + 0.15 * settle\n", "aim: hit chance up a tenth"),
+    # The on-foot settle line: a vehicle gun's hit chance (Vehicles.vehicleHitChance) has its own copy of
+    # the multiplier, so the line alone is no longer unique.
+    (BOTSERVICE, "\tlocal settle = math.clamp((now - (bot.acquiredAt or now) - AIM_SETTLE_DELAY) / 1.5, 0, 1)\n\tchance *= 0.9 + 0.15 * settle\n",
+     "\tlocal settle = math.clamp((now - (bot.acquiredAt or now) - AIM_SETTLE_DELAY) / 1.5, 0, 1)\n\tchance *= 1.0 + 0.15 * settle\n",
+     "aim: hit chance up a tenth"),
     (BOTSERVICE, "\tlocal preferred = dials.range\n", "\tlocal preferred = 55\n", "range: every gun and personality at 55 studs"),
     (BOTSERVICE, "\t\t-- Nor onto a teammate (Oliver: \"never throw frags at teammates' positions\").\n\t\tfor _, entry in ipairs(combatantList) do\n"
      "\t\t\tif entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token)\n"
@@ -1405,9 +1471,12 @@ PLANTS = [
     (BOTSERVICE, 'lmg          = { range = 60, minRange = 10, peek = "suppress", burst = { 6, 10 }, restScale = 2.75',
      'lmg          = { range = 60, minRange = 10, peek = "suppress", burst = { 6, 10 }, restScale = 1',
      "lethality: an LMG's long burst without the longer rest (more rounds a minute)"),
-    (BOTSERVICE, "\tif dials.thirdParty and reacted and targetHumanoid and now - bot.lastHurtAt >= THREAT_WINDOW\n",
-     "\tif false and reacted and targetHumanoid and now - bot.lastHurtAt >= THREAT_WINDOW\n", "third party: the Opportunist never waits"),
+    (BOTSERVICE, "function ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now)\n",
+     "function ARCH.thirdPartyHold(bot, dials, target, targetHumanoid, now)\n\tdo return false end\n", "third party: the Opportunist never waits"),
     (BOTSERVICE, "\tif candidate and ARCH.dialsOf(bot).avoidUnforced then\n", "\tif false then\n", "avoid: the Survivor fights anyone it sees"),
+    (BOTSERVICE, "function ARCH.steerClear(bot, root, threat, reach, now)\n",
+     "function ARCH.steerClear(bot, root, threat, reach, now)\n\tdo return end\n",
+     "avoid: the Survivor lets someone go, then wanders into their range and fights after all"),
     (BOTSERVICE, "\tlocal overstayed = dials.repositionAfterShots > 0 and", "\tlocal overstayed = false and",
      "reposition: the sniper never moves after a shot"),
     (BOTSERVICE, "\t\tlocal exposed = not (peek and peek.exposed)\n", "\t\tlocal exposed = false\n",

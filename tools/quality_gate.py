@@ -88,7 +88,9 @@ def discover():
 
 SUMMARY = [
     re.compile(r"(\d+)\s*/\s*(\d+)\s+(?:planted faults\s+)?caught", re.I),
-    re.compile(r"caught[^\n\d]{0,20}?(\d+)\s*(?:/|of)\s*(\d+)", re.I),
+    # Not across a bracket: "caught (botnav: only 0 of 76 cover spots ...)" is one plant's evidence,
+    # not a summary, and read as one it turned team_battleground_check's 28/28 into 28/104.
+    re.compile(r"caught[^\n\d(]{0,20}?(\d+)\s*(?:/|of)\s*(\d+)", re.I),
     re.compile(r"(\d+)\s+of\s+(\d+)\s+caught", re.I),
     re.compile(r"(\d+)\s*/\s*(\d+)\s+planted faults (?:fired|caught)", re.I),
 ]

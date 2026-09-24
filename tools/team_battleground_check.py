@@ -133,10 +133,17 @@ def sources(repo):
 
 
 class Runtime:
-    """One Lua runtime with the modules loaded."""
+    """One Lua runtime with the modules loaded. Each is a different server as far as math.random goes
+    (as team_base_ruins_check's Build is): runtimes made in one process start from the same
+    math.random stream otherwise, and the seed check's second build could not see a layout that
+    reads it."""
+
+    servers = 0
 
     def __init__(self, src):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
+        Runtime.servers += 1
+        self.lua.execute("math.randomseed(%d)" % (7919 * Runtime.servers))
         mock = TBR.MOCK.replace("local PARTS = { Part = true, WedgePart = true }",
                                 "local PARTS = { Part = true, WedgePart = true, TrussPart = true }")
         self.lua.execute(mock + TBR.EXTRA_MOCK + TBR.DUMP + EXTRA)
@@ -1756,8 +1763,10 @@ PLANTS = [
      [("ok, line = pcall(ZiplineService.Create, lines, zip.fromTop, zip.to, zip.fromTop)", 'ok, line = false, "cut"')], ["build"], "zipline"),
     ("BotNav ignores the hints", "botnav", [("\tif BotNav.CoverHints then\n", "\tif false then\n")], ["botnav"], "botnav"),
     ("BotNav takes a hint the threat can see", "botnav",
-     [("if hit and (hit.Position - eye).Magnitude > 2 and BotNav.CanStep(root, character, point, params) then",
-       "if BotNav.CanStep(root, character, point, params) then")], ["botnav"], "botnav"),
+     # The hints loop's own hidden test (five tabs deep; the rings' copy below it is four). Since the ray
+     # budget (#131) it is a line of its own ahead of the CanStep test.
+     [("\t\t\t\t\tif hit and (hit.Position - eye).Magnitude > 2 then\n\t\t\t\t\t\tlocal ok, reason = BotNav.CanStep(",
+       "\t\t\t\t\tif true then\n\t\t\t\t\t\tlocal ok, reason = BotNav.CanStep(")], ["botnav"], "botnav"),
 ]
 
 
