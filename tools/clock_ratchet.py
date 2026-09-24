@@ -57,7 +57,7 @@ CLOCK_BASELINE = {
     "ServerScriptService/Modules/WeaponService.lua": 4,
     "StarterPlayerScripts/AmbientClient.client.lua": 1,
     "StarterPlayerScripts/CombatClient.client.lua": 9,
-    "StarterPlayerScripts/CompanionFxClient.client.lua": 3,
+    "StarterPlayerScripts/CompanionFxClient.client.lua": 0,
     "StarterPlayerScripts/DefensePreview.lua": 1,
     "StarterPlayerScripts/GlassFxClient.client.lua": 1,
     "StarterPlayerScripts/HudClient.client.lua": 6,
