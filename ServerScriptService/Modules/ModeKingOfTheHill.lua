@@ -60,12 +60,14 @@ local function height()
 	return ObjectiveZone.Height(mode)
 end
 
--- Live combatants of each team on the objective at `point` (objective A when nil).
+-- Live combatants of each team on the objective at `point` (objective A when nil). The second return is
+-- who they are, [token] = team, for the team-mode rewards (captures and time on the objective).
 function ModeKingOfTheHill.Occupancy(point)
 	local counts = { 0, 0 }
+	local inside = {}
 	point = point or (objectives[1] and objectives[1].position)
 	if not point then
-		return counts
+		return counts, inside
 	end
 	for character, token in pairs(Combatants.All()) do
 		local team = ModeTeams.TeamOf(token)
@@ -75,11 +77,26 @@ function ModeKingOfTheHill.Occupancy(point)
 			if humanoid and root and humanoid.Health > 0 then
 				if ObjectiveZone.Contains(mode, point, root.Position) then
 					counts[team] = counts[team] + 1
+					inside[token] = team
 				end
 			end
 		end
 	end
-	return counts
+	return counts, inside
+end
+
+-- The objective a point stands on, as its index and current owner (nil owner if nobody has taken it),
+-- or nil off every objective. For the rewards' "defending kill": an enemy killed on your team's objective.
+function ModeKingOfTheHill.ObjectiveAt(position)
+	if not position or not mode then
+		return nil
+	end
+	for index, objective in ipairs(objectives) do
+		if ObjectiveZone.Contains(mode, objective.position, position) then
+			return index, objective.owner
+		end
+	end
+	return nil
 end
 
 --------------------------------------------------------------------------------
@@ -332,18 +349,26 @@ function ModeKingOfTheHill.PadBonus()
 end
 
 -- One tick: captures, recolours, and returns the list of scoring teams (one entry per objective
--- owned), a status string for the HUD, and the counts on objective A.
+-- owned), a status string for the HUD, and the counts on objective A. The fifth return is for the
+-- rewards: per objective, { owner, status, inside = [token] = team, capturedBy = team or nil } -- capturedBy set
+-- only on the tick the objective changed hands.
 function ModeKingOfTheHill.Tick()
 	local scoring = {}
 	local owned = { 0, 0 }
 	local firstCounts = nil
-	for _, objective in ipairs(objectives) do
-		local counts = ModeKingOfTheHill.Occupancy(objective.position)
+	local presence = {}
+	for index, objective in ipairs(objectives) do
+		local counts, inside = ModeKingOfTheHill.Occupancy(objective.position)
 		firstCounts = firstCounts or counts
 		local alone, status = ModeKingOfTheHill.Holder(counts[1], counts[2])
+		local capturedBy = nil
+		if alone and objective.owner ~= alone then
+			capturedBy = alone
+		end
 		if alone then
 			objective.owner = alone
 		end
+		presence[index] = { owner = objective.owner, status = status, inside = inside, capturedBy = capturedBy }
 		objective.status = status
 		paint(objective)
 		if objective.owner then
@@ -355,7 +380,7 @@ function ModeKingOfTheHill.Tick()
 		objectives[1] and (objectives[1].owner and GameModes.TeamName(objectives[1].owner) or "open") or "-",
 		objectives[2] and (objectives[2].owner and GameModes.TeamName(objectives[2].owner) or "open") or "-")
 	local leader = owned[1] > owned[2] and 1 or (owned[2] > owned[1] and 2 or nil)
-	return leader, status, firstCounts or { 0, 0 }, scoring
+	return leader, status, firstCounts or { 0, 0 }, scoring, presence
 end
 
 function ModeKingOfTheHill.Stop()

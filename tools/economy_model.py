@@ -38,7 +38,7 @@ SOURCES = {
     SHARED + "ProgressionData.lua": "rank crates and the Cell Shop (brainrots bought with Brain Cells sell for coins)",
     MODULES + "VendorService.lua": "Rot Vendor prices (the in-match coin sink)",
     MODULES + "LobbyService.lua": "how often a lobby goal pays",
-    MODULES + "GameMode.lua": "what the respawn modes (TDM, King of the Hill) pay",
+    SHARED + "GameModes.lua": "the team modes' time limits",
     "ServerScriptService/Bootstrap.server.lua": "coins per lobby goal",
     "StarterPlayerScripts/MenuClient.client.lua": "whether the Robux Shop draws crate odds where it sells crates",
 }
@@ -55,6 +55,34 @@ PROFILES = {
     "strong": dict(win=0.20, spread=(0.0, 0.4), kills=5.0,
                    note="wins 1 in 5, otherwise always in the top 40%"),
 }
+# The team modes, the same three players (s.2b). A solo player on a side of bots, one match's worth
+# each, over the mode's full time limit. Team Deathmatch: first to 100 team kills among 15 a side is
+# ~6.7 kills a head for the winning side, so a middling player makes ~7, a weak one 2 and a strong
+# one 20 (respawns every 5 s). Objective Capture scores the hill, not kills: about 60% of the kills,
+# plus captures, seconds stood on an objective the team owns, and kills made defending one.
+# `active` is the share of participation checks that count: every respawn costs one check (a fresh
+# body is never movement) and a player dies a few times a match. `mvp` is how often they top their team.
+# `streak` is multi-kill coins a match (a double is 50).
+TEAM_MODES = ("TeamDeathmatch", "KingOfTheHill")
+TEAM_QUEST_STATS = ("teamMatches", "teamWins", "assists", "captures", "mvp")
+TEAM_PROFILES = {
+    "TeamDeathmatch": {
+        "loses only": dict(win=0.0, draw=0.0, kills=2, assists=1, revenges=0.3, streak=0, mvp=0.0, active=0.85),
+        "wins sometimes": dict(win=0.45, draw=0.1, kills=7, assists=3, revenges=1, streak=25, mvp=0.15, active=0.9),
+        "strong": dict(win=0.7, draw=0.05, kills=20, assists=5, revenges=2, streak=200, mvp=0.6, active=0.95),
+    },
+    "KingOfTheHill": {
+        "loses only": dict(win=0.0, draw=0.0, kills=1, assists=1, revenges=0.2, streak=0, mvp=0.0, active=0.85,
+                           captures=0.5, hold=30, defends=0.2),
+        "wins sometimes": dict(win=0.45, draw=0.1, kills=4, assists=2, revenges=0.6, streak=15, mvp=0.15, active=0.9,
+                               captures=2, hold=100, defends=1),
+        "strong": dict(win=0.7, draw=0.05, kills=12, assists=4, revenges=1.2, streak=120, mvp=0.6, active=0.95,
+                       captures=4, hold=180, defends=3),
+    },
+}
+# A team-mode hour may earn this much more or less than the same player's battle royale hour, coins
+# and Pass XP both. Outside it the report says so and the run exits 1.
+TEAM_BAND = 0.15
 HOURS_PER_DAY = 2          # hours played on a day they play; they play every day
 LOAD_SECONDS = 20          # map build plus the canopy descent: not measured, a guess
 MIN_ALIVE_SECONDS = 30     # even the first one out lasts this long
@@ -244,6 +272,14 @@ class Data:
         except LookupError:
             pass
         self.combatants = min(self.fill, self.max_players)
+        # The team modes' payout (TeamIncome) and the battle royale's own kill rate it pays kills at.
+        self.team = lua_table(text, r"^MatchConfig\.TeamModeRewards = \{", name)
+        self.team_at = self.team.at("win")
+        self.kill_coins, _ = lua_number(text, "MatchConfig.CoinsPerKill", name)
+        self.kill_xp, _ = lua_number(text, "MatchConfig.XpPerKill", name)
+        # A team match has no drop selection; everything else between matches is the same.
+        self.team_overhead = sum(lua_number(text, f"MatchConfig.{k}", name)[0]
+                                 for k in ("ResultsDuration", "Intermission", "AllReadyCountdown"))
         storm = lua_table(text, r"^MatchConfig\.StormPhases = \{", name).array()
         self.storm_seconds = sum(p["holdTime"] + p["shrinkTime"] for p in storm)
         self.overhead = sum(lua_number(text, f"MatchConfig.{k}", name)[0]
@@ -338,10 +374,9 @@ class Data:
         m, self.goal_coins_at = line_of(text, r'AwardBonusCoins\(player, (\d+), "GOAL!"\)', name)
         self.goal_coins = int(m.group(1))
 
-        text, name = self._t(MODULES + "GameMode.lua")
-        m, self.respawn_pay_at = line_of(text, r"local function awardResult\(.*?\n(.*?)\nend", name, re.S)
-        pay = re.search(r"coins = (\d+)", m.group(1))
-        self.respawn_coins = int(pay.group(1)) if pay else None
+        text, name = self._t(SHARED + "GameModes.lua")
+        modes = lua_table(text, r"^GameModes\.Modes = \{", name)
+        self.team_modes = {k: modes[k] for k in TEAM_MODES}
 
         menu = self.text["StarterPlayerScripts/MenuClient.client.lua"]
         self.shop_draws_odds = {}
@@ -550,7 +585,9 @@ class Income:
         self.jackpot_per_match = sum(s * jackpot_value(data.crates[c]) for c, s in crates.items())
         self.sell_per_match = sum(s * (sell_value(data, c, luck) - jackpot_value(data.crates[c])) for c, s in crates.items())
         self.per_hour = dict(kills=kills * self.mph, matches=self.mph, wins=profile["win"] * self.mph,
-                             top10=top10 * self.mph, crates=sum(crates.values()) * self.mph)
+                             top10=top10 * self.mph, crates=sum(crates.values()) * self.mph,
+                             # The team-mode quests: a battle royale player never finishes them.
+                             **{stat: 0 for stat in TEAM_QUEST_STATS})
         self._daily(luck)
         self.xp_per_hour = self.match_xp * self.mph + self.quest_xp / HOURS_PER_DAY
 
@@ -601,6 +638,71 @@ class Income:
     def earned(self):
         """The coins 2x SahurCoins doubles: everything but jackpots and sales."""
         return self.match_cash * self.mph + (self.quest_cash + self.spin_cash + self.weekly_cash / 7) / HOURS_PER_DAY
+
+
+class TeamIncome(Income):
+    """The same steady state for a team mode, from MatchConfig.TeamModeRewards, line for line as
+    RewardService.TeamBreakdown pays it (tools/team_rewards_check.py runs the real one)."""
+
+    def __init__(self, data, mode, profile, luck=1):
+        self.data, self.profile, self.mode = data, profile, mode
+        t = data.team
+        limit = data.team_modes[mode]["timeLimit"]
+        seconds = limit + data.team_overhead + LOAD_SECONDS
+        self.mph, self.minutes = 3600 / seconds, seconds / 60
+        shares = {"win": profile["win"], "draw": profile["draw"], "loss": 1 - profile["win"] - profile["draw"]}
+        cash = xp = 0.0
+        crates = {}
+        for outcome, share in shares.items():
+            r = t[outcome]
+            cash += share * r["coins"]
+            xp += share * r["xp"]
+            if r.get("crate"):
+                crates[r["crate"]] = crates.get(r["crate"], 0) + share
+        self.lines = {"result": (cash, xp)}
+
+        def line(name, coins, x):
+            self.lines[name] = (coins, x)
+
+        kills = min(profile["kills"], t["kill"]["cap"])  # bot kills: a solo player among bots
+        line("kills", kills * data.bot_kill_coins, kills * data.bot_kill_xp)
+        for key, rule in (("assists", "assist"), ("revenges", "revenge"), ("captures", "capture"), ("defends", "defend")):
+            n = min(profile.get(key, 0), t[rule]["cap"])
+            line(key, n * t[rule]["coins"], n * t[rule]["xp"])
+        line("streaks", min(profile["streak"], t["streak"]["cap"]), 0)
+        hold = min(profile.get("hold", 0), t["hold"]["capSeconds"])
+        line("hold", hold * t["hold"]["coinsPerSecond"], hold * t["hold"]["xpPerSecond"])
+        line("mvp", profile["mvp"] * t["mvp"]["coins"], profile["mvp"] * t["mvp"]["xp"])
+        p = t["participation"]
+        samples = math.floor(limit / p["sampleSeconds"] * profile["active"])
+        minutes = samples * p["sampleSeconds"] / 60
+        line("time", minutes * p["coinsPerMinute"], minutes * p["xpPerMinute"])
+
+        self.match_cash = sum(c for c, _ in self.lines.values())
+        self.match_xp = sum(x for _, x in self.lines.values())
+        self.jackpot_per_match = sum(s * jackpot_value(data.crates[c]) for c, s in crates.items())
+        self.sell_per_match = sum(s * (sell_value(data, c, luck) - jackpot_value(data.crates[c])) for c, s in crates.items())
+        # The kills quest counts every kill up to maxPaidKills (MatchService's live path).
+        self.per_hour = dict(kills=min(profile["kills"], t["maxPaidKills"]) * self.mph, matches=self.mph, wins=0, top10=0,
+                             crates=sum(crates.values()) * self.mph, teamMatches=self.mph,
+                             teamWins=profile["win"] * self.mph, assists=profile["assists"] * self.mph,
+                             captures=profile.get("captures", 0) * self.mph, mvp=profile["mvp"] * self.mph)
+        self._daily(luck)
+        self.xp_per_hour = self.match_xp * self.mph + self.quest_xp / HOURS_PER_DAY
+
+
+def team_comparison(data, incomes):
+    """Every team mode and profile against the same profile's battle royale hour: (mode, profile,
+    team income, coins ratio, XP ratio, in band)."""
+    rows = []
+    for mode in TEAM_MODES:
+        for name, profile in TEAM_PROFILES[mode].items():
+            team, br = TeamIncome(data, mode, profile), incomes[name]
+            coins = (team.match_cash + team.jackpot_per_match) * team.mph / ((br.match_cash + br.jackpot_per_match) * br.mph)
+            xp = team.match_xp * team.mph / (br.match_xp * br.mph)
+            ok = abs(coins - 1) <= TEAM_BAND and abs(xp - 1) <= TEAM_BAND
+            rows.append((mode, name, team, coins, xp, ok))
+    return rows
 
 
 def one_offs(data, income, hours):
@@ -854,9 +956,25 @@ def report(data, n):
     goal_hour = 3600 / data.goal_cooldown * data.goal_coins
     print(f"  Lobby football, never readying: up to {fmt(goal_hour)} coins/h ({data.goal_coins} a goal "
           f"{data.goal_coins_at}, one per {data.goal_cooldown} s {data.goal_cooldown_at}).")
-    print(f"  Team Deathmatch and King of the Hill pay {data.respawn_coins} coins a match ({data.respawn_pay_at}). The battle"
-          f" royale's rate for them to match, match coins a minute of play: "
+    print(f"  The battle royale's match coins a minute of play, which the team modes are held to (s.2b): "
           + ", ".join(f"{k} {(inc.match_cash + inc.jackpot_per_match) * inc.mph / 60:.0f}" for k, inc in incomes.items()) + ".")
+    print()
+    print(f"2b. TEAM MODES AGAINST THE BATTLE ROYALE (MatchConfig.TeamModeRewards, {data.team_at}; band ±{TEAM_BAND * 100:.0f}%)")
+    print(f"  {'mode':15} {'profile':15} {'match/h':>7} {'coins/h':>8} {'BR':>8} {'ratio':>6} {'XP/h':>7} {'BR':>7} {'ratio':>6}"
+          f" {'cash/h':>8} {'if sold/h':>9}")
+    rows = team_comparison(data, incomes)
+    for mode, name, team, coins, xp, ok in rows:
+        br = incomes[name]
+        print(f"  {mode:15} {name:15} {team.mph:7.2f} {fmt((team.match_cash + team.jackpot_per_match) * team.mph):>8} "
+              f"{fmt((br.match_cash + br.jackpot_per_match) * br.mph):>8} {coins:6.2f} {fmt(team.match_xp * team.mph):>7} "
+              f"{fmt(br.match_xp * br.mph):>7} {xp:6.2f} {fmt(team.cash):>8} {fmt(team.sold):>9}"
+              + ("" if ok else "   <- OUT OF BAND"))
+    for mode in TEAM_MODES:
+        mid = next(r[2] for r in rows if r[0] == mode and r[1] == "wins sometimes")
+        print(f"    {mode}, wins sometimes, one match: " + ", ".join(
+            f"{k} {c:.0f}c/{x:.0f}xp" for k, (c, x) in mid.lines.items() if c or x))
+    print(f"  {sum(1 for r in rows if r[5])} of {len(rows)} in band. coins/h and XP/h are match pay only (the daily extras"
+          f" are the same whichever mode); cash/h and if sold/h add them, as in s.2.")
     cells = sum(slot["price"] * slot["limit"] for slot in data.cell_shop if slot["kind"] == "Brainrot")
     coins = sum(data.sell_mean[slot["rarity"]] * slot["limit"] for slot in data.cell_shop if slot["kind"] == "Brainrot")
     print(f"  The Cell Shop's brainrots, bought every day and sold: {fmt(cells)} Brain Cells -> {fmt(coins)} coins "
@@ -1067,6 +1185,22 @@ def plant(root, n):
     check("odds drawn on the Robux Shop", planted.shop_draws_odds["renderRobuxShop"] and not base.shop_draws_odds["renderRobuxShop"],
           f"renderRobuxShop draws odds: before {base.shop_draws_odds['renderRobuxShop']}, after {planted.shop_draws_odds['renderRobuxShop']}")
 
+    # 6. The team modes are held to the battle royale's hour. A team win paying three times over must put
+    # somebody out of the band, and so must a loss paying four times over (the player who never wins), and
+    # the unplanted build must be inside it (the band is not simply always failing).
+    incomes = {k: Income(base, p, base_n) for k, p in PROFILES.items()}
+    clean = [r for r in team_comparison(base, incomes) if not r[5]]
+    for label, old, new in (("team win coins tripled", f"coins = {base.team['win']['coins']}, xp",
+                             f"coins = {base.team['win']['coins'] * 3}, xp"),
+                            ("team loss coins quadrupled", f"coins = {base.team['loss']['coins']}, xp",
+                             f"coins = {base.team['loss']['coins'] * 4}, xp")):
+        tmp = _copy(root)
+        _edit(tmp, SHARED + "MatchConfig.lua", old, new)
+        planted = Data(tmp)
+        out = [f"{m} {n} coins x{c:.2f} XP x{x:.2f}" for m, n, _, c, x, ok in
+               team_comparison(planted, {k: Income(planted, p, base_n) for k, p in PROFILES.items()}) if not ok]
+        check(label, bool(out) and not clean, f"{len(out)} of 6 out of band ({'; '.join(out[:2])}); unplanted {len(clean)} out")
+
     print(f"economy_model plant: {sum(results)} of {len(results)} planted faults fired")
     return all(results)
 
@@ -1080,7 +1214,10 @@ def main():
     if "--plant" in args:
         sys.exit(0 if plant(root, n) else 1)
     data = Data(root)
-    report(data, n or data.combatants)
+    incomes, *_ = report(data, n or data.combatants)
+    # The one hard rule the model enforces: no team mode out of the battle royale's band (s.2b).
+    if any(not r[5] for r in team_comparison(data, incomes)):
+        sys.exit("economy_model: a team mode pays outside the battle royale's band (s.2b)")
 
 
 if __name__ == "__main__":

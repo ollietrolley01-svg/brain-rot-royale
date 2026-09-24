@@ -15,6 +15,11 @@
 --   goals     goals scored on the lobby pitch        landmarkChests  chests opened inside a landmark
 --   builds    portable defenses built (mines too)    barrels   explosive barrels you set off
 --   vendor    Rot Vendor purchases                   hazardKills  eliminations by barrel or Rot Mine
+-- The team modes (RewardService.AwardTeamResult, at the end of a Team Deathmatch or Objective Capture; not
+-- counted for a player idle most of the match):
+--   teamMatches  team matches played                 teamWins  team matches won
+--   assists      assists                             captures  objectives captured (Objective Capture)
+--   mvp          times the team's MVP
 --
 -- Titles use %d for the target; the ones without a number ignore it.
 
@@ -36,6 +41,7 @@ QuestData.Pool = {
 		{ id = "builds3", stat = "builds", target = 3, title = "Build %d portable defenses", coins = 400, xp = 150 },
 		{ id = "barrels2", stat = "barrels", target = 2, title = "Blow up %d explosive barrels", coins = 400, xp = 150 },
 		{ id = "vendor2", stat = "vendor", target = 2, title = "Buy %d things from a Rot Vendor", coins = 400, xp = 150 },
+		{ id = "team2", stat = "teamMatches", target = 2, title = "Play %d team matches", coins = 400, xp = 150 },
 	},
 	medium = {
 		{ id = "kills12", stat = "kills", target = 12, title = "Eliminate %d opponents", coins = 900, xp = 300 },
@@ -49,6 +55,8 @@ QuestData.Pool = {
 		{ id = "landmark8", stat = "landmarkChests", target = 8, title = "Open %d chests at landmarks", coins = 900, xp = 300 },
 		{ id = "hazard2", stat = "hazardKills", target = 2, title = "Eliminate %d opponents with barrels or mines", coins = 900, xp = 300 },
 		{ id = "barrels6", stat = "barrels", target = 6, title = "Blow up %d explosive barrels", coins = 900, xp = 300 },
+		{ id = "assists6", stat = "assists", target = 6, title = "Get %d assists in team matches", coins = 900, xp = 300 },
+		{ id = "captures3", stat = "captures", target = 3, title = "Capture %d objectives in Objective Capture", coins = 900, xp = 300 },
 	},
 	hard = {
 		{ id = "win1", stat = "wins", target = 1, title = "Win a match", coins = 2000, xp = 600 },
@@ -59,6 +67,8 @@ QuestData.Pool = {
 		{ id = "obby3", stat = "obby", target = 3, title = "Clear the Cloud Climb %d times", coins = 2000, xp = 600 },
 		{ id = "crates5", stat = "crates", target = 5, title = "Open %d crates", coins = 2000, xp = 600 },
 		{ id = "hazard5", stat = "hazardKills", target = 5, title = "Eliminate %d opponents with barrels or mines", coins = 2000, xp = 600 },
+		-- Three, where the battle royale's is one: a team match is won about half the time.
+		{ id = "teamwins3", stat = "teamWins", target = 3, title = "Win %d team matches", coins = 2000, xp = 600 },
 	},
 }
 
@@ -76,6 +86,8 @@ QuestData.WeeklyPool = {
 	{ id = "w_items60", stat = "items", target = 60, title = "Use %d heals, shields or items", coins = 4000, xp = 1200, crate = "Epic" },
 	{ id = "w_hazard10", stat = "hazardKills", target = 10, title = "Eliminate %d opponents with barrels or mines", coins = 4000, xp = 1200, crate = "Epic" },
 	{ id = "w_vendor12", stat = "vendor", target = 12, title = "Buy %d things from Rot Vendors", coins = 3000, xp = 900, crate = "Rare" },
+	{ id = "w_teamwins10", stat = "teamWins", target = 10, title = "Win %d team matches", coins = 5000, xp = 1500, crate = "Epic" },
+	{ id = "w_mvp3", stat = "mvp", target = 3, title = "Be your team's MVP %d times", coins = 5000, xp = 1500, crate = "Epic" },
 }
 
 QuestData.TierOrder = { "easy", "medium", "hard" }

@@ -11,6 +11,9 @@
 --     elimination, damage taken, chests, companion damage (only the ones that happened, after the
 --     first two)
 --   * rewards as chips: crate in its rarity colour, coins, Pass XP, Rot Rank (nothing that is zero)
+--   * in the team modes, every line of the pay above the chips (result, kills, assists, multi-kills,
+--     revenge, captures, time on the objective, defends, MVP, time played), each MVP by name, and one
+--     row of stat tiles rather than two so the card still fits a phone
 --   * a countdown back to the lobby and a close button
 -- Confetti on a win. Scales down to fit a phone.
 --
@@ -47,6 +50,12 @@ local matchChanged = Remotes.Event("MatchChanged")
 
 local SHOW_FOR = 12 -- seconds; the server's results phase is 15
 local CARD_WIDTH = 580
+-- The crate tile, and the team modes' shorter one; the reward breakdown's row height, the most lines it
+-- draws (RewardService.TeamBreakdown makes at most 11), and the width of its right-hand "paid" column.
+-- Sized so the tallest team card fits a 640x360 phone at a scale of 0.5 or more, clear of fitScale's 0.45
+-- floor where the card would start to leave the screen (tools/team_rewards_layout_check.py).
+local CRATE_TILE, CRATE_TILE_TEAM = 92, 64
+local BREAKDOWN_ROW, BREAKDOWN_MAX, BREAKDOWN_PAID = 18, 12, 112
 local GOLD = C.Accent
 local CONFETTI_COLORS = { C.Accent, C.Green, C.Storm, C.Red, R.Info, Color3.fromRGB(255, 255, 255) }
 
@@ -414,6 +423,16 @@ local function render(result)
 		if teams.target then
 			sub = string.format("First to %d", teams.target)
 		end
+		-- Each side's MVP (GameMode.pickMvps), a list of { team, name }.
+		local mvpNames = {}
+		for _, entry in ipairs(type(teams.mvps) == "table" and teams.mvps or {}) do
+			if type(entry) == "table" and entry.name then
+				table.insert(mvpNames, tostring(entry.name))
+			end
+		end
+		if #mvpNames > 0 then
+			sub = (sub and sub .. "   •   " or "") .. "MVP " .. table.concat(mvpNames, ", ")
+		end
 	end
 	if sub then
 		label({
@@ -421,6 +440,7 @@ local function render(result)
 			Font = Enum.Font.GothamBold,
 			TextSize = 16,
 			TextColor3 = R.TextMuted,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			Text = sub,
 			LayoutOrder = 4,
 			Parent = card,
@@ -456,8 +476,9 @@ local function render(result)
 	if (result.companionDamage or 0) > 0 then
 		table.insert(stats, { result.companionDamage, "Companion dmg", whole, C.Green })
 	end
-	-- Three to a row; two rows at most.
-	while #stats > 6 do
+	-- Three to a row; two rows at most. One in a team mode, where the reward breakdown below needs the room
+	-- on a phone (tools/team_rewards_layout_check.py).
+	while #stats > (teamMode and 3 or 6) do
 		table.remove(stats)
 	end
 	local grid = create("Frame", {
@@ -492,7 +513,8 @@ local function render(result)
 	if (result.eggsTotal or 0) > 0 then
 		table.insert(extras, string.format("Easter eggs %d / %d", result.eggsFound or 0, result.eggsTotal))
 	end
-	if #extras > 0 then
+	-- Not in a team mode: the breakdown takes its room.
+	if #extras > 0 and not teamMode then
 		label({
 			Size = UDim2.new(1, 0, 0, 16),
 			Font = Enum.Font.GothamMedium,
@@ -510,8 +532,10 @@ local function render(result)
 	local reward = result.reward
 	if reward and reward.crate then
 		local tint = Rarity.Color(reward.crate)
+		-- Shorter in a team mode, for the breakdown's room.
+		local tileHeight = teamMode and CRATE_TILE_TEAM or CRATE_TILE
 		local tile = create("Frame", {
-			Size = UDim2.new(1, 0, 0, 92),
+			Size = UDim2.new(1, 0, 0, tileHeight),
 			BackgroundColor3 = tint,
 			BackgroundTransparency = 0.86,
 			BorderSizePixel = 0,
@@ -523,7 +547,7 @@ local function render(result)
 		})
 		local viewport = create("ViewportFrame", {
 			Position = UDim2.fromOffset(10, 6),
-			Size = UDim2.fromOffset(96, 80),
+			Size = UDim2.fromOffset(96, tileHeight - 12),
 			BackgroundTransparency = 1,
 			Ambient = Color3.fromRGB(170, 170, 182),
 			LightColor = Color3.fromRGB(255, 250, 240),
@@ -553,7 +577,7 @@ local function render(result)
 			end
 		end
 		label({
-			Position = UDim2.fromOffset(118, 18),
+			Position = UDim2.fromOffset(118, tileHeight / 2 - 28),
 			Size = UDim2.new(1, -130, 0, 32),
 			Font = Enum.Font.FredokaOne,
 			TextSize = 28,
@@ -563,7 +587,7 @@ local function render(result)
 			Parent = tile,
 		})
 		label({
-			Position = UDim2.fromOffset(118, 52),
+			Position = UDim2.fromOffset(118, tileHeight / 2 + 6),
 			Size = UDim2.new(1, -130, 0, 18),
 			Font = Enum.Font.GothamMedium,
 			TextSize = 14,
@@ -573,7 +597,82 @@ local function render(result)
 			Parent = tile,
 		})
 	end
-	local rewardRow = row(8, nil)
+	-- The team modes' itemised pay (RewardService.TeamBreakdown): every line the card paid, two to a row,
+	-- name on the left and what it paid on the right. The chips below are the totals, which the lines sum
+	-- to exactly (a 2x SahurCoins pass is a line of its own).
+	local lines = reward and type(reward.lines) == "table" and reward.lines or nil
+	if lines and #lines > 0 then
+		local breakdown = create("Frame", {
+			Name = "Breakdown",
+			Size = UDim2.new(1, 0, 0, 0),
+			AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			LayoutOrder = 8,
+			Parent = card,
+		}, {
+			create("UIGridLayout", {
+				CellSize = UDim2.new(0.5, -5, 0, BREAKDOWN_ROW),
+				CellPadding = UDim2.fromOffset(10, 3),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+		})
+		for index, line in ipairs(lines) do
+			if index > BREAKDOWN_MAX then
+				break
+			end
+			local name = tostring(line.label or "")
+			local count = tonumber(line.count)
+			if count and line.id == "hold" then
+				name ..= string.format(" %ds", count)
+			elseif count and line.id == "time" then
+				name ..= string.format(" %d min", count)
+			elseif count and count > 0 then
+				name ..= string.format(" ×%d", count)
+			end
+			local coins, xp = tonumber(line.coins) or 0, tonumber(line.xp) or 0
+			local paid
+			if coins > 0 and xp > 0 then
+				paid = string.format("+%s  ·  %s XP", formatNumber(coins), formatNumber(xp))
+			elseif xp > 0 then
+				paid = string.format("+%s XP", formatNumber(xp))
+			else
+				paid = "+" .. formatNumber(coins)
+			end
+			local cell = create("Frame", {
+				BackgroundColor3 = R.Surface,
+				-- The grid sizes the cell; the same size written here keeps a measuring harness honest.
+				Size = UDim2.new(0.5, -5, 0, BREAKDOWN_ROW),
+				BackgroundTransparency = line.id == "result" and 0 or 0.4,
+				BorderSizePixel = 0,
+				LayoutOrder = index,
+				Parent = breakdown,
+			}, { rounded(6) })
+			label({
+				Position = UDim2.fromOffset(8, 0),
+				Size = UDim2.new(1, -(BREAKDOWN_PAID + 12), 1, 0),
+				Font = line.id == "result" and Enum.Font.GothamBlack or Enum.Font.GothamBold,
+				TextSize = 13,
+				TextColor3 = (line.id == "result" or line.id == "mvp") and headColor or R.Text,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Text = name,
+				Parent = cell,
+			})
+			label({
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -8, 0, 0),
+				Size = UDim2.new(0, BREAKDOWN_PAID, 1, 0),
+				Font = Enum.Font.GothamBold,
+				TextSize = 12,
+				TextColor3 = GOLD,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				Text = paid,
+				Parent = cell,
+			})
+		end
+	end
+
+	local rewardRow = row(9, nil)
 	rewardRow:FindFirstChildOfClass("UIListLayout").Wraps = true
 	local any = false
 	if reward then
@@ -621,7 +720,7 @@ local function render(result)
 	local footer = create("Frame", {
 		Size = UDim2.new(1, 0, 0, 36),
 		BackgroundTransparency = 1,
-		LayoutOrder = 9,
+		LayoutOrder = 10,
 		Parent = card,
 	})
 	local countdown = label({
