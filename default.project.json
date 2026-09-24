@@ -17,6 +17,10 @@
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
         "$path": "StarterPlayerScripts"
+      },
+      "StarterCharacterScripts": {
+        "$className": "StarterCharacterScripts",
+        "$path": "StarterCharacterScripts"
       }
     }
   }

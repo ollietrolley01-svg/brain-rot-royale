@@ -429,7 +429,10 @@ def check(root, sources, dump=False, quiet=False):
     world = World(root, SIZES[0], sources)
     world.play()
     me = world.run("""
+        -- Toasts queue (HudClient's toast block): each line is held up a while before the next may
+        -- replace it. Let the one before go first, so the label shows THIS bounty's line.
         local function toastFor(info)
+            W.advance(5)
             W.fire('Bounty', info)
             return W.lastToast()
         end

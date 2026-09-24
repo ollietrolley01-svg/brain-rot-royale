@@ -1,5 +1,7 @@
--- The lobby vote: three MODE + MAP pairs go up during the countdown, one card per mode (Battle
--- Royale, Team Deathmatch, King of the Hill, in a shuffled order) on three distinct random maps.
+-- The lobby vote: three MODE + MAP pairs go up when the break after a match begins (MatchService opens
+-- it at Intermission, or at the countdown on a fresh server) and stay up until the match starts, one
+-- card per mode (Battle Royale, Team Deathmatch, King of the Hill, in a shuffled order) on three
+-- distinct random maps.
 -- Most votes wins; a tie among the leaders is broken at random; a vote nobody cast resolves to the
 -- Battle Royale card, because that is the main game. Only readied players' votes count: someone
 -- staying in the lobby does not pick the match's mode. Bots never reach this module — votes arrive
@@ -195,8 +197,8 @@ function VoteService.Open()
 	VoteService.Broadcast()
 end
 
--- Called twice by MatchService: after Resolve() when a match starts (the broadcast then carries the
--- winner), and when a countdown is cancelled (no Resolve, so no winner).
+-- Called by MatchService after Resolve() when a match starts (the broadcast then carries the winner),
+-- and when a start fails before that (no Resolve, so no winner). A cancelled countdown leaves it open.
 function VoteService.Close()
 	open = false
 	VoteService.Broadcast()

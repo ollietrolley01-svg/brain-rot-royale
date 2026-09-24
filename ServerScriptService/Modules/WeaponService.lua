@@ -69,6 +69,19 @@ WeaponService.ThrowEffect = function()
 	return false
 end
 
+-- Set by MatchService: told when a player fires a round, starts a reload or uses an item, which is
+-- playing even standing still (the battle royale's AFK rule). nil costs nothing.
+WeaponService.OnActivity = nil
+
+function WeaponService.NoteActivity(player)
+	if WeaponService.OnActivity then
+		local ok, err = pcall(WeaponService.OnActivity, player)
+		if not ok then
+			warn("[WeaponService] activity listener failed: " .. tostring(err))
+		end
+	end
+end
+
 local loadouts = {}
 local lastInstantAt = {}
 -- Players with a PushSoon waiting for the end of this frame.
@@ -1864,6 +1877,7 @@ function WeaponService.ConsumeAmmo(player)
 	end
 	slot.mag -= 1
 	WeaponService.PushSoon(player)
+	WeaponService.NoteActivity(player)
 	return true
 end
 
@@ -1878,6 +1892,7 @@ function WeaponService.Reload(player)
 	end
 
 	loadout.reloading = true
+	WeaponService.NoteActivity(player)
 	if player.Character then player.Character:SetAttribute("Reloading", def.reloadTime); player.Character:SetAttribute("ReloadEmpty", slot.mag <= 0) end -- #13: other clients pose this reload
 	loadout.reloadToken += 1
 	local token = loadout.reloadToken
@@ -2023,6 +2038,7 @@ function WeaponService.StartUse(player, aimPoint, slotIndex)
 		end
 		lastInstantAt[player] = now
 		spendAndFinish(player, loadout, index, item)
+		WeaponService.NoteActivity(player)
 		return true
 	end
 
@@ -2030,6 +2046,7 @@ function WeaponService.StartUse(player, aimPoint, slotIndex)
 	local token = loadout.useToken
 	loadout.using = { index = index, id = item.id, startedAt = os.clock(), duration = item.useTime }
 	WeaponService.Push(player)
+	WeaponService.NoteActivity(player)
 
 	task.delay(item.useTime, function()
 		-- Only the use that's still current finishes: a swap, a new match or a replaced stack
