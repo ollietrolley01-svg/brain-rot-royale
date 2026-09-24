@@ -849,6 +849,24 @@ function VehicleDynamics.Step(rig, input, dt)
 			rig.balance.CFrame = CFrame.fromMatrix(Vector3.zero, targetUp, flatForward)
 		end
 		rig.balance.MaxTorque = mass * BALANCE_TORQUE
+
+		-- Oliver: "the bikes fall over when you drive them". The tyre forces go in at the hubs, about
+		-- a stud below the chassis's centre of mass, and a bike's body is a stud wide, so it has next
+		-- to no roll inertia to resist them. The first frame of a turn, before the lean has caught up,
+		-- the sideways grip at the hubs is a roll torque many times what the Balance constraint holds
+		-- at a sensible angle, and it rolled the bike OUT of the turn and onto its side in about a
+		-- tenth of a second (tools/bike_balance_sim.py: every bike, every turn). On a real bike the
+		-- rider's countersteer puts the lean in first; here the lean is the constraint's job alone,
+		-- so the part of the tyre forces that would roll the body is taken back out and the Balance
+		-- is left to set the lean on its own. Pitch (squat, dive, bumps) is left as it is. The
+		-- chassis is the only part of a vehicle with mass (VehicleModels' Builder:hull, and riders
+		-- are made Massless), so its position is the centre of mass.
+		local roll = 0
+		for _, wheel in ipairs(wheels) do
+			local arm = frame:PointToWorldSpace(wheel.mount) - chassis.Position
+			roll += arm:Cross(wheel.force.Force):Dot(bodyForward)
+		end
+		torque -= bodyForward * roll
 	end
 
 	rig.torque.Torque = torque

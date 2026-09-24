@@ -25,8 +25,9 @@ valid after the fix.
 Usage:  python3 tools/vehicle_stability_sim.py [--source PATH] [--verbose]
 Exit 0 when the real source passes every course and the planted fault is caught.
 
-Not modelled (say so, don't assume): bikes (their balance is an AlignOrientation solved inside
-Roblox's constraint solver), network ownership, tyre/body collision friction, lateral steering.
+Not modelled (say so, don't assume): bikes (their balance is an AlignOrientation; see
+tools/bike_balance_sim.py, which reuses this file's mocks and ground), network ownership, tyre/body
+collision friction, lateral steering.
 """
 import argparse
 import math
