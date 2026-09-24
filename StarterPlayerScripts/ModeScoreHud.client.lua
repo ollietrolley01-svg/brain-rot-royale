@@ -102,11 +102,15 @@ local rightValue, rightFill = side(1, Enum.TextXAlignment.Right)
 -- the enemy red. The team names stay in the tags so a callout of "Blue is pushing" still means something.
 local FRIEND = Color3.fromRGB(80, 230, 110)
 local ENEMY = Color3.fromRGB(232, 92, 92)
+-- The tags leave the middle of their row to the objectives line (OBJECTIVES_W, King of the Hill only),
+-- and say the team's short name ("YOUR TEAM · EMBER"), which fits beside it.
+local OBJECTIVES_W = 110
 local function tag(anchorX, align)
 	return create("TextLabel", {
 		AnchorPoint = Vector2.new(anchorX, 0),
 		Position = UDim2.new(anchorX, 0, 1, 3),
-		Size = UDim2.fromOffset(200, 16),
+		Size = UDim2.fromOffset((WIDTH - OBJECTIVES_W) / 2 - 4, 16),
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBlack,
 		Text = "",
@@ -125,6 +129,74 @@ local sideStroke = create("Frame", {
 	BorderSizePixel = 0,
 	Parent = root,
 }, { UiKit.rounded(Radius.Pill) })
+
+-- Who holds each objective (#86 C37), in the middle of the tags row: "A YOU  B OPEN", each word in its
+-- side's colour. The scoreline's lead says who is ahead; this says where to go. It reads the server's
+-- own status string (ModeKingOfTheHill.Tick: "A Ember Squad · B open"), the only per-objective state
+-- that reaches the client today.
+local objectivesLabel = create("TextLabel", {
+	Name = "Objectives",
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 1, 3),
+	Size = UDim2.fromOffset(OBJECTIVES_W, 16),
+	BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBlack,
+	RichText = true,
+	Text = "",
+	TextColor3 = Role.TextMuted,
+	TextSize = 12,
+	TextStrokeTransparency = 0.4,
+	Visible = false,
+	Parent = root,
+})
+
+local function shortName(index)
+	local team = GameModes.Teams[index]
+	return team and team.short or string.upper(GameModes.TeamName(index))
+end
+
+local function hex(colour)
+	return string.format("#%02X%02X%02X", math.floor(colour.R * 255 + 0.5), math.floor(colour.G * 255 + 0.5),
+		math.floor(colour.B * 255 + 0.5))
+end
+
+-- Each lettered objective's owner from the status string: a team index, false for open, or absent.
+local function objectiveOwners(status)
+	local owners = {}
+	for _, letter in ipairs({ "A", "B" }) do
+		local word = string.match(status, "%f[%w]" .. letter .. " (.-) · ") or string.match(status, "%f[%w]" .. letter .. " (.-)$")
+		if word == "open" then
+			owners[letter] = false
+		elseif word == GameModes.TeamName(1) then
+			owners[letter] = 1
+		elseif word == GameModes.TeamName(2) then
+			owners[letter] = 2
+		end
+	end
+	return owners
+end
+
+local function objectivesLine(status, mine, friend, enemy)
+	if type(status) ~= "string" then
+		return ""
+	end
+	local owners = objectiveOwners(status)
+	local parts = {}
+	for _, letter in ipairs({ "A", "B" }) do
+		local owner = owners[letter]
+		if owner ~= nil then
+			local word, colour = "OPEN", Role.TextMuted
+			if owner and (mine == 1 or mine == 2) then
+				word = owner == mine and "YOU" or "FOE"
+				colour = owner == mine and friend or enemy
+			elseif owner then
+				word, colour = shortName(owner), GameModes.TeamColor(owner)
+			end
+			table.insert(parts, string.format('%s <font color="%s">%s</font>', letter, hex(colour), word))
+		end
+	end
+	return table.concat(parts, "  ")
+end
 
 local function myTeam()
 	local character = player.Character
@@ -247,11 +319,14 @@ local function render(state)
 	sideStroke.Visible = known
 	leftTag.Visible, rightTag.Visible = known, known
 	if known then
-		leftTag.Text = "YOUR TEAM · " .. string.upper(GameModes.TeamName(left))
+		leftTag.Text = "YOUR TEAM · " .. shortName(left)
 		leftTag.TextColor3 = FRIEND
-		rightTag.Text = "ENEMY · " .. string.upper(GameModes.TeamName(right))
+		rightTag.Text = "ENEMY · " .. shortName(right)
 		rightTag.TextColor3 = ENEMY
 	end
+
+	objectivesLabel.Text = koth and objectivesLine(state.hillStatus, mine, FRIEND, ENEMY) or ""
+	objectivesLabel.Visible = objectivesLabel.Text ~= ""
 
 	if koth then
 		-- "Who has held it longest and by how much", said as a gap rather than two numbers to
