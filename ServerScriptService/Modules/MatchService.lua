@@ -657,6 +657,16 @@ local function groundUnder(character, humanoid, root, extra)
 	return workspace:Raycast(root.Position, Vector3.new(0, -(humanoid.HipHeight + root.Size.Y / 2 + (extra or 1.5)), 0), groundParams)
 end
 
+-- Standing on something. A bot's humanoid is simulated here, so its FloorMaterial is exact and costs
+-- no ray (fifty sprinting bots were 500 rays a second); a player's body is simulated on their client,
+-- so it is measured.
+local function onGround(token, character, humanoid, root)
+	if Combatants.IsPlayer(token) then
+		return groundUnder(character, humanoid, root) ~= nil
+	end
+	return humanoid.FloorMaterial ~= Enum.Material.Air
+end
+
 local function tokenGone(token)
 	if Combatants.IsPlayer(token) then
 		return token.Parent == nil
@@ -700,7 +710,7 @@ local function tickStamina(dt)
 				-- off a rocket, a pad or a glider with sprint still held or toggled on.
 				draining = velocity ~= nil and humanoid ~= nil and not humanoid.Sit
 					and Vector3.new(velocity.X, 0, velocity.Z).Magnitude > STAMINA.MovingSpeed
-					and groundUnder(character, humanoid, root) ~= nil
+					and onGround(token, character, humanoid, root)
 			end
 			if draining then
 				entry.value = math.max(entry.value - STAMINA.SprintDrainPerSecond * dt, 0)
@@ -885,14 +895,30 @@ function MatchService.SetStatusSpeed(token, key, factor, duration)
 		statusSpeeds[token] = effects
 	end
 	local untilTime = os.clock() + math.min(duration, 60)
-	effects[key] = { factor = factor, untilTime = untilTime }
+	-- The same effect refreshed (a companion's speed boon re-applies it every 0.2 s): only the end moves.
+	-- A new table, a speed write and a fresh 5 s timer per refresh left ~25 timers live per owner.
+	local existing = effects[key]
+	if existing and existing.factor == factor then
+		existing.untilTime = math.max(existing.untilTime, untilTime)
+		return true
+	end
+	local entry = { factor = factor, untilTime = untilTime }
+	effects[key] = entry
 	applySpeed(token)
-	task.delay(math.min(duration, 60), function()
+	-- One timer per effect: it re-arms for whatever a refresh added, and stands down once replaced.
+	local function expire()
 		local current = statusSpeeds[token]
-		if current and current[key] and current[key].untilTime == untilTime then
-			applySpeed(token)
+		if not current or current[key] ~= entry then
+			return
 		end
-	end)
+		local left = entry.untilTime - os.clock()
+		if left > 0.05 then
+			task.delay(left, expire)
+			return
+		end
+		applySpeed(token)
+	end
+	task.delay(math.min(duration, 60), expire)
 	return true
 end
 
@@ -1715,6 +1741,7 @@ local function startMatch()
 	end
 
 	for index, player in ipairs(joining) do
+		LobbyService.ClearClimb(player)
 		task.spawn(function()
 			-- The opening body: state is already InProgress by the time it arrives, and without this mark
 			-- OnCharacterAdded would run the respawn path (place + kit) and PlaceAtStart below would do
@@ -1722,7 +1749,9 @@ local function startMatch()
 			-- thread moves on, so clearing it here would be too early); a timer clears it if it never does.
 			local openingStamp = os.clock()
 			player:SetAttribute("OpeningSpawn", openingStamp)
-			task.delay(3, function()
+			-- Longer than the waits below (10 s for the body, 10 s for its Humanoid), so a slow load
+			-- can't outlast the mark and be treated as a respawn.
+			task.delay(25, function()
 				if player:GetAttribute("OpeningSpawn") == openingStamp then
 					player:SetAttribute("OpeningSpawn", nil)
 				end

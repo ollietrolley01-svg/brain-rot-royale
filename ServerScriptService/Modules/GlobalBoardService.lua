@@ -37,8 +37,13 @@ local function nameFor(userId)
 	local ok, name = pcall(function()
 		return Players:GetNameFromUserIdAsync(userId)
 	end)
-	names[userId] = ok and name or ("Player " .. tostring(userId))
-	return names[userId]
+	-- Only a real name is kept: a throttled lookup is tried again next refresh rather than showing
+	-- "Player 123" for the rest of the server's life.
+	if ok and name then
+		names[userId] = name
+		return name
+	end
+	return "Player " .. tostring(userId)
 end
 
 -- Records a player's win total. Fire-and-forget; a failure just means the board lags.
@@ -68,7 +73,9 @@ function GlobalBoardService.Top(count)
 		return ordered:GetSortedAsync(false, count):GetCurrentPage()
 	end)
 	if not ok then
-		return nil
+		-- A hiccup on a live server keeps the last good board (nil means "no store" to the lobby,
+		-- which blanks it to the Studio message). cachedAt is left alone, so the next ask retries.
+		return cached
 	end
 	local list = {}
 	for _, entry in ipairs(page) do

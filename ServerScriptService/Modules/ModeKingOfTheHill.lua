@@ -224,6 +224,11 @@ end
 -- Lifecycle
 --------------------------------------------------------------------------------
 
+-- An objective stays this far from either base (LootService.BaseRadius 85 plus room to fight in),
+-- and its nearer base is at least this share as far as the other one.
+local BASE_CLEARANCE = 145
+local BASE_FAIRNESS = 0.6
+
 local function groundAt(site)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
@@ -248,6 +253,17 @@ function ModeKingOfTheHill.Start(currentMode, mapInfo)
 		end
 		for _, existing in ipairs(candidates) do
 			if (flat(point) - existing).Magnitude < SITE_GAP then
+				return false
+			end
+		end
+		-- Fair to both teams: clear of each base's loot ring, and not much nearer one base than the
+		-- other. A landmark beside a base handed that team the objective (and its respawns, which
+		-- PadBonus steers toward it) while the other side crossed the whole arena.
+		local baseA, baseB = ModeTeams.BaseOf(1), ModeTeams.BaseOf(2)
+		if baseA and baseB then
+			local toA = (flat(point) - flat(baseA)).Magnitude
+			local toB = (flat(point) - flat(baseB)).Magnitude
+			if math.min(toA, toB) < BASE_CLEARANCE or math.min(toA, toB) < math.max(toA, toB) * BASE_FAIRNESS then
 				return false
 			end
 		end

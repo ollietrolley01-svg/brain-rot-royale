@@ -109,6 +109,8 @@ local Combatants = { All = function() return bodies end }
 local ModeTeams = {
     Arena = function() return vec(0, 0, 0), 1000 end,
     RefusePad = function() return false end,
+    -- Where GameMode's Setup puts them: 0.72 of the arena out, on opposite sides.
+    BaseOf = function(team) return team == 1 and vec(720, 0, 0) or vec(-720, 0, 0) end,
     TeamOf = function(token) return token.team end,
     IsDowned = function() return false end,
 }
