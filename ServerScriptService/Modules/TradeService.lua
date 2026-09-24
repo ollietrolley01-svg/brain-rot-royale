@@ -122,7 +122,7 @@ function TradeService.Request(from, target)
 		return false, "Trading is lobby-only."
 	end
 
-	inviteFor[target] = { from = from, at = os.clock() }
+	inviteFor[target] = { from = from, at = os.time() }
 	tradeInvite:FireClient(target, { fromName = from.DisplayName, fromUserId = from.UserId })
 
 	return true, "Trade request sent to " .. target.DisplayName .. "."
@@ -135,7 +135,8 @@ function TradeService.Respond(target, accept)
 	if not invite then
 		return false, "That request expired."
 	end
-	if os.clock() - invite.at > INVITE_TIMEOUT then
+	-- os.time, not os.clock: os.clock is CPU time in Roblox, so the 30 s expiry ran slow.
+	if os.time() - invite.at > INVITE_TIMEOUT then
 		return false, "That request expired."
 	end
 

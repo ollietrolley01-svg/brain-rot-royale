@@ -142,6 +142,8 @@ local function makePrompt(chassis, name, localPosition, actionText, objectText)
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = PROMPT_DISTANCE
 	prompt.RequiresLineOfSight = false
+	-- B on a controller, like the loot prompts: X is Reload (#86).
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 	prompt.Parent = attachment
 	return prompt
 end
