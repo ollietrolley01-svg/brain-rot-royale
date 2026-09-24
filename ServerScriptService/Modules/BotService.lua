@@ -81,7 +81,7 @@ for _, key in ipairs({
 	"reloads", "flees", "hunts", "searches", "coverSearches", "coverFound", "coverReached",
 	"lootBlacklisted", "combatReplans", "badMoves", "sprints", "slides", "dangerDodges", "coverRouted",
 	"launcherShots", "launcherMisses", "coverUnreachable", "crouches", "lootIgnored", "lootFarReach",
-	"coverShots",
+	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate",
 }) do
 	STATS[key] = STATS[key] or 0
 end
@@ -587,8 +587,8 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 end
 
 -- The living combatants, looked up once per think tick for every bot to share: token, character, root,
--- humanoid and the root's position at the time. Positions are at most one half-tick (0.125 s) old;
--- line of sight always uses the live root.
+-- humanoid and the root's position at the time. Positions are at most one think slice old
+-- (BotThinkInterval / THINK_SLICES); line of sight always uses the live root.
 local combatantList = {}
 
 local function refreshCombatants()
@@ -620,14 +620,18 @@ local FRONT_CONE_COS = math.cos(math.rad(75))
 -- How long being shot marks the shooter as the threat that outranks everything else.
 local THREAT_WINDOW = 3
 
+-- Returns visible, computed, entry: `entry` is the cache row, which findTarget also uses to keep
+-- the barricade test (coverBetween) on the same cadence as the sight ray it follows.
 local function sightOf(bot, head, token, character, now)
 	local entry = bot.sight[token]
 	if entry and not entry.visible and now - entry.at < SIGHT_CACHE_SECONDS then
-		return false, false
+		return false, false, entry
 	end
+	STATS.sightChecks += 1
 	local visible = hasLineOfSight(head, character, bot.character)
-	bot.sight[token] = { at = now, visible = visible }
-	return visible, true
+	entry = { at = now, visible = visible }
+	bot.sight[token] = entry
+	return visible, true, entry
 end
 
 -- A player's bullet does not pass through a barricade: it takes a bite out of it and stops
@@ -640,6 +644,7 @@ local function coverBetween(bot, head, targetRoot)
 	if not (CombatService.StructureFromPart and CombatService.DamageStructure) then
 		return nil
 	end
+	STATS.coverChecks += 1
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { bot.character }
@@ -711,14 +716,27 @@ local function findTarget(bot, root, head, now)
 	local look = flatLook(root)
 	local fresh = 0
 	for _, candidate in ipairs(candidates) do
-		local visible, computed = sightOf(bot, head, candidate.token, candidate.character, now)
+		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now)
 		if computed then
 			fresh += 1
 		end
 		if not visible and candidate.distance <= 120 then
 			-- Hidden by a barricade rather than by the world: engage, and the shots go into the cover.
-			local structure = coverBetween(bot, head, candidate.root)
-			if structure then
+			-- The barricade ray is cast when the sight ray is (or once, for a row made while the
+			-- target was out past 120), and its answer kept on the sight row for as long as that
+			-- "can't see them" is (SIGHT_CACHE_SECONDS). It used to be cast again for every
+			-- cached hidden candidate the loop passed, outside the LOS_CHECKS_PER_THINK budget: in a
+			-- crowd (#126) up to 12 rays a think (3 sight, 3 barricade, 6 cached rows), now at most 6.
+			-- tools/perf_bot_cost.py counts it (7.5 -> 6.0 a think on average, all hidden).
+			local structure
+			if computed or entry.cover == nil then
+				structure = coverBetween(bot, head, candidate.root)
+				entry.cover = structure or false
+			else
+				structure = entry.cover
+			end
+			-- A cached barricade that has since been shot down no longer hides anyone.
+			if structure and structure.Parent then
 				candidate.throughCover = structure
 				visible = true
 			end
@@ -3229,8 +3247,15 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 	return spawned
 end
 
--- Bots think every BotThinkInterval, but not all in the same frame: they are split into two halves
--- that take turns every half interval, which halves the worst frame without slowing anyone down.
+-- Bots think every BotThinkInterval, but not all in the same frame: they are split into
+-- THINK_SLICES groups that take turns, one group every BotThinkInterval / THINK_SLICES, so each bot
+-- still thinks once an interval and the worst frame carries 1/THINK_SLICES of the bots. It was two
+-- halves (#113/#126/#131): at 50 bots that put 25 thinks in one frame, now 13; at 30, 15 -> 8.
+-- tools/perf_bot_cost.py runs this loop and counts thinks per frame; tools/perf_tick_probe.lua
+-- measures the worst frame in Studio.
+local THINK_SLICES = 4
+BotService.ThinkSlices = THINK_SLICES
+
 function BotService.Start()
 	if running then
 		return
@@ -3240,18 +3265,19 @@ function BotService.Start()
 	local generation = loopGeneration
 
 	task.spawn(function()
-		local half = 0
+		local slice = 0
 		while running and generation == loopGeneration do
-			task.wait(MatchConfig.BotThinkInterval / 2)
+			task.wait(MatchConfig.BotThinkInterval / THINK_SLICES)
 			if not running or generation ~= loopGeneration then
 				break
 			end
 			local started = os.clock()
+			local startedWall = tick()
 			BotNav.Pump()
 			refreshCombatants()
 			local updated = 0
 			for index, bot in ipairs(bots) do
-				if index % 2 == half then
+				if index % THINK_SLICES == slice then
 					updated += 1
 					bot.branch = "idle"
 					local began = os.clock()
@@ -3259,17 +3285,27 @@ function BotService.Start()
 					if not ok then
 						warn("[BotService] Bot update failed: " .. tostring(err))
 					end
-					-- Where the think time goes, for tools/bot_probe.lua.
+					-- Where the think time goes, for tools/bot_probe.lua; the slowest single think and
+					-- its branch, for tools/perf_tick_probe.lua (the 42.6 ms tick is still unexplained).
+					local took = os.clock() - began
 					local key = "time_" .. bot.branch
-					STATS[key] = (STATS[key] or 0) + (os.clock() - began)
+					STATS[key] = (STATS[key] or 0) + took
+					if took > STATS.maxBotUpdate then
+						STATS.maxBotUpdate = took
+						-- Not in STATS: bot_probe subtracts every STATS value, so it holds numbers only.
+						BotService.MaxBotBranch = bot.branch
+					end
 				end
 			end
-			half = 1 - half
+			slice = (slice + 1) % THINK_SLICES
 			local spent = os.clock() - started
 			STATS.thinkTime += spent
 			STATS.thinkTicks += 1
 			STATS.updates += updated
 			STATS.maxTick = math.max(STATS.maxTick, spent)
+			-- os.clock() is CPU time in Roblox (COORDINATION.md); the wall-clock figure beside it says
+			-- whether a long tick was work or a yield inside a think.
+			STATS.maxTickWall = math.max(STATS.maxTickWall, tick() - startedWall)
 		end
 	end)
 end

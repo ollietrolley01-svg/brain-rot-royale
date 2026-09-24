@@ -45,6 +45,15 @@ local STATS = BotNav.Stats
 -- BotService.Stats.maxTick are the numbers to read.
 local MAX_CONCURRENT_PATHS = 15
 
+-- How many of those computes one Pump may START. The cap above bounds how many run at once, but
+-- not how many begin in the same frame: a burst of requests (the drop, a storm phase, a fight
+-- breaking up) started up to 15 ComputeAsync calls in one think tick, and the cap A/B above is
+-- the evidence that computes started together cost frame time. Pump runs every think slice
+-- (BotService.ThinkSlices a BotThinkInterval, about 15 a second), so 3 a pump is ~45 starts a second,
+-- still room for every one of 50 bots to start a route inside about a second; the most urgent
+-- still go first. tools/perf_bot_cost.py counts starts per pump.
+local MAX_STARTS_PER_PUMP = 3
+
 -- A destination this close to where the current route already ends keeps the route.
 local REUSE_RADIUS = 10
 
@@ -308,7 +317,9 @@ function BotNav.Pump()
 		return ra.at < rb.at
 	end)
 	waiting = live
-	while #waiting > 0 and inFlight < MAX_CONCURRENT_PATHS do
+	local started = 0
+	while #waiting > 0 and inFlight < MAX_CONCURRENT_PATHS and started < MAX_STARTS_PER_PUMP do
+		started += 1
 		local bot = table.remove(waiting, 1)
 		local request = bot.nav.request
 		if request then
