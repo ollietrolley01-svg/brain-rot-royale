@@ -285,6 +285,12 @@ CombatService.OnElimination = nil
 -- Set by ProjectileService: fires a launcher's real round (WeaponData `projectile`).
 CombatService.LaunchProjectile = nil
 
+-- Set by ProjectileService to its blast, the one every launcher round and grenade goes off through:
+-- fn(blast) with blast = { owner, weaponId, kind, position, normal, damage, radius, wallDamage }.
+-- Explosive ammo goes off through it too, so every blast in the game falls off, respects cover and
+-- holes walls the same way.
+CombatService.Explode = nil
+
 -- Told of every hit that lands: fn(attackerToken, victimToken, dealt, weaponId, headshot, shieldHit).
 -- Register with CombatService.OnDamage. Each listener runs protected, so one that errors can't stop
 -- damage or the listeners after it. (HitSplatService draws splats; status effects hang off it too.)
@@ -557,25 +563,11 @@ local function buildRaycastParams(character, shooterToken)
 	return params
 end
 
+-- `explosive` is not here: a hitscan gun's blast goes off where its bullet stops (bulletBlast), through
+-- the same blast as the launchers, instead of the cruder splash this used to have (which had no
+-- caller: the only explosive guns fire real rounds).
 local function fireAbility(shooterToken, def, victimToken, hitPosition, baseDamage)
-	if def.ability == "explosive" then
-		local radius = def.splashRadius or 12
-		for _, entry in ipairs(combatantsInRadius(hitPosition, radius, shooterToken)) do
-			if entry.token ~= victimToken then
-				local falloff = 1 - ((entry.root.Position - hitPosition).Magnitude / radius)
-				CombatService.DealDamage(shooterToken, entry.token, baseDamage * 0.6 * math.max(0, falloff), def.id)
-			end
-		end
-		if CombatService.DamageCompanionsInRadius then
-			CombatService.DamageCompanionsInRadius(shooterToken, hitPosition, radius, baseDamage * 0.6)
-		end
-		if CombatService.DamageStructuresInRadius then
-			CombatService.DamageStructuresInRadius(hitPosition, radius, baseDamage * 0.6)
-		end
-		if CombatService.DamageHazardsInRadius then
-			CombatService.DamageHazardsInRadius(hitPosition, radius, baseDamage, shooterToken)
-		end
-	elseif def.ability == "chain" and victimToken then
+	if def.ability == "chain" and victimToken then
 		local victimRoot = Combatants.GetRoot(victimToken)
 		if victimRoot then
 			for _, entry in ipairs(combatantsInRadius(victimRoot.Position, def.chainRadius or 20, shooterToken)) do
@@ -593,6 +585,41 @@ local function fireAbility(shooterToken, def, victimToken, hitPosition, baseDama
 	end
 end
 
+-- Explosive ammo (#122, WeaponData `explosiveAmmo = { damage, radius, wallDamage }`): a small blast
+-- where a hitscan bullet stops. A hitscan gun with the old `ability = "explosive"` gets one too, sized
+-- the way that ability always was (60% of the bullet over splashRadius), so no gun can fall back to a
+-- second, different blast.
+function CombatService.BulletBlast(def)
+	if def.explosiveAmmo then
+		return def.explosiveAmmo
+	end
+	if def.ability == "explosive" and not def.projectile then
+		return { damage = def.damage * 0.6, radius = def.splashRadius or 12, wallDamage = 0 }
+	end
+	return nil
+end
+
+-- One bullet's blast, through ProjectileService's (CombatService.Explode). The victim the bullet struck
+-- is inside it and takes their share like anyone else, exactly as a rocket's direct victim does; a
+-- shooter standing too close takes the half every blast gives its owner.
+local function bulletBlast(shooterToken, def, position, normal)
+	local ammo = CombatService.BulletBlast(def)
+	if not ammo or not CombatService.Explode then
+		return nil
+	end
+	return CombatService.Explode({
+		owner = shooterToken,
+		weaponId = def.id,
+		kind = "impact",
+		position = position,
+		normal = normal,
+		damage = ammo.damage,
+		radius = ammo.radius,
+		innerRadius = 0,
+		wallDamage = ammo.wallDamage or 0,
+	})
+end
+
 -- `rewindTo`: the server time the victims are put back to (LagCompensation), or nil for the present.
 local function firePellet(shooterToken, character, origin, direction, def, rewindTo)
 	local params = buildRaycastParams(character, shooterToken)
@@ -600,6 +627,9 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 	local currentOrigin = origin
 	local travelled = 0
 	local endPoint = origin + direction * def.range
+	-- The last solid thing the bullet struck: where explosive ammo goes off. A pane it broke and flew
+	-- on through doesn't count, and a bullet that ran out of range in the open blows up nothing.
+	local stopped = nil
 
 	while remaining > 0 and travelled < def.range do
 		local result = LagCompensation.Raycast(currentOrigin, direction * (def.range - travelled), params, rewindTo)
@@ -608,6 +638,7 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		end
 
 		endPoint = result.Position
+		stopped = result
 		travelled += (result.Position - currentOrigin).Magnitude
 
 		-- Someone else's companion soaks the bullet.
@@ -637,6 +668,7 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 				table.insert(filter, result.Instance)
 				params.FilterDescendantsInstances = filter
 				currentOrigin = result.Position + direction * 0.05
+				stopped = nil
 				continue
 			end
 			fireAbility(shooterToken, def, nil, result.Position, def.damage)
@@ -676,6 +708,9 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		end
 	end
 
+	if stopped then
+		bulletBlast(shooterToken, def, stopped.Position, stopped.Normal)
+	end
 	return endPoint
 end
 

@@ -1077,6 +1077,8 @@ CombatService.LaunchProjectile = function(player, def, origin, direction)
 	launchRound(player, def, origin, direction)
 end
 CombatService.SmokeBlocks = ProjectileService.SmokeBlocks
+-- Explosive ammo (#122) goes off through this same blast, so a bullet's blast and a rocket's behave alike.
+CombatService.Explode = explode
 WeaponService.ThrowEffect = function(player, itemId, aimPoint)
 	return throwFromPlayer(player, itemId, aimPoint)
 end
