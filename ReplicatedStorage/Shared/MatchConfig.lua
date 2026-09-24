@@ -110,6 +110,31 @@ MatchConfig.TeamModeRewards = {
 }
 MatchConfig.XpPerKill = 60
 
+-- Vehicles parked at each team's base in the team modes (Oliver, 2026-09-24: "make vehicles spawn near
+-- the spawns of the teams on team gamemodes"). ModeTeams parks them; they are EXTRA to the map's own
+-- town and verge parking, which every mode keeps. One per slot, and both bases get the same models.
+--   Slots          "armed" is a car with a mounted weapon (Rotster, Crocodilo Ranger, Sahur Van);
+--                  "car" is any car, weighted as the map rolls them; "bike" is any bike. At most one
+--                  bike: a base of bikes is a base nobody can fight from.
+--   Inner/Outer    studs from the base point the spots are looked for between. The pads spread 60
+--                  from it, so the ring overlaps them and PadClearance does the keeping apart.
+--   PadClearance   studs from a vehicle's centre to any spawn pad: half a Ranger's length (7.3) plus
+--                  the 8-stud box a pad keeps clear, plus a few to walk round the bumper.
+--   Gap            studs between two base vehicles' centres, so none is parked into another.
+--   LootClearance  studs from any loot already lying there (the base caches).
+--   RespawnDelay   seconds after a base vehicle is wrecked (or lost off the map) before a replacement
+--                  is parked; never more live base vehicles than slots.
+MatchConfig.TeamBaseVehicles = {
+	Enabled = true,
+	Slots = { "armed", "car", "bike" },
+	Inner = 22,
+	Outer = 75,
+	PadClearance = 18,
+	Gap = 18,
+	LootClearance = 10,
+	RespawnDelay = 45,
+}
+
 -- Bots backfill the lobby and play for real: they carry actual weapons from WeaponData,
 -- push and strafe instead of standing still, fight each other as well as players, and
 -- retreat when hurt. Accuracy falls off with range so close fights are genuinely dangerous

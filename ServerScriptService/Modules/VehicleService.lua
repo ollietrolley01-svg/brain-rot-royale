@@ -7,6 +7,7 @@
 --   VehicleService.Count()                                         registered vehicles, for tests
 --   VehicleService.ApplyBlast(centre, radius, damage)              throw vehicles clear of a blast
 --   VehicleService.Get(model)                                      the service's entry for a model
+--   VehicleService.FootingAt(parent, centre, yaw, size)            parkOn's level test, asked in advance
 --
 -- Bodies come from Shared/VehicleModels and handling from Shared/VehicleDynamics; this file owns
 -- everything around them: seats and prompts, who simulates the physics, keeping drivers honest,
@@ -400,6 +401,16 @@ local function footingAt(centre, yaw, size)
 	end
 	return highest - lowest, highest
 end
+
+-- The same footing test parkOn makes, for a caller choosing between spots BEFORE it creates anything
+-- (ModeTeams' base vehicles): a spot that passes here is one parkOn keeps exactly where it was asked,
+-- rather than stepping it up to FOOTING_REACH studs aside. Returns the spread and the highest ground,
+-- or nil where some point of the footprint has no ground under it at all.
+function VehicleService.FootingAt(parent, centre, yaw, size)
+	footingParams.FilterDescendantsInstances = { parent }
+	return footingAt(centre, yaw, size)
+end
+VehicleService.FootingTolerance = FOOTING_TOLERANCE
 
 -- `inward` (optional) points from the spot towards somewhere known to be level, as far as the
 -- vehicle may go: MapGenerator's verge parking passes the way to its road, whose graded corridor is
