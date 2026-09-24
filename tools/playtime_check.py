@@ -166,8 +166,10 @@ def checks(progression_src, service_src, cycle):
     # The invariant: a live character that never moves (or only shuffles under MoveStuds) is never paid.
     results.append(("standing still pays nothing", api.total("statue")[0] == 0, f"{api.total('statue')[0]} coins in 2 h"))
     results.append(("shuffling under MoveStuds pays nothing", api.total("fidget")[0] == 0, f"{api.total('fidget')[0]} coins in 2 h"))
-    results.append(("dead / spectating still counts as playing", api.total("ghost")[0] == hour2[0],
-                    f"{api.total('ghost')[0]} coins"))
+    # Dead / spectating is not playing: an idle player who died at the drop and sat on the spectator
+    # camera used to be paid the whole ladder.
+    results.append(("dead / spectating pays nothing", api.total("ghost")[0] == 0,
+                    f"{api.total('ghost')[0]} coins in 2 h"))
     ladder = [api.coins(n) for n in range(1, 10)]
     results.append(("the ladder climbs then holds at the cap",
                     all(b >= a for a, b in zip(ladder, ladder[1:])) and ladder[-1] == cfg.CapCoins and ladder[0] < cfg.CapCoins,
@@ -184,8 +186,8 @@ def checks(progression_src, service_src, cycle):
 def plants(progression_src, service_src):
     """Each plant breaks an invariant; the checks must go red for every one."""
     yield "MoveStuds = 0 (standing still would pay)", progression_src.replace("MoveStuds = 4", "MoveStuds = 0"), service_src
-    yield "a missing character counts as idle", progression_src, service_src.replace(
-        "\t\tsession.last = nil\n\t\treturn true", "\t\tsession.last = nil\n\t\treturn false")
+    yield "a missing character (dead, spectating) counts as playing", progression_src, service_src.replace(
+        "\t\tsession.last = nil\n\t\treturn false", "\t\tsession.last = nil\n\t\treturn true")
     yield "the ladder never caps", progression_src.replace(
         "return math.min(p.CapCoins, p.FirstCoins", "return (0 * p.CapCoins + p.FirstCoins"), service_src
     yield "the active threshold dropped to 1 check", progression_src.replace("MinActiveSamples = 10", "MinActiveSamples = 1"), service_src

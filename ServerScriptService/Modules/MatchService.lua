@@ -57,6 +57,80 @@ local dropSelect = false
 local chosenDrop = {}
 local participants = {}
 local alive = {}
+-- #102: participants who pressed LEAVE on the spectator HUD this match. Still participants (see
+-- LeaveSpectate), no longer spectators: IsSpectating and FocusTarget refuse them, and a second LEAVE is
+-- refused rather than loading another body at the pier. Cleared when the match's tables are.
+local leftSpectate = {}
+
+-- The battle royale's AFK rule, the team modes' participation check (GameMode.sampleActivity) applied to
+-- a placement: every `every` seconds of a running match each living player is checked for having moved
+-- MoveStuds or hurt someone since the last check. One active in fewer than minActiveShare of their checks
+-- is paid the team modes' `afk` line instead of their placement -- a Ready player who never touches the
+-- keyboard used to drop in, stand still and collect a placement crate and coins every match. A dead or
+-- spectating player is not checked (their placement is already fixed), nor is anyone before their first
+-- check (killed in the opening seconds is not idling). All of it in one table: this file is near the
+-- local limit.
+local afk = {
+	players = {}, -- [player] = { samples, active, last = Vector3?, busy = bool }
+	tick = 0,
+	every = MatchConfig.TeamModeRewards.participation.sampleSeconds or 15,
+	share = MatchConfig.TeamModeRewards.participation.minActiveShare or 0.5,
+	moveStuds = require(Shared:WaitForChild("ProgressionData")).Playtime.MoveStuds,
+}
+
+function afk.record(player)
+	local record = afk.players[player]
+	if not record then
+		record = { samples = 0, active = 0 }
+		afk.players[player] = record
+	end
+	return record
+end
+
+function afk.sample(player)
+	local record = afk.record(player)
+	local root = Combatants.GetRoot(player)
+	local position = root and root.Position
+	local moved = position ~= nil and record.last ~= nil and (position - record.last).Magnitude >= afk.moveStuds
+	record.samples += 1
+	if moved or record.busy then
+		record.active += 1
+	end
+	record.last = position
+	record.busy = false
+end
+
+function afk.isIdle(player)
+	local record = afk.players[player]
+	return record ~= nil and record.samples > 0 and record.active < record.samples * afk.share
+end
+
+-- A placement's pay: the real one, or for an idle player only the `afk` line (no crate, no placement
+-- coins, no match, win or quest progress). Same shape as a team mode's card, so the results screen lists it.
+function afk.award(player, rank)
+	if not afk.isIdle(player) then
+		return RewardService.AwardPlacement(player, rank)
+	end
+	local rules = MatchConfig.TeamModeRewards.afk or {}
+	local coins = RewardService.AddCoins(player, rules.coins or 0)
+	local xp = rules.xp or 0
+	require(script.Parent:WaitForChild("BattlePassService")).AddXp(player, xp)
+	StateSync.Push(player)
+	return {
+		rank = rank,
+		coins = coins,
+		xp = xp,
+		afk = true,
+		lines = { { id = "result", label = "Away from keyboard", coins = coins, xp = xp } },
+	}
+end
+
+-- Hurting someone is playing, even standing still (a camper holding an angle is not AFK).
+CombatService.OnDamage(function(attacker, _, dealt)
+	if state == "InProgress" and participants[attacker] and (dealt or 0) > 0 and Combatants.IsPlayer(attacker) then
+		afk.record(attacker).busy = true
+	end
+end)
 local aliveCount = 0
 local placements = {}
 local deathConnections = {}
@@ -288,6 +362,13 @@ function MatchService.IsAlive(player)
 	return not (currentMode.respawn and GameMode.IsDowned(player))
 end
 
+-- Alive in a match that is actually being played: InProgress, not Loading. startMatch marks everyone
+-- alive before it places them, so IsAlive alone let the drop-in window use items and dump the kit
+-- (Bootstrap's DropSlot and UseSelected ask this).
+function MatchService.IsPlaying(player)
+	return state == "InProgress" and MatchService.IsAlive(player)
+end
+
 -- Is this player WATCHING the match rather than playing it?
 --
 -- One predicate, in one place, because two copies of it is exactly how the exit below and
@@ -303,7 +384,7 @@ function MatchService.IsSpectating(player)
 	if currentMode and currentMode.respawn then
 		return false
 	end
-	return participants[player] == true and not alive[player]
+	return participants[player] == true and not alive[player] and not leftSpectate[player]
 end
 
 -- #102: "theres no way to leave spectator mode." There was not. The Spectate remote had exactly two
@@ -322,10 +403,16 @@ end
 --
 -- Returns whether they were actually spectating, so a stray remote is distinguishable from a real
 -- exit rather than silently doing nothing.
+--
+-- And it ENDS spectating: `leftSpectate` takes them out of IsSpectating, which FocusTarget and this
+-- function both ask. Before it, a player who had left was still "spectating" to the server -- they could
+-- keep streaming the arena through SetReplicationFocus, and every LEAVE (the remote allows one a second)
+-- loaded yet another body at the pier.
 function MatchService.LeaveSpectate(player)
 	if not MatchService.IsSpectating(player) then
 		return false
 	end
+	leftSpectate[player] = true
 
 	-- The client is told FIRST, and the order is load-bearing. setSpectating(false) is what tears
 	-- the spectator camera down and hands the view back; doing it after LoadCharacter would race a
@@ -1137,7 +1224,7 @@ local function finishMatch()
 		local rank = ranks[token]
 		if rank and Combatants.IsPlayer(token) and token.Parent then
 			local reward = currentMode.AwardResult and currentMode.AwardResult(token, rank)
-				or RewardService.AwardPlacement(token, rank)
+				or afk.award(token, rank)
 			local eggsFound, eggsTotal = EasterEggs.FoundCount(token)
 			matchResults:FireClient(token, {
 				companionDamage = CompanionService.DamageDealt(token),
@@ -1188,6 +1275,7 @@ local function finishMatch()
 		alive = {}
 		placements = {}
 		aliveCount = 0
+		table.clear(leftSpectate)
 		-- A minute's break in the lobby before the next countdown can start.
 		state = "Intermission"
 		countdown = MatchConfig.Intermission
@@ -1652,6 +1740,9 @@ local function startMatch()
 	alive = {}
 	placements = {}
 	aliveCount = 0
+	table.clear(leftSpectate)
+	table.clear(afk.players)
+	afk.tick = 0
 	table.clear(streaks)
 	CompanionService.ResetStats()
 
@@ -1962,8 +2053,13 @@ function MatchService.OnPlayerRemoving(player)
 		-- Eliminated, told "placed #N", then left while spectating: finishMatch pays placements only to
 		-- players still here, so theirs was never paid. Rank is final at death, so pay it now - this
 		-- runs before PlayerData.Release in Bootstrap's leave handler, so it saves (logic review #1).
-		pcall(RewardService.AwardPlacement, player, placements[player])
+		-- Through the same AFK rule as everyone else's placement.
+		pcall(afk.award, player, placements[player])
 	end
+	leftSpectate[player] = nil
+	afk.players[player] = nil
+	-- Keyed by UserId, so a weak table can't drop it mid-visit; nothing else let it go on leave.
+	lastReadyToggle[player.UserId] = nil
 	participants[player] = nil
 	alive[player] = nil
 	placements[player] = nil
@@ -1978,6 +2074,22 @@ function MatchService.Start()
 	task.spawn(function()
 		while true do
 			task.wait(1)
+
+			if state == "InProgress" and not currentMode.respawn then
+				-- The battle royale's participation checks (a respawn mode runs its own, in GameMode).
+				afk.tick += 1
+				if afk.tick >= afk.every then
+					afk.tick = 0
+					for token in pairs(participants) do
+						if Combatants.IsPlayer(token) and alive[token] then
+							local ok, err = pcall(afk.sample, token)
+							if not ok then
+								warn("[MatchService] participation check failed: " .. tostring(err))
+							end
+						end
+					end
+				end
+			end
 
 			if state == "Waiting" then
 				local readyNow = #readyPlayers()
@@ -2031,6 +2143,7 @@ function MatchService.Start()
 							mapInfo = nil
 							participants, alive, placements = {}, {}, {}
 							aliveCount = 0
+							table.clear(leftSpectate)
 							state = "Waiting"
 							-- A throw before VoteService.Close() leaves the vote open with no countdown; close it here. #107
 							VoteService.Close()

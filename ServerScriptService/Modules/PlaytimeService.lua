@@ -3,9 +3,10 @@
 -- lives only in this server's memory, so leaving starts it again and no save is touched.
 --
 -- "Active" is judged from the server, which can't see input: every SampleSeconds the player's
--- root part is checked, and a check counts if it moved MoveStuds since the last one, or if there
--- is no living character to check (dead, spectating, between respawns — a player who died early
--- is still playing). Standing still in the lobby all stretch pays nothing.
+-- root part is checked, and a check counts if it moved MoveStuds since the last one. No living
+-- character to check (dead, spectating, between respawns) does NOT count: it used to, so an idle
+-- player who died at the drop and sat on the spectator camera was paid the whole ladder -- a
+-- battle royale AFK farm. Standing still in the lobby all stretch pays nothing either.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -36,7 +37,7 @@ local function sample(session, player)
 	local root = livingRoot(player)
 	if not root then
 		session.last = nil
-		return true
+		return false
 	end
 	local position = root.Position
 	local last = session.last
