@@ -967,7 +967,39 @@ elseif math.abs(telegraph.Position.Y - 0.1) > 0.05 then
 end
 clean("ground")
 
--- 7. Nothing threw, anywhere (each distinct error once, with how often).
+-- 7. A beat that throws: warned about once per kind, and never stops the frame -- a move due in
+-- the same frame still strikes and lands on time, and live effects keep being stepped.
+local errorsBefore = #world.errors
+world.marks = {}
+world.stageStart = world.t
+api.schedule(0.1, function() error("planted beat fault") end, "test")
+api.schedule(0.1, function() error("planted beat fault") end, "test")
+local survivor = payload("Zap", nil)
+local t0 = world.t
+world.remotes.CompanionAttack.OnClientEvent:Fire(survivor)
+run(0.5)
+local warned, escaped = 0, 0
+for index = errorsBefore + 1, #world.errors do
+    local e = world.errors[index]
+    if string.find(e, "planted beat fault", 1, true) then
+        if string.sub(e, 1, 5) == "warn:" then warned = warned + 1 else escaped = escaped + 1 end
+    end
+end
+local struck = false
+for _, m in ipairs(world.marks) do
+    if m.what == "strike" and math.abs((m.t - t0) - survivor.windup) <= FRAME + 1e-6 then struck = true end
+end
+if escaped > 0 then fail(string.format("beats: a throwing beat escaped the frame %d time(s) (the scheduler must catch it)", escaped)) end
+if warned ~= 1 then fail(string.format("beats: two throws of one kind of beat warned %d time(s), want exactly 1", warned)) end
+if not struck then fail("beats: a move due alongside a throwing beat did not strike on time") end
+if not named("Bolt") then fail("beats: a move due alongside a throwing beat drew nothing") end
+-- Those were planted; take them out of the error list below.
+for index = #world.errors, errorsBefore + 1, -1 do
+    if string.find(world.errors[index], "planted beat fault", 1, true) then table.remove(world.errors, index) end
+end
+clean("beats")
+
+-- 8. Nothing threw, anywhere (each distinct error once, with how often).
 local seen, order = {}, {}
 for _, e in ipairs(world.errors) do
     if not seen[e] then seen[e] = 0; table.insert(order, e) end
@@ -1403,6 +1435,8 @@ PLANTS = [
     ("the ground found on a target's legs", CLIENT, "\t\t\ttable.insert(exclude, model)\n", "\t\t\treturn result.Position + UP * 0.1\n"),
     ("an effect host turned toward its target", CLIENT, "\tnozzle.Parent = fx.host\n",
      "\tnozzle.Parent = fx.host\n\tfx.host.CFrame = CFrame.lookAt(from, from + (look.Magnitude > 0.1 and look or Vector3.new(0, 0, -1)))\n"),
+    ("a throwing beat not caught", CLIENT, "\t\t\trunBeat(job.kind, job.fn, t)", "\t\t\tjob.fn(t)"),
+    ("a throwing beat warned every time", CLIENT, "\tif not ok and not warnedBeats[kind] then", "\tif not ok then"),
     ("a property the class doesn't have", CLIENT, "\tl.Shadows = false\n", "\tl.CastShadows = false\n"),
     ("a clip that doesn't return to rest", ANIM, "{ W + 0.34, -0.04 }, { D.Spit, 0 } },", "{ W + 0.34, -0.04 }, { D.Spit, 0.2 } },"),
     ("a glow that peaks after the strike", ANIM, "glow = { { 0, 0 }, { W, 1, \"in\" }, { W + 0.08, 0.2 }, { D.Zap, 0 } },",

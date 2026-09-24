@@ -225,19 +225,33 @@ local function effect(key, name, position, life, detail)
 	return fx
 end
 
+-- Runs one beat. A beat that throws is dropped and warned about (once per kind of beat, so a
+-- fault in every Lob landing is one line, not one a second), and never stops the frame: the
+-- beats after it and every live effect still run.
+local warnedBeats = {}
+local function runBeat(kind, fn, t)
+	local ok, err = pcall(fn, t)
+	if not ok and not warnedBeats[kind] then
+		warnedBeats[kind] = true
+		warn("[CompanionFx] " .. tostring(kind) .. " beat failed: " .. tostring(err))
+	end
+end
+
 -- Runs `fn(t)` `delay` seconds from now, on the first frame at or after it. (A tenth of a
--- millisecond's grace, so float rounding in the clock never costs a whole frame.)
-local function schedule(delay, fn)
+-- millisecond's grace, so float rounding in the clock never costs a whole frame.) `kind` names
+-- the beat for the warning if it throws.
+local function schedule(delay, fn, kind)
+	kind = kind or "beat"
 	-- Nothing to wait for (a Blast): now, not next frame. Safe here: this is never called from an
 	-- effect's update (see `step`).
 	if delay <= 0 then
-		fn(now())
+		runBeat(kind, fn, now())
 		return
 	end
 	if #pending >= CAPS.PENDING then
 		return
 	end
-	table.insert(pending, { at = now() + math.max(delay, 0), fn = fn })
+	table.insert(pending, { at = now() + math.max(delay, 0), fn = fn, kind = kind })
 end
 
 -- A counted burst of particles, trimmed to what the budget has room for.
@@ -640,7 +654,7 @@ task.spawn(function()
 				if model.Parent then
 					track(model)
 				end
-			end)
+			end, "rig")
 		end
 	end)
 	companions.ChildRemoved:Connect(function(model)
@@ -1402,7 +1416,7 @@ local function onAttack(info)
 		if own then
 			pulse(ctx.pal.main, 0.35, 0.25)
 		end
-	end)
+	end, "strike")
 	if kind ~= "Blast" then
 		schedule(lands, function()
 			mark("lands", ctx)
@@ -1423,7 +1437,7 @@ local function onAttack(info)
 			if info.practice and kind ~= "Shockwave" then
 				Sfx.PlayAt("CompanionHit", info.to, 0.12)
 			end
-		end)
+		end, "lands")
 	end
 end
 
@@ -1828,7 +1842,7 @@ local function step()
 		local job = pending[index]
 		if t >= job.at - 1e-4 then
 			table.remove(pending, index)
-			job.fn(t)
+			runBeat(job.kind, job.fn, t)
 		else
 			index += 1
 		end
@@ -1866,6 +1880,7 @@ RunService.RenderStepped:Connect(step)
 if Seam then
 	Seam.api = {
 		step = step,
+		schedule = schedule,
 		attack = onAttack,
 		hit = onHit,
 		caps = CAPS,
