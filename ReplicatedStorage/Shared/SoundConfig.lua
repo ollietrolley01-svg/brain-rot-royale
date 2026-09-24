@@ -1645,6 +1645,234 @@ SoundConfig.Sounds = {
 	},
 
 	--------------------------------------------------------------------------------
+	-- Death effects (#24, Shared/DeathEffectDesigns): the moments the existing cues above don't cover.
+	-- Each design lists the cues it plays in its `cues`, and tools/killanim_check.py holds every one to
+	-- a cue here. Built from the same stock files as everything else. Audible lengths are given where a
+	-- slowed layer could run long; none outlasts the effect it belongs to.
+	--------------------------------------------------------------------------------
+
+	-- A party popper's fuse: a short bright fizz and a click (slider 0.85 s / 2.4 = 0.35 s).
+	DeathFuse = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 120,
+		category = "Effects",
+		layers = {
+			{ id = SLIDER, volume = 0.8, pitch = 2.4 },
+			{ id = CLICK, volume = 0.6, pitch = 1.6, delay = 0.12 },
+		},
+	},
+
+	-- A goo bubble popping: a wet little plip.
+	DeathBubble = {
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 90,
+		category = "Effects",
+		layers = {
+			{ id = CLICK, volume = 0.8, pitch = 2.4 },
+			{ id = WATER, volume = 0.4, pitch = 2.8 },
+		},
+	},
+
+	-- Air rushing into three balloons (slider 0.85 s / 1.5 = 0.57 s), and a squeak of rubber.
+	DeathBalloonInflate = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 120,
+		category = "Effects",
+		layers = {
+			{ id = SLIDER, volume = 0.9, pitch = 1.5 },
+			{ id = SWITCH, volume = 0.4, pitch = 1.9, delay = 0.3 },
+		},
+	},
+
+	-- A balloon going pop: a sharp snap with a click on top.
+	DeathBalloonPop = {
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 160,
+		category = "Effects",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 1.8 },
+			{ id = CLICK, volume = 0.5, pitch = 1.2 },
+		},
+	},
+
+	-- Something big coming down through the air: the bat's swing, the drum's drop (0.85 s / 1.2).
+	DeathWhoosh = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Effects",
+		layers = {
+			{ id = SLIDER, volume = 1, pitch = 1.2 },
+			{ id = WATER, volume = 0.3, pitch = 2.6 },
+		},
+		effects = { { "EqualizerSoundEffect", { HighGain = 2, MidGain = 0, LowGain = -6 } } },
+	},
+
+	-- A cartoon bonk: a hollow thunk with weight under it.
+	DeathBonk = {
+		volume = 0.6,
+		pitch = 1,
+		maxDistance = 200,
+		category = "Effects",
+		layers = {
+			{ id = HIT, volume = 1, pitch = 0.6 },
+			{ id = COLLIDE, volume = 0.5, pitch = 0.75, delay = 0.02 },
+			{ id = BASS, volume = 0.5, pitch = 0.9 },
+		},
+	},
+
+	-- A small ghost's woo: a high "uuh" through a flanger.
+	DeathGhostWail = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Effects",
+		layers = {
+			{ id = UUH, volume = 1, pitch = 1.6 },
+			{ id = SLIDER, volume = 0.25, pitch = 1.4, delay = 0.05 },
+		},
+		effects = { { "FlangeSoundEffect", { Depth = 0.6, Mix = 0.6, Rate = 3 } } },
+	},
+
+	-- A wet splat: a low slap of water and a thud (impact_water 2.38 s / 1.1 = 2.2 s, mostly tail).
+	DeathInkSplat = {
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 170,
+		category = "Effects",
+		layers = {
+			{ id = WATER, volume = 0.9, pitch = 1.1 },
+			{ id = HIT, volume = 0.6, pitch = 0.5 },
+			{ id = LAND, volume = 0.5, pitch = 0.6 },
+		},
+	},
+
+	-- A war drum landing: one deep boom (bass 1.01 s / 0.55 = 1.8 s) with a thump on top.
+	DeathDrumBoom = {
+		volume = 0.6,
+		pitch = 1,
+		maxDistance = 240,
+		category = "Effects",
+		layers = {
+			{ id = BASS, volume = 1, pitch = 0.55 },
+			{ id = BOOM3, volume = 0.35, pitch = 1.5 },
+			{ id = HIT, volume = 0.6, pitch = 0.8, delay = 0.03 },
+		},
+	},
+
+	-- Coins raining: bright pings a beat apart and a jingle of metal.
+	DeathCoinJingle = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 140,
+		category = "Effects",
+		layers = {
+			{ id = PING, volume = 0.8, pitch = 2.2 },
+			{ id = METAL, volume = 0.6, pitch = 2.1, delay = 0.06 },
+			{ id = PING, volume = 0.6, pitch = 2.6, delay = 0.14 },
+		},
+	},
+
+	-- A digital glitch: clicks chopped by a fast tremolo, and a high blip.
+	DeathGlitch = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 150,
+		category = "Effects",
+		layers = {
+			{ id = CLICK, volume = 1, pitch = 0.7 },
+			{ id = SWITCH3, volume = 0.7, pitch = 0.6, delay = 0.05 },
+			{ id = PING, volume = 0.4, pitch = 2.8, delay = 0.08 },
+		},
+		effects = { { "TremoloSoundEffect", { Depth = 1, Frequency = 24 } } },
+	},
+
+	-- A brain swelling: a low throb rising under a stretched squeal (bass 1.01 s / 0.8 = 1.26 s).
+	DeathBrainSwell = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 170,
+		category = "Effects",
+		layers = {
+			{ id = BASS, volume = 1, pitch = 0.8 },
+			{ id = SLIDER, volume = 0.5, pitch = 0.9, delay = 0.1 },
+			{ id = UUH, volume = 0.3, pitch = 1.3, delay = 0.35 },
+		},
+		effects = { { "FlangeSoundEffect", { Depth = 0.5, Mix = 0.4, Rate = 5 } } },
+	},
+
+	-- Thunder right overhead: a crack, then the roll (impact_explosion_02 2.12 s / 0.7 = 3.0 s).
+	DeathThunder = {
+		volume = 0.6,
+		pitch = 1,
+		maxDistance = 400,
+		category = "Effects",
+		layers = {
+			{ id = SNAP, volume = 1, pitch = 0.5 },
+			{ id = BOOM2, volume = 0.7, pitch = 0.7, delay = 0.04 },
+			{ id = BASS, volume = 0.5, pitch = 0.5, delay = 0.06 },
+		},
+	},
+
+	-- A vortex winding up: rushing water slowed right down, through a flanger (2.38 s / 0.9 = 2.6 s).
+	DeathVortex = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 200,
+		category = "Effects",
+		layers = {
+			{ id = WATER, volume = 0.9, pitch = 0.9 },
+			{ id = SLIDER, volume = 0.6, pitch = 0.55 },
+		},
+		effects = { { "FlangeSoundEffect", { Depth = 0.9, Mix = 0.6, Rate = 2 } } },
+	},
+
+	-- A meteor coming in: a long falling scream of air (slider 0.85 s / 1.0).
+	DeathMeteorFall = {
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 300,
+		category = "Effects",
+		layers = {
+			{ id = SLIDER, volume = 1, pitch = 1 },
+			{ id = WATER, volume = 0.3, pitch = 1.6 },
+		},
+		effects = { { "EqualizerSoundEffect", { HighGain = 3, MidGain = 0, LowGain = -4 } } },
+	},
+
+	-- The meteor landing: a blast, so it carries and rolls off like the grenades do.
+	DeathMeteorImpact = {
+		volume = 0.65,
+		pitch = 1,
+		maxDistance = 500,
+		category = "Effects",
+		acoustic = "blast",
+		layers = {
+			{ id = BOOM3, volume = 1, pitch = 0.8 },
+			{ id = BOOM2, volume = 0.6, pitch = 0.6, delay = 0.05 },
+			{ id = COLLIDE, volume = 0.5, pitch = 0.5 },
+		},
+	},
+
+	-- A singularity opening: a deep hum and a groan, pulled out of shape (bass 1.01 s / 0.45 = 2.2 s).
+	DeathSingularity = {
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 220,
+		category = "Effects",
+		layers = {
+			{ id = BASS, volume = 1, pitch = 0.45 },
+			{ id = UUH, volume = 0.4, pitch = 0.5, delay = 0.1 },
+			{ id = SLIDER, volume = 0.4, pitch = 0.4, delay = 0.2 },
+		},
+		effects = { { "FlangeSoundEffect", { Depth = 1, Mix = 0.7, Rate = 1.5 } } },
+	},
+
+	--------------------------------------------------------------------------------
 	-- Movement (StarterPlayerScripts/MovementClient): slides, climbs, vaults, stamina, item launches.
 	-- Played for yourself with Sfx.Play and at other people's bodies with Sfx.PlayAt.
 	--------------------------------------------------------------------------------

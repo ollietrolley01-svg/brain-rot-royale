@@ -1,6 +1,12 @@
--- Kill animations (#24): when a player is credited with a kill, the kill animation they have
--- equipped plays where the body fell, for everyone nearby. The server only decides WHICH one and
--- WHERE; KillAnimFxClient builds it on each client, so no parts are made or replicated here.
+-- Death effects (#24; "kill animations" in the code and the save): when a player is credited with a
+-- kill, the death effect they have equipped plays on the body, for everyone nearby. The server only
+-- decides WHICH one, WHERE and whether it gets the BODY; KillAnimFxClient builds it on each client, so
+-- no parts are made or replicated here.
+--
+-- The body: a plain ragdoll is claimed through DeathFxService.Claim (anchored now, hidden once the
+-- effect's life is over) and sent along, so the effect can pop, squash, melt or lift it. A body a
+-- gun's own kill effect already has (burn, freeze, confetti...) keeps that, and the effect plays
+-- beside it with no body.
 --
 -- Hooked by wrapping MatchService.OnKillCredited (Bootstrap, one line after ProgressionService is
 -- set). That hook is the one place both kill paths meet: the battle royale path and the respawn
@@ -14,12 +20,19 @@ local CosmeticData = require(Shared:WaitForChild("CosmeticData"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
 
+local DeathEffectDesigns = require(Shared:WaitForChild("DeathEffectDesigns"))
+
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
+local DeathFxService = require(script.Parent:WaitForChild("DeathFxService"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
 
 local KillAnimService = {}
 
 local killAnimFx = Remotes.Event("KillAnimFx")
+
+-- How long after the effect's own life the server waits before hiding a claimed body: the client's
+-- copy starts a round trip later than this clock, and every design has the body gone by its end.
+local CLAIM_MARGIN = 0.4
 
 -- Where the body is. The root first; a rig that has lost it (a shattered or vaporised body) still
 -- has a pivot while it exists.
@@ -60,7 +73,13 @@ function KillAnimService.Play(killer, victim)
 	if not SafeValue.Vector3(position) then
 		return false
 	end
-	killAnimFx:FireAllClients({ id = id, position = position })
+	local design = DeathEffectDesigns.Get(id)
+	local character = Combatants.GetCharacter(victim)
+	local body = nil
+	if design and character and DeathFxService.Claim(character, design.life + CLAIM_MARGIN) then
+		body = character
+	end
+	killAnimFx:FireAllClients({ id = id, position = position, body = body })
 	return true
 end
 

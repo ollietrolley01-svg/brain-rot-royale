@@ -1155,18 +1155,20 @@ CosmeticData.Items = {
 		description = "Crate exclusive. Swims through space. Glides through lobbies.",
 	},
 
-	-- Kill animations (#24, 2026-09-24): what plays where a body falls when the owner gets the
-	-- kill. KillAnimService fires the equipped one to every client and KillAnimFxClient builds it,
-	-- keyed by these ids, with a cap on parts and particles and a lifetime under three seconds.
-	-- Priced inside the same rarity bands as the skins, auras and parachutes. None is a crate
-	-- exclusive, because no crate draws this kind yet: a crateOnly one could never be had.
+	-- Death effects (#24, 2026-09-24; kind "KillAnimation" and the save's `killAnimation` slot keep
+	-- their first name, so nothing saved changes): what plays on the body when the owner gets the
+	-- kill. KillAnimService fires the equipped one to every client and KillAnimFxClient builds it
+	-- from Shared/DeathEffectDesigns, keyed by these ids; the shop's previews play the same designs.
+	-- Fifteen, laid out like the parachutes: Common to Epic sold in the rotating shop, priced inside
+	-- the same rarity bands as the skins, auras and parachutes; Legendary and up crate exclusives,
+	-- drawn by the Death Effect Crate (CrateData), the only crate that rolls this kind.
 	KillConfettiPop = {
 		name = "Party Popper",
 		kind = "KillAnimation",
 		rarity = "Common",
 		price = 3000,
 		color = Color3.fromRGB(255, 120, 190),
-		description = "Pop. Streamers. Nobody asked.",
+		description = "They wind up, then POP. Streamers everywhere. Nobody asked.",
 	},
 	KillRotPuddle = {
 		name = "Rot Puddle",
@@ -1176,13 +1178,29 @@ CosmeticData.Items = {
 		color = Color3.fromRGB(150, 196, 96),
 		description = "They melt into a bubbling green puddle. Mind your shoes.",
 	},
+	KillBalloonFloat = {
+		name = "Balloon Getaway",
+		kind = "KillAnimation",
+		rarity = "Common",
+		price = 4500,
+		color = Color3.fromRGB(255, 84, 104),
+		description = "Three balloons carry them off into the sky. One pops. Bye.",
+	},
 	KillBigBonk = {
 		name = "Big Bonk",
 		kind = "KillAnimation",
 		rarity = "Uncommon",
 		price = 7000,
 		color = Color3.fromRGB(168, 122, 72),
-		description = "A bat the size of a lamppost comes down from the sky. Bonk.",
+		description = "A bat the size of a lamppost winds up and flattens them. Bonk.",
+	},
+	KillInkSplat = {
+		name = "Ink Splat",
+		kind = "KillAnimation",
+		rarity = "Uncommon",
+		price = 7500,
+		color = Color3.fromRGB(150, 60, 255),
+		description = "They go dark, bulge, and SPLAT into a puddle of glowing ink.",
 	},
 	KillRotGhost = {
 		name = "Rot Ghost",
@@ -1190,7 +1208,15 @@ CosmeticData.Items = {
 		rarity = "Uncommon",
 		price = 8000,
 		color = Color3.fromRGB(214, 236, 255),
-		description = "Their ghost floats up, waves, and fades. Very polite.",
+		description = "They sink away and their ghost floats up, waves, and fades. Very polite.",
+	},
+	KillPixelDissolve = {
+		name = "Pixel Delete",
+		kind = "KillAnimation",
+		rarity = "Rare",
+		price = 14000,
+		color = Color3.fromRGB(60, 240, 255),
+		description = "They glitch, and a scan line deletes them into floating voxels.",
 	},
 	KillDrumStamp = {
 		name = "Drum Stamp",
@@ -1198,7 +1224,7 @@ CosmeticData.Items = {
 		rarity = "Rare",
 		price = 15000,
 		color = Color3.fromRGB(206, 150, 80),
-		description = "A spinning war drum slams down and stamps a ring in the ground.",
+		description = "A spinning war drum drops out of the sky and stamps them flat.",
 	},
 	KillCoinFountain = {
 		name = "Coin Fountain",
@@ -1206,7 +1232,7 @@ CosmeticData.Items = {
 		rarity = "Rare",
 		price = 16000,
 		color = Color3.fromRGB(255, 196, 64),
-		description = "A fountain of SahurCoins. Sadly not real ones.",
+		description = "They turn to gold and burst into SahurCoins. Sadly not real ones.",
 	},
 	KillBrainBlast = {
 		name = "Brain Blast",
@@ -1214,7 +1240,47 @@ CosmeticData.Items = {
 		rarity = "Epic",
 		price = 30000,
 		color = Color3.fromRGB(255, 150, 176),
-		description = "A giant brain swells, wobbles and pops in a pink shockwave.",
+		description = "A giant brain swells out of their head, throbs, and pops in a pink shockwave.",
+	},
+	KillLightningSmite = {
+		name = "Rot Smite",
+		kind = "KillAnimation",
+		rarity = "Epic",
+		price = 35000,
+		color = Color3.fromRGB(210, 236, 255),
+		description = "Storm clouds gather, lightning strikes, and they crumble to ash.",
+	},
+	KillCrystalShatter = {
+		name = "Crystal Shatter",
+		kind = "KillAnimation",
+		rarity = "Legendary",
+		crateOnly = true,
+		color = Color3.fromRGB(150, 226, 255),
+		description = "Crate exclusive. Crystals grow round them, freeze them solid, and shatter.",
+	},
+	KillRotVortex = {
+		name = "Rot Vortex",
+		kind = "KillAnimation",
+		rarity = "Legendary",
+		crateOnly = true,
+		color = Color3.fromRGB(110, 200, 70),
+		description = "Crate exclusive. A funnel of rot spins them up into the sky and pops.",
+	},
+	KillMeteorStrike = {
+		name = "Brainrot Meteor",
+		kind = "KillAnimation",
+		rarity = "Mythic",
+		crateOnly = true,
+		color = Color3.fromRGB(255, 110, 20),
+		description = "Crate exclusive. A burning meteor. A crater. Rocks. Overkill.",
+	},
+	KillBlackHole = {
+		name = "Rot Singularity",
+		kind = "KillAnimation",
+		rarity = "Secret",
+		crateOnly = true,
+		color = Color3.fromRGB(150, 70, 255),
+		description = "Crate exclusive. A black hole opens, swallows them whole, and goes off like a star.",
 	},
 }
 

@@ -33,6 +33,9 @@ ShopRotation.RarityWeight = { Common = 100, Uncommon = 55, Rare = 25, Epic = 9, 
 ShopRotation.CrateChance = {
 	Common = 1, Uncommon = 1, Rare = 0.85, Epic = 0.6, Legendary = 0.25, Mythic = 0.1,
 	Accessory = 0.7, Skin = 0.75, Aura = 0.5, Parachute = 0.5,
+	-- The Death Effect Crate (2026-09-24). Drawn last in CrateData.Order, so its roll comes after
+	-- every other crate's in each rotation and theirs are exactly as they were.
+	DeathEffect = 0.5,
 	-- Sold for Robux, so it's never out of stock.
 	Super = 1,
 }
@@ -58,9 +61,11 @@ end
 -- exactly as they were. tools/parachute_shop_probe.lua checks that against the old draw.
 ShopRotation.ParachuteSlots = 2
 
--- Kill animations on sale per rotation (#24, 2026-09-24). Drawn last, from a Random of their own,
--- for the same reason as the parachutes: every earlier draw in every rotation stays as it was.
-ShopRotation.KillAnimationSlots = 2
+-- Death effects (kind "KillAnimation") on sale per rotation (#24, 2026-09-24). Drawn last, from a
+-- Random of their own, for the same reason as the parachutes: every earlier draw in every rotation
+-- stays as it was. Four of the eleven buyable ones at a time, so the Death Effects tab always has a
+-- real choice without the whole range being on the shelf at once.
+ShopRotation.KillAnimationSlots = 4
 
 local cached = nil
 
