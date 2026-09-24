@@ -27,6 +27,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local GunModels = require(Shared:WaitForChild("GunModels"))
+local ItemData = require(Shared:WaitForChild("ItemData"))
 local ItemModels = require(Shared:WaitForChild("ItemModels"))
 local Rarity = require(Shared:WaitForChild("Rarity"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
@@ -58,6 +59,73 @@ end
 local PANEL_W = panelSize(COLUMNS).X
 local PANEL_H = panelSize(COLUMNS).Y
 InventoryPanel.Size = Vector2.new(PANEL_W, PANEL_H)
+
+--------------------------------------------------------------------------------
+-- What a slot is, in words (#86 C14, C39, C40, M13)
+--------------------------------------------------------------------------------
+
+-- A gun's name carries no type: "Scrolla Scrolla Brrrap" could be anything, and whether it is an SMG or a
+-- sniper is the first thing a player needs to know. The word comes from the gun's `style` (the silhouette
+-- WeaponService builds), so it cannot disagree with the model in the player's hands. LootService keeps a
+-- copy of this table for the floor label -- the server cannot require a StarterPlayerScripts module --
+-- and tools/player_eye_check.py ("gunword") fails the moment the two differ or a style has no word.
+local GUN_TYPE_WORDS = {
+	pistol = "PISTOL", revolver = "REVOLVER", smg = "SMG", rifle = "RIFLE", dmr = "MARKSMAN",
+	shotgun = "SHOTGUN", doublebarrel = "SHOTGUN", crossbow = "CROSSBOW", sniper = "SNIPER",
+	blaster = "BLASTER", launcher = "LAUNCHER", lmg = "MACHINE GUN", minigun = "MINIGUN",
+	cannon = "CANNON", railgun = "RAILGUN",
+}
+
+-- The type word, or nil when the name already says it ("Rot SMG", "Bonker Double Barrel", "Grass
+-- Toucher DMR"): "Rot SMG · SMG" is noise. Compared without case or spaces, against the word and the
+-- style both, so "Double Barrel" matches "doublebarrel".
+function InventoryPanel.GunTypeWord(name, style)
+	local word = style and GUN_TYPE_WORDS[style]
+	if not word then
+		return nil
+	end
+	local flat = string.gsub(string.lower(name or ""), "%s", "")
+	local wordFlat = string.gsub(string.lower(word), "%s", "")
+	if string.find(flat, wordFlat, 1, true) or string.find(flat, style, 1, true) then
+		return nil
+	end
+	return word
+end
+
+-- The longer text a card shows while it is hovered or selected, and the HUD's line under a held item:
+-- an item's description and its standing rule (the structure cap, M13), or a gun's type, reach and hit.
+function InventoryPanel.Describe(slot)
+	if type(slot) ~= "table" then
+		return ""
+	end
+	if slot.kind == "item" then
+		local item = ItemData.Get(slot.id)
+		if not item then
+			return ""
+		end
+		local text = item.description or ""
+		if item.capRule then
+			text = text .. " " .. item.capRule
+		end
+		return text
+	end
+	local def = WeaponData.Get(slot.id)
+	if not def then
+		return ""
+	end
+	local parts = {}
+	local word = GUN_TYPE_WORDS[slot.style or def.style]
+	if word then
+		table.insert(parts, word)
+	end
+	-- Range is where a hitscan shot stops doing anything at all (WeaponData's header: no falloff, nothing
+	-- beyond it), so it is the number that explains a miss. A launcher's round flies until it lands.
+	if def.range and not def.projectile then
+		table.insert(parts, string.format("reach %d studs", def.range))
+	end
+	table.insert(parts, string.format("%d dmg%s", def.damage or 0, (def.pellets or 1) > 1 and (" x" .. def.pellets) or ""))
+	return table.concat(parts, "  •  ")
+end
 
 -- Two columns on a narrow upright screen, four everywhere else.
 function InventoryPanel.ColumnsFor(viewport)
@@ -554,6 +622,26 @@ function InventoryPanel:_buildCard(index, parent)
 		ZIndex = ZINDEX + 5,
 		Parent = card,
 	}, { rounded(2) })
+	-- The card's detail (Describe): over the icon and the ammo chip, which it hides, while the card is
+	-- hovered or selected. The name and the tier line stay where they are, so the card still says what
+	-- it is. Scaled into the box rather than truncated: an item's description is the whole point, and the
+	-- longest (Sticky Bomb, or a fortress with its cap rule) is about 150 characters.
+	refs.detail = create("TextLabel", {
+		Name = "Detail",
+		Position = UDim2.fromOffset(10, 36),
+		Size = UDim2.new(1, -20, 1, -84),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		Text = "",
+		TextColor3 = C.Text,
+		TextScaled = true,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Visible = false,
+		ZIndex = ZINDEX + 5,
+		Parent = card,
+	}, { create("UITextSizeConstraint", { MaxTextSize = 13 }) })
 	refs.empty = create("TextLabel", {
 		Name = "Empty",
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -590,6 +678,15 @@ function InventoryPanel:_paintCard(refs, slot, state)
 	refs.card.BackgroundColor3 = filled and C.Panel or C.Background
 	refs.card.BackgroundTransparency = filled and 0 or 0.25
 	setIcon(refs, filled and slot or nil)
+
+	-- Hovered or selected, and not being dragged: the words instead of the picture.
+	local detailed = filled and state.detail == true and not state.source and not state.target
+	refs.detail.Visible = detailed
+	refs.detail.Text = detailed and InventoryPanel.Describe(slot) or ""
+	if detailed then
+		refs.icon.Visible = false
+		refs.count.Visible = false
+	end
 
 	if filled then
 		local color = Rarity.Color(slot.rarity)
@@ -649,6 +746,7 @@ function InventoryPanel:_render()
 			selected = self.selected == index,
 			target = drag ~= nil and drag.active and drag.hover == index and drag.hover ~= drag.from,
 			source = drag ~= nil and drag.active and drag.from == index,
+			detail = (self.selected == index or self.hovered == index) and not (drag ~= nil and drag.active),
 		})
 	end
 	local closeKey = self.options.closeKeyLabel and self.options.closeKeyLabel()
@@ -774,6 +872,30 @@ function InventoryPanel:_connectPointer()
 				return
 			end
 			self.drag = { from = index, start = Vector2.new(input.Position.X, input.Position.Y), input = input, active = false, hover = nil }
+		end)
+		-- Hovering a card shows its detail (#86 C14); a tap does too, by selecting it. A gamepad's
+		-- selection counts as hovering, since it has no pointer.
+		local function hover(on)
+			if on then
+				self.hovered = index
+			elseif self.hovered == index then
+				self.hovered = nil
+			end
+			if self.open then
+				self:_render()
+			end
+		end
+		refs.card.MouseEnter:Connect(function()
+			hover(true)
+		end)
+		refs.card.MouseLeave:Connect(function()
+			hover(false)
+		end)
+		refs.card.SelectionGained:Connect(function()
+			hover(true)
+		end)
+		refs.card.SelectionLost:Connect(function()
+			hover(false)
 		end)
 		-- A gamepad pressing A on a selected card taps it (there's no pointer to drag with).
 		refs.card.Activated:Connect(function(input)
@@ -925,7 +1047,7 @@ function InventoryPanel:Close(byPanel)
 		return
 	end
 	self.open = false
-	self.selected, self.drag = nil, nil
+	self.selected, self.drag, self.hovered = nil, nil, nil
 	self.lifted.card.Visible = false
 	local selected = GuiService.SelectedObject
 	if selected and selected:IsDescendantOf(self.root) then

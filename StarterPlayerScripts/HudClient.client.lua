@@ -1199,6 +1199,29 @@ local weaponName = create("TextLabel", {
 	Parent = weaponFrame,
 })
 
+-- What the held item does (#86 C14), with its standing rule (the structure cap, M13): the left of the
+-- ammo row, which is empty while an item is in hand ("x3" or "RAISING" is all the right-hand side says,
+-- under 130 px at 30 pt). There is no row under the item line to put it in -- the slots start 6 px
+-- below it -- and a taller plate would push the whole hotbar up the screen. Two lines of 12 pt in 516
+-- px hold the longest description with its cap rule. Desktop shape only: setHotbarShape hides it on a
+-- phone, as it does the ammo and item lines.
+do
+	local itemDetail = create("TextLabel", {
+		Name = "ItemDetail",
+		Size = UDim2.new(1, -150, 0, 32),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		Text = "",
+		TextColor3 = C.Muted,
+		TextSize = 12,
+		TextWrapped = true,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Visible = false,
+		Parent = weaponFrame,
+	})
+end
+
 local slotRow = create("Frame", {
 	Position = UDim2.new(0, 0, 0, 58),
 	Size = UDim2.new(1, 0, 0, 64),
@@ -1543,6 +1566,17 @@ local function renderWeapon()
 	hudLayout.show(healthFrame, true)
 
 	local slot = loadout.equipped and loadout.slots[loadout.equipped]
+	-- The words for the slot (#86 C14 description, C39 gun type), from the inventory module, which says
+	-- them in its cards too. Required here, not at the top: this chunk is close to Luau's local limit.
+	local okPanel, Panel = pcall(require, script.Parent:FindFirstChild("InventoryPanel"))
+	if not okPanel or type(Panel) ~= "table" or type(Panel.Describe) ~= "function" then
+		Panel = nil
+	end
+	local itemDetail = weaponFrame:FindFirstChild("ItemDetail")
+	if itemDetail then
+		itemDetail.Text = (Panel and slot and slot.kind == "item") and Panel.Describe(slot) or ""
+		itemDetail.Visible = itemDetail.Text ~= "" and weaponFrame:GetAttribute("PhoneShape") ~= true
+	end
 	if slot and slot.kind == "item" then
 		-- The same "not ready yet" as a gun gets after a swap (#86 M16): a click in it is eaten.
 		local raising = (loadout.equipReadyIn or 0) > 0.05
@@ -3127,6 +3161,10 @@ do
 			end
 			ammoText.Visible = not phone
 			weaponName.Visible = not phone
+			local itemDetail = weaponFrame:FindFirstChild("ItemDetail")
+			if itemDetail then
+				itemDetail.Visible = not phone and itemDetail.Text ~= ""
+			end
 			if rowLayout then
 				rowLayout.Parent = phone and nil or slotRow
 			end
