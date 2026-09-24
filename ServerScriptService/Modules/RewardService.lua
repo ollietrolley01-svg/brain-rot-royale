@@ -490,6 +490,7 @@ function RewardService.EquipCosmetic(player, cosmeticId)
 		data.Cosmetics.aura = nil
 		data.Cosmetics.accessory = nil
 		data.Cosmetics.parachute = nil
+		data.Cosmetics.killAnimation = nil
 		StateSync.Push(player)
 		return true, "Cosmetics removed."
 	end
@@ -502,7 +503,9 @@ function RewardService.EquipCosmetic(player, cosmeticId)
 		return false, "You don't own that."
 	end
 
-	local SLOT_FOR_KIND = { GunSkin = "gunSkin", Aura = "aura", Accessory = "accessory", Parachute = "parachute" }
+	local SLOT_FOR_KIND = {
+		GunSkin = "gunSkin", Aura = "aura", Accessory = "accessory", Parachute = "parachute", KillAnimation = "killAnimation",
+	}
 	local slotKey = SLOT_FOR_KIND[item.kind]
 	if not slotKey then
 		return false, "That can't be equipped."

@@ -48,8 +48,9 @@ local function defaultData()
 			Style = 0, DeluxeStyle = 0, PrestigeStyle = 0,
 		},
 		-- `parachute` (the canopy worn on the drop-in and the Rot Glider) was added 2026-09-17; older
-		-- saves have none and keep the default canopy.
-		Cosmetics = { owned = {}, gunSkin = nil, aura = nil, accessory = nil, parachute = nil },
+		-- saves have none and keep the default canopy. `killAnimation` (what plays on a body when
+		-- this player gets the kill, #24) was added 2026-09-24; older saves have none and play nothing.
+		Cosmetics = { owned = {}, gunSkin = nil, aura = nil, accessory = nil, parachute = nil, killAnimation = nil },
 		Pass = { xp = 0, claimedFree = {}, claimedPremium = {} },
 		Daily = { lastClaimDay = 0, streak = 0 },
 		Stats = { wins = 0, kills = 0, matches = 0 },
@@ -206,6 +207,9 @@ local function reconcile(saved)
 		end
 		if type(saved.Cosmetics.accessory) == "string" then
 			data.Cosmetics.accessory = saved.Cosmetics.accessory
+		end
+		if type(saved.Cosmetics.killAnimation) == "string" then
+			data.Cosmetics.killAnimation = saved.Cosmetics.killAnimation
 		end
 	end
 

@@ -463,6 +463,7 @@ ProgressionService.Start()
 PlaytimeService.Start()
 BattlePassService.OnXp = ProgressionService.OnPassXp
 MatchService.OnKillCredited = ProgressionService.OnKillCredited
+MatchService.OnKillCredited = require(Modules:WaitForChild("KillAnimService")).Chain(MatchService.OnKillCredited) -- #24 kill animations
 MatchService.ProgressionSummary = ProgressionService.MatchSummary
 TradeService.OnTradeMoved = ProgressionService.OnTradeMoved
 LobbyService.Start()
