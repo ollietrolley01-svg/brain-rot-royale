@@ -867,6 +867,21 @@ SoundConfig.Sounds = {
 		},
 	},
 
+	-- You got the kill: a bright ping over a low thump. KillFeedback plays it twice, a step apart, and
+	-- raises the pitch with each kill in a chain, so a double or triple kill climbs (Oliver, 2026-09-22:
+	-- "make it more satisfying to get a kill").
+	KillConfirm = {
+		volume = 0.55,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = PING, volume = 1, pitch = 1.3 },
+			{ id = SWITCH3, volume = 0.5, pitch = 1.1 },
+			{ id = BASS, volume = 0.5, pitch = 0.7 },
+		},
+		effects = { { "EqualizerSoundEffect", { HighGain = 3, MidGain = 0, LowGain = 2 } } },
+	},
+
 	-- Someone went down.
 	Elimination = {
 		volume = 0.6,

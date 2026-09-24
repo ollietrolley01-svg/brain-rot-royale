@@ -118,6 +118,31 @@ function WeaponService.Clear(player)
 	syncShield(player, 0)
 end
 
+-- A player alive in a match with no loadout can't pick anything up: GiveWeapon and GiveConsumable
+-- refuse without one, and the pickup prompt said nothing, so the player pressed E and nothing
+-- happened until a respawn made a new loadout (Oliver, 2026-09-22: "I sometimes also just cant pick
+-- up items till i respawn"). Whatever cleared it, a living player who is in the match gets an empty
+-- loadout back here instead, and the output log says so, so the cause can be found.
+local warnedMissing = {}
+local function loadoutFor(player)
+	local loadout = loadouts[player]
+	if loadout then
+		return loadout
+	end
+	local character = typeof(player) == "Instance" and player:IsA("Player") and player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health > 0 and player:GetAttribute("InMatch") == true then
+		if not warnedMissing[player] then
+			warnedMissing[player] = true
+			warn(string.format("[WeaponService] %s was alive in the match with no loadout; made a fresh one.\n%s",
+				player.Name, debug.traceback()))
+		end
+		loadouts[player] = blankLoadout()
+		return loadouts[player]
+	end
+	return nil
+end
+
 function WeaponService.Push(player)
 	local loadout = loadouts[player]
 	if not loadout then
@@ -1447,7 +1472,7 @@ end
 -- `ammo` ({ mag, reserve }) restores a dropped gun's real ammo; without it the gun is full.
 function WeaponService.GiveWeapon(player, weaponId, ammo)
 	local def = WeaponData.Get(weaponId)
-	local loadout = loadouts[player]
+	local loadout = loadoutFor(player)
 	if not def or not loadout then
 		return false, "Not in a match."
 	end
@@ -1576,7 +1601,7 @@ end
 -- slots. Returns how many fit (0 when there's no room), so the rest can stay on the floor.
 function WeaponService.GiveConsumable(player, itemId, amount)
 	local item = ItemData.Get(itemId)
-	local loadout = loadouts[player]
+	local loadout = loadoutFor(player)
 	if not item or not loadout then
 		return 0
 	end

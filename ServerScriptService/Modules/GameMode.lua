@@ -23,7 +23,9 @@ local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local ModeKingOfTheHill = require(script.Parent:WaitForChild("ModeKingOfTheHill"))
 local ModeTeams = require(script.Parent:WaitForChild("ModeTeams"))
+local LootService = require(script.Parent:WaitForChild("LootService"))
 local QuestService = require(script.Parent:WaitForChild("QuestService"))
+local RewardService = require(script.Parent:WaitForChild("RewardService"))
 local StateSync = require(script.Parent:WaitForChild("StateSync"))
 local StormService = require(script.Parent:WaitForChild("StormService"))
 
@@ -399,6 +401,10 @@ end
 
 local KOTH_TICK = 0.25
 
+-- Oliver, 2026-09-23 14:32: "make sure that the loot regenerates over the course of the round like
+-- every minute or so". Every 60 s each base is refilled to its full stock.
+local BASE_RESTOCK = 60
+
 local function startWorld(mapInfo)
 	-- No storm. Stop() sets the broadcast status to "Idle", which is what makes the HUD's storm
 	-- line and the client's ring disappear on their own with no client change at all.
@@ -411,6 +417,30 @@ local function startWorld(mapInfo)
 	deadlineMs = nowMs() + (current.timeLimit or 480) * 1000
 
 	local centre, radius = ModeTeams.Setup(current, mapInfo)
+
+	-- Base loot (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Each base is
+	-- stocked at the start and refilled to full every BASE_RESTOCK seconds while the match runs, so
+	-- whoever respawns later still finds something at home. Off the main thread: seeding yields.
+	local stockGeneration = generation
+	task.spawn(function()
+		while running and generation == stockGeneration do
+			for team = 1, GameModes.TeamCount do
+				local base = ModeTeams.BaseOf(team)
+				if base then
+					local have = LootService.CountNear(base, LootService.BaseRadius)
+					for kind, want in pairs(LootService.BaseStock) do
+						local missing = want - (have[kind] or 0)
+						if missing > 0 then
+							local inner = kind == "chest" and 20 or 10
+							local gap = kind == "chest" and 14 or 6
+							LootService.SeedAt(ModeTeams.BaseLootSpots(team, missing, inner, LootService.BaseRadius - 5, gap), kind)
+						end
+					end
+				end
+			end
+			task.wait(BASE_RESTOCK)
+		end
+	end)
 
 	-- The arena boundary: a circle that never shrinks, drawn through the storm's own broadcast so
 	-- the ring, the minimap circle and the bots' rotation logic all work with nothing new.
@@ -445,12 +475,15 @@ local function startWorld(mapInfo)
 				return
 			end
 			if current.id == "KingOfTheHill" then
-				local team, status = ModeKingOfTheHill.Tick()
+				-- Objective Capture: every objective a team owns scores it a point a second.
+				local team, status, _, scoring = ModeKingOfTheHill.Tick()
 				hillHolder, hillStatus = team, status
 				accumulated += KOTH_TICK
 				if accumulated >= 1 then
 					accumulated -= 1
-					addScore(team, 1)
+					for _, owner in ipairs(scoring or {}) do
+						addScore(owner, 1)
+					end
 				end
 			end
 			if nowMs() >= deadlineMs then
@@ -487,8 +520,8 @@ local function placeAtStart(player, character, index)
 	if not ok then
 		warn("[GameMode] opening loadout failed for " .. Combatants.GetName(player) .. ": " .. tostring(err))
 	end
-	announce(StateSync.Notify, player, string.format("%s — %s", current.name,
-		GameModes.TeamName(ModeTeams.TeamOf(player) or 1)))
+	announce(StateSync.Notify, player, string.format("%s — you're on %s. Teammates are green, enemies red.", current.name,
+		string.upper(GameModes.TeamName(ModeTeams.TeamOf(player) or 1))))
 	return index
 end
 
@@ -537,11 +570,19 @@ local function results()
 	}
 end
 
--- Placeholder until the reward-rate work lands: credits the kill quest and nothing else, so no
--- economy is changed by these modes before the per-minute baseline has been measured.
+-- The team-mode payout (Oliver, 2026-09-23 16:10: "theres no rewards for the team gamemodes!"): a crate,
+-- coins and pass XP for a win, a draw or a loss (MatchConfig.TeamModeRewards). Kills are paid as they
+-- happen, in MatchService's respawn branch.
 local function awardResult(player, rank)
-	QuestService.Progress(player, "matches", 1)
-	return { rank = rank, crate = nil, coins = 0, xp = 0, pending = true }
+	local team = ModeTeams.TeamOf(player)
+	local winner = leader()
+	local outcome = winner == nil and "draw" or (team == winner and "win" or "loss")
+	local ok, reward = pcall(RewardService.AwardTeamResult, player, outcome, rank)
+	if not ok then
+		warn("[GameMode] team reward failed for " .. player.Name .. ": " .. tostring(reward))
+		return { rank = rank, coins = 0, xp = 0 }
+	end
+	return reward
 end
 
 local respawnBehaviour = {

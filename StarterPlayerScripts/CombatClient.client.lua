@@ -725,12 +725,29 @@ RunService.Heartbeat:Connect(function(delta)
 	end
 end)
 
+-- Spray (Oliver, 2026-09-22: "the guns need a recoil and accuracy dropoff as they shoot like in other
+-- similar games"). Each shot of an unbroken spray kicks harder than the last and sideways drift grows,
+-- and while the trigger stays down the kick only half-recovers between shots, so the view (and the aim,
+-- which is read from the camera) climbs and the player pulls down against it. Let go and it settles.
+-- The server widens the spread the same way (CombatService bloom).
+local spray = { shots = 0, lastAt = 0 }
+
 function addRecoil(def)
+	local now = os.clock()
+	if now - spray.lastAt > math.max(0.3, 2.2 / math.max(def.fireRate, 0.1)) then
+		spray.shots = 0
+	end
+	spray.lastAt = now
+	spray.shots += 1
 	-- Heavier, slower weapons kick harder; a 13/sec chaingun would be unusable otherwise.
 	local kick = math.clamp(def.damage / 60, 0.25, 2.2) / math.max(1, def.fireRate * 0.35)
 	kick *= 1 - (1 - CROUCH_STEADY.SteadyRecoil) * steadyFactor
-	recoilPitch += math.rad(kick * 1.7)
-	recoilYaw += math.rad((math.random() - 0.5) * kick * 1.4)
+	kick *= 1 + math.min((spray.shots - 1) * 0.12, 1.2)
+	if aiming then
+		kick *= 0.7
+	end
+	recoilPitch = math.min(recoilPitch + math.rad(kick * 1.7), math.rad(14))
+	recoilYaw += math.rad((math.random() - 0.5) * kick * 1.4 * (1 + math.min(spray.shots * 0.06, 0.8)))
 end
 
 -- Two passes around Roblox's camera update. The default camera module reads
@@ -761,7 +778,9 @@ RunService:BindToRenderStep("BRR_Recoil", Enum.RenderPriority.Camera.Value + 1, 
 	camera.CFrame = camera.CFrame * offset
 	appliedRecoil = offset
 
-	local decay = math.clamp(delta * 12, 0, 1)
+	-- Mid-spray the kick barely recovers, so it builds; once the trigger is let go it settles fast.
+	local spraying = os.clock() - spray.lastAt < 0.18
+	local decay = math.clamp(delta * (spraying and 3 or 12), 0, 1)
 	recoilPitch -= recoilPitch * decay
 	recoilYaw -= recoilYaw * decay
 end)
@@ -1304,6 +1323,32 @@ for _, side in ipairs({ -1, 1 }) do
 	reticle(UDim2.fromScale(0.5, 0.5 + side * 0.33), UDim2.new(0, 4, 0.34, 0))
 end
 reticle(UDim2.fromScale(0.5, 0.5), UDim2.fromOffset(4, 4), Color3.fromRGB(255, 60, 60))
+
+-- At night (Night Ops, or any event that turns the lights down) a black reticle vanishes against a dark
+-- sky: the lines turn glowing green instead, and back to black when it's light.
+do
+	local Lighting = game:GetService("Lighting")
+	local lines = {}
+	for _, child in ipairs(scopeLens:GetChildren()) do
+		if child:IsA("Frame") and child.BackgroundColor3 == Color3.new(0, 0, 0) then
+			table.insert(lines, child)
+		end
+	end
+	local night = false
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			local clock = Lighting.ClockTime
+			local dark = clock < 5.5 or clock > 18.5 or Lighting.Brightness < 0.6
+			if dark ~= night then
+				night = dark
+				for _, line in ipairs(lines) do
+					line.BackgroundColor3 = dark and Color3.fromRGB(90, 255, 130) or Color3.new(0, 0, 0)
+				end
+			end
+		end
+	end)
+end
 
 --------------------------------------------------------------------------------
 -- Building
@@ -2028,6 +2073,10 @@ Remotes.Event("ItemUsed").OnClientEvent:Connect(function(character, itemId)
 	burst(root.Position, item.color, item.kind == "movement" and 4 or 2.6, 14)
 end)
 
+-- Guns whose viewmodel template has been asked for ahead of time (the cache itself lives in Viewmodel
+-- and may evict; a repeat Preload of an evicted gun would just rebuild it, so this only stops asking twice).
+local preloaded = {}
+
 loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	-- Pickup cue whenever something was added. Only against an existing loadout, so the fresh
 	-- one handed out at match start doesn't ping; uses (count going down) stay silent.
@@ -2037,6 +2086,30 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	end
 
 	loadout = newLoadout
+	-- Build each carried gun's viewmodel template now, while it's being picked up, rather than on its
+	-- first draw (Viewmodel.Preload; it had no caller, so every first draw built one and hitched). One
+	-- gun per frame so a full loadout arriving at once doesn't hitch here instead. Unskinned only: a
+	-- skin is read off the held gun at draw time, which isn't known yet.
+	if newLoadout and type(newLoadout.slots) == "table" then
+		local wanted = {}
+		for _, slot in pairs(newLoadout.slots) do
+			if type(slot) == "table" and slot.kind == "weapon" and slot.id then
+				local def = WeaponData.Get(slot.id)
+				if def and not preloaded[def.id] then
+					preloaded[def.id] = true
+					table.insert(wanted, def)
+				end
+			end
+		end
+		if #wanted > 0 then
+			task.spawn(function()
+				for _, def in ipairs(wanted) do
+					task.wait()
+					pcall(Viewmodel.Preload, def, Rarity.Color(def.rarity), Enum.Material.Metal, false)
+				end
+			end)
+		end
+	end
 	if newLoadout and newLoadout.using then
 		useEndsAt = os.clock() + newLoadout.using.remaining
 		useDuration = newLoadout.using.duration

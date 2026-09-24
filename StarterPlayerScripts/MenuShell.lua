@@ -118,7 +118,7 @@ function MenuShell.new(options)
 	}
 	local header, walletSlot = UiParts.header({
 		parent = self.panel,
-		title = options.title or "BRAIN ROT ROYALE",
+		title = options.title or "BRAINROT BATTLES",
 		actions = actions,
 	})
 	self.header = header

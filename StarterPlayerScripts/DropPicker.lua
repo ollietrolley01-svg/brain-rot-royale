@@ -289,7 +289,9 @@ end
 -- Draws the ground, then the river, then the roads, into one ImageLabel. Returns the label and the
 -- pixel size, or nil and the reason it could not.
 function DropPicker.DrawImage(parent, data, px)
-	local W = math.clamp(math.floor(px), 192, 384)
+	-- Up to 640 px (was 384) so a large drop screen draws the map at its own size instead of stretching
+	-- a 384 px picture (Oliver 09-22 15:34).
+	local W = math.clamp(math.floor(px), 192, 640)
 	local ok, result = pcall(function()
 		local AssetService = game:GetService("AssetService")
 		local image = AssetService:CreateEditableImage({ Size = Vector2.new(W, W) })
@@ -572,8 +574,8 @@ function DropPicker.DrawOverlays(disc, px, data, options)
 		})
 	end
 
-	-- Town rings, at the town's own radius.
-	for _, town in ipairs(data.towns) do
+	-- Town rings removed (Oliver 16:05: "get rid of the town bubbles"); the town name labels stay.
+	for _, town in ipairs({}) do
 		local ring = math.max(town.r * k, 8)
 		create("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
@@ -1251,7 +1253,7 @@ function Picker:Layout()
 	})
 	local lx, ly = 0, 0
 	for _, item in ipairs({
-		{ "Town", "ring" }, { "Landmark", "diamond" }, { "Road", "road" },
+		{ "Landmark", "diamond" }, { "Road", "road" },
 		{ "Water", "w" }, { "Buildings", "b" },
 	}) do
 		local w = textWidth(item[1], Type.Caption.Size, Type.Caption.Font)

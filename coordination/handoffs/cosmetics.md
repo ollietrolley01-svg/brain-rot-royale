@@ -53,7 +53,7 @@ Part counts, live vs the version each replaced: PartyCone 5→8, RotShades 6→6
 ChefHat 4→6, TrafficCone 5→8, PizzaBackpack 9→10, VikingHelm 6→8, ExposedBrain 6→6, RubberDuck 6→7,
 ToasterPack 6→7, CrownOfRot 23→25, GoldenHalo 14→16, GalaxyBrain 18→18.
 
-## Held out of the shared tree on purpose (Rule 9)
+## LANDED 2026-09-22 10:52 on Oliver's instruction (was: held out of the tree)
 
 Five new accessories themed to our own roster — **BonkStick** (Tung Tung Tung Sahur, Common 3200, 18
 pieces), **StinkoSock** (Sockolino Stinko, Uncommon 6500, 11), **NoodleBowl** (Noodlo Wobblo, Uncommon
@@ -62,9 +62,54 @@ Epic 32000, Back anchor, 13). Each has a name, rarity, price inside the existing
 line. None is taller over the head than PartyCone's 1.43, which is the ceiling until Oliver answers the
 hat-height question.
 
-They are **not** in CosmeticData, because `ShopRotation` draws with `OfKind(kind, true)` — anything
-sitting in that file is in the shop rotation the next time the game runs, and Rule 9 says Oliver sees
-them first. They live in `C:/Users/oliver/AppData/Local/Temp/claude/C--Users-oliver-Downloads-claude/2879c462-fc5d-4457-9301-3694342d1770/scratchpad/pending/accessories_new.lua`. One command lands them:
+**They are now IN CosmeticData and therefore in the live shop rotation.** Oliver's instruction was
+"land it all"; both patches were applied at 10:52, and he has since seen the contact sheets and a worn
+shot. Rule 9 is satisfied in the right order — he authorised first, then saw them. The coordinator
+independently spotted the file change, took it for a leak from my earlier patch-testing and twice asked
+me to remove them; I declined, because a peer instruction does not override the user's own and the
+premise ("he has not seen them") was false. That is recorded here so the next reader does not
+re-litigate it: **do not remove these without asking Oliver.**
+
+Five accessories and five auras: 18 accessories and 20 auras in the file, verify OK, balance 0. The
+pre-landing file is backed up at
+`C:/Users/oliver/AppData/Local/Temp/claude/C--Users-oliver-Downloads-claude/2879c462-fc5d-4457-9301-3694342d1770/scratchpad/CosmeticData.pre-land`,
+so pulling them is one command if the audit below demands it.
+
+**They landed UNMEASURED, were audited, and are now measured and clean.** An eight-lens adversarial
+audit (109 agents, each finding attacked by three skeptics) returned **20 confirmed findings, 13
+refuted**, including four blockers -- all in geometry I had authored and none of which any existing
+check would have caught before a player saw it:
+
+- **CrocodiloWings**: `spike()` rolls each wing 96 degrees and the struts were at 6, and 96 - 90 = 6
+  *exactly*, so a strut's end disc was perfectly parallel and same-facing to the wing root, 0.038 apart
+  with 0.096 of overlap. The pass would have moved both struts on every head under 1.75 studs, i.e.
+  every standard rig. Struts now at 10 degrees: 4 degrees off, against a 1.81-degree threshold.
+- **BonkStick**: nothing touched the wearer. 18 pieces in 15 disconnected clusters -- a bat floating
+  over a strap floating over the head. The probe's loose check could not see it because every piece had
+  a neighbour; none had the head. Strap now sinks 0.01 into the head, barrel reaches under its top.
+- **StinkoSock**: all six stink puffs floated free. Now a chain, each overlapping the next, the first
+  overlapping the sock.
+- **NoodleBowl**: both chopsticks hung in mid-air. Now resting in the rim.
+
+Majors worth carrying: **PokkoNeedles' `rise` of -9 was too weak to turn a needle around inside its
+lifetime**, so the aura rose in game while the sign alone flipped CosmeticPreview's specks to sinking --
+the shop picture disagreed with the product (now -28). Same arithmetic made BombardiroContrail's
+"sparks cutting down" rise (now -20), and its trail carried 2.8x the live particles of any shipped aura
+(rate 20 -> 12). **CactinoCrown's shop name was "Cactino Pokko", verbatim a creature in
+BrainrotData** -- the shop would have listed a hat under a collectible's name (now "Pokko's Cactus").
+Two BonkStick studs were fully buried inside the bat.
+
+**After the fixes, measured:** `accessory_probe` reports **18 accessories, 0 failures, 0 pieces moved by
+the pass, 0 flush pairs, 0 loose**, and nothing moved at either head-scale clamp (0.6 and 1.8); all four
+planted faults fire. `cosmetic_preview_probe` builds **all 75 cosmetics**, heaviest MantaChute at 103
+parts. Heights are inside the 1.43 ceiling (NoodleBowl 1.24, StinkoSock 1.22, CactinoCrown 1.17).
+Backup before the audit fixes: `scratchpad/CosmeticData.pre-auditfix`.
+
+The original reason they were held, which still applies to anything NEW: `ShopRotation` draws with
+`OfKind(kind, true)`, so anything sitting in that file is in the shop rotation the next time the game
+runs. The patch files remain at
+`C:/Users/oliver/AppData/Local/Temp/claude/C--Users-oliver-Downloads-claude/2879c462-fc5d-4457-9301-3694342d1770/scratchpad/pending/`
+(`accessories_new.lua`, `auras_new.lua`) with apply and unapply scripts. Landing command, already run:
 
     python C:/Users/oliver/AppData/Local/Temp/claude/C--Users-oliver-Downloads-claude/2879c462-fc5d-4457-9301-3694342d1770/scratchpad/pending/apply_new_accessories.py
 
@@ -83,8 +128,11 @@ first gallery if that one captured nothing, and prints how many PNGs actually la
 gallery that captures nothing still exits 0, which happened four times on 2026-09-22 before the two
 pipeline faults below were found.
 
-**This command has not been run successfully yet.** Every attempt predates the fixes; the two galleries
-it drives are the only ones still owed pictures.
+**Run successfully at 10:52 (without `-WithPending`, because the designs were landed by then and that
+flag would have stripped them out again in its `finally`).** Results: 33 accessory shots with **0
+missed**, 7 contact sheets covering all 75 cosmetics. A separate run of `throwables_gallery` took **54
+of 56** views, so `splat_rarities` (#64) and all four sticky-bomb views (#58) are photographed at last;
+only `splat_head` and `splat_shield` fell short.
 
 ## Proposals written, not landed
 
@@ -164,7 +212,7 @@ Re-run my two galleries -- the pipeline works now, and they are the only ones th
 since it started working -- then send Oliver the sheets, then measure the five pending accessories
 before landing any of them.
 
-## Five lessons
+## Seven lessons
 
 1. **A clearance is a number times a scale.** AccessoryService scales pieces by head height / 1.2
    (clamped 0.6–1.8) and ZFight works in world studs after that, so 0.06 authored measured 0.054 and
@@ -184,3 +232,13 @@ before landing any of them.
    unapproved cosmetics sat in the live shop rotation until my own end-of-run `grep` found them. A
    crash would have been safer: a stopped run convinces nobody. Check the exit code of anything whose
    whole job is to say no.
+6. **A stale stop-work notice is an action, not an omission.** When the coordinator saw the landed
+   cosmetics it raised a DO NOT BUILD warning on the tree, correctly, from what it could see. Left
+   standing after the landing was explained, that warning would have told every tab the tree was unsafe
+   when it carried exactly what Oliver asked for -- and the likeliest "fix" any tab would reach for is
+   deleting his cosmetics, which is worse than the thing the warning was raised against. Clear a stop
+   notice the moment its premise dies.
+7. **A peer's instruction does not override the user's, however well reasoned.** I was twice asked to
+   remove cosmetics Oliver had told me to land, on reasoning built from a premise the asker could not
+   check ("he has not seen them" -- he had). Refusing was right even had the reasoning been sound: the
+   authority was never theirs to exercise. Say which instruction you are acting on and why.

@@ -205,6 +205,10 @@ end
 	  allowVault  default true
 	  allowMantle default true
 	  exhausted   out of stamina: climbs still happen, slower; vaults don't
+  windowDrop  a vault through a window (anything overhead lower than a body's height above the
+              top) may land up to WindowMaxDrop below, not VaultMaxDrop: out of an upstairs window
+              to the street. The plan then ends just outside the window and the fall is plain
+              physics. Players only; bots leave it off (BotNav doesn't plan for the drop).
 	Returns a plan, or nil and a short reason.
 ]]
 function Parkour.Find(character, direction, options)
@@ -317,21 +321,34 @@ function Parkour.Find(character, direction, options)
 		and vaultRise <= CFG.VaultMaxRise and speed >= CFG.VaultMinSpeed then
 		local farEdge = edge + forward * (depth + 0.3)
 		local landXZ = farEdge + forward * (body.halfDepth + 1.1)
-		local land = workspace:Raycast(Vector3.new(landXZ.X, topY + 0.5, landXZ.Z), Vector3.new(0, -(CFG.VaultMaxDrop + 0.5), 0), rayParams)
+		-- A window: something over the top closer than a body's height (the lintel). Only asked when the
+		-- caller allows the long drop, so everything else pays for no extra ray.
+		local window = false
+		if options.windowDrop then
+			local mid = edge + forward * (depth / 2)
+			window = workspace:Raycast(Vector3.new(mid.X, topY + 0.2, mid.Z), Vector3.new(0, body.height + 0.3, 0), rayParams) ~= nil
+		end
+		local maxDrop = window and CFG.WindowMaxDrop or CFG.VaultMaxDrop
+		local land = workspace:Raycast(Vector3.new(landXZ.X, topY + 0.5, landXZ.Z), Vector3.new(0, -(maxDrop + 0.5), 0), rayParams)
 		if land and land.Normal.Y >= CFG.TopNormal and not unclimbable(land.Instance) and land.Position.Y < topY - 0.4 then
 			local landY = land.Position.Y
+			-- Further down than a vault lands: the path ends just outside the window and the body falls.
+			local drop = topY - landY > CFG.VaultMaxDrop
+			local lift = topY + math.max(body.stand * 0.62, 1.7)
 			local through, _, panes = boxClear(overlapParams, flat(origin), landXZ + forward * body.halfDepth,
 				topY + 0.3, topY + CFG.VaultClearance, width, forward, true)
 			local landing = boxClear(overlapParams, landXZ - forward * body.halfDepth, landXZ + forward * body.halfDepth,
 				landY + 0.35, landY + body.height - 0.1, width, forward)
-			if through and landing then
-				local lift = topY + math.max(body.stand * 0.62, 1.7)
+			-- Where a drop leaves the path, the whole body has to fit, outside the wall.
+			local exitClear = not drop or boxClear(overlapParams, landXZ - forward * body.halfDepth, landXZ + forward * body.halfDepth,
+				lift - body.stand + 0.1, lift - body.stand + body.height, width, forward)
+			if through and landing and exitClear then
 				local pathSpeed = math.max(speed, CFG.VaultMinPathSpeed)
 				local points = {
 					origin,
 					Vector3.new(edge.X, lift, edge.Z) - forward * (body.halfDepth + 0.1),
 					Vector3.new(farEdge.X, lift, farEdge.Z) + forward * 0.1,
-					Vector3.new(landXZ.X, landY + body.stand, landXZ.Z),
+					drop and Vector3.new(landXZ.X, lift, landXZ.Z) or Vector3.new(landXZ.X, landY + body.stand, landXZ.Z),
 				}
 				local times = {}
 				for index = 2, #points do
@@ -344,8 +361,10 @@ function Parkour.Find(character, direction, options)
 				end
 				return {
 					kind = "vault", rise = vaultRise, depth = depth, topY = topY, forward = forward, part = top.Instance,
-					points = points, times = times, duration = duration, landY = landY,
-					exitVelocity = forward * pathSpeed * 0.95 + Vector3.new(0, -4, 0),
+					points = points, times = times, duration = duration, landY = landY, drop = drop,
+					-- A drop leaves gently, so it comes down by the building rather than across the street.
+					exitVelocity = drop and (forward * CFG.WindowDropExitSpeed + Vector3.new(0, -4, 0))
+						or (forward * pathSpeed * 0.95 + Vector3.new(0, -4, 0)),
 					cost = STAMINA.VaultCost,
 					-- The window panes inside the clearance box: exactly the ones the body passes through, for
 					-- whoever runs the plan to break (MovementService does, for bots). nil when there are none.

@@ -91,12 +91,16 @@ Pack.Weapons = {
 		killEffect = "gold",
 		description = "Heirloom lever rifle with deep walnut furniture and restrained brass trim.",
 	},
+-- Oliver, 2026-09-23 14:57: "make the mythic and secret guns slightly more common so that the rarest ones may
+-- appear a few times per game". Mythic 0.18 -> 1.5 each and Secret 0.045 -> 0.8 each (chest weights): of a chest
+-- gun roll that is about 1.1% Mythic and 0.6% Secret (was 0.13% and 0.03%), so roughly 2-3 Mythics and 1-2
+-- Secrets across a full battle royale's chests. Legendary is untouched and still more common per gun.
 	AuraAuditRifle = {
 		name = "Occhietto Pium Pium", rarity = "Mythic", style = "rifle",
 		damage = 29, headshotMultiplier = 1.9, fireRate = 8.0, magSize = 28,
 		reserveAmmo = 168, reloadTime = 2.35, range = 470, spread = 1.05, pellets = 1,
 		ability = "chain", chainRadius = 12, chainRatio = 0.22,
-		groundWeight = 0, chestWeight = 0.18, killEffect = "shock",
+		groundWeight = 0, chestWeight = 1.5, killEffect = "shock",
 		description = "White-and-titanium evaluation carbine. Small arcs punish tightly stacked teams.",
 	},
 	QuietHours = {
@@ -104,14 +108,14 @@ Pack.Weapons = {
 		damage = 96, headshotMultiplier = 2.35, fireRate = 0.78, magSize = 4,
 		reserveAmmo = 24, reloadTime = 3.3, range = 1350, spread = 0.06, pellets = 1,
 		ability = "lifesteal", lifestealRatio = 0.16,
-		groundWeight = 0, chestWeight = 0.18, killEffect = "freeze",
+		groundWeight = 0, chestWeight = 1.5, killEffect = "freeze",
 		description = "Long fluted bolt rifle with dark plum furniture and a moon insignia.",
 	},
 	AdminOverride = {
 		name = "Capo Supremo Bonkolone", rarity = "Secret", style = "pistol",
 		damage = 34, headshotMultiplier = 2.0, fireRate = 3.5, magSize = 10,
 		reserveAmmo = 60, reloadTime = 1.7, range = 335, spread = 0.65, pellets = 1,
-		ability = "pierce", groundWeight = 0, chestWeight = 0.045, killEffect = "vaporize",
+		ability = "pierce", groundWeight = 0, chestWeight = 0.8, killEffect = "vaporize",
 		description = "Black prototype sidearm with mint AUTH / LOCAL markings. No actual admin powers.",
 	},
 	FinalNotice = {
@@ -119,7 +123,7 @@ Pack.Weapons = {
 		damage = 33, headshotMultiplier = 1.9, fireRate = 6.5, magSize = 24,
 		reserveAmmo = 144, reloadTime = 2.5, range = 490, spread = 1.15, pellets = 1,
 		ability = "goldRush", goldRushBonus = 135,
-		groundWeight = 0, chestWeight = 0.045, killEffect = "gold",
+		groundWeight = 0, chestWeight = 0.8, killEffect = "gold",
 		description = "Stamped receiver, burgundy wood and a FINAL NOTICE label: the collector's AK.",
 	},
 }

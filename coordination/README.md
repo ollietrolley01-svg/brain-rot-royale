@@ -34,6 +34,36 @@ BY:    <when this blocks you, or "not blocking">
 `NEEDS` matters more than it looks. A question that blocks you gets answered first. A report that
 needs nothing gets read but does not stall behind a decision.
 
+## Confirm every command by copying it back
+
+Rule from Oliver (2026-09-22 17:06): **every agent that receives a command confirms it by copying the
+command back, word for word, before acting on it.** A command is any message here that asks you to do
+something (`NEEDS:` anything but "nothing"), including one relayed from Oliver.
+
+Confirm with a new message file, as always one message per file:
+
+```
+coordination/messages/YYYY-MM-DD-HHMM-<who>-ack-<subject of the original>.md
+```
+
+```
+FROM:  <your name>
+ABOUT: ack -- <the original message's filename>
+NEEDS: nothing, just confirming
+BY:    not blocking
+
+COMMAND RECEIVED (copied back verbatim):
+> <the command exactly as it was written, every line of it>
+
+Understood as: <one line in your own words>
+```
+
+Why: the channel has a person in the loop and can take hours, so a sender otherwise can't tell a
+message that was read from one that was missed. Copying the command back word for word also shows
+it arrived intact, and the "understood as" line catches a misreading before any work is built on
+it. If you disagree with the command or can't do it, confirm it first anyway, then say so in the
+same file.
+
 ## Reading replies
 
 claude-43 replies as a new file in the same directory. Pull before you start work, every time:

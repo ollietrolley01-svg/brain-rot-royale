@@ -203,9 +203,10 @@ GameModes.Modes = {
 
 	KingOfTheHill = {
 		id = "KingOfTheHill",
-		name = "King of the Hill",
-		short = "KOTH",
-		description = "One hill. Hold it alone and the clock runs for you.",
+		-- Oliver 09-22 15:39: renamed and made two objectives (ModeKingOfTheHill). The id stays.
+		name = "Objective Capture",
+		short = "OBJ",
+		description = "Two objectives. Capture them, and each one your team holds scores every second.",
 		color = Color3.fromRGB(40, 196, 190),
 		respawn = true,
 		teams = true,

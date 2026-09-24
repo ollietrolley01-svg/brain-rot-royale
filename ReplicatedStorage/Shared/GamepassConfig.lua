@@ -12,7 +12,7 @@
 --     GamepassConfig.Passes below, using its `name` and `description`, and upload any square image.
 --     After creating it, open the pass, choose Sales, switch "Item for Sale" on and set the price to
 --     `suggestedPrice`. The pass's ID is the number in its URL: paste it over that entry's `id = 0`.
---       Iron Sahur 50 R$, Rot Runner 50 R$, 2x SahurCoins 350 R$, Brainrot Pass Premium 50 R$,
+--       Iron Sahur 50 R$, Rot Runner 50 R$, 2x SahurCoins 350 R$, Brainrot Pass Premium 450 R$,
 --       2x Crate Luck 350 R$.
 --  3. DEVELOPER PRODUCTS: Monetization -> Developer Products -> Create a Developer Product. Make one
 --     product for every entry in GamepassConfig.Products (bundles, boosts, crates, coin packs, and
@@ -99,7 +99,10 @@ GamepassConfig.Products = {
 		description = "One time only. Everything you need to get your collection going.",
 		featured = 1,
 		badge = "ONE TIME ONLY",
-		worth = "Worth 1,200+ R$  •  4x value",
+		-- "Worth" is counted at this shop's own Robux prices (Oliver, 2026-09-22: fix the worth lines):
+		-- 25K coins at the 50K pack's rate, Legendary 499, Epic 135, 2 Rare 70, 2 Health boosts 70 =
+		-- 974 R$, before the exclusive. Recount it here if a price or the contents change.
+		worth = "Worth 950+ R$  •  3x value",
 		limit = 1,
 		color = Color3.fromRGB(94, 214, 122),
 		suggestedPrice = 300,
@@ -124,7 +127,10 @@ GamepassConfig.Products = {
 		description = "The big one: a Super Crate, 2 Mythic Crates, 2 Legendary Crates, 50K coins, Pro boosts and two Pro exclusives.",
 		featured = 2,
 		badge = "BEST VALUE",
-		worth = "Worth 7,000+ R$  •  8x value",
+		-- At this shop's own Robux prices: 50K coins 399, Super 100, 2 Mythic 1,798, 2 Legendary 998 =
+		-- 3,295 R$, before the Pro boosts and the two exclusives, which aren't sold alone. (It used to
+		-- say 7,000+, which only held with the Mythic Crates counted at their coin price.)
+		worth = "Worth 3,200+ R$  •  4x value",
 		color = Color3.fromRGB(255, 184, 48),
 		suggestedPrice = 800,
 		order = 6,
@@ -135,7 +141,7 @@ GamepassConfig.Products = {
 				-- Cut on 2026-09-18, with the crate repricing: at the rationalised prices the old contents
 				-- (5 Super, 10 Mythic, 150k coins) came to roughly 30,000 R$ of crates for 800 R$, which
 				-- isn't a bundle, it's an arbitrage — nobody would buy a crate directly again. This is
-				-- still about 7,000 R$ of value for 800.
+				-- about 4,200 R$ at the shop's Robux prices for 800 (see `worth`).
 				{ kind = "Coins", amount = 50000 },
 				{ kind = "Crate", crate = "Super", amount = 1 },
 				{ kind = "Crate", crate = "Mythic", amount = 2 },
@@ -173,7 +179,8 @@ GamepassConfig.Products = {
 		badge = "ALWAYS IN STOCK",
 		worth = "Mythic or Secret, guaranteed",
 		color = Color3.fromRGB(255, 90, 200),
-		suggestedPrice = 999,
+		-- 100 R$ (Oliver, 2026-09-22 22:22; was 999). Set the same on the Creator Dashboard.
+		suggestedPrice = 100,
 		order = 9,
 	},
 	CrateCommon = {
@@ -211,7 +218,7 @@ GamepassConfig.Products = {
 	CrateMythic = {
 		id = 0,
 		name = "Mythic Crate",
-		description = "One Mythic loot crate: Legendary or better every time, 17% Mythic, 3% Secret.",
+		description = "One Mythic loot crate: Legendary or better every time.",
 		grant = { kind = "Crate", crate = "Mythic" },
 		suggestedPrice = 899,
 		order = 14,

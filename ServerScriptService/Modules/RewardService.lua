@@ -41,15 +41,17 @@ end
 
 -- Bot kills pay noticeably less than real ones, so a lobby full of backfill can't be farmed
 -- as hard as a lobby full of people.
-function RewardService.AwardKill(player, wasBot)
+-- `scale` (optional, default 1) is the team modes' reduced kill rate (MatchConfig.TeamModeRewards).
+function RewardService.AwardKill(player, wasBot, scale)
 	local data = PlayerData.Get(player)
 	if not data then
 		return
 	end
+	scale = scale or 1
 
 	data.Stats.kills += 1
-	RewardService.AddCoins(player, wasBot and MatchConfig.CoinsPerBotKill or MatchConfig.CoinsPerKill)
-	BattlePassService.AddXp(player, wasBot and MatchConfig.XpPerBotKill or MatchConfig.XpPerKill)
+	RewardService.AddCoins(player, math.floor((wasBot and MatchConfig.CoinsPerBotKill or MatchConfig.CoinsPerKill) * scale + 0.5))
+	BattlePassService.AddXp(player, math.floor((wasBot and MatchConfig.XpPerBotKill or MatchConfig.XpPerKill) * scale + 0.5))
 	StateSync.Push(player)
 	QuestService.Progress(player, "kills", 1)
 end
@@ -109,6 +111,38 @@ function RewardService.AwardPlacement(player, rank)
 		crate = bracket.crate,
 		coins = coins,
 		xp = bracket.xp,
+	}
+end
+
+-- The end-of-match payout for a team mode. `outcome` is "win", "draw" or "loss". Counts the match played
+-- (Stats.matches, the matches quest) but never a battle royale win. Returns the same shape AwardPlacement
+-- does, so the results card shows the crate, coins and XP the usual way.
+function RewardService.AwardTeamResult(player, outcome, rank)
+	local data = PlayerData.Get(player)
+	if not data then
+		return nil
+	end
+	data.Stats.matches += 1
+	QuestService.Progress(player, "matches", 1)
+
+	local table_ = MatchConfig.TeamModeRewards or {}
+	local reward = table_[outcome] or table_.loss
+	if not reward then
+		StateSync.Push(player)
+		return nil
+	end
+	if reward.crate then
+		CrateService.Give(player, reward.crate, 1)
+	end
+	local coins = RewardService.AddCoins(player, math.floor((reward.coins or 0) * RewardService.PlacementMultiplier))
+	BattlePassService.AddXp(player, reward.xp or 0)
+	StateSync.Push(player)
+	return {
+		rank = rank,
+		crate = reward.crate,
+		coins = coins,
+		xp = reward.xp or 0,
+		outcome = outcome,
 	}
 end
 

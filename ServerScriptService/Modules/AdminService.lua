@@ -30,6 +30,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local GamepassConfig = require(Shared:WaitForChild("GamepassConfig"))
 local MatchEvents = require(Shared:WaitForChild("MatchEvents"))
+local CrateData = require(Shared:WaitForChild("CrateData"))
 
 local Modules = ServerScriptService:WaitForChild("Modules")
 local RateLimit = require(Modules:WaitForChild("RateLimit"))
@@ -82,8 +83,12 @@ local function modules()
 		PlayerData = require(Modules:WaitForChild("PlayerData")),
 		Match = require(Modules:WaitForChild("MatchService")),
 		Loot = require(Modules:WaitForChild("LootService")),
+		Crate = require(Modules:WaitForChild("CrateService")),
+		StateSync = require(Modules:WaitForChild("StateSync")),
 	}
 end
+
+local godWatched = {}
 
 -- Each handler returns a short string for the log, or nil if it did nothing. None of them trusts
 -- its argument: every one is a lookup in a real table before anything is granted.
@@ -159,6 +164,60 @@ local HANDLERS = {
 			return "event " .. id .. " REFUSED: " .. tostring(reason)
 		end
 		return "event " .. id
+	end,
+
+	-- Any crate in CrateData, one at a time (Oliver, 2026-09-22: "add all crates to the admin menu").
+	-- The tier is looked up in CrateData like every other id here, and handed over through
+	-- CrateService.Give, the same path placements and quests use.
+	Crate = function(player, payload)
+		local tier = typeof(payload) == "string" and payload or nil
+		if not tier or not CrateData.Get(tier) then
+			return nil
+		end
+		local m = modules()
+		if not m.Crate.Give(player, tier, 1) then
+			return nil
+		end
+		pcall(m.StateSync.Push, player)
+		return "crate " .. tier
+	end,
+
+	-- God mode (Oliver, 2026-09-22). An invisible ForceField on the character: Humanoid:TakeDamage does
+	-- nothing while one is present, and every damage path in the game goes through TakeDamage
+	-- (CombatService.DealDamage for guns, blasts, companions and hazards; StormService for the storm).
+	-- The `AdminGod` attribute carries it across respawns until it's switched off.
+	God = function(player, payload)
+		local on = payload == true
+		player:SetAttribute("AdminGod", on or nil)
+		local function apply(character)
+			if not character then
+				return
+			end
+			local existing = character:FindFirstChild("AdminGod")
+			if player:GetAttribute("AdminGod") then
+				if not existing then
+					local field = Instance.new("ForceField")
+					field.Name = "AdminGod"
+					field.Visible = false
+					field.Parent = character
+				end
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					humanoid.Health = humanoid.MaxHealth
+				end
+			elseif existing then
+				existing:Destroy()
+			end
+		end
+		apply(player.Character)
+		if not godWatched[player] then
+			godWatched[player] = true
+			player.CharacterAdded:Connect(function(character)
+				character:WaitForChild("Humanoid", 5)
+				apply(character)
+			end)
+		end
+		return "god " .. tostring(on)
 	end,
 
 	Fly = function(player, payload)

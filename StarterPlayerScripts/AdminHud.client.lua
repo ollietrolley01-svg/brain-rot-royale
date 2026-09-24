@@ -17,6 +17,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local GamepassConfig = require(Shared:WaitForChild("GamepassConfig"))
 local MatchEvents = require(Shared:WaitForChild("MatchEvents"))
+local CrateData = require(Shared:WaitForChild("CrateData"))
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
 local UiParts = require(script.Parent:WaitForChild("UiParts"))
 local AdminFly = require(script.Parent:WaitForChild("AdminFly"))
@@ -98,10 +99,22 @@ local function build()
 	row("+10,000 coins", "Coins", 10000)
 	row("+100,000 coins", "Coins", 100000)
 
+	heading("CRATES")
+	for _, tier in ipairs(CrateData.Order) do
+		local crate = CrateData.Get(tier)
+		if crate then
+			row("+1 " .. (crate.name or (tier .. " Crate")), "Crate", tier)
+		end
+	end
+
 	heading("PASSES")
 	for key, pass in pairs(GamepassConfig.Passes) do
 		row(pass.name or key, "Pass", key)
 	end
+
+	heading("GOD MODE")
+	row("God mode on", "God", true)
+	row("God mode off", "God", false)
 
 	heading("MOVEMENT")
 	row("Fly on", "Fly", true)
@@ -113,8 +126,35 @@ local function build()
 	end
 
 	heading("WEAPONS")
-	for id, def in pairs(WeaponData.Weapons) do
-		row(def.name or id, "Weapon", id)
+	-- Grouped by rarity, lowest first, A to Z inside each (Oliver, 2026-09-23: "sort the guns in the
+	-- admin menu by rarity"). Each group has a heading in its rarity colour.
+	do
+		local Rarity = require(Shared:WaitForChild("Rarity"))
+		local groups = {}
+		for id, def in pairs(WeaponData.Weapons) do
+			local rarity = Rarity.Index[def.rarity] and def.rarity or "Other"
+			groups[rarity] = groups[rarity] or {}
+			table.insert(groups[rarity], { id = id, name = def.name or id })
+		end
+		local order_ = table.clone(Rarity.Order)
+		table.insert(order_, "Other")
+		for _, rarity in ipairs(order_) do
+			local list = groups[rarity]
+			if list then
+				table.sort(list, function(a, b)
+					return a.name < b.name
+				end)
+				order += 1
+				UiParts.text(body, Type.Label, string.upper(rarity) .. "  (" .. #list .. ")",
+					rarity == "Other" and Role.TextMuted or Rarity.Color(rarity), {
+						Size = UDim2.new(1, 0, 0, 18),
+						LayoutOrder = order,
+					})
+				for _, entry in ipairs(list) do
+					row(entry.name, "Weapon", entry.id)
+				end
+			end
+		end
 	end
 
 	-- A pill to open it, so the panel isn't sitting over the game the whole match.

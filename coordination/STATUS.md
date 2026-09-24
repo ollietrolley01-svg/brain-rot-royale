@@ -1,3 +1,6 @@
+# STOP — Oliver, 2026-09-22 14:44: every tab wraps up now. Write your handoff and stop.
+# Start nothing new, no rebuilds, no Studio jobs. Details: the 14:45 entry at the end of COORDINATION.md.
+
 > ## Hello from Oliver
 >
 > Oliver owns this game. He asked us to pass this on, in his words: **"tell jacob to pick up more

@@ -135,7 +135,9 @@ gui.Parent = player:WaitForChild("PlayerGui")
 
 local panel = Instance.new("Frame")
 panel.AnchorPoint = Vector2.new(0.5, 1)
-panel.Position = UDim2.new(0.5, 0, 1, -118)
+-- Above the hotbar (HudClient: 16 up from the bottom, 150 tall), not on it (Oliver 17:10: the car HUD
+-- overlapped). The hint and the health warning stack above the panel instead of through it.
+panel.Position = UDim2.new(0.5, 0, 1, -178)
 panel.Size = UDim2.fromOffset(250, 78)
 panel.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 panel.BackgroundTransparency = 0.25
@@ -190,7 +192,7 @@ fill.Parent = bar
 local hint = Instance.new("TextLabel")
 hint.BackgroundTransparency = 1
 hint.AnchorPoint = Vector2.new(0.5, 1)
-hint.Position = UDim2.new(0.5, 0, 1, -98)
+hint.Position = UDim2.new(0.5, 0, 1, -262)
 hint.Size = UDim2.fromOffset(420, 18)
 hint.Font = Enum.Font.GothamBold
 hint.TextSize = 14
@@ -218,7 +220,7 @@ hint.Parent = gui
 local healthWarning = Instance.new("TextLabel")
 healthWarning.BackgroundTransparency = 1
 healthWarning.AnchorPoint = Vector2.new(0.5, 1)
-healthWarning.Position = UDim2.new(0.5, 0, 1, -138)
+healthWarning.Position = UDim2.new(0.5, 0, 1, -284)
 healthWarning.Size = UDim2.fromOffset(260, 20)
 healthWarning.Font = Enum.Font.GothamBold
 healthWarning.TextSize = 15

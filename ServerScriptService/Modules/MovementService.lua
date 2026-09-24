@@ -290,16 +290,50 @@ end
 
 local bootTokens = {}
 
-local function bounceBoots(player, humanoid)
-	local token = (bootTokens[player] or 0) + 1
-	bootTokens[player] = token
+-- Everything that changes how high a character jumps goes through here, and the reason is a bug this
+-- replaced rather than a preference. Bounce Boots used to write JumpHeight directly and, on expiry,
+-- restore it to BaseJumpHeight — so ANY other source of jump height (a companion boon, anything added
+-- later) was silently wiped the moment a consumable the player drank earlier ran out. Two rules for one
+-- property means the last writer wins and neither author can see the other.
+--
+-- Factors live on the humanoid as `JumpF_<key>` attributes: per-key so clearing one leaves the others,
+-- read only by this function, and they die with the character rather than leaking in a table keyed by
+-- an Instance. A factor of 1 removes the key. JumpPower takes the square root because Roblox's legacy
+-- power scales with the square of the height.
+function MovementService.SetJumpFactor(humanoid, key, factor)
+	if typeof(humanoid) ~= "Instance" or not humanoid:IsA("Humanoid") then
+		return false
+	end
+	if type(key) ~= "string" or #key == 0 or #key > 32 then
+		return false
+	end
+	if type(factor) ~= "number" or factor ~= factor or factor < 0 or factor > 10 then
+		return false
+	end
 
 	if humanoid:GetAttribute("BaseJumpHeight") == nil then
 		humanoid:SetAttribute("BaseJumpHeight", humanoid.JumpHeight)
 		humanoid:SetAttribute("BaseJumpPower", humanoid.JumpPower)
 	end
-	humanoid.JumpHeight = humanoid:GetAttribute("BaseJumpHeight") * BOOTS_JUMP_MULTIPLIER
-	humanoid.JumpPower = humanoid:GetAttribute("BaseJumpPower") * math.sqrt(BOOTS_JUMP_MULTIPLIER)
+	humanoid:SetAttribute("JumpF_" .. key, factor ~= 1 and factor or nil)
+
+	local product = 1
+	for name, value in pairs(humanoid:GetAttributes()) do
+		if string.sub(name, 1, 6) == "JumpF_" and type(value) == "number" then
+			product *= value
+		end
+	end
+
+	humanoid.JumpHeight = humanoid:GetAttribute("BaseJumpHeight") * product
+	humanoid.JumpPower = humanoid:GetAttribute("BaseJumpPower") * math.sqrt(product)
+	return true
+end
+
+local function bounceBoots(player, humanoid)
+	local token = (bootTokens[player] or 0) + 1
+	bootTokens[player] = token
+
+	MovementService.SetJumpFactor(humanoid, "BounceBoots", BOOTS_JUMP_MULTIPLIER)
 	-- The client reads this for the HUD and to allow the double jump.
 	player:SetAttribute("BounceBootsUntil", workspace:GetServerTimeNow() + BOOTS_DURATION)
 
@@ -309,8 +343,7 @@ local function bounceBoots(player, humanoid)
 		end
 		player:SetAttribute("BounceBootsUntil", nil)
 		if humanoid.Parent then
-			humanoid.JumpHeight = humanoid:GetAttribute("BaseJumpHeight")
-			humanoid.JumpPower = humanoid:GetAttribute("BaseJumpPower")
+			MovementService.SetJumpFactor(humanoid, "BounceBoots", 1)
 		end
 	end)
 end

@@ -31,14 +31,15 @@ MenuStackToggle.__index = MenuStackToggle
 
 MenuStackToggle.SettingId = "MenuStackCollapsed"
 
--- The stack's pixel layout in MenuClient's ScreenGui: MENU at (16, 130), 210x42.
+-- The stack's pixel layout in MenuClient's ScreenGui: the SHOP button (top of the five) at (16, 130),
+-- 104x26 (Oliver 14:41: the minimize tab floated away from the buttons when they shrank).
 local STACK_TOP = 124
 local STACK_SIZE = Vector2.new(300, 460)
-local MENU_X, MENU_Y, MENU_W, MENU_H = 16, 130, 210, 42
+local MENU_X, MENU_Y, MENU_W, MENU_H = 16, 130, 104, 26
 local SLIDE = 56
 
 -- 40 wide rather than a sliver: it's a finger's target on a phone.
-local EXPANDED_TAB = { x = MENU_X + MENU_W + 6, w = 40 }
+local EXPANDED_TAB = { x = MENU_X + MENU_W + 3, w = 30 }
 local COLLAPSED_TAB = { x = MENU_X, w = 78 }
 
 local DARK = Color3.fromRGB(20, 16, 6)
@@ -98,6 +99,9 @@ function MenuStackToggle.new(screenGui, options)
 		Parent = screenGui,
 	}, { rounded(10) })
 	self.tab = tab
+	-- ONE UIScale on the tab. Its resting value is self.fit (the stack's own scale, so the tab is the
+	-- buttons' size); the open/close and attention bounces go relative to that and settle back on it.
+	self.fit = 1
 	self.tabScale = create("UIScale", { Parent = tab })
 	self.tabStroke = create("UIStroke", {
 		Color = C.Panel,
@@ -109,17 +113,18 @@ function MenuStackToggle.new(screenGui, options)
 	-- Expanded: a chevron pointing left, "tuck it away".
 	local tuck = create("Frame", { Name = "Tuck", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = tab })
 	self.tuckBars = {
-		bar(tuck, 18, 16, 12, 3, -45, C.Muted),
-		bar(tuck, 18, 25, 12, 3, 45, C.Muted),
+		-- Sized for the 30x26 tab beside the 26 px buttons (was drawn for 40x42 and hung out of it).
+		bar(tuck, 14, 10, 9, 3, -45, C.Muted),
+		bar(tuck, 14, 16, 9, 3, 45, C.Muted),
 	}
 	self.tuck = tuck
 
 	-- Collapsed: a menu icon, today's quests, a chevron pointing right.
 	local open = create("Frame", { Name = "Open", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, Parent = tab })
 	self.openBars = {
-		bar(open, 19, 14, 18, 3, 0, DARK),
-		bar(open, 19, 21, 18, 3, 0, DARK),
-		bar(open, 19, 28, 18, 3, 0, DARK),
+		bar(open, 19, 7, 18, 3, 0, DARK),
+		bar(open, 19, 13, 18, 3, 0, DARK),
+		bar(open, 19, 19, 18, 3, 0, DARK),
 	}
 	self.summary = create("TextLabel", {
 		Name = "Summary",
@@ -176,6 +181,18 @@ function MenuStackToggle.new(screenGui, options)
 	end)
 
 	self.stackScale = create("UIScale", { Parent = stack })
+	-- Oliver 15:24: the column ran into the health / shield / stamina block on a short window, and "make
+	-- the hud scale with resolution". On desktop the whole stack (buttons, bundle, quest tracker) shrinks
+	-- to whatever height is left above that block, and re-fits when the window or the tracker changes.
+	local function refit()
+		self:_fitHeight()
+	end
+	screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(refit)
+	for _, item in ipairs(options.items or {}) do
+		item:GetPropertyChangedSignal("AbsoluteSize"):Connect(refit)
+		item:GetPropertyChangedSignal("Visible"):Connect(refit)
+	end
+	task.defer(refit)
 
 	if self.settings then
 		self.settings.Changed:Connect(function(id)
@@ -186,6 +203,60 @@ function MenuStackToggle.new(screenGui, options)
 		self:SetCollapsed(self.settings.Get(MenuStackToggle.SettingId) == true, true, false)
 	end
 	return self
+end
+
+-- Height the bottom-left health / shield / stamina block takes (HudClient anchors it up to 1, -202, plus
+-- its label), kept clear of the stack.
+local BOTTOM_RESERVED = 150
+
+function MenuStackToggle:_fitHeight()
+	if self.phoneStack then
+		return
+	end
+	local gui = self.stack.Parent
+	if not gui then
+		return
+	end
+	local current = math.max(self.stackScale.Scale, 0.01)
+	local bottom = 0
+	for _, item in ipairs(self.stack:GetChildren()) do
+		if item:IsA("GuiObject") and item.Visible then
+			bottom = math.max(bottom, item.Position.Y.Offset + item.AbsoluteSize.Y / current)
+		end
+	end
+	if bottom <= 0 then
+		return
+	end
+	-- On a screen too narrow for the stamina bar to sit bottom-centre it moves up above the bottom-left
+	-- stack (StaminaBar.Layout), so the column has to stop above IT, not just above the health block --
+	-- it used to run into the bar (Oliver 17:10, STARTER BUNDLE under STAMINA).
+	local reserved = BOTTOM_RESERVED
+	local okStamina, StaminaBar = pcall(require, script.Parent:FindFirstChild("StaminaBar"))
+	if okStamina and StaminaBar and StaminaBar.Layout then
+		local anchor, position, scale = StaminaBar.Layout(gui.AbsoluteSize)
+		if anchor.X == 0 then
+			reserved = math.max(reserved, -position.Y.Offset + 50 * scale + 10)
+		end
+	end
+	local room = gui.AbsoluteSize.Y - reserved - STACK_TOP
+	-- Never below 0.85 (Oliver 15:37: at 0.55 it was too small to read), and grows up to 1.25x where
+	-- there is room (Oliver 16:16: "the quest menu and buttons are still a bit too small").
+	local scale = math.clamp(room / bottom, 0.85, 1.25)
+	self.stackScale.Scale = scale
+	-- The collapse tab sits outside the stack, so it scales and moves with it (Oliver 16:22: "the
+	-- minimize button is floating"). It used to bounce back to a scale of 1 after every open/close
+	-- while its position still assumed the stack's 1.25, so it hung off the buttons' corner.
+	if math.abs(self.fit - scale) > 0.001 then
+		self.fit = scale
+		self:_placeTab()
+	end
+end
+
+-- The tab straight to where it belongs at the current fit: position, size and scale, no animation.
+function MenuStackToggle:_placeTab()
+	local position, size = self:_tabGoal(self.collapsed and COLLAPSED_TAB or EXPANDED_TAB)
+	self.tab.Position, self.tab.Size = position, size
+	self.tabScale.Scale = self.fit
 end
 
 function MenuStackToggle:_paintHover()
@@ -208,7 +279,11 @@ function MenuStackToggle:_tabGoal(target)
 		-- Right-aligned in its slot, so the icons beside it never shift when the tab changes width.
 		return UDim2.fromOffset(self.phoneTab.x + self.phoneTab.w - w, self.phoneTab.y), UDim2.fromOffset(w, self.phoneTab.h)
 	end
-	return UDim2.fromOffset(target.x, MENU_Y), UDim2.fromOffset(target.w, MENU_H)
+	-- Size stays in unscaled units: tabScale grows it with the stack. The position follows the scaled
+	-- button column so the tab stays snug beside it.
+	local s = self.fit or 1
+	local x = target == EXPANDED_TAB and (MENU_X + MENU_W) * s + 3 or MENU_X * s
+	return UDim2.fromOffset(x, STACK_TOP + (MENU_Y - STACK_TOP) * s), UDim2.fromOffset(target.w, MENU_H)
 end
 
 function MenuStackToggle:_stackHome()
@@ -231,6 +306,7 @@ end
 function MenuStackToggle:SetPhone(spots, inset)
 	inset = inset or 0
 	if spots then
+		self.fit = 1
 		self.phoneTab = { x = spots.stackTab.x, y = spots.stackTab.y - inset, w = spots.stackTab.w, h = spots.stackTab.h }
 		-- Right-aligned under the tab, and pulled up so that whatever is actually showing starts right
 		-- under it: MENU is its own icon on a phone and hidden in here, so the stack would otherwise
@@ -259,8 +335,9 @@ function MenuStackToggle:SetPhone(spots, inset)
 	else
 		self.phoneTab, self.phoneStack = nil, nil
 		self.stackScale.Scale = 1
+		self:_fitHeight()
 		for index, b in ipairs(self.openBars) do
-			b.Position = UDim2.fromOffset(19, 7 + index * 7)
+			b.Position = UDim2.fromOffset(19, 1 + index * 6)
 			b.Size = UDim2.fromOffset(18, 3)
 		end
 		for _, b in ipairs(self.openChevron) do
@@ -314,6 +391,7 @@ function MenuStackToggle:SetCollapsed(collapsed, instant, save)
 		stack.GroupTransparency = 0
 		tab.Position = tabPosition
 		tab.Size = tabSize
+		self.tabScale.Scale = self.fit
 		return
 	end
 
@@ -335,8 +413,8 @@ function MenuStackToggle:SetCollapsed(collapsed, instant, save)
 		tween(stack, 0.3, { Position = home, GroupTransparency = 0 })
 		tween(tab, 0.3, { Position = tabPosition, Size = tabSize }, Enum.EasingStyle.Back)
 	end
-	self.tabScale.Scale = 0.9
-	tween(self.tabScale, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+	self.tabScale.Scale = 0.9 * self.fit
+	tween(self.tabScale, 0.3, { Scale = self.fit }, Enum.EasingStyle.Back)
 end
 
 -- What the collapsed tab shows beside the menu icon: "2/3" for today's quests, or "" for nothing.
@@ -379,8 +457,8 @@ function MenuStackToggle:Attention()
 	end
 	self.pending = true
 	self:_paintDot()
-	self.tabScale.Scale = 1.18
-	tween(self.tabScale, 0.45, { Scale = 1 }, Enum.EasingStyle.Elastic)
+	self.tabScale.Scale = 1.18 * self.fit
+	tween(self.tabScale, 0.45, { Scale = self.fit }, Enum.EasingStyle.Elastic)
 	if not self.pulsing then
 		self.pulsing = true
 		task.spawn(function()

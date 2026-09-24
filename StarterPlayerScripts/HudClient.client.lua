@@ -87,9 +87,10 @@ local bannerSub = create("TextLabel", {
 	Font = Enum.Font.Gotham,
 	Text = "",
 	TextColor3 = C.Muted,
-	TextSize = 14,
+	-- Shrinks to fit rather than running out of the banner (Oliver 15:37).
+	TextScaled = true,
 	Parent = banner,
-})
+}, { create("UITextSizeConstraint", { MaxTextSize = 14 }), create("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }) })
 
 -- Ready up / stay in the lobby. A big pill beside the banner: amber and gently pulsing while
 -- you're not ready, green with a tick once you are, with the live ready count underneath.
@@ -710,6 +711,11 @@ local function townAt(position)
 end
 
 task.spawn(function()
+	-- #135 (Oliver 09-22): entering a town showed TWO popups -- this "NOW ENTERING" banner and the
+	-- "ENTERING ..." one further down, which already covers towns and landmarks. This one is off.
+	do
+		return
+	end
 	while true do
 		task.wait(0.5)
 
@@ -883,7 +889,7 @@ local profileMatches = nil
 local tipIndex = 0
 local NEW_PLAYER_TIPS = {
 	"Step on the green pad or press F to ready up for the next match",
-	"Press M for the menu: crates, quests, the shop and your brainrots",
+	"The buttons on the left: shop, brainrots, progress, Robux and settings",
 	"Loot guns, heals, shields and items — eight slots, keys 1 to 8 (Q cycles)",
 	"Equip a brainrot as your companion and press {Companion} to use its move in a fight",
 	"Try the Cloud Climb up the tree, kick a ball into the goal, spin the daily wheel",
@@ -1091,7 +1097,12 @@ do
 		staminaView.rush = MovementState.rush
 		staminaView.draining = MovementState.draining
 		staminaView.refusedAt = MovementState.refusedAt
+		-- Hidden while driving: nobody sprints in a car, and the bar sat on the car's speedometer (17:10).
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
 		staminaView.hidden = not MovementState.inMatch or player:GetAttribute("MenuOpen") == true
+			or (seat ~= nil and seat:IsA("VehicleSeat"))
 		staminaBar:Update(math.min(dt, 0.1), staminaView)
 	end)
 end
@@ -2292,6 +2303,39 @@ local function refreshTownMarkers()
 			townMarkers[town] = nil
 		end
 	end
+
+	-- No two names printed over each other on the minimap (Oliver's 16:58 screenshot: BONKINGTON
+	-- across GRASS TOUCHER'S REST, THE BEACHED GALLEON across a town). Landmarks first, then towns;
+	-- a name that would overlap one already shown is hidden and its dot stays.
+	local ordered = {}
+	for owner, marker in pairs(townMarkers) do
+		table.insert(ordered, { marker = marker, landmark = owner:GetAttribute("LandmarkCenter") ~= nil })
+	end
+	table.sort(ordered, function(a, b)
+		if a.landmark ~= b.landmark then
+			return a.landmark
+		end
+		return a.marker.Position.Y.Offset < b.marker.Position.Y.Offset
+	end)
+	local shown = {}
+	for _, entry in ipairs(ordered) do
+		local label = entry.marker:FindFirstChildOfClass("TextLabel")
+		if label then
+			local x, y = entry.marker.Position.X.Offset, entry.marker.Position.Y.Offset - 5
+			local half = math.min(label.TextBounds.X, 84) / 2 + 2
+			local free = true
+			for _, box in ipairs(shown) do
+				if math.abs(box.x - x) < box.half + half and math.abs(box.y - y) < 12 then
+					free = false
+					break
+				end
+			end
+			label.Visible = free
+			if free then
+				table.insert(shown, { x = x, y = y, half = half })
+			end
+		end
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -2308,7 +2352,7 @@ local COMPASS_SPAN = 180 -- degrees across the strip
 
 local compass = create("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 100),
+	Position = UDim2.new(0.5, 0, 0, 104),
 	Size = UDim2.fromOffset(COMPASS_W, COMPASS_H),
 	BackgroundColor3 = C.Background,
 	BackgroundTransparency = 0.35,
@@ -2448,7 +2492,9 @@ local function placeCompassMarker(marker, bearing, heading)
 		return
 	end
 	marker.frame.Visible = true
-	marker.frame.Position = UDim2.fromOffset(COMPASS_W / 2 + delta * (COMPASS_W / COMPASS_SPAN), 0)
+	marker.x = COMPASS_W / 2 + delta * (COMPASS_W / COMPASS_SPAN)
+	marker.delta = delta
+	marker.frame.Position = UDim2.fromOffset(marker.x, 0)
 	-- Fading out toward the ends of the strip.
 	marker.label.TextTransparency = math.clamp((math.abs(delta) - (COMPASS_SPAN / 2 - 28)) / 28, 0, 1) * 0.85
 end
@@ -2459,6 +2505,31 @@ local function updateCompass(root)
 		return
 	end
 	compass.Visible = true
+	-- Always flush under whatever the top-centre HUD is showing right now (Oliver 17:16): the players-
+	-- alive banner, the storm line under it, or a team mode's score bar -- measured off what is actually
+	-- on screen, so it follows any of them changing size, hiding or scaling. A phone layout places the
+	-- compass itself and is left alone.
+	if not compass:GetAttribute("PhonePlaced") then
+		local bottom = nil
+		local function under(gui)
+			if gui and gui.Visible and gui.AbsoluteSize.Y > 0 then
+				local edge = gui.AbsolutePosition.Y + gui.AbsoluteSize.Y
+				bottom = bottom and math.max(bottom, edge) or edge
+			end
+		end
+		under(banner)
+		if stormLabel.Text ~= "" then
+			under(stormLabel)
+		end
+		local scoreGui = playerGui:FindFirstChild("ModeScoreHud")
+		if scoreGui and scoreGui.Enabled then
+			under(scoreGui:FindFirstChild("Scoreline"))
+		end
+		local y = math.floor((bottom and (bottom - screenGui.AbsolutePosition.Y) or 6) + 4 + 0.5)
+		if compass.Position.Y.Offset ~= y or compass.Position.Y.Scale ~= 0 then
+			compass.Position = UDim2.new(0.5, 0, 0, y)
+		end
+	end
 	local look = camera.CFrame.LookVector
 	local heading = math.deg(math.atan2(look.X, -look.Z))
 	local here = root.Position
@@ -2468,6 +2539,42 @@ local function updateCompass(root)
 			placeCompassMarker(marker, marker.bearing, heading)
 		elseif marker.position then
 			placeCompassMarker(marker, bearingTo(here, marker.position), heading)
+		end
+	end
+
+	-- No two labels on top of each other (Oliver's 16:58 screenshot: THE BEACON and BRAINROT CARNIVAL
+	-- printed over one another, with the N across LAG LAGOON). The cardinals keep theirs; then each
+	-- place, the one nearest the middle of the strip first, shows its name only where it clears every
+	-- label already shown. A place whose name doesn't fit still shows its dot.
+	local taken = {}
+	local function clear(x, width)
+		for _, span in ipairs(taken) do
+			if x + width / 2 > span[1] and x - width / 2 < span[2] then
+				return false
+			end
+		end
+		return true
+	end
+	local places = {}
+	for _, marker in pairs(compassMarkers) do
+		if marker.frame.Visible and marker.x then
+			if marker.bearing then
+				local width = marker.label.TextBounds.X + 6
+				table.insert(taken, { marker.x - width / 2, marker.x + width / 2 })
+			elseif marker.position then
+				table.insert(places, marker)
+			end
+		end
+	end
+	table.sort(places, function(a, b)
+		return math.abs(a.delta) < math.abs(b.delta)
+	end)
+	for _, marker in ipairs(places) do
+		local width = math.max(marker.label.TextBounds.X, 8) + 6
+		local fits = clear(marker.x, width)
+		marker.label.Visible = fits
+		if fits then
+			table.insert(taken, { marker.x - width / 2, marker.x + width / 2 })
 		end
 	end
 
@@ -2485,6 +2592,24 @@ local function updateCompass(root)
 		placeCompassMarker(marker, bearingTo(here, activeDrop.position), heading)
 	elseif compassMarkers.drop then
 		compassMarkers.drop.frame.Visible = false
+	end
+	-- Objective Capture's A and B, in their owner's colour (read off the pillar ModeKingOfTheHill paints)
+	-- with how far off they are: a supply drop was on the strip and the objectives weren't, so the loot
+	-- read as the thing to go for. On the strip rather than on screen, so they cost no view.
+	local hill = workspace:FindFirstChild("Hill")
+	for _, letter in ipairs({ "A", "B" }) do
+		local key = "objective:" .. letter
+		local site = hill and hill:FindFirstChild("Objective" .. letter)
+		local x, z = site and site:GetAttribute("HillX"), site and site:GetAttribute("HillZ")
+		if x and z then
+			local pillar = site:FindFirstChild("HillPillar")
+			local target = Vector3.new(x, here.Y, z)
+			local text = string.format("%s %dm", letter, math.floor((target - here).Magnitude / 3.57 + 0.5))
+			local marker = compassMarker(key, text, pillar and pillar.Color or C.Text, "objective")
+			placeCompassMarker(marker, bearingTo(here, target), heading)
+		elseif compassMarkers[key] then
+			compassMarkers[key].frame.Visible = false
+		end
 	end
 end
 
@@ -3045,6 +3170,7 @@ do
 		local function apply()
 			local viewport = camera.ViewportSize
 			local phone = PhoneLayout.Active(viewport)
+			compass:SetAttribute("PhonePlaced", phone == true)
 			local spots = phone and PhoneLayout.Rects(viewport) or nil
 			-- Portrait is the simplified HUD: a piece PhoneLayout has no rect for there (the compass, the
 			-- kill feed, the bounty and location lines, the speed pill) is hidden rather than left behind.
@@ -3470,6 +3596,11 @@ end)
 
 matchResults.OnClientEvent:Connect(function(result)
 	recapPanel.Visible = false
+	-- ResultsScreen.client.lua draws the end-of-match screen now (Oliver, 16:03). This card and its
+	-- champion banner are the fallback for when that script is missing.
+	if playerGui:FindFirstChild("BrrResults") then
+		return
+	end
 	resultsPanel.Visible = true
 	resultsRank.Text = "#" .. result.rank
 	resultsRank.TextColor3 = result.rank == 1 and C.Accent or C.Text
@@ -3587,6 +3718,11 @@ end)
 local function renderBanner()
 	local ready = isReady()
 	updateReadyButton()
+
+	-- Oliver: the players-alive bubble is Battle Royale only. In a team mode the score bar takes
+	-- this slot (ModeScoreHud moves up to it), so the banner hides while you're playing one.
+	banner.Visible = not (matchState.state == "InProgress" and loadout
+		and matchState.mode ~= nil and matchState.mode ~= "BattleRoyale")
 
 	if matchState.state == "Waiting" then
 		bannerTitle.Text = ready and "WAITING FOR PLAYERS" or "READY UP TO PLAY"

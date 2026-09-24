@@ -135,7 +135,7 @@ local coinLabel = create("TextLabel", {
 -- ("is the menu open"), and `content` is a list-laid frame inside the shell's scrolling area, so all
 -- eight renderers draw into exactly what they drew into before and keep their owners.
 local MenuShell = require(script.Parent:WaitForChild("MenuShell"))
-local shell = MenuShell.new({ parent = screenGui, title = "BRAIN ROT ROYALE" })
+local shell = MenuShell.new({ parent = screenGui, title = "BRAINROT BATTLES" })
 local panel = shell.layer
 
 -- THE SHELL HAS TO BE TOLD WHAT SCREEN IT IS ON, and nothing told it (Oliver's #65).
@@ -1354,7 +1354,15 @@ local function renderCrates()
 		-- The GUARANTEE itself is untouched — CrateService still forces the rarity up after a dry run,
 		-- and the open still says "(guaranteed — your luck was due)" when it fires. Only the menu's
 		-- running count is gone.
-		fitLine(statLine(card, 32, oddsText, C.Text, Enum.Font.GothamBold, 12), 30, oddsHeight)
+		local oddsLabel = statLine(card, 32, oddsText, C.Text, Enum.Font.GothamBold, 12)
+		fitLine(oddsLabel, 30, oddsHeight)
+		if not narrow then
+			-- Wide, the line stays one row, so a long one (2x luck plus the accessory note) shrinks
+			-- to fit instead of losing its last rarities off the end.
+			oddsLabel.TextTruncate = Enum.TextTruncate.None
+			oddsLabel.TextScaled = true
+			create("UITextSizeConstraint", { MaxTextSize = 12, MinTextSize = 8, Parent = oddsLabel })
+		end
 		if category == "Brainrot" then
 			fitLine(statLine(card, 52, (crate.description or "") .. "  Best possible drops:", C.Muted, Enum.Font.Gotham, 12), 86 + shift)
 
@@ -1542,6 +1550,12 @@ end
 -- find. Buyable items that aren't in stock right now are left out, with a note that more rotate in.
 local function renderCosmetics()
 	stockHeader(0, "SHOP  •  a new selection every 5 minutes, rarer items less often")
+	-- Loaded here rather than at the top: the main chunk is at Luau's 200-local limit. require caches, and a
+	-- module that fails to load just costs the rows their previews.
+	local okPreview, cosmeticPreview = pcall(require, Shared:WaitForChild("CosmeticPreview"))
+	if not okPreview then
+		cosmeticPreview = nil
+	end
 	local cosmetics = profile and profile.cosmetics
 	local sections = {
 		{ title = "ON SALE NOW", items = {} },
@@ -1603,14 +1617,25 @@ local function renderCosmetics()
 			local buttons = makeRow(order, item.name, item.rarity and Rarity.Color(item.rarity) or item.color, subtitle)
 			if item.kind == "Parachute" then
 				parachutePreview(buttons.Parent, id)
+			elseif cosmeticPreview and buttons.Parent.Size.Y.Offset <= 64 then
+				-- Accessories, gun skins and auras get a live preview in the same spot as a parachute's
+				-- (Shared/CosmeticPreview, finished and never hooked up). Only on a wide row: a stacked
+				-- one on a narrow screen runs its subtitle under that spot. It tears itself down with the row.
+				local holder = create("Frame", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -118, 0.5, 0),
+					Size = UDim2.fromOffset(72, 56),
+					BackgroundTransparency = 1,
+					Parent = buttons.Parent,
+				}, { rounded(8) })
+				pcall(cosmeticPreview.Fill, holder, id)
 			end
 
 			if sectionIndex == 5 then
 				-- Where it's earned: the progression hub on the Pass tab. Rank cosmetic ids start with
 				-- Prestige, Mastery or Cell (verify.py holds them to it), which picks the page.
 				addButton(buttons, 1, "HOW", Color3.fromRGB(255, 150, 176), function()
-					ProgressionPanel.SetView(string.find(id, "^Cell") and "Shop" or string.find(id, "^Mastery") and "Mastery" or "Rank")
-					activeTab = "Pass"
+					activeTab = string.find(id, "^Cell") and "CellShop" or string.find(id, "^Mastery") and "Mastery" or "Rank"
 					renderTab()
 				end)
 			elseif sectionIndex == 4 then
@@ -1670,7 +1695,7 @@ local function renderPass()
 
 	-- The progression hub shares this tab: a PASS | RANK | MASTERY | INDEX | CELL SHOP toggle on top,
 	-- and every page but PASS is drawn by ProgressionPanel instead of the pass list below.
-	if ProgressionPanel.Render(content, profile, { rerender = renderTab }) then
+	if ProgressionPanel.Render(content, profile, { rerender = renderTab, noTabs = true }) then
 		return
 	end
 
@@ -2059,8 +2084,44 @@ local function featuredCard(order, product)
 	local lines = product.grant.kind == "Bundle" and GamepassConfig.DescribeContents(product.grant, cosmeticLabel) or nil
 	local rows = lines and math.ceil(#lines / 2) or 0
 
+	-- Every crate this card sells is a paid random item, so the card carries the odds that are rolled
+	-- for each one (a bundle: one line per crate kind inside it), sized to wrap and never cut off.
+	-- Same luck and crateBoosted rule as the Crates tab.
+	local odds = {}
+	do
+		local tiers, seen = {}, {}
+		if product.grant.kind == "Crate" then
+			table.insert(tiers, product.grant.crate)
+		end
+		for _, entry in ipairs(product.grant.contents or {}) do
+			if entry.kind == "Crate" and not seen[entry.crate] then
+				seen[entry.crate] = true
+				table.insert(tiers, entry.crate)
+			end
+		end
+		local TextService = game:GetService("TextService")
+		local _, width = narrowContent()
+		local column = math.max(64, width - 8 - math.min(310, math.max(0, width - 64)))
+		local top = lines and (66 + rows * 20 + 2)
+			or (66 + TextService:GetTextSize(product.description or "", 13, Enum.Font.Gotham, Vector2.new(column, 10000)).Y + 6)
+		for _, tier in ipairs(tiers) do
+			local crate = CrateData.Get(tier)
+			if crate then
+				local boosted = profile and profile.crateBoosted and profile.crateBoosted[tier] or false
+				local text = table.concat(CrateData.OddsLine(crate, profile and profile.crateLuck or 1, boosted), "   ")
+				if lines then
+					text = (crate.name or (tier .. " Crate")) .. ":   " .. text
+				end
+				local height = TextService:GetTextSize(text, 12, Enum.Font.GothamBold, Vector2.new(column, 10000)).Y + 2
+				table.insert(odds, { text = text, top = top, height = height })
+				top += height + 2
+			end
+		end
+		odds.bottom = top
+	end
+
 	local card = create("Frame", {
-		Size = UDim2.new(1, -8, 0, math.max(128, 70 + rows * 20 + 12)),
+		Size = UDim2.new(1, -8, 0, math.max(128, 70 + rows * 20 + 12, #odds > 0 and odds.bottom + 12 or 0)),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
@@ -2159,6 +2220,22 @@ local function featuredCard(order, product)
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextYAlignment = Enum.TextYAlignment.Top,
 			TextSize = 13,
+			Parent = card,
+		})
+	end
+
+	for _, entry in ipairs(odds) do
+		create("TextLabel", {
+			Position = UDim2.fromOffset(130, entry.top),
+			Size = UiKit.textSpan(select(2, narrowContent()), 310, entry.height),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.GothamBold,
+			Text = entry.text,
+			TextColor3 = C.Text,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextSize = 12,
 			Parent = card,
 		})
 	end
@@ -2292,6 +2369,32 @@ local function renderRobuxShop()
 		shopSection(nextOrder(), "CRATES, BOOSTS & COINS", C.Green)
 		for _, product in ipairs(products) do
 			local buttons = makeRow(nextOrder(), product.name, C.Text, product.description)
+			-- A crate here is a paid random item, so its row carries the odds that are rolled, the same
+			-- line the Crates tab draws (same luck, same crateBoosted rule), wrapped and never cut off.
+			local crate = product.grant.kind == "Crate" and CrateData.Get(product.grant.crate)
+			if crate then
+				local row = buttons.Parent
+				local narrow, width = narrowContent()
+				local boosted = profile and profile.crateBoosted and profile.crateBoosted[product.grant.crate] or false
+				local oddsText = table.concat(CrateData.OddsLine(crate, profile and profile.crateLuck or 1, boosted), "   ")
+				local reserve = narrow and -28 or -320
+				local column = math.max(80, width - 8 + reserve)
+				local height = math.max(16, game:GetService("TextService"):GetTextSize(oddsText, 12, Enum.Font.GothamBold, Vector2.new(column, 10000)).Y + 2)
+				row.Size += UDim2.fromOffset(0, height + 4)
+				create("TextLabel", {
+					Position = UDim2.fromOffset(14, 54),
+					Size = UDim2.new(1, reserve, 0, height),
+					BackgroundTransparency = 1,
+					Font = Enum.Font.GothamBold,
+					Text = oddsText,
+					TextColor3 = C.Text,
+					TextWrapped = true,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
+					TextSize = 12,
+					Parent = row,
+				})
+			end
 			addButton(buttons, 1, product.suggestedPrice .. " R$", C.Green, function()
 				MarketplaceService:PromptProductPurchase(player, product.id)
 			end, product.id > 0)
@@ -2658,7 +2761,14 @@ local TABS = {
 	{ key = "Crates", label = "Crates", render = renderCrates },
 	{ key = "Style", label = "Style Crates", render = renderStyleCrates },
 	{ key = "Cosmetics", label = "Cosmetics", render = renderCosmetics },
-	{ key = "Pass", label = "Pass", render = renderPass },
+	-- Oliver 09-22 14:15: rank, mastery and the cell shop were all under the Pass tab. Each progression
+	-- page is its own tab now; they share the Pass renderer, which hands every page but PASS to
+	-- ProgressionPanel.
+	{ key = "Pass", label = "Pass", render = function() ProgressionPanel.View = "Pass"; renderPass() end },
+	{ key = "Rank", label = "Rank", render = function() ProgressionPanel.View = "Rank"; renderPass() end },
+	{ key = "Mastery", label = "Mastery", render = function() ProgressionPanel.View = "Mastery"; renderPass() end },
+	{ key = "Index", label = "Rot Index", render = function() ProgressionPanel.View = "Index"; renderPass() end },
+	{ key = "CellShop", label = "Cell Shop", render = function() ProgressionPanel.View = "Shop"; renderPass() end },
 	{ key = "Quests", label = "Quests", render = renderQuests },
 	{ key = "Robux", label = "Robux Shop", render = renderRobuxShop },
 	{ key = "Settings", label = "Settings", render = renderSettings },
@@ -2691,14 +2801,33 @@ local DESTINATION_LOOK = {
 	Style = { glyph = "✦", sub = "Cosmetic crates" },
 	Cosmetics = { glyph = "◆", sub = "Skins and auras" },
 	Pass = { glyph = "▲", sub = "Brainrot Pass" },
+	Rank = { glyph = "★", sub = "Rot Rank" },
+	Mastery = { glyph = "◎", sub = "Gun mastery" },
+	Index = { glyph = "▦", sub = "Every brainrot" },
+	CellShop = { glyph = "✚", sub = "Spend Brain Cells" },
 	Quests = { glyph = "✓", sub = "Daily and weekly" },
 	Robux = { glyph = "$", sub = "Robux" },
 	Settings = { glyph = "⚙", sub = "Keys and audio" },
 }
 
+-- Oliver, 2026-09-22 13:59-14:00: no single menu -- separate buttons, each its own page. A button opens
+-- its GROUP, and the rail shows only that group's tabs. Quests sit under PROGRESS with the pass.
+local TAB_GROUP = {
+	Crates = "Shop", Style = "Shop", Cosmetics = "Shop",
+	Brainrots = "Brainrots", Trade = "Brainrots",
+	Pass = "Progress", Rank = "Progress", Mastery = "Progress", Index = "Progress", CellShop = "Progress", Quests = "Progress",
+	Robux = "Robux",
+	Settings = "Settings",
+}
+
 local function renderTabStrip()
 	local destinations = {}
-	for index, tab in ipairs(TABS) do
+	local group = TAB_GROUP[activeTab]
+	for _, tab in ipairs(TABS) do
+		if group and TAB_GROUP[tab.key] ~= group then
+			continue
+		end
+		local index = #destinations + 1
 		local look = DESTINATION_LOOK[tab.key] or {}
 		destinations[index] = { key = tab.key, label = string.upper(tab.label), glyph = look.glyph, sub = look.sub }
 	end
@@ -2732,6 +2861,18 @@ end
 --------------------------------------------------------------------------------
 -- Crate reveal
 --------------------------------------------------------------------------------
+-- IN A DO-BLOCK, and it is the whole crate reveal. This file's main chunk reached 200 top-level
+-- locals -- Luau's hard limit -- at which point one more anywhere in the file stops it compiling,
+-- SILENTLY: no error at build time, and the entire menu simply does not run. Locals declared inside
+-- a do-block are released at its end, so the 35 declared below cost the main chunk nothing.
+--
+-- The reveal was chosen because it is genuinely self-contained: none of its 35 names is referenced
+-- anywhere before this block or after it (checked by name across the whole file, both directions),
+-- so enclosing it changes no behaviour. It is the same treatment HudClient already gives its drop
+-- screen and its inventory, and for the same reason.
+--
+-- If you add a top-level local to this file, check `verify.py`'s "main-chunk locals" line first.
+do
 
 -- Full-screen opening. Everything is built from parts in a ViewportFrame, so there are no image
 -- assets. Click to skip to the reveal, click again to close.
@@ -3294,6 +3435,8 @@ crateOpened.OnClientEvent:Connect(function(result)
 		end
 	end)
 end)
+end
+-- End of the crate reveal's block; its 35 locals are released here.
 
 --------------------------------------------------------------------------------
 -- Trade invite popup
@@ -3409,17 +3552,27 @@ end)
 -- Open / close
 --------------------------------------------------------------------------------
 
+-- Compact (Oliver 14:01: "small enough to fit on the screen without taking too much space") and
+-- stacked top to bottom (14:06): five 100 x 28 buttons, 4 px apart, y 130-286. The bundle nudge and the
+-- quest tracker below were moved down by the same 114 px to make room.
+local HUD_BUTTON_W = 104
+local HUD_BUTTON_H = 26
+local HUD_BUTTON_GAP = 3
+-- Oliver 14:16/14:21: snug and neat by size and arrangement, same look as the old MENU button.
+local function hudButtonLook()
+	return { rounded(8) }
+end
 local menuButton = create("TextButton", {
 	Position = UDim2.new(0, 16, 0, 130),
-	Size = UDim2.new(0, 210, 0, 42),
+	Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
 	BackgroundColor3 = C.Accent,
 	BorderSizePixel = 0,
 	Font = Enum.Font.GothamBold,
-	Text = "MENU  [M]",
+	Text = "SHOP",
 	TextColor3 = Color3.new(0, 0, 0),
-	TextSize = 16,
+	TextSize = 13,
 	Parent = screenGui,
-}, { rounded(10) })
+}, hudButtonLook())
 
 -- CombatClient reads this. While the menu is open mid-match the mouse has to be free — first
 -- person otherwise keeps it locked to centre, leaving the panel unclickable — and clicks must
@@ -3441,7 +3594,34 @@ local function toggleMenu()
 	end
 end
 
-menuButton.Activated:Connect(toggleMenu)
+-- Declared here, assigned below once openTab exists.
+local hudButtonOpen
+menuButton.Activated:Connect(function()
+	hudButtonOpen("Crates")
+end)
+-- The other four buttons ride on the SHOP button as children, so every place that shows, hides or
+-- stacks menuButton (phone layout, MenuStackToggle) moves all five together.
+for index, spec in ipairs({
+	{ "BRAINROTS", "Brainrots" },
+	{ "PROGRESS", "Pass" },
+	{ "ROBUX", "Robux" },
+	{ "SETTINGS", "Settings" },
+}) do
+	local button = create("TextButton", {
+		Position = UDim2.new(0, 0, 0, index * (HUD_BUTTON_H + HUD_BUTTON_GAP)),
+		Size = UDim2.new(0, HUD_BUTTON_W, 0, HUD_BUTTON_H),
+		BackgroundColor3 = C.Accent,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		Text = spec[1],
+		TextColor3 = Color3.new(0, 0, 0),
+		TextSize = 13,
+		Parent = menuButton,
+	}, hudButtonLook())
+	button.Activated:Connect(function()
+		hudButtonOpen(spec[2])
+	end)
+end
 shell.onBack = toggleMenu
 -- Oliver's #66. `onBack` alone was not enough: the scrim and Backspace read that field at click
 -- time, but the header's X captured `options.onClose` at CONSTRUCTION -- line 138, before this
@@ -3471,7 +3651,7 @@ Settings.Bind("BRR_Menu", "Menu", function(_, inputState)
 end, nil, Enum.KeyCode.ButtonSelect)
 
 local function labelMenuButton()
-	menuButton.Text = "MENU  [" .. Settings.KeyLabel("Menu") .. "]"
+	menuButton.Text = "SHOP"
 end
 labelMenuButton()
 Settings.Changed:Connect(labelMenuButton)
@@ -3489,6 +3669,15 @@ local function openTab(key)
 	renderTab()
 end
 
+-- A HUD button: open its group, or close it if that group is what is showing.
+hudButtonOpen = function(key)
+	if panel.Visible and TAB_GROUP[activeTab] == TAB_GROUP[key] then
+		toggleMenu()
+		return
+	end
+	openTab(key)
+end
+
 --------------------------------------------------------------------------------
 -- Quest tracker
 --------------------------------------------------------------------------------
@@ -3498,7 +3687,7 @@ end
 local TRACKER_WIDTH = 250
 
 local tracker = create("TextButton", {
-	Position = UDim2.new(0, 16, 0, 224),
+	Position = UDim2.new(0, 16, 0, 318),
 	Size = UDim2.fromOffset(TRACKER_WIDTH, 40),
 	AutomaticSize = Enum.AutomaticSize.Y,
 	BackgroundColor3 = C.Background,
@@ -3681,7 +3870,7 @@ end)
 -- A pulsing shortcut under the menu button to the best deal still open to you: the Starter Bundle
 -- until it's been bought, then the Pro Bundle. Only for products whose ID is set (or in Studio).
 local bundleNudge = create("TextButton", {
-	Position = UDim2.new(0, 16, 0, 180),
+	Position = UDim2.new(0, 16, 0, 278),
 	Size = UDim2.new(0, 210, 0, 34),
 	BackgroundColor3 = C.Green,
 	BorderSizePixel = 0,

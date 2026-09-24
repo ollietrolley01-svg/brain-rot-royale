@@ -86,6 +86,8 @@ local mode = nil
 local arenaCentre = Vector3.zero
 local arenaRadius = 0
 local pads = { {}, {} }
+-- Each team's base point (the centre its pads were looked for around), for the base loot.
+local bases = {}
 
 -- token -> 1 or 2
 local teamOf = {}
@@ -171,11 +173,14 @@ end
 -- Setup
 --------------------------------------------------------------------------------
 
-local PADS_PER_TEAM = 5
+-- Oliver 09-22 15:33: "spawn a little further apart" and "play areas a little larger". 8 pads (was 5),
+-- spread over 60 studs (was 30), players kept 20 apart when they land (SPAWN_CLEARANCE, was 14), and the
+-- arena 0.72 of the map radius clamped 650..950 (was 0.62, 560..820).
+local PADS_PER_TEAM = 8
 local BASE_FRACTION = 0.72
 -- Where a team's pads are looked for around its base. The first number is the original
 -- spacing; the rest are only reached when that pass finds nothing at all.
-local PAD_SPREADS = { 30, 70, 150 }
+local PAD_SPREADS = { 60, 110, 180 }
 
 -- The arena: a disc centred on town 1. MapGenerator's placeTowns puts town index 1 at distance 0
 -- (plus a +/-40 jitter) on every map and every seed, so it is the one stable anchor there is, and
@@ -206,7 +211,7 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	-- boundary circle drawn over a map that is already built at full size, so this is free. Bases
 	-- sit BASE_FRACTION apart, so the longest crossing (BombardiroBay) goes 936 -> 1181 studs,
 	-- about 52 s -> 66 s at MatchConfig.BaseWalkSpeed, which is a respawn mode's to absorb.
-	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.62, 560, 820)
+	arenaRadius = math.clamp((mapInfo and mapInfo.radius or 900) * 0.72, 650, 950)
 
 	-- Two bases on opposite sides of the centre, on an axis rolled per match so the same map does
 	-- not always play along the same street.
@@ -215,7 +220,9 @@ function ModeTeams.Setup(currentMode, mapInfo)
 		local heading = axis + (team - 1) * math.pi
 		local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * BASE_FRACTION)
 		pads[team] = ModeTeams.BuildPads(base, mapInfo)
+		bases[team] = base
 	end
+	ModeTeams.MapRiver = mapInfo and mapInfo.river
 
 	return arenaCentre, arenaRadius, #pads[1], #pads[2]
 end
@@ -280,9 +287,58 @@ function ModeTeams.RefusePad(x, z, river)
 	return nil
 end
 
+-- The team's base point, or nil outside a team match.
+function ModeTeams.BaseOf(team)
+	return active and bases[team] or nil
+end
+
+-- Where the base loot goes (Oliver, 2026-09-23: "way more loot around the spawns of the teams"). Up to
+-- `count` open-ground spots between `inner` and `outer` studs from the team's base, each passing the
+-- same checks a spawn pad does (inside the arena, real ground, not in the river, nothing built on it)
+-- and kept `gap` studs apart so pickups never sit in one another.
+function ModeTeams.BaseLootSpots(team, count, inner, outer, gap)
+	local base = bases[team]
+	if not active or not base then
+		return {}
+	end
+	inner, outer, gap = inner or 12, outer or 80, gap or 6
+	local spots = {}
+	for _ = 1, count * 10 do
+		if #spots >= count then
+			break
+		end
+		local angle = math.random() * math.pi * 2
+		local reach = inner + math.sqrt(math.random()) * (outer - inner)
+		local x, z = base.X + math.cos(angle) * reach, base.Z + math.sin(angle) * reach
+		if not ModeTeams.RefusePad(x, z, ModeTeams.MapRiver) then
+			local spot = Vector3.new(x, terrainAt(x, z) or 0, z)
+			local clear = true
+			-- Never on a spawn pad: a chest there would block the pad, and a gun there is grabbed
+			-- by accident on every respawn.
+			for _, pad in ipairs(pads[team] or {}) do
+				if (Vector3.new(pad.X, 0, pad.Z) - Vector3.new(x, 0, z)).Magnitude < 7 then
+					clear = false
+					break
+				end
+			end
+			for _, other in ipairs(spots) do
+				if (other - spot).Magnitude < gap then
+					clear = false
+					break
+				end
+			end
+			if clear then
+				table.insert(spots, spot)
+			end
+		end
+	end
+	return spots
+end
+
 function ModeTeams.Teardown()
 	active = false
 	mode = nil
+	table.clear(bases)
 	table.clear(teamOf)
 	table.clear(protectedUntil)
 	table.clear(downed)
@@ -550,7 +606,7 @@ end
 -- 14, not 10: the probe measured a replacement bot landing 11 studs from a living body, which
 -- cleared the old constant and still reads as close. Before this whole fix the same measurement
 -- was 0 studs -- three replacements on one point. A character is about 5 studs across.
-local SPAWN_CLEARANCE = 14
+local SPAWN_CLEARANCE = 20
 
 -- `except` is the body being placed. It is already registered as a combatant by the time
 -- OnCharacterAdded reaches the respawn, and the placement watchdog can run this again when the body

@@ -1921,3 +1921,260 @@ entries, verify OK.** This is the failure Rule 9 exists to prevent — writing a
 it — and it was one ignored exit code away from reaching a playtest.
 
 - **19:1x hourly pass:** 5-hour 27% (resets 18:10), **weekly all-models 84% — the ceiling to watch now**, Fable 100% and out of use. No messages sent: every tab stood down on Oliver's "find a stopping point" and none has cleared. **No rebuild and no checks re-run — the only file changed since the 10:11 build is a handoff**, and a check on an unchanged tree re-proves nothing. LANDED this hour: the soda-pill countdown (server clock, falls back to no number rather than a wrong one), the `capRule` split, `tools/bot_probe.lua`'s new traces, five unapproved cosmetics REMOVED from the shop rotation and independently verified gone. UNPROVEN: everything needing a real Player or a picture — #95's friendly outline, Cloud Climb's 26 jumps, the six render-batch widths, #58 and #64 still unphotographed. WAITING ON OLIVER: nine board questions, the clear for seven tabs, and his playtest verdict.
+
+## 2026-09-22 19:2x — [CLEARED 19:3x: OLIVER AUTHORISED IT. See below.] Cosmetics in the shop file
+`ReplicatedStorage/Shared/CosmeticData.lua` changed at **10:52**, after the cosmetics tab stood down, and
+**all five unapproved accessories are back in it** (`grep -c` = 5, where claude-43 verified 0 at 19:0x).
+**No Studio process is running**, so this is NOT a `-WithPending` gallery in flight with a `finally` pending
+— it is a leak, and nothing is scheduled to remove them.
+- **Oliver's playtest build (10:11) PREDATES this and does not contain them.** Nothing has reached him.
+- The risk is forward only: any build cut from the tree in this state ships five cosmetics he has never
+  seen, straight into the live shop rotation — writing the data IS shipping it.
+- Tree otherwise green: verify OK · balance 0 · lua static check 348 files, 0 findings.
+- **claude-43 is deliberately NOT removing them.** Both pending blocks insert before the same marker, and a
+  naive edit could slice the auras out with the accessories — the exact hazard the tab's own script refused
+  on an hour ago. **The person with the right tool uses it, not the person with the most urgency.**
+- Asked the owning tab to remove with its fixed script (auras-first, `finally` that throws) and confirm
+  `grep -c` = 0 plus the three checks. **This heading is cleared when they do.**
+**If it was the round-trip test of the fixed script, the test ended APPLIED rather than reverted** — a
+verification that leaves the system in the state it was verifying against, which is the failure mode that
+fix existed to close.
+Also changed and unattributed this hour: `OLIVER_LIST.md` 147 → 417 lines (10:45, claude-43's file) and
+`.gitignore` gaining `*.pre-*` (10:57).
+
+## 2026-09-22 19:3x — CLEARED: OLIVER SAID "land it all". BUILD FREELY. (claude-43)
+The five accessories and five auras in `CosmeticData.lua` were landed **on Oliver's own instruction**, typed
+in the cosmetics tab: *"land it all"*, after a session in which that tab had repeatedly told him the ten were
+held out of the shop and unmeasured. 18 accessories and 20 auras now; verify OK, balance 0. `morning_gallery`
+was run WITHOUT `-WithPending` deliberately, so nothing will strip out what he asked for. **The DO NOT BUILD
+heading above is struck.**
+**Rule 9 is satisfied, and in the right order:** he authorised the landing, and he has since SEEN them — 33
+accessory shots, 0 missed, 7 contact sheets plus a worn shot, sent to him after the render finished. **The
+rule protects him from unseen cosmetics appearing in his game; it does not stop him shipping his own.**
+**The caveat that is real and stays open: the ten are LIVE and UNMEASURED.** No probe has run on them. An
+eight-lens adversarial audit is running now — head-scale clearances, ring corners, floating pieces, the
+height ceiling, whether the new aura layer fields are ones `AuraService` actually reads, and whether
+`verify.py`'s ring regex can even see the new calls — with every finding attacked by three skeptics before
+it is believed. **If it finds a blocker the tab tells Oliver and pulls them; the pre-landing file is backed
+up and removal is one command.**
+**On claude-43's stop: the check was right and its premise was wrong.** A file changing under you with five
+names you verified gone an hour earlier is worth stopping for, and had it been the leak it looked like, the
+stop would have caught it before a build. **Refusing to edit the file myself was also right** — the tab had
+the tool that knows which block is which, and the answer came from asking rather than from acting.
+**Attribution settled:** `OLIVER_LIST.md` (147 → 417) and `.gitignore`'s `*.pre-*` are neither claude-43's
+nor the cosmetics tab's — both came from whoever cut commit `1e964ca`.
+**Renders: the throwables re-run took 54 of 56.** `splat_rarities` (#64's whole subject) and all four
+sticky-bomb views (#58) are captured at last; only `splat_head` and `splat_shield` missed.
+
+## 2026-09-22 12:2x — HOURLY PASS: **WEEKLY CREDIT AT 89%, ONE POINT FROM THE STOP LINE** (claude-43)
+**5-hour 45% (resets 18:10). Weekly all-models 89%. At 90% every tab stops landing under Rule 10** — so the
+next substantial landing may be the one that crosses it. **Any tab still working: reach a clean point NOW
+rather than at the threshold.** A landing interrupted at the ceiling is the exact failure Rule 10 exists to
+prevent, and the ceiling is one point away.
+Tree changed this hour and was re-checked: `OK: no problems` · `files unbalanced: 0` ·
+`lua static check: 349 files, 0 findings`. **Rebuilt: 161 scripts.**
+LANDED since the last pass, by tabs working to Oliver's own instructions rather than mine: `CosmeticData`
+(+96/-34, the ten cosmetics plus audit corrections), `MovementService` (+47/-…), a new
+`ServerScriptService/Modules/CompanionBoons.lua`, and `tools/cosmetic_preview_probe.lua`. **I did not brief
+any of it and have not read those diffs** — Oliver is directing tabs directly, which is his to do; recorded
+so the next reader does not mistake my silence for review.
+UNPROVEN: the ten cosmetics (audit running), everything needing a real Player or a picture, `#58`/`#64`'s two
+missing views. WAITING ON OLIVER: nine board questions, the clear for seven tabs, his playtest verdict.
+
+## 2026-09-22 13:1x — THE 12:18 PLAYTEST DID NOT START: A REQUIRE CYCLE IN `CompanionBoons` (Claude, Oliver's session)
+**Oliver's report: no lobby, no map, HUD dead, falling to death over and over.** That is Bootstrap dying
+before `LobbyService` builds anything. Cause, found by running the server's startup against stand-in services:
+`CompanionBoons.lua` (new today) did `require(MatchService)` at the top of the file, and MatchService ->
+BotService -> CompanionService -> CompanionBoons -> MatchService is a cycle. Roblox refuses it
+("Requested module was required recursively"), so the whole server script stops at the first require.
+**None of the three gates can see this**: every file compiles, every require names a real module, and a
+cycle is only a fault at run time. 157 of 162 scripts were unchanged from main; the cycle arrived with one line.
+**Fix:** MatchService is loaded on first use inside `CompanionBoons` (`matchService()`), at both
+`SetStatusSpeed` call sites. Nothing calls them during startup. Backup `CompanionBoons.lua.pre-cyclefix`.
+**Checked:** a scan of every top-level require in the tree finds 0 cycles after the fix (1 before); the
+startup simulation now gets past every require and into the lobby build. **UNPROVEN until Oliver plays it:**
+that the lobby and HUD come back. The first thing to look at if not: Studio's Output window, first red line.
+**RULE: a server module never requires MatchService (or anything that reaches it) at top level if
+MatchService can reach it back.** Load it on first use.
+
+## 2026-09-22 13:3x — `CompanionBoons.lua` OWNERSHIP, AND A FIFTH DOOR WARNING (claude-43)
+**Not the brainrot tab's** — never created or touched by them, no reference to their companion work, and
+`.pre-cyclefix` is not their suffix. Their last tree write was 10:08:58; `CompanionBoons` is 13:15:58.
+**So it belongs to `Fleet and partner work review [d516ca]`**, the tab nobody had briefed, and its only
+description anywhere is its own source. Asked what it is for.
+**THE WARNING THAT MATTERS: the companion heal exploit is closed by a CARRY, and a new respawn path
+bypasses it.** `despawn` records the health FRACTION and `lastAttackAt` into `lastCondition`; `Refresh`
+re-applies both AFTER `spawnFor`; `RefreshAll` routes through `Refresh` rather than back to `spawnFor` —
+that last one was a fourth door found late (a trade completing respawned every player's companion at once).
+**Any path in `CompanionBoons` that despawns and respawns a companion is a FIFTH door and reopens a proven
+fix silently.** The brainrot tab verified theirs intact at `CompanionService`'s 12:20 state (`lastCondition`
+at six sites, read after `spawnFor`, `RefreshAll` routed) before standing down — **re-check after
+`CompanionBoons` settles.**
+**General form, worth more than the instance: a fix implemented as a CARRY across a rebuild is invisible to
+anyone adding a new rebuild path.** It does not fail loudly, it does not fail a check, and the exploit simply
+returns. When a fix works by preserving state across a teardown, the teardown sites are the thing to
+enumerate — and the enumeration belongs in the handoff, not in the fixer's head.
+
+## 2026-09-22 13:4x — **A HOLE IN THE FLOOR: THE THREE GATES CANNOT SEE A REQUIRE CYCLE** (claude-43)
+`CompanionBoons.lua` required `MatchService` at its top. The graph is
+`MatchService → BotService → CompanionService → CompanionBoons`, **Roblox refuses that recursively, and
+Bootstrap died before the lobby built** — a total game-breaker. **All three gates were green the entire time
+it was in the tree.** `verify.py`, `balance.py` and `lua_static_check.py` do not walk a require graph.
+**"Three checks green" has been this fleet's phrase for "safe to land" all week, and it does not cover this
+class at all.** Caught only because someone lazified the require (`CompanionBoons.lua.pre-cyclefix`, 13:15).
+**FIRST TOOLING JOB AFTER THE WEEKLY CEILING LIFTS: a require-cycle check in `lua_static_check.py`** —
+build the graph from `require(...)` sites, report any cycle, plant a fault. The owning tab has walked the
+other three requires by hand (`MovementService`, `CombatService`, `Combatants`; none reaches back) and puts
+the specification in `coordination/handoffs/fleet-review.md`.
+**The general form: a gate's silence is only as wide as what it inspects.** Every "green" this week meant
+"no finding in the three things these tools examine", and nobody had written down what they do NOT examine.
+That list now starts: require cycles · anything needing a Player · anything needing a LocalScript · synthetic
+input · hand-made terrain · a BillboardGui in a capture · and any behaviour a probe cannot reach.
+
+### `CompanionBoons` — what it is, since its source was the only description
+Oliver's 12:0x ask: companions give their owner passive effects (regen, speed, jump, health, venom) and the
+rarer ones get explosive abilities. Opt-in via a `boon` field in `BrainrotData`; the module names no brainrot.
+16 of 126 carry one, `blast = true` on 6 (Legendary and rarer, gated by `BrainrotData.BlastMinRarity`, two
+planted faults in verify). Also touched: `BrainrotData`, `CompanionService` (4 hooks + a blast branch in
+`UseAbility`), `MovementService` (`SetJumpFactor`), `verify.py`. **PROVEN: nothing. No probe, nothing seen in
+Studio.** Review queued with the bug-review tab.
+**Its own bug, found by the fifth-door warning:** `Apply` called `Clear`, which lowers MaxHealth and clamps
+Health, so **every completed trade stripped the health boon from every player carrying one** through
+`RefreshAll`. A loss rather than a gain, so the toggle exploit stayed closed. Fixed by no-oping `Apply` when
+the same def is already active. **The warning was aimed at a fifth respawn door and found a different bug in
+the same room — worth remembering when deciding whether a warning was worth sending.**
+
+## 2026-09-22 13:5x — THE CYCLE CHECK'S LOAD-BEARING DETAIL, AND THE #59-#64 COLLISION RESOLVED (claude-43)
+
+### THE CHECK MUST COUNT **TOP-LEVEL REQUIRES ONLY** — OR IT FLAGS EVERY FIX AS A FAULT
+Spec in `coordination/handoffs/fleet-review.md`. The part nobody may get backwards: **a lazy require inside
+a function is the documented FIX for a cycle**, so a checker that treats both kinds as edges reports every
+repair as the very fault it repaired. **It needs TWO planted faults, not one:** a top-level require that
+closes a real cycle, asserted to fire — AND a fixture with that same require moved inside a function, which
+must stay clean. **Without the second, the check cannot tell a fix from a fault**, which is the same shape as
+a probe that cannot tell a plant from a pass. Seed case is the real one:
+`MatchService → BotService → CompanionService → CompanionBoons → MatchService`.
+
+### `OLIVER_LIST.md`: #59-#64 MEANT TWO DIFFERENT THINGS AT ONCE, IN FIVE FILES
+Six items Oliver typed separately (dummies ragdoll, cosmetic crates tab, exhaust pipe, phone merge dialog,
+brainrot abilities, rarity-coloured splats) were numbered #59-#64 — but the source `.txt` already had real
+items at those ordinals (splats-cover-your-view, vehicle zoom, Ranger poles, sliding sound, throwable
+preview, shotgun nerf). **Both meanings were live in this file and four handoffs simultaneously.**
+Resolved toward the source: **positional numbering keeps #1-#94** — provable, because #88-#94 carry their
+numbers inside their own text and land on exactly those ordinals — and the six move to **A1-A6 with their
+old number recorded beside each**, so nothing already written becomes unreadable. Nothing else renumbered;
+#134+ is free if Oliver wants them given real numbers.
+**A number that means two things is worse than no number, and it survives precisely because each user is
+locally consistent.**
+
+### A CORRECTION MADE THE RIGHT WAY
+The fleet-review tab told Oliver twice that the ten cosmetics were a Rule 9 violation and recommended
+pulling them. On learning he had authorised them, it went back and corrected that **with him**, naming its
+evidence as circumstantial and its conclusion as inference rather than measurement — "the finally did not
+clean up" was never observed. **Correcting the person you misinformed, rather than only the record, is the
+part most corrections skip.**
+
+## 2026-09-22 14:2x — **VERIFY IS RED AND `MenuClient` IS AT LUAU'S HARD LIMIT. DO NOT BUILD.** (claude-43)
+```
+StarterPlayerScripts\MenuClient.client.lua: 200 locals in the main chunk, Luau's limit is 200
+progression: StarterPlayerScripts/MenuClient.client.lua lost the Pass tab hub (`ProgressionPanel.Render(...)`)
+```
+`verify.py` exit 1. `balance.py` 0 · `lua_static_check.py` 349 files 0 findings — **the other two gates cannot
+see either of these**, which is the third time today a green pair has sat beside a real fault.
+**200 locals is a GAME-BREAKER, not a warning.** MenuClient has been tracked all day at 194 with a warn at
+195; past 200 the file does not compile and the whole menu goes with it. Every menu change today was required
+to be net-neutral or negative on locals for exactly this reason, and something has now spent the last six.
+**NOBODY OWNS UP TO IT YET.** `ControlsHint` 14:02, `MenuClient` 14:07 then 14:17 — **after a fleet-wide stop
+at 92% weekly.** The Menu & HUD tab has disclaimed both and verified its own five markers survive as of 14:18
+(countdown, merge de-dup, SELL ALL confirm, gamepad binds, the pad branch). Asked the fleet-review and
+bug-review tabs. **`MatchService`/`MatchConfig` moved at 13:46 and `CrateService` at 14:15 as well.**
+**THE HAZARD BEYOND THE RED: if the editing tab is working from a copy taken before 10:08, a whole-file write
+removes this morning's landings silently.** Nothing is lost as of 14:18; that is a check, not a guarantee.
+**NO BUILD CUT THIS PASS.** The 12:18 build (162 scripts) is the last one from a green tree and remains the
+one Oliver should play. **Clearing this red is finishing a landing already in progress, not new work — that
+is the only thing anyone should spend the ceiling on.**
+
+## 2026-09-22 14:3x — FINDING 2 IS A STALE CHECK, NOT A REGRESSION. THE LOCALS ARE STILL REAL. (claude-43)
+**Verified at the line, not taken from a report.** `MenuClient:1672` now reads
+`ProgressionPanel.Render(content, profile, { rerender = renderTab, noTabs = true })`, with a comment above
+describing a deliberate redesign — the progression hub sharing the tab, a PASS | RANK | MASTERY | INDEX |
+CELL SHOP toggle, every page but PASS drawn by `ProgressionPanel` — and **`ProgressionPanel:498` reads
+`ctx.noTabs`.** Coherent across two files. **So verify's "lost the Pass tab hub" is matching an old literal
+shape: a stale check against a changed contract. Update the check to the new shape; do NOT relax it blindly**
+— a flag named `noTabs` is either the redesign or the exact regression the check exists to catch, and only
+its author can say which in one sentence. Second in line behind the locals.
+**THE 200 LOCALS REMAIN REAL AND URGENT** regardless of authorship. Routed to the Menu & HUD tab **as the
+file's OWNER, not its author** — authorship is unresolved and may stay so: all seven tabs are visible, every
+one asked disclaims it, and the fleet-review tab proved it with a `git diff` split (its own writes since
+`1e964ca` are `BrainrotData`, `CompanionService`, `MovementService`, `verify.py`, `OLIVER_LIST.md`,
+`handoffs/fleet-review.md` — and nothing in `StarterPlayerScripts` at all). **The likeliest remaining
+explanation is Oliver working in it himself, which nobody else can see.**
+**Ownership is the right routing when authorship is unknown.** A `do` block changes scope, so it needs
+whoever knows which names are safe to enclose — the fleet-review tab declined for exactly that reason, which
+was correct rather than a refusal.
+**`HudClient` has not moved since 10:08 and the Menu & HUD tab's five markers were intact at 14:18**, so the
+stale-copy fear is not realised for their work. That is a check at a moment, not a guarantee going forward.
+
+## 2026-09-22 14:4x — LOCALS CLEARED; **NEVER `git stash` ON THE SHARED TREE**; ONE RED REMAINS (claude-43)
+**`MenuClient` is off the limit — verified independently: `main-chunk locals: most is 194 in HudClient`**, so
+MenuClient is no longer the fleet maximum, down from 200. The whole crate reveal is wrapped in a `do` block,
+releasing 35 top-level names, **each checked in BOTH directions across the file** — none referenced before
+the block or after it, so scope changed and behaviour did not. Boundaries at statement edges; the comment
+above it records the 200 limit, that overrunning is silent, and to read `verify.py`'s line before adding a
+top-level local. Backup `.pre-doblock`. static 349 files 0 findings · balance 0.
+
+### **RULE: NEVER RUN `git stash` (OR ANY WHOLE-TREE GIT COMMAND) ON THIS WORKING TREE**
+Self-reported by the Menu & HUD tab, unprompted: to test whether a failure predated their edit they ran
+`git stash` **on a tree six other tabs were editing**. That stashes EVERYONE's uncommitted work, not just
+theirs, for as long as it takes to run a check — and a conflicting `pop` would have taken other tabs' work
+with it. **Nothing was lost; that was luck, not design.** Verified by claude-43 after the fact: stash list
+empty, 18 files still modified, their markers present.
+**The read-only diagnostic was `git diff -- <one file>`.** A destructive whole-tree command was reached for
+out of convenience. **Same family as the slice-to-next-delimiter, and worse: the blast radius was other
+tabs' work rather than one file's.** Add to it: `git checkout .`, `git reset --hard`, `git clean`, `git stash
+pop` — none of them belong in a tree nine sessions share. **If you need to know what a file looked like
+before, diff that file.**
+
+### THE ONE REMAINING RED, AND WHY IT STAYS RED
+`progression: MenuClient lost the Pass tab hub` — **a stale check against a deliberate redesign**, confirmed
+at the line (`noTabs = true`, `ProgressionPanel:498` reads it, comment describes the shared hub). **It fires
+identically before and after the do-block; a do-block cannot change a call's arguments.**
+**claude-43 is deliberately NOT updating the check.** Its author is unknown — likeliest Oliver himself — and
+a flag named `noTabs` is either the redesign or exactly the regression the check exists to catch. Changing an
+assertion to match a change whose intent nobody can confirm is how a gate stops being a gate.
+**So verify stays RED for ONE known, understood reason.** A tab seeing red should compare against this entry
+before assuming its own fault. First job when the ceiling lifts, and the question is on Oliver's board.
+
+## 2026-09-22 14:45 — **STOP. OLIVER: EVERY TAB WRAPS UP NOW.** (Claude, Oliver's own session)
+Oliver, 14:44, verbatim: *"Whatever is still active on my home pc needs to stop. Make a note somewhere it will
+see to tell it to wrap up."* This is his instruction, relayed verbatim, and it covers **every tab, including
+claude-43**:
+1. Finish only the single edit you are in the middle of, if leaving it would break a file. Start nothing new.
+2. Write your handoff (`coordination/handoffs/<tab>.md`), no hourly pass, no rebuild, no Studio job, no messages.
+3. Stop. Do not schedule or wait for another pass. Oliver restarts the fleet himself when he wants it.
+**For the record, answering the 14:4x question:** `noTabs = true` IS Oliver's redesign, not a regression.
+At 14:15 he asked that rank, mastery and the cell shop stop sharing the Pass tab; each progression page is now
+its own menu tab (MenuClient TABS: Pass, Rank, Mastery, Index, CellShop under the PROGRESS button). The
+`progression: MenuClient lost the Pass tab hub` check is stale and can be updated when the fleet next runs.
+Everything from Oliver's session today is on GitHub `main` and in release `playtest-2026-09-22-1445`
+(the startup require-cycle fix, 50/30 bot fill, HUD buttons, controls in Settings, progression tabs,
+crate reroll, chest loot on the ground, bot aim restored, minimize-tab position).
+
+## 2026-09-22 15:0x — FINAL PASS. OLIVER'S STOP INCLUDES claude-43, AND THE HOURLY CRON IS CANCELLED.
+His words: *"Whatever is still active on my home pc needs to stop."* `STOP.md` names every tab including
+this one and says **no scheduled passes** — so the hourly coordinator cron (`4eea5b28`) is **deleted**, not
+paused. Nothing will wake the fleet on a timer. **Oliver restarts it himself; delete `STOP.md` when he does.**
+**Tree at the stop:** `balance.py` 0 unbalanced · `lua_static_check.py` 349 files, 0 findings · **`verify.py`
+RED for ONE known reason** — the stale progression check against the `noTabs` redesign, documented at 14:4x
+and on Oliver's board as q10. **Nothing else is failing.** A tab reading red should compare against that
+entry before assuming its own fault.
+**NO BUILD CUT.** `LootService` (14:37), `MatchConfig` (14:39) and a new `MenuStackToggle.lua` (14:43) landed
+after the last green build and I have not read them. **The 12:18 build (162 scripts) is the last one from a
+green tree and is the one Oliver should play.**
+**Weekly credit 92%**, five days to reset; 5-hour 4%. The weekly ceiling, not the 5-hour one, is what ends
+the session.
+**Open on purpose, all named in `coordination/handoffs/`:** the ten cosmetics (audit run, Oliver's keep-vs-pull
+call), `CompanionBoons` entirely unproven, the require-cycle check unbuilt with its spec written, the six-shot
+render batch unshot, `#58`/`#64`'s two missing views, the bots' watch list, `#133`, Cloud Climb's 26 jumps,
+`#95`'s friendly outline, and ten board questions. **Nothing is half-applied and every tab's state is written
+down.**

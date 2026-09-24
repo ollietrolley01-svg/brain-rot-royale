@@ -32,7 +32,11 @@ if (-not (Test-Path $place)) {
 
 $versionType = if ($Saved) { "Saved" } else { "Published" }
 $url = "https://apis.roblox.com/universes/v1/$UniverseId/places/$PlaceId/versions?versionType=$versionType"
-$bytes = [System.IO.File]::ReadAllBytes($place)
+# Open Cloud rejects a leading <?xml ...?> declaration with 400 "Invalid Content stream"
+# (found 2026-09-23), and build_place.py writes one, so send the document from <roblox onward.
+$xml = [System.IO.File]::ReadAllText($place)
+$xml = $xml.Substring($xml.IndexOf("<roblox"))
+$bytes = (New-Object System.Text.UTF8Encoding $false).GetBytes($xml)
 "Uploading $([Math]::Round($bytes.Length / 1MB, 1)) MB as $versionType..."
 
 try {

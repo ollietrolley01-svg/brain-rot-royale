@@ -741,6 +741,7 @@ local function tryParkour(now)
 		speed = speed,
 		grounded = grounded,
 		allowVault = recentlyGrounded,
+		windowDrop = true,
 		exhausted = MovementState.exhausted and not MovementState.rush,
 	})
 	if not plan then

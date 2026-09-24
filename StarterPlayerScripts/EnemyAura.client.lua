@@ -29,12 +29,26 @@ local GameModes = require(Shared:WaitForChild("GameModes"))
 local player = Players.LocalPlayer
 
 local ENEMY = Color3.fromRGB(232, 92, 92)
--- Enemies are filled; friends are outlined only. A fill on every teammate is a wash of colour over
--- half the screen in a 6v6, and the question "is that one mine" is answered by an edge just as well.
-local ENEMY_FILL, FRIEND_FILL = 0.65, 1
-local ENEMY_OUTLINE, FRIEND_OUTLINE = 0.15, 0.25
+-- Teammates are green, whichever team you are on (Oliver, 2026-09-22: "change the friendly color for the
+-- team gamemodes to green"). It used to be the team's own colour.
+local FRIEND = Color3.fromRGB(80, 230, 110)
+-- Enemies are filled and outlined. Friends get a light green fill and NO outline (Oliver, 2026-09-23
+-- 16:11: "a bunch of the foliage and stuff is outlined the same way a friendly bot is"). With DepthMode
+-- Occluded, Roblox traces the outline along the edge of whatever is in front of the character, so a bush,
+-- fence or leaf covering a teammate got a green outline of its own. A fill is only drawn on the character's
+-- own visible pixels, so it cannot spill onto anything else.
+local ENEMY_FILL, FRIEND_FILL = 0.65, 0.72
+local ENEMY_OUTLINE, FRIEND_OUTLINE = 0.15, 1
 
 local marks = {}
+
+-- ROBLOX DRAWS AT MOST 31 HIGHLIGHTS AT ONCE, and silently drops the rest. A team match fills to 30
+-- combatants, so 29 marks plus a dead body still carrying its mark, or a barricade preview, went over
+-- and some players and bots showed no outline at all (Oliver, 2026-09-22: "sometimes the outline ...
+-- isnt visible"). So only the nearest MAX_LIT are switched on, re-picked a few times a second, and a
+-- dead body's mark is taken off straight away. The coloured name still marks everyone else.
+local MAX_LIT = 24
+local camera = workspace.CurrentCamera
 
 local function myTeam()
 	local character = player.Character
@@ -55,6 +69,9 @@ local function clear(character)
 	if mark.highlight then
 		mark.highlight:Destroy()
 	end
+	if mark.pin then
+		mark.pin:Destroy()
+	end
 	-- The nameplate is the server's, and we only ever changed its colour: put the colour back rather
 	-- than leaving our own on somebody else's instance.
 	local label = nameLabel(character)
@@ -69,13 +86,14 @@ local function paint(character)
 		return
 	end
 	local mine, theirs = myTeam(), character:GetAttribute("Team")
-	if mine == nil or theirs == nil then
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if mine == nil or theirs == nil or (humanoid and humanoid.Health <= 0) then
 		clear(character)
 		return
 	end
 
 	local enemy = theirs ~= mine
-	local colour = enemy and ENEMY or GameModes.TeamColor(theirs)
+	local colour = enemy and ENEMY or FRIEND
 	local mark = marks[character]
 	if not mark then
 		mark = {}
@@ -89,12 +107,61 @@ local function paint(character)
 		-- marked character exactly as it hides the character.
 		mark.highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 		mark.highlight.Adornee = character
+		mark.highlight.Enabled = false -- the budget loop below switches it on
 		mark.highlight.Parent = character
+		if humanoid then
+			-- A body is not a target (Oliver, 2026-09-22: "the glow ... disappears when the bot or player
+			-- dies so you dont mistake corpses for enemies"). Died, and health reaching 0, both take the
+			-- mark off at once -- Died alone can arrive late or not at all for a body another machine owns.
+			humanoid.Died:Connect(function()
+				clear(character)
+			end)
+			humanoid.HealthChanged:Connect(function(health)
+				if health <= 0 then
+					clear(character)
+				end
+			end)
+		end
 	end
 	mark.highlight.FillColor = colour
 	mark.highlight.OutlineColor = colour
 	mark.highlight.FillTransparency = enemy and ENEMY_FILL or FRIEND_FILL
 	mark.highlight.OutlineTransparency = enemy and ENEMY_OUTLINE or FRIEND_OUTLINE
+
+	-- Teammates also get a small green marker over their heads (Oliver, 2026-09-23: "make it easier to tell
+	-- what team youre on"). NOT through walls (Oliver, 14:39: "i dont wanna see the team marker icon through
+	-- walls"): AlwaysOnTop is off, so a wall in front hides it like it hides the teammate. It is a
+	-- BillboardGui, so it costs none of the 31-highlight budget.
+	if enemy then
+		if mark.pin then
+			mark.pin:Destroy()
+			mark.pin = nil
+		end
+	elseif not mark.pin or not mark.pin.Parent then
+		local head = character:FindFirstChild("Head") or character.PrimaryPart
+		if head then
+			local pin = Instance.new("BillboardGui")
+			pin.Name = "TeamPin"
+			pin.AlwaysOnTop = false
+			pin.LightInfluence = 0
+			pin.MaxDistance = 600
+			pin.Size = UDim2.fromOffset(22, 18)
+			pin.StudsOffsetWorldSpace = Vector3.new(0, 4.2, 0)
+			pin.Adornee = head
+			local arrow = Instance.new("TextLabel")
+			arrow.BackgroundTransparency = 1
+			arrow.Size = UDim2.fromScale(1, 1)
+			arrow.Font = Enum.Font.GothamBlack
+			arrow.Text = "▼"
+			arrow.TextScaled = true
+			arrow.TextColor3 = FRIEND
+			arrow.TextStrokeColor3 = Color3.fromRGB(10, 40, 18)
+			arrow.TextStrokeTransparency = 0.2
+			arrow.Parent = pin
+			pin.Parent = head
+			mark.pin = pin
+		end
+	end
 
 	-- The name, in the same colour. The plate is built server-side a moment after the character, so
 	-- this runs again when it appears (see `watch`), and the original colour is kept so `clear` can
@@ -136,6 +203,41 @@ local function watch(model)
 		paint(model)
 	end
 end
+
+-- The budget: nearest first, enemies ahead of friends at the same distance.
+task.spawn(function()
+	while true do
+		task.wait(0.3)
+		local eye = camera and camera.CFrame.Position
+		local list = {}
+		for character, mark in pairs(marks) do
+			if mark.highlight then
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if not character.Parent or (humanoid and humanoid.Health <= 0)
+					or (humanoid and humanoid:GetState() == Enum.HumanoidStateType.Dead) then
+					-- Gone, or a body: never outlined (the budget pass is the backstop for a missed Died).
+					clear(character)
+				else
+					local pivot = character:GetPivot().Position
+					local distance = eye and (pivot - eye).Magnitude or 0
+					if mark.highlight.OutlineTransparency < 1 then -- enemies (only they have an outline)
+						distance *= 0.8
+					end
+					table.insert(list, { mark = mark, distance = distance })
+				end
+			end
+		end
+		table.sort(list, function(a, b)
+			return a.distance < b.distance
+		end)
+		for index, entry in ipairs(list) do
+			local lit = index <= MAX_LIT
+			if entry.mark.highlight.Enabled ~= lit then
+				entry.mark.highlight.Enabled = lit
+			end
+		end
+	end
+end)
 
 workspace.ChildAdded:Connect(watch)
 workspace.ChildRemoved:Connect(clear)

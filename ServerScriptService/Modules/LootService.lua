@@ -162,8 +162,37 @@ end
 
 -- The part players and bots interact with. Invisible and upright, so the model on it turns
 -- around the vertical when AmbientClient spins it.
+-- The newest pickup base made, so the Drop* functions below can hand what they just spawned to the
+-- dropped-item cap without every spawner having to return it.
+local lastPickup = nil
+
+-- Oliver, 2026-09-22 15:26: at most 50 DROPPED items on the ground at once (death drops, chest spills,
+-- thrown-away slots); past that the oldest is deleted. Loot the map spawns at the start is not counted.
+local MAX_DROPPED = 50
+local dropped = {}
+
+local function trackDrop(base)
+	if not base or not base.Parent then
+		return
+	end
+	table.insert(dropped, base)
+	-- Forget ones already picked up or cleared, then trim the oldest down to the cap.
+	local live = {}
+	for _, item in ipairs(dropped) do
+		if item.Parent then
+			table.insert(live, item)
+		end
+	end
+	dropped = live
+	while #dropped > MAX_DROPPED do
+		local oldest = table.remove(dropped, 1)
+		oldest:Destroy()
+	end
+end
+
 local function pickupBase(name, position)
 	local base = Instance.new("Part")
+	lastPickup = base
 	base.Name = name
 	base.Size = Vector3.new(2.4, 0.4, 2.4)
 	base.Transparency = 1
@@ -281,6 +310,9 @@ local function spawnGroundWeapon(position, forcedDef, ammo)
 			end
 			StateSync.Notify(player, message)
 			base:Destroy()
+		elseif message then
+			-- Never fail silently: a pickup that does nothing reads as a broken prompt.
+			StateSync.Notify(player, "Couldn't pick that up: " .. message, true)
 		end
 	end)
 end
@@ -387,6 +419,8 @@ local function spawnConsumable(position, itemId, amount)
 			else
 				StateSync.Notify(player, "No room: you're already holding " .. item.name .. ".", true)
 			end
+		else
+			StateSync.Notify(player, "Couldn't pick that up right now.", true)
 		end
 	end)
 end
@@ -436,11 +470,13 @@ local function spawnChest(cframe)
 		-- fault partway through can open it twice.
 		chest:SetAttribute("Claimed", true)
 
-		-- Only fill empty slots. GiveWeapon replaces the equipped gun when the loadout is full,
-		-- so handing out both rolls that way let the second overwrite the first — or, with a
-		-- single free slot, overwrite whatever the player was holding. Anything that doesn't
-		-- fit drops beside the chest instead of vanishing.
-		local taken, dropped = {}, {}
+		-- Oliver, 2026-09-22 14:37: chests spill their loot onto the ground instead of straight into the
+		-- inventory. Everything lands in front of the chest, toward whoever opened it, and is picked up
+		-- the normal way. Ammo still goes straight to the opener: there is no ground pickup for ammo.
+		local opener = player.Character and player.Character.PrimaryPart
+		local toward = opener and (opener.Position - chest.Position) * Vector3.new(1, 0, 1) or Vector3.zero
+		local spill = chest.Position + (toward.Magnitude > 0.1 and toward.Unit * 4 or Vector3.new(0, 0, 4))
+		local dropped = {}
 		local best = "Common"
 		for gunIndex = 1, LootService.ChestGuns do
 			local def = WeaponData.RollChestWeapon()
@@ -456,24 +492,15 @@ local function spawnChest(cframe)
 			if (Rarity.Index[def.rarity] or 0) > (Rarity.Index[best] or 0) then
 				best = def.rarity
 			end
-			if WeaponService.HasFreeSlot(player) and WeaponService.GiveWeapon(player, def.id) then
-				table.insert(taken, def.name)
-			else
-				LootService.DropWeapon(def.id, chest.Position)
-				table.insert(dropped, def.name)
-			end
+			LootService.DropWeapon(def.id, spill, nil, chest.Position)
+			table.insert(dropped, def.name)
 		end
 
 		WeaponService.GiveAmmo(player, 0.4 + math.random() * 0.5)
 
 		local function giveItem(item)
-			local added = LootService.GiveOrDrop(player, item.id, item.pickup, chest.Position)
-			if added > 0 then
-				table.insert(taken, item.name)
-			end
-			if added < item.pickup then
-				table.insert(dropped, item.name)
-			end
+			LootService.DropItem(item.id, spill, item.pickup, chest.Position)
+			table.insert(dropped, item.name)
 		end
 
 		-- Always some recovery, often a second, a fair chance of a movement item, and now and
@@ -492,14 +519,7 @@ local function spawnChest(cframe)
 			giveItem(ItemData.RollThrowable())
 		end
 
-		local parts = {}
-		if #taken > 0 then
-			table.insert(parts, table.concat(taken, ", "))
-		end
-		if #dropped > 0 then
-			table.insert(parts, "on the floor (full): " .. table.concat(dropped, ", "))
-		end
-		StateSync.Notify(player, "Chest: " .. (#parts > 0 and table.concat(parts, "  •  ") or "ammo and heals"))
+		StateSync.Notify(player, "Chest: " .. table.concat(dropped, ", ") .. " on the ground")
 		QuestService.Progress(player, "chests", 1)
 		if nearLandmark(chest.Position) then
 			QuestService.Progress(player, "landmarkChests", 1)
@@ -635,6 +655,82 @@ function LootService.Populate(mapInfo)
 end
 
 --------------------------------------------------------------------------------
+-- Team bases (Oliver, 2026-09-23: "make there be way more loot around the spawns of the teams in the
+-- team gamemodes, and make the bots go for it")
+--------------------------------------------------------------------------------
+
+-- What a base cache is made of, per team. GameMode stocks it once at the start and tops it back up
+-- while the match runs, so a team that respawns later still finds gear at home.
+-- Chests 3 -> 8 (Oliver, 2026-09-23 14:38: "i wanted chests"), so most of a team gets one on the way out.
+LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 8 }
+LootService.BaseRadius = 85
+
+local function baseKind(item)
+	local name = item.Name
+	if name == "GroundWeapon" then
+		return "weapon"
+	elseif name == "Chest" then
+		return "chest"
+	elseif name == "HealPickup" then
+		return "heal"
+	elseif name == "ItemPickup" then
+		return "item"
+	end
+	return nil
+end
+
+-- How many of each kind of unclaimed pickup lie within `radius` of `centre` (flat distance).
+function LootService.CountNear(centre, radius)
+	local counts = { weapon = 0, heal = 0, item = 0, chest = 0 }
+	if not container or not container.Parent then
+		return counts
+	end
+	local flat = Vector3.new(centre.X, 0, centre.Z)
+	for _, item in ipairs(container:GetChildren()) do
+		if item:IsA("BasePart") and not item:GetAttribute("Claimed") then
+			local kind = baseKind(item)
+			if kind and (Vector3.new(item.Position.X, 0, item.Position.Z) - flat).Magnitude <= radius then
+				counts[kind] += 1
+			end
+		end
+	end
+	return counts
+end
+
+-- Puts one pickup of `kind` at each of `spots` (ground positions). Yields between batches like
+-- Populate, and stops if the loot is cleared under it. Returns how many it placed.
+function LootService.SeedAt(spots, kind)
+	ensureContainer()
+	local generation = populateGeneration
+	local placed = 0
+	for _, position in ipairs(spots) do
+		if generation ~= populateGeneration then
+			break
+		end
+		local ok, err = pcall(function()
+			if kind == "chest" then
+				spawnChest(CFrame.new(position + Vector3.new(0, 1, 0)) * CFrame.Angles(0, math.random() * math.pi * 2, 0))
+			elseif kind == "weapon" then
+				spawnGroundWeapon(position + Vector3.new(0, 1, 0))
+			elseif kind == "heal" then
+				spawnConsumable(position + Vector3.new(0, 1, 0), ItemData.RollRecovery().id)
+			else
+				spawnConsumable(position + Vector3.new(0, 1, 0), rollGroundItem().id)
+			end
+		end)
+		if ok then
+			placed += 1
+		else
+			warn("[LootService] base loot failed: " .. tostring(err))
+		end
+		if placed % POPULATE_BATCH == 0 then
+			task.wait()
+		end
+	end
+	return placed
+end
+
+--------------------------------------------------------------------------------
 -- Drops
 --------------------------------------------------------------------------------
 
@@ -721,7 +817,9 @@ function LootService.DropWeapon(weaponId, position, ammo, from)
 		return
 	end
 	ensureContainer()
+	lastPickup = nil
 	spawnGroundWeapon(scatter(position, from), def, ammo)
+	trackDrop(lastPickup)
 end
 
 -- A random heal or shield, for bots' death drops.
@@ -730,7 +828,9 @@ function LootService.DropHeal(position)
 		return
 	end
 	ensureContainer()
+	lastPickup = nil
 	spawnConsumable(scatter(position), ItemData.RollRecovery().id)
+	trackDrop(lastPickup)
 end
 
 function LootService.DropItem(itemId, position, amount, from)
@@ -738,7 +838,9 @@ function LootService.DropItem(itemId, position, amount, from)
 		return
 	end
 	ensureContainer()
+	lastPickup = nil
 	spawnConsumable(scatter(position, from), itemId, amount)
+	trackDrop(lastPickup)
 end
 
 -- Whatever was in an inventory slot, back on the floor: a gun with its ammo, or the whole stack.

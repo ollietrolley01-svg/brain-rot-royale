@@ -2595,7 +2595,7 @@ function MapWilds.Build(map, ctx)
 				end
 			end
 		end
-		-- Both banks of the river, a few studs back from the water.
+		-- Both banks of the river, just past its sand beach (MapTerrain's RIVER_BEACH_OUT is width / 2 + 14).
 		local river = ctx.river
 		for index = 1, river and #river.points - 1 or 0 do
 			local a, b = river.points[index], river.points[index + 1]
@@ -2607,7 +2607,7 @@ function MapWilds.Build(map, ctx)
 				local step = 44
 				for travelled = step / 2, length, step do
 					local at = a + along * travelled
-					local offset = (river.width or 34) / 2 + rand(6, 16)
+					local offset = (river.width or 34) / 2 + rand(16, 26)
 					local sign = chance(0.5) and 1 or -1
 					if not patch(at.X + side.X * offset * sign, at.Z + side.Z * offset * sign, rand(6, 11)) then
 						break

@@ -1323,13 +1323,34 @@ local function eliminate(token, killerToken, method, weaponId)
 	-- no spectating and no last one standing.
 	--
 	-- This sits ABOVE dropLoot and above the kill-reward block on purpose, so a respawn mode drops
-	-- nothing of the ISSUED kit (what was picked up still drops - dropPickedUp, Oliver's #124) and
-	-- **PAYS NOTHING AT ALL** — no kill coins, no XP, no mastery. That is DELIBERATE AND TEMPORARY:
-	-- Oliver asked for rewards scaled to what the same performance would earn per minute in the
-	-- battle royale, and no economy moves here until that rate has been measured rather than
-	-- guessed. When the reward work lands, it hangs off currentMode.OnDeath, not off this seam.
+	-- nothing of the ISSUED kit (what was picked up still drops - dropPickedUp, Oliver's #124). Kills
+	-- DO pay here now (Oliver, 2026-09-23 16:10: "theres no rewards for the team gamemodes!"), at
+	-- MatchConfig.TeamModeRewards.killScale of the battle royale rate and only for the first
+	-- maxPaidKills of the match; the result payout is the mode's AwardResult.
 	if currentMode.respawn then
 		dropPickedUp(token)
+		-- Counted for the results card only (no coins, XP or streak banners, per the note above):
+		-- the respawn path returned before the tally below, so a Team Deathmatch results screen showed
+		-- 0 eliminations however many players and bots you took down (Oliver, 2026-09-22: "the win
+		-- screen isnt showing my bot kills").
+		if killerToken and killerToken ~= token and Combatants.IsPlayer(killerToken) and participants[killerToken] then
+			local streak = streaks[killerToken]
+			if not streak then
+				streak = { count = 0, at = 0, total = 0 }
+				streaks[killerToken] = streak
+			end
+			streak.total += 1
+			local rules = MatchConfig.TeamModeRewards or {}
+			if streak.total <= (rules.maxPaidKills or 30) then
+				local ok, err = pcall(RewardService.AwardKill, killerToken, Combatants.IsBot(token), rules.killScale or 0.5)
+				if not ok then
+					warn("[MatchService] team kill reward failed: " .. tostring(err))
+				end
+				if MatchService.OnKillCredited then
+					pcall(MatchService.OnKillCredited, killerToken, token, weaponId)
+				end
+			end
+		end
 		currentMode.OnDeath(token, killerToken, method, weaponId)
 		return
 	end
@@ -1591,8 +1612,13 @@ local function startMatch()
 	end
 	tagInMatch(Players:GetPlayers())
 
+	-- The battle royale fills to 50, every other mode to 30 (MatchConfig, Oliver 09-22 13:45).
+	local fillTarget = MatchConfig.BotFillTarget
+	if currentMode.id == "BattleRoyale" then
+		fillTarget = MatchConfig.BotFillTargetBattleRoyale or fillTarget
+	end
 	local botCount = math.clamp(
-		math.min(MatchConfig.BotFillTarget, MatchConfig.MaxPlayers) - #joining,
+		math.min(fillTarget, MatchConfig.MaxPlayers) - #joining,
 		0,
 		MatchConfig.MaxPlayers
 	)

@@ -36,7 +36,7 @@ CrateData.Crates = {
 		color = Color3.fromRGB(255, 80, 230),
 		odds = { Mythic = 90, Secret = 10 },
 		jackpot = { chance = 0.6, min = 50000, max = 250000 },
-		description = "Mythic or Secret every time, 10% Secret, 60% chance of a 50K-250K jackpot.",
+		description = "Mythic or Secret every time, and a 60% chance of a 50K-250K jackpot.",
 	},
 	Common = {
 		name = "Common Crate",
@@ -66,7 +66,7 @@ CrateData.Crates = {
 		accessoryChance = 10,
 		odds = { Uncommon = 24, Rare = 45, Epic = 28, Legendary = 3 },
 		pity = { every = 12, rarity = "Epic" },
-		description = "Uncommon to Legendary, with a slim 3% shot at a Legendary.",
+		description = "Uncommon to Legendary, with a slim shot at a Legendary.",
 	},
 	Epic = {
 		name = "Epic Crate",
@@ -76,7 +76,7 @@ CrateData.Crates = {
 		accessoryChance = 14,
 		odds = { Rare = 32, Epic = 54, Legendary = 12, Mythic = 2 },
 		pity = { every = 25, rarity = "Legendary" },
-		description = "Rare to Mythic. Nothing below a Rare, and a Legendary about one time in eight.",
+		description = "Rare to Mythic. Nothing below a Rare, and a real shot at a Legendary.",
 	},
 	Legendary = {
 		name = "Legendary Crate",
@@ -87,7 +87,7 @@ CrateData.Crates = {
 		odds = { Epic = 58, Legendary = 34, Mythic = 7, Secret = 1 },
 		jackpot = { chance = 0.25, min = 5000, max = 25000 },
 		pity = { every = 40, rarity = "Mythic" },
-		description = "Epic to Secret: a third Legendary, a small shot at Mythic, and a 25% coin jackpot.",
+		description = "Epic to Secret: plenty of Legendaries, a small shot at Mythic, and a 25% coin jackpot.",
 	},
 	Mythic = {
 		name = "Mythic Crate",
@@ -96,7 +96,7 @@ CrateData.Crates = {
 		odds = { Legendary = 80, Mythic = 17, Secret = 3 },
 		jackpot = { chance = 0.4, min = 20000, max = 100000 },
 		pity = { every = 50, rarity = "Secret" },
-		description = "Legendary or better, every time. 17% Mythic, 3% Secret.",
+		description = "Legendary or better, every time, with a shot at Mythic and Secret.",
 	},
 	-- The STYLE CRATES: cosmetic crates in tiers, drawing from every cosmetic kind at once rather than
 	-- one slot each (Oliver, 2026-09-18: "varying tiers of these crates"). Tiers rather than more
@@ -273,7 +273,9 @@ function CrateData.OddsLine(crate, luck, boosted)
 		end
 	end
 	if crate.accessoryChance and crate.accessoryChance > 0 then
-		table.insert(parts, string.format("+ %d%% accessory", crate.accessoryChance))
+		-- A ceiling, and a swap: CrateService.Open only gives one when an accessory the player doesn't
+		-- own exists at the rarity rolled, and it replaces the brainrot rather than adding to it.
+		table.insert(parts, string.format("up to %d%% an accessory instead", crate.accessoryChance))
 	end
 	return parts
 end

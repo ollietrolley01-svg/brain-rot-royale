@@ -244,6 +244,8 @@ local function bar(parent, props, ratio, color)
 end
 
 -- A little pink brain-cell coin: the currency's icon everywhere on these pages.
+-- Upgraded 2026-09-22 (Oliver: "upgrade the icons in the progression menu"): a minted coin rather
+-- than a flat disc -- a lit face, a darker rim, a highlight, and a little brain in place of the "b".
 local function cellIcon(parent, size, position)
 	local icon = create("Frame", {
 		Position = position,
@@ -252,13 +254,38 @@ local function cellIcon(parent, size, position)
 		BorderSizePixel = 0,
 		Parent = parent,
 	}, { rounded(size) })
-	create("UIStroke", { Color = BRAIN_DARK, Thickness = math.max(1, size / 12), Parent = icon })
+	create("UIGradient", {
+		Rotation = 90,
+		Color = ColorSequence.new(Color3.fromRGB(255, 196, 212), Color3.fromRGB(232, 104, 140)),
+		Parent = icon,
+	})
+	create("UIStroke", { Color = BRAIN_DARK, Thickness = math.max(1, size / 10), Parent = icon })
+	-- The inner ring of a struck coin.
+	local face = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.74, 0.74),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Parent = icon,
+	}, { rounded(size) })
+	create("UIStroke", { Color = Color3.fromRGB(255, 226, 234), Thickness = math.max(1, size / 20), Transparency = 0.35, Parent = face })
+	-- Highlight, top left.
+	create("Frame", {
+		Position = UDim2.fromScale(0.2, 0.14),
+		Size = UDim2.fromScale(0.3, 0.16),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.45,
+		BorderSizePixel = 0,
+		Rotation = -30,
+		Parent = icon,
+	}, { rounded(size) })
 	label(icon, {
 		Size = UDim2.fromScale(1, 1),
 		Font = FONT.Display,
-		Text = "b",
+		Text = "🧠",
 		TextColor3 = BRAIN_DARK,
-		TextSize = math.floor(size * 0.72),
+		TextSize = math.floor(size * 0.58),
 		TextXAlignment = Enum.TextXAlignment.Center,
 	})
 	return icon
@@ -313,6 +340,51 @@ local function emblem(parent, prestige, size, position)
 		Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(170, 170, 180)),
 		Parent = diamond,
 	})
+	if prestige > 0 then
+		-- An outer frame a step out from the gem, in the prestige colour, and a soft glow behind.
+		local glow = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(size * 0.98, size * 0.98),
+			BackgroundColor3 = info.color,
+			BackgroundTransparency = 0.8,
+			BorderSizePixel = 0,
+			Parent = holder,
+		}, { rounded(size) })
+		-- Behind the gem and the number, which are its siblings.
+		glow.ZIndex = diamond.ZIndex - 1
+		local frame = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(inner * 1.2, inner * 1.2),
+			Rotation = 45,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Parent = holder,
+		}, { rounded(math.floor(size * 0.14)) })
+		create("UIStroke", { Color = info.color, Thickness = math.max(1, size / 28), Transparency = 0.25, Parent = frame })
+		-- A light facet across the top half of the gem.
+		create("Frame", {
+			Position = UDim2.fromScale(0, 0),
+			Size = UDim2.fromScale(0.5, 0.5),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BackgroundTransparency = 0.7,
+			BorderSizePixel = 0,
+			Parent = diamond,
+		}, { rounded(math.floor(size * 0.1)) })
+		if prestige >= 5 then
+			label(holder, {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0, -math.floor(size * 0.12)),
+				Size = UDim2.fromOffset(size, math.floor(size * 0.3)),
+				Font = FONT.Display,
+				Text = prestige >= 10 and "★★★" or "★",
+				TextColor3 = Color3.fromRGB(255, 220, 90),
+				TextSize = math.floor(size * 0.24),
+				TextXAlignment = Enum.TextXAlignment.Center,
+			})
+		end
+	end
 	label(holder, {
 		Size = UDim2.fromScale(1, 1),
 		Font = FONT.Display,
@@ -364,6 +436,40 @@ local function cosmeticSwatch(parent, item, isOwned, caption, width, height, for
 		Parent = tile,
 	})
 	local fade = (isOwned or forSale) and 0 or 0.55
+	-- The real thing, turning, through Shared/CosmeticPreview (the same builder the shop uses). The flat
+	-- drawing below is only the fallback if the preview module can't load.
+	local okPreview, preview = pcall(require, Shared:WaitForChild("CosmeticPreview"))
+	if okPreview and preview and item.id then
+		art.Position = UDim2.new(0.5, 0, 0, 20)
+		art.Size = UDim2.fromOffset(math.min(width - 10, 58), math.min(height - 38, 44))
+		create("UICorner", { CornerRadius = UDim.new(0, 8), Parent = art })
+		local shown = pcall(preview.Fill, art, item.id, { background = C.Panel, backgroundTransparency = 1 })
+		if shown then
+			local viewport = art:FindFirstChild("CosmeticPreview")
+			if viewport and not (isOwned or forSale) then
+				-- Not earned yet: the same model, dimmed.
+				viewport.ImageTransparency = 0.45
+				viewport.ImageColor3 = Color3.fromRGB(150, 150, 165)
+			end
+		end
+		if shown then
+			if forSale then
+				return tile
+			end
+			label(tile, {
+				Position = UDim2.new(0, 3, 1, -34),
+				Size = UDim2.new(1, -6, 0, 28),
+				Font = FONT.Bold,
+				Text = isOwned and ("✓ " .. item.name) or item.name,
+				TextColor3 = isOwned and C.Green or C.Muted,
+				TextWrapped = true,
+				TextSize = 10,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				TextYAlignment = Enum.TextYAlignment.Top,
+			})
+			return tile
+		end
+	end
 	if item.kind == "Aura" then
 		local ring = create("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
@@ -493,6 +599,11 @@ local function renderToggle(content, progression, ctx)
 
 	local claimable = progression and claimableCount(progression) or 0
 	for index, view in ipairs(VIEWS) do
+		-- Each page is its own menu tab now (MenuClient, Oliver 09-22 14:15), so the in-page tabs are
+		-- skipped and only the Brain Cells chip is drawn.
+		if ctx and ctx.noTabs then
+			break
+		end
 		local selected = ProgressionPanel.View == view.key
 		local text = narrow and view.short or view.label
 		-- A count fits on a 96 px tab and not on a 54 px one: "INDEX 10" measured 52 px wide in the

@@ -67,7 +67,7 @@ local function pitchFor(mode)
 		return mode.description or ""
 	end
 	if label == "seconds held" then
-		return string.format("Two teams, one hill. Hold it for %d seconds. Respawns.", target)
+		return string.format("Two teams, two objectives. Capture and hold them, first to %d. Respawns.", target)
 	end
 	return string.format("Two teams. First to %d %s. Respawns.", target, label)
 end

@@ -97,6 +97,40 @@ end
 local leftValue, leftFill = side(0, Enum.TextXAlignment.Left)
 local rightValue, rightFill = side(1, Enum.TextXAlignment.Right)
 
+-- Oliver, 2026-09-23: "make it easier to tell what team youre on". Your side is always on the LEFT,
+-- in the same green your teammates' outlines use, tagged YOUR TEAM; the other side is on the right in
+-- the enemy red. The team names stay in the tags so a callout of "Blue is pushing" still means something.
+local FRIEND = Color3.fromRGB(80, 230, 110)
+local ENEMY = Color3.fromRGB(232, 92, 92)
+local function tag(anchorX, align)
+	return create("TextLabel", {
+		AnchorPoint = Vector2.new(anchorX, 0),
+		Position = UDim2.new(anchorX, 0, 1, 3),
+		Size = UDim2.fromOffset(200, 16),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBlack,
+		Text = "",
+		TextSize = 13,
+		TextStrokeTransparency = 0.4,
+		TextXAlignment = align,
+		Parent = root,
+	})
+end
+local leftTag = tag(0, Enum.TextXAlignment.Left)
+local rightTag = tag(1, Enum.TextXAlignment.Right)
+local sideStroke = create("Frame", {
+	Size = UDim2.new(0, 4, 1, -12),
+	Position = UDim2.fromOffset(3, 6),
+	BackgroundColor3 = FRIEND,
+	BorderSizePixel = 0,
+	Parent = root,
+}, { UiKit.rounded(Radius.Pill) })
+
+local function myTeam()
+	local character = player.Character
+	return character and character:GetAttribute("Team")
+end
+
 local caption = create("TextLabel", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
@@ -126,7 +160,9 @@ local function fit()
 		-- zero overlaps in the storm readout's slot, which no team mode uses.
 		scale.Scale = 1
 		root.AnchorPoint = Vector2.new(0.5, 0)
-		root.Position = UDim2.new(0.5, 0, 0, 72)
+		-- The top slot: HudClient hides the players-alive banner in team modes, so the score bar sits
+		-- there and clears the compass below it (it used to overlap the compass at y 100).
+		root.Position = UDim2.new(0.5, 0, 0, 10)
 	else
 		-- On a touch screen the desktop literals are NOT what is drawn — PhoneLayout replaces the
 		-- whole HUD with its own map — so measuring this against them was measuring the wrong thing
@@ -157,15 +193,31 @@ end
 -- way -- so this is ONE predicate that covers every path, not one that has to be threaded through
 -- each of them.
 local inProgress = false
+-- The mode the CURRENT match is (MatchChanged carries it). A scoreline cached from an earlier team match
+-- used to come back when the next match was a battle royale: `lastState` below is only replaced by a
+-- ModeChanged push, which a battle royale never sends, so the loadout arriving re-rendered the old
+-- TDM score (Oliver's 17:10 screenshot: 84-77 FIRST TO 100 over a battle royale's storm and ALIVE bar).
+local currentMode = nil
+local forgetScores -- set below, once lastState exists
 matchChanged.OnClientEvent:Connect(function(state)
 	inProgress = state ~= nil and state.state == "InProgress"
-	if not inProgress then
+	local mode = state and state.mode or nil
+	if mode ~= currentMode then
+		currentMode = mode
+		-- Only a switch to a mode with no scoreline drops the cache: a team match's first ModeChanged can
+		-- arrive before this, and render() already refuses a cached push from a different mode.
+		if (mode == nil or mode == "BattleRoyale") and forgetScores then
+			forgetScores()
+		end
+	end
+	if not inProgress or currentMode == nil or currentMode == "BattleRoyale" then
 		root.Visible = false
 	end
 end)
 
 local function render(state)
-	local teams = inProgress and state and state.scores ~= nil
+	local teams = inProgress and state and state.scores ~= nil and currentMode ~= nil and currentMode ~= "BattleRoyale"
+		and (state.mode == nil or state.mode == currentMode)
 	if not teams then
 		root.Visible = false
 		return
@@ -175,14 +227,30 @@ local function render(state)
 	local target = math.max(state.target or 1, 1)
 	local koth = state.hillHolder ~= nil or state.hillStatus ~= nil
 
-	leftValue.Text = tostring(scores[1] or 0)
-	rightValue.Text = tostring(scores[2] or 0)
-	leftValue.TextColor3 = GameModes.TeamColor(1)
-	rightValue.TextColor3 = GameModes.TeamColor(2)
-	leftFill.BackgroundColor3 = GameModes.TeamColor(1)
-	rightFill.BackgroundColor3 = GameModes.TeamColor(2)
-	leftFill.Size = UDim2.fromScale(math.clamp((scores[1] or 0) / target, 0, 1), 1)
-	rightFill.Size = UDim2.fromScale(math.clamp((scores[2] or 0) / target, 0, 1), 1)
+	-- Mine on the left. Before the server has given me a side, fall back to team 1 on the left in the
+	-- teams' own colours, as it always was.
+	local mine = myTeam()
+	local left = mine == 2 and 2 or 1
+	local right = left == 1 and 2 or 1
+	local known = mine == 1 or mine == 2
+	local leftColour = known and FRIEND or GameModes.TeamColor(left)
+	local rightColour = known and ENEMY or GameModes.TeamColor(right)
+	leftValue.Text = tostring(scores[left] or 0)
+	rightValue.Text = tostring(scores[right] or 0)
+	leftValue.TextColor3 = leftColour
+	rightValue.TextColor3 = rightColour
+	leftFill.BackgroundColor3 = leftColour
+	rightFill.BackgroundColor3 = rightColour
+	leftFill.Size = UDim2.fromScale(math.clamp((scores[left] or 0) / target, 0, 1), 1)
+	rightFill.Size = UDim2.fromScale(math.clamp((scores[right] or 0) / target, 0, 1), 1)
+	sideStroke.Visible = known
+	leftTag.Visible, rightTag.Visible = known, known
+	if known then
+		leftTag.Text = "YOUR TEAM · " .. string.upper(GameModes.TeamName(left))
+		leftTag.TextColor3 = FRIEND
+		rightTag.Text = "ENEMY · " .. string.upper(GameModes.TeamName(right))
+		rightTag.TextColor3 = ENEMY
+	end
 
 	if koth then
 		-- "Who has held it longest and by how much", said as a gap rather than two numbers to
@@ -191,8 +259,13 @@ local function render(state)
 		local leader = (scores[1] or 0) == (scores[2] or 0) and nil or ((scores[1] or 0) > (scores[2] or 0) and 1 or 2)
 		caption.Text = clock(state.secondsLeft)
 		if leader then
-			caption.Text = clock(state.secondsLeft) .. "\n" .. GameModes.TeamName(leader) .. " +" .. lead .. "s"
-			caption.TextColor3 = GameModes.TeamColor(leader)
+			if known then
+				caption.Text = clock(state.secondsLeft) .. "\n" .. (leader == mine and "YOU" or "ENEMY") .. " +" .. lead
+				caption.TextColor3 = leader == mine and FRIEND or ENEMY
+			else
+				caption.Text = clock(state.secondsLeft) .. "\n" .. GameModes.TeamName(leader) .. " +" .. lead
+				caption.TextColor3 = GameModes.TeamColor(leader)
+			end
 		else
 			caption.Text = clock(state.secondsLeft) .. "\nlevel"
 			caption.TextColor3 = Role.TextMuted
@@ -221,6 +294,10 @@ end
 -- player spawning into a game already at 3-1 would see nothing until someone scored again.
 local inMatch = false
 local lastState = nil
+function forgetScores()
+	lastState = nil
+	root.Visible = false
+end
 
 Remotes.Event("LoadoutChanged").OnClientEvent:Connect(function(newLoadout)
 	local joined = newLoadout ~= nil
@@ -243,6 +320,22 @@ modeChanged.OnClientEvent:Connect(function(state)
 	end
 	render(state)
 end)
+
+-- My side arriving (or changing on a respawn) re-draws the scoreline the right way round.
+local function watchMine(character)
+	character:GetAttributeChangedSignal("Team"):Connect(function()
+		if lastState and inMatch then
+			render(lastState)
+		end
+	end)
+	if lastState and inMatch then
+		render(lastState)
+	end
+end
+player.CharacterAdded:Connect(watchMine)
+if player.Character then
+	watchMine(player.Character)
+end
 
 local camera = workspace.CurrentCamera
 if camera then

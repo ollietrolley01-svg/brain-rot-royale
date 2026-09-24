@@ -82,11 +82,32 @@ MatchConfig.PlacementBrackets = {
 	{ maxRank = 5,  crate = "Epic",      coins = 1200, xp = 550 },
 	{ maxRank = 10, crate = "Rare",      coins = 600,  xp = 340 },
 	{ maxRank = 20, crate = "Uncommon",  coins = 260,  xp = 190 },
-	{ maxRank = 30, crate = "Common",    coins = 100,  xp = 90 },
-	{ maxRank = 50, crate = "Common",    coins = 60,   xp = 60 },
+	{ maxRank = 30, crate = "Common",    coins = 120,  xp = 90 },
+	{ maxRank = 50, crate = "Common",    coins = 90,   xp = 70 },
 }
+-- The bottom two were 100 and 60 coins (xp 60 at the bottom). Raised a little (Oliver, 2026-09-22,
+-- from ECONOMY.md s.2): at 50 players a player who keeps losing spends two thirds of their matches in
+-- ranks 31-50 and earned 4.5x less a minute than a middle player.
+
+-- Every hit between combatants is multiplied by this (CombatService.DealDamage). 1 = the weapons' raw damage.
+-- 0.85 (Oliver, 2026-09-22 21:38: "increase the ttk a bit") turned out too slow (2026-09-23 15:07: "make it
+-- a good middleground"), so 0.92: a kill takes about 9% longer than raw damage instead of 18%.
+MatchConfig.CombatDamageScale = 0.92
 
 MatchConfig.CoinsPerKill = 75
+-- Team Deathmatch / King of the Hill payouts (Oliver, 2026-09-23 16:10: "theres no rewards for the team
+-- gamemodes!"). An 8-minute team match pays about what a mid-table battle royale does over the same time:
+-- a crate and coins for the result, plus kills at half the battle royale rate (respawns make kills far
+-- more frequent), and only the first `maxPaidKills` of a match pay so a bot lobby can't be farmed.
+-- Coins go through the same 2x-pass and High Stakes multipliers as placement coins. Wins here do NOT count
+-- as battle royale wins (Stats.wins, the global board).
+MatchConfig.TeamModeRewards = {
+	win = { crate = "Rare", coins = 350, xp = 300 },
+	draw = { crate = "Uncommon", coins = 250, xp = 220 },
+	loss = { crate = "Uncommon", coins = 150, xp = 160 },
+	killScale = 0.5,
+	maxPaidKills = 30,
+}
 MatchConfig.XpPerKill = 60
 
 -- Bots backfill the lobby and play for real: they carry actual weapons from WeaponData,
@@ -94,11 +115,13 @@ MatchConfig.XpPerKill = 60
 -- retreat when hurt. Accuracy falls off with range so close fights are genuinely dangerous
 -- and long ones are survivable.
 -- #127 (Oliver, 2026-09-22): "reduce the bot count down to 30". Was 50 (49 bots with one player).
--- This is the ONE field every mode reads: MatchService fills to min(BotFillTarget, MaxPlayers) minus
--- the real players, and the team modes take that same roster, so 30 here means 29 bots with one
--- player in the battle royale and in TDM/KOTH alike. Fewer bots in one area is also the cheapest
--- answer to his lag complaint (#126), before any think-loop work.
+-- Oliver, 2026-09-22 13:45: "we need 50 players in the battle royale rounds and keep 30 in the other
+-- gamemodes". So the fill target is per mode: MatchService fills to min(target, MaxPlayers) minus the
+-- real players, reading BotFillTargetBattleRoyale for the battle royale and BotFillTarget for every
+-- other mode (TDM, KOTH). 50 in the battle royale means 49 bots with one player, as it was before #127;
+-- the team modes keep 30, where bunched bots were the lag complaint (#126).
 MatchConfig.BotFillTarget = 30
+MatchConfig.BotFillTargetBattleRoyale = 50
 MatchConfig.BotHealth = 100
 MatchConfig.BotWalkSpeed = 17
 MatchConfig.BotThinkInterval = 0.25
@@ -107,8 +130,11 @@ MatchConfig.BotThinkInterval = 0.25
 -- is about a sixth off a bot's hit rate at every range (measured at 20, 60 and 150 studs by
 -- tools/bot_probe.lua's S23). Accuracy falls off with distance, so these two numbers and the falloff
 -- below are the whole difficulty dial, alongside BotDamageScale.
-MatchConfig.BotAccuracyNear = 0.55
-MatchConfig.BotAccuracyFar = 0.15
+-- Oliver, 2026-09-22 14:39: "un nerf the bots aim". Back to the pre-#118 values.
+-- Oliver, 2026-09-22 21:34: "make the bots aim a little better". Up a notch (0.66/0.19 -> 0.71/0.22);
+-- BotService also lets aim settle on a target and makes fast-moving targets harder to hit.
+MatchConfig.BotAccuracyNear = 0.71
+MatchConfig.BotAccuracyFar = 0.22
 MatchConfig.BotAccuracyFalloff = 120
 MatchConfig.BotReactionTime = 0.28
 MatchConfig.BotBurstRest = 0.48
@@ -141,7 +167,11 @@ MatchConfig.BotRearNoticeTime = 1.2
 MatchConfig.BotMemorySeconds = 6
 
 -- Below this share of max health, a bot that's being hit looks for cover (or builds some).
-MatchConfig.BotCoverHealth = 0.6
+-- Oliver, 2026-09-22 21:35: "make them take cover". Was 0.6.
+MatchConfig.BotCoverHealth = 0.8
+-- Team modes: how long a freshly spawned bot spends gearing up at its base (chests first) before it
+-- heads for the fight. Ends early once the base has nothing it wants.
+MatchConfig.BotBaseGearSeconds = 30
 
 -- Storm pressure: the distance to the safe circle over how far a bot can walk before the storm
 -- gets there. Past Rotate it stops looting outside that circle and sprints its wander legs; past

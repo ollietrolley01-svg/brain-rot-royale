@@ -43,6 +43,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local CombatService = require(script.Parent:WaitForChild("CombatService"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local PlayerData = require(script.Parent:WaitForChild("PlayerData"))
+local CompanionBoons = require(script.Parent:WaitForChild("CompanionBoons"))
 
 local CompanionService = {}
 
@@ -139,6 +140,9 @@ end
 local lastCondition = {}
 
 local function despawn(owner)
+	-- The boon goes with the companion, always, whatever took it away: unequipped, sold, downed,
+	-- character gone, match over. Every one of those paths reaches here.
+	CompanionBoons.Clear(owner)
 	local entry = companions[owner]
 	companions[owner] = nil
 	if entry and entry.maxHealth and entry.maxHealth > 0 then
@@ -363,6 +367,7 @@ local function spawnFor(player, character)
 	end
 
 	attachModel(player, character, def, player)
+	CompanionBoons.Apply(player, def)
 end
 
 -- Bots can bring a companion too. Cleaned up automatically when the bot's character goes:
@@ -478,6 +483,26 @@ local function lineOfSight(from, targetCharacter, targetRoot, ownerCharacter, al
 	return result == nil or result.Instance:IsDescendantOf(targetCharacter)
 end
 
+-- Team modes: a teammate is never a target (Oliver, 2026-09-23 14:49: team bots "hit eachother with
+-- their buff companions"). ModeTeams is loaded on first use, not at the top, so no require cycle can form;
+-- anything wrong with it fails open to today's behaviour.
+local modeTeams
+local function friendly(owner, token)
+	if modeTeams == nil then
+		local module = script.Parent:FindFirstChild("ModeTeams")
+		local ok, result = false, nil
+		if module then
+			ok, result = pcall(require, module)
+		end
+		modeTeams = ok and type(result) == "table" and result or false
+	end
+	if not modeTeams or not modeTeams.IsHostile then
+		return false
+	end
+	local ok, hostile = pcall(modeTeams.IsHostile, owner, token)
+	return ok and hostile == false
+end
+
 -- The living enemy in range and in sight of the companion that sits nearest the owner's
 -- crosshair, or, with no aim point (bots), simply the nearest one.
 local function pickTarget(owner, entry, aimPoint)
@@ -489,7 +514,7 @@ local function pickTarget(owner, entry, aimPoint)
 
 	local bestToken, bestRoot, bestScore = nil, nil, math.huge
 	for character, token in pairs(Combatants.All()) do
-		if token ~= owner and character.Parent then
+		if token ~= owner and character.Parent and not friendly(owner, token) then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
@@ -563,6 +588,13 @@ local function hit(player, token, amount, tag, report)
 			end
 		end
 	end
+	-- Venom rides the hit rather than replacing it: the bite still does its damage, and the poison is
+	-- what the boon adds. Refreshes on a second bite (CompanionBoons), it does not stack.
+	local entry = companions[player]
+	local venom = entry and CompanionBoons.VenomOf(entry.def)
+	if venom then
+		CompanionBoons.StartVenom(player, token, venom, "Companion:" .. entry.def.name)
+	end
 end
 
 -- Where a splash is cast from: half a stud back toward where the move came from. A glob that
@@ -632,7 +664,7 @@ local function onBeam(player, entry, from, to)
 	end
 	local bestToken, bestRoot, bestAt = nil, nil, math.huge
 	for character, token in pairs(Combatants.All()) do
-		if token ~= player and character.Parent then
+		if token ~= player and character.Parent and not friendly(player, token) then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
@@ -928,6 +960,47 @@ local function practice(player, entry, aimPoint)
 end
 
 -- The hotkey. Returns whether the move was used.
+
+-- An explosive companion ability (`blast = true`, Legendary and rarer -- BrainrotData gates it).
+--
+-- Routed through ProjectileService.Explode rather than given its own blast maths, because that
+-- function already does exposure raycasts, falloff, self-damage scaling and the client detonation
+-- cue. A second blast implementation is how the explosive-ammo branch ended up cruder than the
+-- rounds beside it. `kind = "grenade"` is a REGISTERED cue, so the client draws a real explosion
+-- instead of nothing; a new kind would need client work this change does not do.
+--
+-- Lazy require: ProjectileService pulls in the combat path, and requiring it at the top of this file
+-- makes a cycle. Resolved on first use, the way BotService reaches mode state.
+local projectileService
+local blastId = 0
+local function blastFor(player, entry, position)
+	if not entry.def.blast then
+		return false
+	end
+	if not projectileService then
+		local ok, mod = pcall(require, script.Parent:WaitForChild("ProjectileService"))
+		if not ok then
+			warn("[CompanionService] blast wanted ProjectileService: " .. tostring(mod))
+			return false
+		end
+		projectileService = mod
+	end
+	local step = (BrainrotData.RarityIndex[entry.def.rarity] or 0) - (BrainrotData.RarityIndex[BrainrotData.BlastMinRarity] or 4)
+	local radius = BrainrotData.BlastRadius + BrainrotData.BlastRadiusStep * math.max(0, step)
+	blastId += 1
+	projectileService.Explode({
+		id = "companion" .. blastId,
+		owner = player,
+		position = position,
+		normal = Vector3.yAxis,
+		kind = "grenade",
+		radius = radius,
+		damage = entry.stats.damage * BrainrotData.BlastPower,
+		weaponId = "Companion:" .. entry.def.name,
+	})
+	return true
+end
+
 function CompanionService.UseAbility(owner, aimPoint)
 	local entry = companions[owner]
 	if not entry then
@@ -946,10 +1019,15 @@ function CompanionService.UseAbility(owner, aimPoint)
 	entry.lastAttackAt = now
 	if CompanionService.IsFighting(owner) and CombatService.IsEnabled() then
 		local token, targetRoot = pickTarget(owner, entry, aimPoint)
-		if token then
+		local to = token and targetRoot and targetRoot.Position or reachPoint(owner, entry, aimPoint)
+		-- A blast brainrot explodes at the point instead of landing its single hit, so the two never
+		-- both pay: the blast IS the ability, not a bonus on top of it.
+		if blastFor(owner, entry, to) then
+			-- handled
+		elseif token then
 			attack(owner, entry, token, targetRoot)
 		else
-			attackPoint(owner, entry, reachPoint(owner, entry, aimPoint))
+			attackPoint(owner, entry, to)
 		end
 	else
 		practice(owner, entry, aimPoint)
@@ -1092,6 +1170,10 @@ function CompanionService.Start()
 		accumulated = 0
 
 		local now = os.clock()
+		for owner in pairs(companions) do
+			CompanionBoons.Tick(owner, THINK_INTERVAL)
+		end
+		CompanionBoons.TickVenom(THINK_INTERVAL)
 		for owner, entry in pairs(companions) do
 			if not entry.model.Parent or not entry.anchor.Parent then
 				despawn(owner)
