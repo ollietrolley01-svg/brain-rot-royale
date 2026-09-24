@@ -46,8 +46,15 @@ local open = false
 -- mouse (so it can be seen and clicked with), and otherwise wanted exactly when the mouse ISN'T
 -- locked to the crosshair. Locked with no menu open is FPS combat -- the one place a visible OS
 -- cursor is a bug, not a convenience.
+-- One more case: a vehicle gun's aim mark IS the cursor while its gunner aims with a free mouse
+-- (VehicleWeaponClient sets the local `AimCursor` attribute), and the OS arrow on top of it is a
+-- second cursor. That script asks through the attribute rather than writing the icon itself, so this
+-- stays the only writer and every path above still ends in one answer.
 local function desiredIcon()
-	return open or UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter
+	if open then
+		return true
+	end
+	return UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter and player:GetAttribute("AimCursor") ~= true
 end
 
 local function reconcileIcon()
@@ -82,6 +89,11 @@ player:GetAttributeChangedSignal("MenuOpen"):Connect(sync)
 -- The lock can also change with no menu involved at all: entering or leaving FPS combat, a
 -- vehicle, death. The icon has to follow every one of those, not only a menu's open/close.
 UserInputService:GetPropertyChangedSignal("MouseBehavior"):Connect(function()
+	if not open then
+		reconcileIcon()
+	end
+end)
+player:GetAttributeChangedSignal("AimCursor"):Connect(function()
 	if not open then
 		reconcileIcon()
 	end

@@ -368,14 +368,19 @@ local function placeReticle(x, y, pinned)
 end
 
 -- The OS arrow is hidden while the aim mark is the cursor, and given back when it is not (a menu, a
--- pad, leaving the seat). Only ever put back by this script if this script took it away.
+-- pad, leaving the seat). MenuCursor is the one script that writes MouseIconEnabled (#112), so this
+-- only says so, through the player's `AimCursor` attribute (local: a client's attribute on its own
+-- Player never leaves this machine), and MenuCursor hides the arrow while it is set. Writing the
+-- property here fought MenuCursor: its reconcile on every MouseBehavior change (a right-drag of the
+-- camera) put the arrow back beside the mark, and this script's "give it back" on leaving the seat
+-- set it visible in first-person combat -- #112's "can still see my cursor in FPS" again.
 local hidCursor = false
 local function setCursorHidden(hide)
 	if hide == hidCursor then
 		return
 	end
 	hidCursor = hide
-	UserInputService.MouseIconEnabled = not hide
+	player:SetAttribute("AimCursor", hide or nil)
 end
 
 RunService.RenderStepped:Connect(function(dt)
