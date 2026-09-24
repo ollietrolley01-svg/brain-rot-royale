@@ -10,10 +10,11 @@ a metal part inside workspace.Map, plays what the server sent through the client
   W  wood throws splinters: long thin sticks (two sides at most 0.4, the third at least 0.8)
   S  concrete throws chunky lumps and a dust puff (an emitter that doesn't glow)
   M  metal throws thin plates (at most 0.14 thick) and sparks (a glowing emitter)
-  T  a wall at half health is darker but exactly as opaque as before
+  T  a wall at half health is at damage stage 2 (DamageStage attribute), weathered darker, and
+     exactly as opaque as before (tools/crack_check.py holds every damage path to that)
 
 Planted faults, each of which must be caught: wood's profile turned into chunks (W), and a
-see-through bump put into the battered step (T).
+see-through bump put into the stage step (T).
 
     python3 tools/destruct_material_check.py
 """
@@ -40,11 +41,12 @@ local wall = part("Wall", Vector3.new(12, 10, 1), Vector3.new(20, 5, 0), Enum.Ma
 local plate = part("Part", Vector3.new(6, 3, 6), Vector3.new(40, 1.5, 0), Enum.Material.Metal)
 plate:SetAttribute("DestructibleHealth", 50)
 
--- T: half health darkens, never fades.
+-- T: half health is stage 2 and weathers the colour, never fades.
 local before = wall.Transparency
 local r0 = wall.Color.R
 DS.Damage(wall, 60)
 if wall.Transparency ~= before then fail("T", "battered wall went from transparency " .. before .. " to " .. wall.Transparency) end
+if wall:GetAttribute("DamageStage") ~= 2 then fail("T", "battered wall at stage " .. tostring(wall:GetAttribute("DamageStage"))) end
 if not (wall.Color.R < r0) then fail("T", "battered wall did not darken") end
 
 -- E: break all three in one frame; the server sends families and makes no debris parts itself.
@@ -122,8 +124,8 @@ def main():
         print("  FAIL", f)
     planted = [
         ("W", (), [("wood = { shape = \"splinter\"", "wood = { shape = \"chunk\"")]),
-        ("T", [("\t\t\t\tmember.Color = member.Color:Lerp(Color3.new(0, 0, 0), 0.25)\n",
-                "\t\t\t\tmember.Color = member.Color:Lerp(Color3.new(0, 0, 0), 0.25)\n\t\t\t\tmember.Transparency = math.max(member.Transparency, 0.12)\n")], ()),
+        ("T", [("\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n",
+                "\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n\t\t\tmember.Transparency = math.max(member.Transparency, 0.12)\n")], ()),
     ]
     caught = 0
     for tag, service_faults, client_faults in planted:

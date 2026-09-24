@@ -62,6 +62,23 @@
 --
 -- A blast that goes off on open ground also takes a small bite out of the terrain (craterAt),
 -- capped per map and never on a road, paving or water, or under anything built.
+--
+-- DAMAGE YOU CAN SEE (#71). Nothing that is taking damage ever turns see-through: a wall fading
+-- toward clear read as a ghost of cover. Instead it cracks, and the cracks are drawn on every client
+-- by CrackFxClient from three cheap things replicated here:
+--
+--   DamageStage   attribute, 0 whole, 1 at 75% health, 2 at 50%, 3 at 25%; only ever goes up. On
+--                 the part (a pool of one, or each member of a group) or on the Model (a Model
+--                 pool). Written at most three times per pool. Each stage also weathers the pool's
+--                 colour a little toward what its material looks like broken (STAGE_TINT).
+--   DamageSites   attribute on each part that was hit: up to MAX_SITES_PER_PART "face,x,y,z" points
+--                 in the part's own space (face is the Enum.NormalId value). Written only when a new
+--                 site opens, so a wall under a minigun costs four writes, not one per bullet.
+--   Damaged       tag on those parts, so a player who joins late (or streams the part in) finds
+--                 them and draws the same cracks.
+--
+-- and one DamageFx event per frame with that frame's hits, { part, point, face, count } each
+-- (capped, one record per part), for the chips, sparks, dust and sound each hit makes.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -135,6 +152,20 @@ local function classOf(material)
 	return CLASS_OF[material] or "plastic"
 end
 DestructibleService.ClassOf = classOf
+DestructibleService.ClassTable = CLASS_OF
+
+-- Each damage stage weathers what is left a step toward what its material looks like broken, from
+-- the colour it had before the first stage (so stages never compound): stone greyer and dustier,
+-- wood darker, metal sooty, leaves dry and brown. Glass keeps its colour; it cracks instead.
+local STAGE_TINT = {
+	stone = { Color3.fromRGB(104, 100, 94), 0.07 },
+	wood = { Color3.fromRGB(58, 42, 28), 0.08 },
+	metal = { Color3.fromRGB(38, 36, 34), 0.07 },
+	foliage = { Color3.fromRGB(132, 108, 54), 0.16 },
+	plastic = { Color3.fromRGB(76, 76, 76), 0.06 },
+	cloth = { Color3.fromRGB(64, 60, 56), 0.07 },
+}
+DestructibleService.StageTint = STAGE_TINT
 
 -- health = toughness(material) * (BASE + PER_STUD * size) * kind, where size is the cube root of the
 -- pool's solid volume (capped): a bench about 55, an oak about 120, a boulder about 200, a parked car
@@ -170,6 +201,26 @@ local PANE_MARGIN = 0.02
 
 local glassShatter = Remotes.Event("GlassShatter")
 local breakFx = Remotes.Event("BreakFx")
+local damageFx = Remotes.Event("DamageFx")
+
+-- Damage stages (see the header): the health fraction at or below which each stage begins.
+local STAGE_AT = { 0.75, 0.5, 0.25 }
+DestructibleService.StageAt = STAGE_AT
+-- CrackFxClient reads these by the same literal names.
+local STAGE_ATTRIBUTE, SITES_ATTRIBUTE, DAMAGED_TAG = "DamageStage", "DamageSites", "Damaged"
+DestructibleService.StageAttribute = STAGE_ATTRIBUTE
+DestructibleService.SitesAttribute = SITES_ATTRIBUTE
+DestructibleService.DamagedTag = DAMAGED_TAG
+-- Where hits leave marks: at most this many per part and per pool; a hit this close to an open site
+-- on the same face deepens that one rather than opening another.
+local MAX_SITES_PER_PART, MAX_SITES_PER_POOL = 4, 8
+local SITE_MERGE = 1.6
+DestructibleService.MaxSitesPerPart = MAX_SITES_PER_PART
+DestructibleService.MaxSitesPerPool = MAX_SITES_PER_POOL
+-- Hit records one DamageFx event carries at most (one per part per frame). Every hit still opens
+-- its site; only the burst and sound of the ones past this are left out.
+local HITS_PER_FRAME = 40
+DestructibleService.HitsPerFrame = HITS_PER_FRAME
 
 -- Anything inside these is fair game; anything else on the map is scenery and stays put.
 local ROOTS = { Map = true }
@@ -350,7 +401,7 @@ local function entryFor(part)
 	if type(max) ~= "number" or max <= 0 then
 		return nil
 	end
-	entry = { health = max, max = max, members = members, tagged = tagged,
+	entry = { health = max, max = max, members = members, tagged = tagged, stage = 0,
 		target = typeof(key) == "Instance" and key:IsA("Model") and key or nil }
 	damaged[key] = entry
 	-- Dropped when the pool's anchor goes: the part itself, the Model, or the group's first member.
@@ -382,11 +433,56 @@ function DestructibleService.PassesThrough(part)
 	return part ~= nil and part.Name == DestructibleService.GlassName
 end
 
--- Panes broken this frame, sent to every client as one event: { cframe, size, color, from } each,
--- where `from` (optional) is where the shot or blast came from, so the shards fly away from it.
+-- Where on a part a hit landed: the point on the face it struck, in the part's own space, and that
+-- face as its Enum.NormalId value (0 +X, 1 +Y, 2 +Z, 3 -X, 4 -Y, 5 -Z). From the exact hit when the
+-- caller knows it (`at`, and `normal` if it has one); otherwise the point of the part nearest to
+-- where the shot or blast came from, which is exact for a blast and, for a shot, lands on the face
+-- the shot came in through. nil when there is nothing to go on.
+local function hitSite(part, from, at, normal)
+	local source = typeof(at) == "Vector3" and at or (typeof(from) == "Vector3" and from or nil)
+	if not source then
+		return nil
+	end
+	local cframe, half = part.CFrame, part.Size / 2
+	local p = cframe:PointToObjectSpace(source)
+	local coords = { p.X, p.Y, p.Z }
+	local halves = { half.X, half.Y, half.Z }
+	local axis, sign = 1, 1
+	if typeof(normal) == "Vector3" then
+		local n = cframe:VectorToObjectSpace(normal)
+		local along = { n.X, n.Y, n.Z }
+		for index = 2, 3 do
+			if math.abs(along[index]) > math.abs(along[axis]) then
+				axis = index
+			end
+		end
+		sign = along[axis] >= 0 and 1 or -1
+	else
+		-- The face the point stands furthest out from (or, from inside, is nearest to).
+		local best = -math.huge
+		for index = 1, 3 do
+			local excess = math.abs(coords[index]) - halves[index]
+			if excess > best then
+				best, axis = excess, index
+			end
+		end
+		sign = coords[axis] >= 0 and 1 or -1
+	end
+	for index = 1, 3 do
+		coords[index] = math.clamp(coords[index], -halves[index], halves[index])
+	end
+	coords[axis] = sign * halves[axis]
+	return Vector3.new(coords[1], coords[2], coords[3]), (axis - 1) + (sign < 0 and 3 or 0)
+end
+DestructibleService.HitSite = hitSite
+
+-- Panes broken this frame, sent to every client as one event:
+-- { cframe, size, color, from, impact, transparency } each, where `from` (optional) is where the
+-- shot or blast came from, so the shards fly away from it, and `impact` (optional) the point on the
+-- pane it struck, where GlassFxClient starts the spiderweb.
 local pendingPanes = nil
 
-local function breakPane(pane, from)
+local function breakPane(pane, from, at, normal)
 	local entry = damaged[pane]
 	if entry then
 		entry.broken = true
@@ -399,7 +495,10 @@ local function breakPane(pane, from)
 			glassShatter:FireAllClients(batch)
 		end)
 	end
-	table.insert(pendingPanes, { pane.CFrame, pane.Size, pane.Color, typeof(from) == "Vector3" and from or nil })
+	-- The face doesn't matter here: a pane is one sheet, and the shards fly from the point.
+	local point, _face = hitSite(pane, from, at, normal)
+	table.insert(pendingPanes, { pane.CFrame, pane.Size, pane.Color, typeof(from) == "Vector3" and from or nil,
+		point and pane.CFrame * point or nil, pane.Transparency })
 	pane:Destroy()
 end
 
@@ -558,12 +657,13 @@ function DestructibleService.SettleDown(node, maxDrop)
 end
 
 -- Pieces broken this frame, sent to every client as one BreakFx event:
--- { cframe, size, color, material, class, from } each. Capped per frame, biggest pools first come
--- first served, so a rocket through a street of props costs one bounded message.
+-- { cframe, size, color, material, class, from, stage } each, `stage` being how cracked it was (the
+-- debris carries the cracks on). Capped per frame, biggest pools first come first served, so a
+-- rocket through a street of props costs one bounded message.
 local FX_PER_FRAME = 60
 local pendingFx = nil
 
-queueFx = function(part, from)
+queueFx = function(part, from, stage)
 	if not pendingFx then
 		pendingFx = {}
 		task.defer(function()
@@ -574,7 +674,7 @@ queueFx = function(part, from)
 	end
 	if #pendingFx < FX_PER_FRAME then
 		table.insert(pendingFx, { part.CFrame, part.Size, part.Color, part.Material, classOf(part.Material),
-			typeof(from) == "Vector3" and from or nil })
+			typeof(from) == "Vector3" and from or nil, stage or 0 })
 	end
 end
 
@@ -587,14 +687,14 @@ tellBroken = function(cframe, size)
 end
 
 -- A part coming apart: it's gone at once for everyone, and each client throws its debris.
-local function shatter(part, from)
+local function shatter(part, from, stage, at, normal)
 	if part.Name == DestructibleService.GlassName then
-		breakPane(part, from)
+		breakPane(part, from, at, normal)
 		return
 	end
 	tellBroken(part.CFrame, part.Size)
 	dropDressing(part, from)
-	queueFx(part, from)
+	queueFx(part, from, stage)
 	part:Destroy()
 end
 
@@ -616,7 +716,7 @@ local function shatterPool(entry, from)
 	end)
 	for index, member in ipairs(members) do
 		if index <= FX_PER_POOL and member.Transparency < 0.95 and member.Name ~= DestructibleService.GlassName then
-			queueFx(member, from)
+			queueFx(member, from, entry.stage)
 		end
 	end
 	for _, member in ipairs(members) do
@@ -633,8 +733,115 @@ local function shatterPool(entry, from)
 	end
 end
 
--- Returns the damage actually taken. `from` (optional) is where the shot or blast came from.
-function DestructibleService.Damage(part, amount, attackerToken, from)
+-- The stage a pool is at for what it has left: 0 whole, then one more at each STAGE_AT fraction.
+local function stageFor(health, max)
+	local fraction = health / max
+	local stage = 0
+	for index, at in ipairs(STAGE_AT) do
+		if fraction <= at then
+			stage = index
+		end
+	end
+	return stage
+end
+DestructibleService.StageFor = stageFor
+
+-- A pool reaching a new stage: the attribute clients draw its cracks from, and its colour weathered
+-- a step. Only ever colour: never Transparency, on any member, at any stage (#71;
+-- tools/crack_check.py holds every damage path to that).
+local function setStage(entry, stage)
+	entry.stage = stage
+	for _, carrier in ipairs(entry.target and { entry.target } or entry.members) do
+		if carrier.Parent then
+			carrier:SetAttribute(STAGE_ATTRIBUTE, stage)
+		end
+	end
+	entry.baseColors = entry.baseColors or {}
+	for _, member in ipairs(entry.members) do
+		local tint = member.Parent and STAGE_TINT[classOf(member.Material)]
+		if tint then
+			local base = entry.baseColors[member]
+			if not base then
+				base = member.Color
+				entry.baseColors[member] = base
+			end
+			member.Color = base:Lerp(tint[1], tint[2] * stage)
+		end
+	end
+end
+
+-- A part's hit sites: opened (and the attribute rewritten) only when a hit lands clear of every
+-- site already on that face, and never past the caps. Returns true if it opened one.
+local function addSite(entry, part, point, face)
+	entry.sites = entry.sites or {}
+	entry.siteCount = entry.siteCount or 0
+	local list = entry.sites[part]
+	if not list then
+		list = {}
+		entry.sites[part] = list
+	end
+	for _, site in ipairs(list) do
+		if site.face == face and (site.point - point).Magnitude <= SITE_MERGE then
+			return false
+		end
+	end
+	if #list >= MAX_SITES_PER_PART or entry.siteCount >= MAX_SITES_PER_POOL then
+		return false
+	end
+	table.insert(list, { face = face, point = point })
+	entry.siteCount += 1
+	local codes = {}
+	for _, site in ipairs(list) do
+		table.insert(codes, string.format("%d,%.1f,%.1f,%.1f", site.face, site.point.X, site.point.Y, site.point.Z))
+	end
+	part:SetAttribute(SITES_ATTRIBUTE, table.concat(codes, ";"))
+	part:AddTag(DAMAGED_TAG)
+	return true
+end
+
+-- Hits this frame, one record per part (later hits on it the same frame only add to its count),
+-- worked out and sent as one DamageFx event once the frame's shots are done.
+local pendingHits = nil
+
+local function flushHits()
+	local batch = pendingHits
+	pendingHits = nil
+	local records = {}
+	for _, hit in ipairs(batch.list) do
+		local part = hit.part
+		if part.Parent and not hit.entry.broken then
+			local point, face = hitSite(part, hit.from, hit.at, hit.normal)
+			if point then
+				addSite(hit.entry, part, point, face)
+				if #records < HITS_PER_FRAME then
+					table.insert(records, { part, point, face, hit.count })
+				end
+			end
+		end
+	end
+	if #records > 0 then
+		damageFx:FireAllClients(records)
+	end
+end
+
+local function recordHit(entry, part, from, at, normal)
+	if not pendingHits then
+		pendingHits = { list = {}, byPart = {} }
+		task.defer(flushHits)
+	end
+	local hit = pendingHits.byPart[part]
+	if hit then
+		hit.count += 1
+		return
+	end
+	hit = { entry = entry, part = part, from = from, at = at, normal = normal, count = 1 }
+	pendingHits.byPart[part] = hit
+	table.insert(pendingHits.list, hit)
+end
+
+-- Returns the damage actually taken. `from` (optional) is where the shot or blast came from; `at`
+-- and `normal` (optional) the exact point and surface normal it struck, when the caller has them.
+function DestructibleService.Damage(part, amount, attackerToken, from, at, normal)
 	if amount <= 0 then
 		return 0
 	end
@@ -646,26 +853,23 @@ function DestructibleService.Damage(part, amount, attackerToken, from)
 	local dealt = math.min(entry.health, amount)
 	entry.health -= dealt
 
-	-- Half gone: it starts to look it, so you can read what is nearly through. (Glass has no
-	-- halfway; it just breaks.) Darker, never see-through: a wall fading toward clear read as a
-	-- ghost of cover rather than cover taking a beating (#71).
-	if entry.health <= entry.max * 0.5 and not entry.battered and entry.max > 1 then
-		entry.battered = true
-		for _, member in ipairs(entry.members) do
-			if member.Parent then
-				member.Color = member.Color:Lerp(Color3.new(0, 0, 0), 0.25)
-			end
-		end
-	end
-
 	if entry.health <= 0 then
 		entry.broken = true
 		if entry.tagged then
 			shatterPool(entry, from)
 		else
-			shatter(part, from)
+			shatter(part, from, entry.stage, at, normal)
 		end
+		return dealt
 	end
+
+	-- Still standing: it cracks a stage further at 75%, 50% and 25% (glass has no stages; one hit
+	-- breaks it), and the hit leaves its mark where it landed.
+	local stage = stageFor(entry.health, entry.max)
+	if stage > entry.stage and entry.max > 1 then
+		setStage(entry, stage)
+	end
+	recordHit(entry, part, from, at, normal)
 	return dealt
 end
 
@@ -739,11 +943,13 @@ end
 
 CombatService.DestructibleFromPart = DestructibleService.FromPart
 CombatService.DestructiblePassesThrough = DestructibleService.PassesThrough
-CombatService.DamageDestructible = function(shooterToken, part, amount, from)
-	local at = part.Position
-	local dealt = DestructibleService.Damage(part, amount, shooterToken, from)
+-- `at` and `normal` (optional): where the shot struck and the surface there, so the crack opens
+-- where the bullet went in rather than on the part's nearest point to the shooter.
+CombatService.DamageDestructible = function(shooterToken, part, amount, from, at, normal)
+	local point = typeof(at) == "Vector3" and at or part.Position
+	local dealt = DestructibleService.Damage(part, amount, shooterToken, from, at, normal)
 	-- "structure": the HUD marks a hit on the map differently from a hit on a person.
-	CombatService.ConfirmHit(shooterToken, dealt, false, at, "structure")
+	CombatService.ConfirmHit(shooterToken, dealt, false, point, "structure")
 	return dealt
 end
 CombatService.DamageDestructiblesInRadius = DestructibleService.DamageInRadius

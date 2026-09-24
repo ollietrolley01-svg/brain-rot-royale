@@ -1,8 +1,10 @@
 -- Things on the map breaking, drawn locally (#71). DestructibleService removes whatever broke on the
 -- server and sends everything that broke that frame in one BreakFx event:
--- { cframe, size, color, material, class, from } each, where `class` is the material's family
--- (wood, stone, metal, foliage, cloth, glass, plastic) and `from` is where the shot or blast came
--- from, when known. Here each piece comes apart the way its material would:
+-- { cframe, size, color, material, class, from, stage } each, where `class` is the material's family
+-- (wood, stone, metal, foliage, cloth, glass, plastic), `from` is where the shot or blast came from,
+-- when known, and `stage` how cracked it was when it went (CrackFxClient drew the cracks; the first
+-- CRACKED_PIECES pieces carry them on, with more lines the further gone it was). Here each piece
+-- comes apart the way its material would:
 --
 --   wood      splinters and a couple of broken boards, a puff of sawdust
 --   stone     chunks and wedges of itself, and a cloud of grey dust
@@ -40,6 +42,8 @@ local MAX_PER_EVENT = 70
 local PER_BREAK_MIN, PER_BREAK_MAX = 3, 12
 local PUFFS_PER_EVENT = 6
 local SOUNDS_PER_EVENT = 3
+-- Pieces per break that carry the cracks of what broke.
+local CRACKED_PIECES = 4
 -- Seconds a piece may tumble before it is laid to rest regardless; how long it then lies there; how
 -- long it takes to fade. MAX_LIFE is the backstop: nothing outlives it.
 local SETTLE_AFTER = 2.2
@@ -164,7 +168,38 @@ local function pieceSize(shape, size)
 	return Vector3.new(edge * (0.7 + r() * 0.6), edge * (0.6 + r() * 0.5), edge * (0.7 + r() * 0.6))
 end
 
-local function burst(cframe, size, color, material, class, from, budget)
+-- The cracks a broken thing had, carried on one of its pieces: dark lines across its broadest face
+-- (a crack on a tumbling chunk reads the same whichever way the face is drawn), one more per stage.
+local function crackLook(piece, stage, color)
+	local size = piece.Size
+	local face = Enum.NormalId.Front
+	if size.X * size.Z >= size.X * size.Y and size.X * size.Z >= size.Y * size.Z then
+		face = Enum.NormalId.Top
+	elseif size.Y * size.Z > size.X * size.Y then
+		face = Enum.NormalId.Right
+	end
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "Cracks"
+	gui.Face = face
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 40
+	gui.LightInfluence = 1
+	local line = color:Lerp(Color3.new(0, 0, 0), 0.72)
+	for _ = 1, stage + 1 do
+		local crack = Instance.new("Frame")
+		crack.AnchorPoint = Vector2.new(0.5, 0.5)
+		crack.Position = UDim2.fromScale(0.25 + math.random() * 0.5, 0.25 + math.random() * 0.5)
+		crack.Size = UDim2.new(0.5 + math.random() * 0.5, 0, 0, 2 + stage)
+		crack.Rotation = math.random() * 180
+		crack.BackgroundColor3 = line
+		crack.BorderSizePixel = 0
+		crack.Parent = gui
+	end
+	gui.Parent = piece
+	return gui
+end
+
+local function burst(cframe, size, color, material, class, from, budget, stage)
 	local profile = PROFILES[class] or PROFILES.plastic
 	local volume = size.X * size.Y * size.Z
 	local count = math.clamp(math.floor(volume ^ (1 / 3) * 1.6), PER_BREAK_MIN, PER_BREAK_MAX)
@@ -200,6 +235,9 @@ local function burst(cframe, size, color, material, class, from, budget)
 		piece.CanTouch = false
 		piece.CastShadow = false
 		piece.CustomPhysicalProperties = LIGHT
+		if stage > 0 and index <= CRACKED_PIECES and class ~= "foliage" and class ~= "cloth" then
+			crackLook(piece, stage, color)
+		end
 		piece.Parent = fxFolder
 		local outward = (cframe:VectorToWorldSpace(offset)).Unit
 		if outward ~= outward then
@@ -230,6 +268,7 @@ breakFx.OnClientEvent:Connect(function(batch)
 	local budget, puffs, sounds = MAX_PER_EVENT, 0, 0
 	for _, entry in ipairs(batch) do
 		local cframe, size, color, material, class, from = entry[1], entry[2], entry[3], entry[4], entry[5], entry[6]
+		local stage = type(entry[7]) == "number" and math.clamp(math.floor(entry[7]), 0, 3) or 0
 		if typeof(cframe) == "CFrame" and typeof(size) == "Vector3" and typeof(color) == "Color3"
 			and typeof(material) == "EnumItem" and (cframe.Position - camera.CFrame.Position).Magnitude <= EFFECT_DISTANCE then
 			local profile = PROFILES[class] or PROFILES.plastic
@@ -242,7 +281,7 @@ breakFx.OnClientEvent:Connect(function(batch)
 				puff(cframe.Position, profile.puff or color, profile.puffSize or 1, profile.sparks)
 			end
 			if budget > 0 and active < MAX_ACTIVE then
-				budget -= burst(cframe, size, color, material, class, from, budget)
+				budget -= burst(cframe, size, color, material, class, from, budget, stage)
 			end
 		end
 	end
