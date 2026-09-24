@@ -1474,6 +1474,82 @@ SoundConfig.Sounds = {
 	},
 
 	--------------------------------------------------------------------------------
+	-- Footsteps (FootstepClient): one step each, picked by the ground under the body
+	--------------------------------------------------------------------------------
+
+	-- Every step is built on `action_jump_land`, the one short soft-impact file there is (0.26 s):
+	-- a heel strike. What the ground adds goes on top: a gritty scuff for hard floors, a hollow
+	-- knock for boards, a ring for metal, a splash for water, and for grass and sand the top end
+	-- taken off because soft ground swallows the click of the strike. Quiet and short range: a
+	-- footstep is heard across a room, not across a field.
+	FootstepConcrete = {
+		volume = 0.34,
+		pitch = 1,
+		maxDistance = 80,
+		category = "Effects",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 1.45 },
+			{ id = CLICK, volume = 0.22, pitch = 0.6 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -4, MidGain = 0, HighGain = 2 } } },
+	},
+	FootstepGrass = {
+		volume = 0.3,
+		pitch = 1,
+		maxDistance = 60,
+		category = "Effects",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 1.1 },
+			{ id = SNAP, volume = 0.08, pitch = 0.45 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -2, MidGain = -2, HighGain = -9 } } },
+	},
+	FootstepWood = {
+		volume = 0.36,
+		pitch = 1,
+		maxDistance = 80,
+		category = "Effects",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 0.95 },
+			{ id = HIT, volume = 0.28, pitch = 0.55 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = 1, MidGain = 3, HighGain = -3 } } },
+	},
+	FootstepMetal = {
+		volume = 0.34,
+		pitch = 1,
+		maxDistance = 90,
+		category = "Effects",
+		layers = {
+			{ id = LAND, volume = 0.9, pitch = 1.3 },
+			{ id = METAL, volume = 0.2, pitch = 1.9 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -3, MidGain = 1, HighGain = 3 } } },
+	},
+	FootstepWater = {
+		volume = 0.34,
+		pitch = 1,
+		maxDistance = 80,
+		category = "Effects",
+		layers = {
+			{ id = WATER, volume = 0.45, pitch = 2.2 },
+			{ id = LAND, volume = 0.35, pitch = 1.2 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -4, MidGain = 0, HighGain = 0 } } },
+	},
+	FootstepSand = {
+		volume = 0.3,
+		pitch = 1,
+		maxDistance = 60,
+		category = "Effects",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 0.85 },
+			{ id = SNAP, volume = 0.12, pitch = 0.35 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = 0, MidGain = -2, HighGain = -6 } } },
+	},
+
+	--------------------------------------------------------------------------------
 	-- Vehicles
 	--------------------------------------------------------------------------------
 
@@ -1636,7 +1712,7 @@ function SoundConfig.ClassOf(name, cue)
 	if cue and Acoustics.CLASSES[cue.acoustic or ""] then
 		return cue.acoustic
 	end
-	if Acoustics.FOLEY[name] then
+	if Acoustics.FOLEY[name] or (type(name) == "string" and string.sub(name, 1, 8) == "Footstep") then
 		return "foley"
 	end
 	if type(name) == "string" and string.sub(name, 1, 7) == "Gunshot" then
@@ -1728,6 +1804,65 @@ function SoundConfig.Plan(name, cue, distance, enclosed, nearPath)
 		plan.distant = math.clamp((distance - from) / math.max(far - from, 1), 0, 1)
 	end
 	return plan
+end
+
+--------------------------------------------------------------------------------
+-- Footsteps: which step cue a floor gets, and how often a body at a given speed steps
+--------------------------------------------------------------------------------
+
+SoundConfig.Footsteps = {
+	-- Enum.Material names to step cues. Anything missing sounds like a hard floor; Air never steps.
+	MATERIAL = {
+		Grass = "FootstepGrass", LeafyGrass = "FootstepGrass", Ground = "FootstepGrass", Mud = "FootstepGrass",
+		Fabric = "FootstepGrass",
+		Sand = "FootstepSand", Snow = "FootstepSand", Salt = "FootstepSand", Sandstone = "FootstepSand",
+		Wood = "FootstepWood", WoodPlanks = "FootstepWood", Cardboard = "FootstepWood",
+		Metal = "FootstepMetal", CorrodedMetal = "FootstepMetal", DiamondPlate = "FootstepMetal",
+		Foil = "FootstepMetal",
+		Water = "FootstepWater",
+	},
+	DEFAULT = "FootstepConcrete",
+	-- Cadence, from how people actually walk and run: about 1.8 steps a second at a 1.4 m/s walk,
+	-- 2.75 at a 4.5 m/s jog (the default 16 studs/s), topping out near 3.4 at a sprint. Linear in
+	-- speed in metres a second (SoundConfig.Acoustics.METRES_PER_STUD), clamped.
+	CADENCE_BASE = 1.4,
+	CADENCE_PER_MPS = 0.3,
+	CADENCE_MIN = 1.6,
+	CADENCE_MAX = 3.4,
+	-- Slower than this (studs/s, across the ground) is standing, not walking.
+	MIN_SPEED = 2,
+	-- Only bodies this close to the camera step, and only the nearest few of those.
+	REACH = 90,
+	MAX_BODIES = 8,
+	-- Your own steps, played flat, sit under everything else rather than on top of it.
+	SELF_GAIN = 0.55,
+	-- A jog is the reference; a sprint lands harder, a walk softer.
+	GAIN_MIN = 0.7,
+	GAIN_MAX = 1.25,
+}
+
+-- The step cue for a floor, by Enum.Material name; nil in the air.
+function SoundConfig.FootstepCue(materialName)
+	if materialName == nil or materialName == "Air" then
+		return nil
+	end
+	return SoundConfig.Footsteps.MATERIAL[materialName] or SoundConfig.Footsteps.DEFAULT
+end
+
+-- Steps a second at `speed` studs a second across the ground; 0 when standing.
+function SoundConfig.StepRate(speed)
+	local steps = SoundConfig.Footsteps
+	if speed < steps.MIN_SPEED then
+		return 0
+	end
+	local metres = speed * Acoustics.METRES_PER_STUD
+	return math.clamp(steps.CADENCE_BASE + steps.CADENCE_PER_MPS * metres, steps.CADENCE_MIN, steps.CADENCE_MAX)
+end
+
+-- How hard a step at `speed` lands, 1 at the default 16 studs/s.
+function SoundConfig.StepGain(speed)
+	local steps = SoundConfig.Footsteps
+	return math.clamp(speed / 16, steps.GAIN_MIN, steps.GAIN_MAX)
 end
 
 -- Every cue as a list of layers, whether it was written as one file or several. Each layer is

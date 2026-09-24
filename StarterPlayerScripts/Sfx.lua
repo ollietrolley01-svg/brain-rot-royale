@@ -308,13 +308,13 @@ end
 
 -- `pitchJitter` keeps repeated cues from sounding mechanical. `pitch` overrides the cue's base
 -- pitch, for rising sequences like the crate-opening tier climb. Your own gun indoors rings in
--- the room; outside it doesn't.
-function Sfx.Play(name, pitchJitter, pitch)
+-- the room; outside it doesn't. `gain`, optional, scales this one play (a crouched step).
+function Sfx.Play(name, pitchJitter, pitch, gain)
 	local config = SoundConfig.Get(name)
 	if not config then
 		return
 	end
-	playFlat(name, pitchJitter, pitch, SoundConfig.Plan(name, config, 0, Sfx.IsEnclosed()), 1)
+	playFlat(name, pitchJitter, pitch, SoundConfig.Plan(name, config, 0, Sfx.IsEnclosed()), gain or 1)
 end
 
 -- A far-off event heard as a whole rather than from a direction (the ExplosionFar rumble): played
@@ -376,7 +376,7 @@ end
 
 -- The voice is picked and moved when the sound ARRIVES, not when it was made: a far shot waits
 -- for its travel time first, so a pool slot is never retargeted with a play still pending on it.
-local function arriveAt(name, position, scale, plan)
+local function arriveAt(name, position, scale, plan, gain)
 	local pool = ensurePositionalPool(name)
 	if not pool then
 		return
@@ -386,7 +386,7 @@ local function arriveAt(name, position, scale, plan)
 
 	local entry = pool[index]
 	entry.attachment.Position = position
-	playVoice(entry.voice, scale, plan, 1)
+	playVoice(entry.voice, scale, plan, gain or 1)
 end
 
 -- How far the listener is from the line a shot took, for whether its crack passes them.
@@ -403,7 +403,8 @@ end
 -- `towards`, optional: where the shot went. A supersonic shot whose line passes within
 -- CRACK_REACH of you cracks before its report arrives; one that doesn't is heard as a report.
 -- Without it the shot is taken as passing near (the crack is the more telling sound).
-function Sfx.PlayAt(name, position, pitchJitter, towards)
+-- `gain`, optional, scales this one play (a crouched or sprinting step).
+function Sfx.PlayAt(name, position, pitchJitter, towards, gain)
 	local config = SoundConfig.Get(name)
 	local camera = workspace.CurrentCamera
 	if not config or not camera then
@@ -425,9 +426,9 @@ function Sfx.PlayAt(name, position, pitchJitter, towards)
 	local plan = SoundConfig.Plan(name, config, distance, Sfx.IsEnclosed(), nearPath)
 	local scale = pitchScale(config, pitchJitter, nil)
 	if plan.start > 0.005 then
-		task.delay(plan.start, arriveAt, name, position, scale, plan)
+		task.delay(plan.start, arriveAt, name, position, scale, plan, gain)
 	else
-		arriveAt(name, position, scale, plan)
+		arriveAt(name, position, scale, plan, gain)
 	end
 
 	-- A big blast far enough off that its crack is fading gets its rumble underneath.
