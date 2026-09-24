@@ -2215,4 +2215,64 @@ function Viewmodel:Pose(camera, state)
 	self.onEvent = onEvent
 end
 
+--------------------------------------------------------------------------------
+-- The third-person body (#13)
+--
+-- Other players' bodies are posed by GunPoseClient. So that a reload seen from outside is the same reload
+-- you see in first person, it is driven by the same clip tables: `ClipFor` builds this gun's reload or
+-- rack clip from the gun model on the body (the HeldGun carries the same contract: Action and the parts'
+-- Anim groups), and `BodyArm` turns where the clip's left hand is at a moment -- which anchor it is at or
+-- between -- into the left arm's shoulder and elbow turns. The right hand stays on the grip: the held gun
+-- is welded to the torso (WeaponService.MountGun), so a right arm that moved would leave it.
+--------------------------------------------------------------------------------
+
+-- Shoulder yaw and pitch and elbow bend, in degrees, for the left hand at each anchor, in the convention
+-- GunPoseClient's own poses use (yaw applied after pitch; positive pitch raises the arm forward; negative
+-- yaw turns a left arm in across the body). SupportHand is GunPoseClient's held pose exactly.
+local BODY_LEFT = {
+	SupportHand = { -38, 78, 14 },
+	MagHand = { -50, 55, 60 },
+	Slap = { -50, 58, 50 },
+	Pocket = { -10, 15, 40 },
+	Load = { -55, 62, 55 },
+	ChargeHand = { -58, 88, 95 },
+	BoltHand = { -60, 75, 85 },
+	CoverHand = { -45, 95, 60 },
+}
+Viewmodel.BodyLeft = BODY_LEFT
+
+local function bodyTurns(name)
+	local entry = BODY_LEFT[name] or BODY_LEFT.SupportHand
+	return CFrame.Angles(0, rad(entry[1]), 0) * CFrame.Angles(rad(entry[2]), 0, 0), CFrame.Angles(rad(entry[3]), 0, 0)
+end
+
+-- The reload (`kind` "reload") or rack ("rack") clip for the gun `model`, as first person would play it.
+-- `empty` and `missing` are what StartReload is given. Nil when the gun has no such clip.
+function Viewmodel.ClipFor(model, kind, empty, missing)
+	local context = { action = model:GetAttribute("Action") or "ar", groupParts = {}, def = {} }
+	for _, part in ipairs(model:GetDescendants()) do
+		local group = part:IsA("BasePart") and part:GetAttribute("Anim")
+		if group then
+			context.groupParts[group] = context.groupParts[group] or {}
+			table.insert(context.groupParts[group], part)
+		end
+	end
+	if kind == "rack" then
+		return rackClip(context)
+	end
+	return reloadClip(context, empty == true, missing or 1)
+end
+
+-- The left arm's shoulder and elbow turns at `progress` (0..1) through `clip`: the anchors either side of
+-- that moment on the clip's left-hand track, eased between exactly as first person eases them.
+function Viewmodel.BodyArm(clip, progress)
+	local a, b, s = sample(clip and clip.left, progress)
+	if not a then
+		return bodyTurns("SupportHand")
+	end
+	local shoulderA, elbowA = bodyTurns(a[2])
+	local shoulderB, elbowB = bodyTurns(b[2])
+	return shoulderA:Lerp(shoulderB, s), elbowA:Lerp(elbowB, s), a[2], b[2], s
+end
+
 return Viewmodel
