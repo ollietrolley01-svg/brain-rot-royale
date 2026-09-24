@@ -282,7 +282,7 @@ function Monetization.HandleReceipt(player, receiptInfo)
 
 	local purchaseId = tostring(receiptInfo.PurchaseId)
 	if alreadyGranted(data, purchaseId) then
-		if not PlayerData.Save(player) and not studioTestGrant then
+		if not PlayerData.SaveAndWait(player) and not studioTestGrant then
 			return notYet
 		end
 		return Enum.ProductPurchaseDecision.PurchaseGranted
@@ -306,7 +306,7 @@ function Monetization.HandleReceipt(player, receiptInfo)
 	end
 
 	recordPurchase(data, purchaseId)
-	local saved = PlayerData.Save(player)
+	local saved = PlayerData.SaveAndWait(player)
 	if not saved and studioTestGrant then
 		warn(string.format("[Monetization] Studio test grant of %s: there's no DataStore here, so it won't persist.",
 			tostring(product.key)))
