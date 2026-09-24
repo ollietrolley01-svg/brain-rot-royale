@@ -43,6 +43,107 @@ BrainrotData.Attacks = {
 		description = "Zap that arcs on to a second enemy" },
 }
 
+-- Ability styles: what makes two brainrots with the same move feel different (OLIVER_LIST A5). 126
+-- brainrots shared six moves, so every Bonk was the same Bonk. A style bends one move with numbers,
+-- never with new art: the client draws a style cue from the same parts it already builds.
+--
+--   power     damage factor on the move (styles are side-grades, not buffs: tools/companion_ability_check.py
+--             holds each one's damage a second within 0.85-1.2 of the plain move, counting its DoT;
+--             applied after MaxAbilityDamage, so a capped brainrot pays the trade too)
+--   cooldown  cooldown factor
+--   area      splash / radius factor, plus `areaStep` a rarity step
+--   reach     range factor (not radial moves: their range IS their radius)
+--   slow      walk-speed factor put on whoever it hits, minus `slowStep` a rarity step, for `slowTime` s
+--   dot       fraction of the hit dealt again over `dotTime` s, plus `dotStep` a rarity step (through
+--             CompanionBoons' venom ticker, so a kill by the tick is credited like any companion kill)
+--   leech     fraction of the damage dealt healed to the owner, plus `leechStep` a rarity step
+--   forks     extra enemies the beam jumps on to (each at 60% of the one before)
+--   kinds     the moves it can go on; any move when absent
+--
+-- Blast brainrots take no style: their ability is ProjectileService.Explode, which carries none of it.
+-- A brainrot that carries a venom boon takes no DoT style either -- one venom slot per victim, so the
+-- second would silently overwrite the first.
+BrainrotData.AbilityStyles = {
+	Slow = { label = "Chilling", power = 0.92, slow = 0.72, slowStep = 0.03, slowTime = 1.6,
+		description = "slows the target" },
+	Daze = { label = "Dazing", power = 0.95, slow = 0.45, slowStep = 0.02, slowTime = 0.6,
+		description = "staggers the target" },
+	Burn = { label = "Burning", power = 0.85, dot = 0.3, dotStep = 0.015, dotTime = 2,
+		description = "burns over 2s" },
+	Toxic = { label = "Toxic", power = 0.8, dot = 0.35, dotStep = 0.02, dotTime = 4,
+		description = "poisons over 4s" },
+	Leech = { label = "Leeching", power = 0.92, leech = 0.25, leechStep = 0.03,
+		description = "heals you" },
+	Wide = { label = "Wide", power = 0.9, area = 1.3, areaStep = 0.03, kinds = { Bonk = true, Lob = true, Shockwave = true },
+		description = "wider area" },
+	Quick = { label = "Quick", power = 0.8, cooldown = 0.75,
+		description = "fast recharge" },
+	Long = { label = "Long-range", power = 1.0, cooldown = 1.08, reach = 1.3, kinds = { Spit = true, Zap = true, Lob = true, Chain = true },
+		description = "longer reach" },
+	Fork = { label = "Forking", power = 0.9, forks = 1, kinds = { Zap = true, Chain = true },
+		description = "one more jump" },
+}
+
+-- Which style each brainrot's move has, by name (the collection below is keyed by name too, and a
+-- save stores names). Picked from what the move is called: a Frost Ray chills, a Stink Cloud poisons,
+-- a Brick Drop staggers. Every brainrot is listed except the blast ones; the check refuses a name that
+-- is not a brainrot, a style that is not in AbilityStyles, and a style on a move it cannot go on.
+BrainrotData.AbilityStyleOf = {
+	["Tung Tung Tung Sahur"] = "Daze", ["Bombardiro Crocodilo"] = "Wide", ["Trippi Troppi"] = "Quick",
+	["Pizzarino Blobbo"] = "Burn", ["Sockolino Stinko"] = "Toxic", ["Toastini Crunchi"] = "Wide",
+	["Bubblo Gummo"] = "Slow", ["Noodlo Wobblo"] = "Quick", ["Cactino Pokko"] = "Toxic",
+	["Mudlo Splosh"] = "Toxic", ["Tralalero Tralala"] = "Long", ["Chimpanzini Bananini"] = "Long",
+	["Boneca Ambalabu"] = "Wide", ["Cappellino Fizzolo"] = "Fork", ["Lamponi Brillo"] = "Wide",
+	["Frullato Vortini"] = "Wide", ["Gnocco Grumpini"] = "Wide", ["Pinguino Scivolo"] = "Slow",
+	["Zucchero Scintilla"] = "Fork", ["Lirili Larila"] = "Toxic", ["Ballerina Cappuccina"] = "Wide",
+	["Brr Brr Patapim"] = "Wide", ["Robottino Bip Bop"] = "Quick", ["Draghetto Tostato"] = "Burn",
+	["Polpetta Orbitale"] = "Wide", ["Nuvolino Tuono"] = "Fork", ["Fungo Saltarello"] = "Toxic",
+	["Frigo Camelo"] = "Slow", ["Bombombini Gusini"] = "Wide", ["Vulcanino Brontolo"] = "Burn",
+	["Specchio Riflesso"] = "Fork", ["Gufo Mezzanotte"] = "Long", ["Serpentino Zigzag"] = "Toxic",
+	["Astronauta Pisolino"] = "Wide", ["Golden Sahur"] = "Daze", ["Galassia Sognante"] = "Fork",
+	["Drago Arcobaleno"] = "Burn", ["Fantasmino Eterno"] = "Long", ["Spaghettino Twirlo"] = "Fork",
+	["Gommino Rimbalzo"] = "Daze", ["Lanternino Lucciola"] = "Leech", ["Cuscino Pisolone"] = "Daze",
+	["Tartarughino Turbo"] = "Quick", ["Sirenetta Bollicina"] = "Quick", ["Magnetino Attrazione"] = "Slow",
+	["Cavaliere Croissant"] = "Daze", ["Stregonella Zucca"] = "Toxic", ["Nebbiolina Specchio"] = "Slow",
+	["Imperatore Gelato"] = "Slow", ["Titano Tostapane"] = "Burn", ["Oracolo Lavatrice"] = "Wide",
+	["Drago Gelatina"] = "Wide", ["Samurai Sushi"] = "Burn", ["Arcobalenissimo"] = "Long",
+	["Pomodorino Schizzo"] = "Burn", ["Biscottino Crumbo"] = "Wide", ["Lumachina Lenta"] = "Slow",
+	["Ombrellino Pioggia"] = "Slow", ["Patatina Fritta"] = "Burn", ["Mattoncino Blocco"] = "Daze",
+	["Nuvoletta Pioviggina"] = "Slow", ["Pulcinello Piumino"] = "Quick", ["Gelatino Tremolo"] = "Wide",
+	["Salsiccia Saltella"] = "Burn", ["Cipollina Lacrima"] = "Leech", ["Formichina Operaia"] = "Fork",
+	["Bottoncino Cucito"] = "Fork", ["Radicchio Rotolo"] = "Wide", ["Pesciolino Bolla"] = "Quick",
+	["Cavolfiore Cervello"] = "Daze", ["Ghiacciolo Sorbetto"] = "Slow", ["Ragnetto Tessitore"] = "Slow",
+	["Tamburino Bum Bum"] = "Daze", ["Pantofolina Morbida"] = "Daze", ["Cactusello Danzante"] = "Toxic",
+	["Zucchina Lanterna"] = "Leech", ["Koalino Pennichella"] = "Daze", ["Fornellino Fiammella"] = "Burn",
+	["Biscione Arrotolato"] = "Toxic", ["Nocciolino Ninja"] = "Quick", ["Pinna Surfista"] = "Wide",
+	["Gufetto Professore"] = "Daze", ["Polipo Pittore"] = "Toxic", ["Cervo Neon"] = "Fork",
+	["Pipistrello Bollente"] = "Burn", ["Scatolone Robusto"] = "Daze", ["Cucciolo Cometa"] = "Long",
+	["Riccio Rotante"] = "Toxic", ["Barattolo Miele"] = "Slow", ["Tricheco Baffone"] = "Daze",
+	["Faro Guardiano"] = "Leech", ["Ape Operosa"] = "Fork", ["Granchio Tenaglia"] = "Quick",
+	["Mago Merendina"] = "Leech", ["Cavaliere Lattina"] = "Daze", ["Medusa Lucente"] = "Toxic",
+	["Unicorno Frizzante"] = "Fork", ["Tuba Tuonante"] = "Daze", ["Scheletrino Ballerino"] = "Daze",
+	["Astronave Formaggio"] = "Wide", ["Drago Pantofola"] = "Burn", ["Lupo Lunare"] = "Slow",
+	["Ciclope Cioccolato"] = "Wide", ["Nuvola Temporale"] = "Fork", ["Imperatrice Farfalla"] = "Fork",
+	["Faraone Fagiolino"] = "Wide", ["Balena Cantante"] = "Leech", ["Titano Tuttifrutti"] = "Daze",
+	["Stregone Stellato"] = "Long", ["Leone Lampadina"] = "Long", ["Castello Ambulante"] = "Daze",
+	["Capitano Calamaro"] = "Fork", ["Grifone Glassato"] = "Slow", ["Golem Gorgonzola"] = "Toxic",
+	["Sfinge Sussurrante"] = "Daze", ["Leviatano Limonata"] = "Fork", ["Mecha Mortadella"] = "Quick",
+	["L'Ultimo Pixel"] = "Fork", ["Nonna Nebulosa"] = "Slow", ["Il Buco Nero Bello"] = "Slow",
+}
+
+-- The style a brainrot's move has, or nil (a blast brainrot, or a style that cannot go on its move).
+function BrainrotData.StyleOf(def)
+	if not def or def.blast then
+		return nil, nil
+	end
+	local name = BrainrotData.AbilityStyleOf[def.name]
+	local style = name and BrainrotData.AbilityStyles[name]
+	if not style or (style.kinds and not style.kinds[def.attack or "Spit"]) then
+		return nil, nil
+	end
+	return style, name
+end
+
 -- Buffed 2026-09-22 (Oliver: "buff the brainrots so that they can actually be useful in the matches,
 -- as of now they're redundant to guns"). Was Common 6 up to Secret 40, with AbilityPower 1.65 and
 -- AbilityCooldown 3.5: a Common's Spit did 10 every 6.4 s (1.5 damage a second), a Legendary's 41
@@ -468,26 +569,47 @@ end
 -- uses.
 function BrainrotData.Stats(def, level, stars)
 	local attack = BrainrotData.Attacks[def.attack] or BrainrotData.Attacks.Spit
+	local style, styleName = BrainrotData.StyleOf(def)
+	local plain = style or {}
+	local step = BrainrotData.RarityIndex[def.rarity] or 0
 	local bonus = BrainrotData.LevelBonus(level or 1) * BrainrotData.StarBonus(stars)
 	local damage = math.floor((BrainrotData.RarityDamage[def.rarity] or 6) * attack.power * (def.power or 1)
 		* BrainrotData.AbilityPower * bonus + 0.5)
 	-- No single companion hit takes a full-health player (100) in one go, whatever the rarity, level
 	-- and stars: it's a strong extra hit, not a kill button.
 	damage = math.min(damage, BrainrotData.MaxAbilityDamage)
+	-- The style's trade comes AFTER the cap, or a capped Mythic would get its slow or DoT for free (the
+	-- cap swallowed the power cut). Every style's power is 1 or less, so the cap still holds.
+	if plain.power and plain.power ~= 1 then
+		damage = math.floor(damage * plain.power + 0.5)
+	end
 	local cooldown = attack.cooldown * (BrainrotData.RarityCooldown[def.rarity] or 1) * BrainrotData.AbilityCooldown
+		* (plain.cooldown or 1)
+	local area = (plain.area or 1) + (plain.areaStep or 0) * step
+	-- A radial move's range is its radius, in whole studs (18 at Common up to 30 at Secret).
+	local range = attack.radial and math.floor((attack.range + (attack.radiusStep or 0) * step) * area + 0.5)
+		or math.floor((attack.range + (BrainrotData.RarityRange[def.rarity] or 0)) * (plain.reach or 1) + 0.5)
 
 	return {
 		kind = def.attack or "Spit",
 		move = def.move or attack.label,
-		description = attack.description,
+		description = style and (attack.description .. ". " .. style.label .. ": " .. style.description) or attack.description,
 		damage = damage,
 		cooldown = math.floor(cooldown * 100 + 0.5) / 100,
-		-- A radial move's range is its radius, in whole studs (18 at Common up to 30 at Secret).
-		range = attack.radial and math.floor(attack.range + (attack.radiusStep or 0) * (BrainrotData.RarityIndex[def.rarity] or 0) + 0.5)
-			or (attack.range + (BrainrotData.RarityRange[def.rarity] or 0)),
-		splash = attack.splash or 0,
+		range = range,
+		splash = math.floor((attack.splash or 0) * area + 0.5),
 		radial = attack.radial == true,
 		chain = attack.chain,
+		-- The style, resolved to plain numbers for this rarity so the server and the card read the same.
+		style = styleName,
+		styleLabel = style and style.label or nil,
+		slow = plain.slow and math.max(0.3, plain.slow - (plain.slowStep or 0) * step) or nil,
+		slowTime = plain.slowTime,
+		dot = plain.dot and (plain.dot + (plain.dotStep or 0) * step) or nil,
+		dotTime = plain.dotTime,
+		leech = plain.leech and (plain.leech + (plain.leechStep or 0) * step) or nil,
+		-- Enemies the move jumps on to after the first: a Chain's own fork, plus a Forking style's.
+		forks = (attack.chain and attack.chain - 1 or 0) + (plain.forks or 0),
 		dps = math.floor(damage / cooldown * 10 + 0.5) / 10,
 		health = math.floor((BrainrotData.RarityHealth[def.rarity] or 60) * bonus + 0.5),
 		level = level or 1,

@@ -12,6 +12,12 @@
 -- so beams, launches and stomps fire at that moment rather than at the broadcast. CompanionHit
 -- marks where damage really landed with an impact, and makes the companion cheer.
 --
+-- A move's style (BrainrotData.AbilityStyles) rides both broadcasts as `style`, and adds a second,
+-- tinted cue on each hit from the same parts: frost chips for a slow, a spinning halo for a daze,
+-- rising embers for a burn, green puffs for poison, a red glob flying back to the companion for a
+-- leech. Wide, Quick and Long change numbers only and show through the move's own ring and timing;
+-- a Forking beam draws its extra jump (`to3`).
+--
 -- All local: nothing here replicates, and effects far from the camera are skipped. Companions
 -- are posed through Motor6D.Transform, which is local too, so every client animates them itself.
 
@@ -197,6 +203,51 @@ local impactWindow, impactsInWindow = 0, 0
 
 -- Where a companion's move really hurt someone: a white flash, a star of shards flying out and a
 -- ring; bigger for a knockout.
+-- The tint and shape of each style's hit cue. Plain colours, not the brainrot's, so a slow reads as a
+-- slow on any companion.
+local STYLE_CUE = {
+	Slow = { color = Color3.fromRGB(150, 220, 255) },
+	Daze = { color = Color3.fromRGB(255, 240, 120) },
+	Burn = { color = Color3.fromRGB(255, 130, 40) },
+	Toxic = { color = Color3.fromRGB(120, 230, 70) },
+	Leech = { color = Color3.fromRGB(230, 40, 70) },
+}
+
+local function styleCue(style, position, rig)
+	local cue = STYLE_CUE[style]
+	if not cue then
+		return
+	end
+	local color = cue.color
+	if style == "Slow" then
+		-- Frost chips settling outward along the ground.
+		ring(position - Vector3.new(0, 2, 0), 3.5, color, 0.6)
+		for index = 1, 5 do
+			local angle = index / 5 * math.pi * 2
+			local chip = neon(Vector3.new(0.3, 0.3, 0.3), CFrame.new(position), color, 0.1)
+			fadeOut(chip, 0.6, { CFrame = CFrame.new(position + Vector3.new(math.cos(angle) * 2.2, -1.6, math.sin(angle) * 2.2)) })
+		end
+	elseif style == "Daze" then
+		-- A halo of little stars spinning over the head.
+		local above = position + Vector3.new(0, 2.6, 0)
+		for index = 1, 3 do
+			local angle = index / 3 * math.pi * 2
+			local star = neon(Vector3.new(0.35, 0.35, 0.35), CFrame.new(above + Vector3.new(math.cos(angle), 0, math.sin(angle))), color, 0)
+			fadeOut(star, 0.6, { CFrame = CFrame.new(above + Vector3.new(math.cos(angle + 2.5), 0.3, math.sin(angle + 2.5))) })
+		end
+	elseif style == "Burn" or style == "Toxic" then
+		-- Embers or puffs drifting up off the victim.
+		for _ = 1, 4 do
+			local start = position + Vector3.new(math.random() * 1.6 - 0.8, -0.5, math.random() * 1.6 - 0.8)
+			local puff = neon(Vector3.new(0.45, 0.45, 0.45), CFrame.new(start), color, 0.2, Enum.PartType.Ball)
+			fadeOut(puff, 0.7, { CFrame = CFrame.new(start + Vector3.new(0, 2.5, 0)), Size = Vector3.new(0.1, 0.1, 0.1) })
+		end
+	elseif style == "Leech" and rig and rig.root.Parent then
+		-- A glob of health flying back from the victim to the companion.
+		projectile(position, rig.root.Position, color, 0.35, 2, function() end)
+	end
+end
+
 local function impact(position, color, killed)
 	local size = killed and 2.6 or 1.6
 	burst(position, Color3.new(1, 1, 1), size)
@@ -261,16 +312,20 @@ companionAttack.OnClientEvent:Connect(function(info)
 	task.delay(windup, function()
 		local from = origin()
 		Sfx.PlayAt("CompanionAttack", from, 0.15)
-		if info.kind == "Zap" then
-			beam(from, to, color, 0.35, 0.18)
+		if info.kind == "Zap" or info.kind == "Chain" then
+			beam(from, to, color, info.kind == "Zap" and 0.35 or 0.3, info.kind == "Zap" and 0.18 or 0.2)
 			burst(to, color, 1.4)
-		elseif info.kind == "Chain" then
-			beam(from, to, color, 0.3, 0.2)
-			burst(to, color, 1.4)
+			-- The forks: a Chain's own, and a Forking style's extra jump, each a beat after the last.
 			if typeof(info.to2) == "Vector3" then
 				task.delay(0.08, function()
 					beam(to, info.to2, color, 0.25, 0.2)
 					burst(info.to2, color, 1.2)
+					if typeof(info.to3) == "Vector3" then
+						task.delay(0.08, function()
+							beam(info.to2, info.to3, color, 0.2, 0.2)
+							burst(info.to3, color, 1)
+						end)
+					end
 				end)
 			end
 		elseif info.kind == "Shockwave" then
@@ -324,6 +379,9 @@ companionHit.OnClientEvent:Connect(function(info)
 		if typeof(position) == "Vector3" and (not camera or (position - camera.CFrame.Position).Magnitude <= EFFECT_DISTANCE) then
 			impactsInWindow += 1
 			impact(position, color, info.killed == true)
+			if type(info.style) == "string" then
+				styleCue(info.style, position, rigFor(info))
+			end
 			if index == 1 then
 				Sfx.PlayAt("CompanionHit", position, 0.12)
 			end
