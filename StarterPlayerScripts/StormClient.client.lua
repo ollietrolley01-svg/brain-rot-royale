@@ -16,8 +16,7 @@
 -- brightest thing at eye level, which is what tells you where the storm starts.
 --
 -- Sound: crossing out into the storm plays the "StormEnter" cue and crossing back plays
--- "StormLeave". Neither cue exists in SoundConfig yet, and Sfx.Play of an unknown cue returns
--- without playing (Sfx.lua ensurePool), so these are hooks until the cues are written.
+-- "StormLeave" (both in SoundConfig).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")

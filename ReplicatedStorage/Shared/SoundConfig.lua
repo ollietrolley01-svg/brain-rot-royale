@@ -1239,6 +1239,68 @@ SoundConfig.Sounds = {
 		},
 	},
 
+	-- Things breaking, by material (BreakFxClient, #71): wood snaps and knocks, stone thuds and
+	-- crumbles, metal clangs twice, foliage rustles.
+	BreakWood = {
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 160,
+		category = "Effects",
+		layers = {
+			{ id = SNAP, volume = 0.9, pitch = 0.7 },
+			{ id = COLLIDE, volume = 0.6, pitch = 0.8, delay = 0.04 },
+		},
+	},
+	BreakStone = {
+		volume = 0.6,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Effects",
+		layers = {
+			{ id = BOOM3, volume = 0.35, pitch = 1.8 },
+			{ id = COLLIDE, volume = 0.7, pitch = 0.6 },
+		},
+	},
+	BreakMetal = {
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Effects",
+		layers = {
+			{ id = METAL, volume = 0.9, pitch = 0.8 },
+			{ id = METAL, volume = 0.5, pitch = 1.4, delay = 0.06 },
+		},
+	},
+	BreakFoliage = {
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 120,
+		category = "Effects",
+		layers = {
+			{ id = WATER, volume = 0.6, pitch = 2.2 },
+			{ id = SNAP, volume = 0.4, pitch = 1.3 },
+		},
+	},
+
+	-- Crossing the storm edge (StormClient, #45): a low rotten groan going out, a bright ping coming back.
+	StormEnter = {
+		volume = 0.5,
+		pitch = 1,
+		category = "Effects",
+		layers = {
+			{ id = BASS, volume = 1, pitch = 0.6 },
+			{ id = UUH, volume = 0.35, pitch = 0.7, delay = 0.05 },
+		},
+	},
+	StormLeave = {
+		volume = 0.4,
+		pitch = 1,
+		category = "Effects",
+		layers = {
+			{ id = PING, volume = 0.8, pitch = 1.3 },
+		},
+	},
+
 	Shock = {
 		volume = 0.5,
 		pitch = 1,
