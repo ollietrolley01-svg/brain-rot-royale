@@ -82,6 +82,9 @@ for _, key in ipairs({
 	"lootBlacklisted", "combatReplans", "badMoves", "sprints", "slides", "dangerDodges", "coverRouted",
 	"launcherShots", "launcherMisses", "coverUnreachable", "crouches", "lootIgnored", "lootFarReach",
 	"coverShots", "sightChecks", "coverChecks", "maxTickWall", "maxBotUpdate", "quickShots",
+	-- BOT ARCHETYPES (tools/bot_archetype_sim.py reads these)
+	"peeks", "repositions", "thirdPartyHolds", "avoided", "flankMoves", "focusFire", "throwsSticky",
+	"buildsFortify", "buildsBlock", "buildsCross", "buildsPushed", "throwsRefusedFriendly", "buildsRefusedFriendly",
 }) do
 	STATS[key] = STATS[key] or 0
 end
@@ -223,27 +226,28 @@ BotService.Archetypes = ARCH.Types
 -- sniper's dead zone). `peek` is the style of working a corner: "push" goes round it, "hold" waits
 -- behind it and steps out to fire, "suppress" stands its ground and fires long bursts, "strafe"
 -- keeps moving in the open, "lob" fires at feet and cover from range. `burst` is the shots in one
--- burst; `restScale` stretches BotBurstRest so a longer burst does not mean more rounds a minute
--- (throughput is a lethality dial and stays put). `repositionAfterShots` moves the bot after that many
+-- burst; `restScale` stretches (or trims) BotBurstRest so the class fires the same rounds a minute
+-- as the stock 2-5 burst did with its guns' fire rates (throughput is a lethality dial and stays
+-- put; the numbers come from tools/bot_archetype_sim.py's rounds-a-second table, and it checks them). `repositionAfterShots` moves the bot after that many
 -- shots from one spot. `reloadUnder` reloads early, behind cover, once the magazine is under that
 -- share. `fragToFlush` frags a target it can't see out of cover before pushing; `smokeToCross` smokes
 -- its own approach; `noFrags` never wastes a throwable on what it can simply shoot.
 ARCH.Classes = {
-	pistol       = { range = 30, minRange = 4, peek = "strafe", burst = { 2, 4 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
-	revolver     = { range = 34, minRange = 4, peek = "hold", burst = { 1, 2 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.35, fragToFlush = false, smokeToCross = false, noFrags = false },
-	smg          = { range = 20, minRange = 3, peek = "strafe", burst = { 4, 7 }, restScale = 1.5, repositionAfterShots = 0, reloadUnder = 0.25, fragToFlush = false, smokeToCross = true, noFrags = false },
-	shotgun      = { range = 12, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.8, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = true, smokeToCross = true, noFrags = false },
-	doublebarrel = { range = 10, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.8, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = true, smokeToCross = true, noFrags = false },
+	pistol       = { range = 30, minRange = 4, peek = "strafe", burst = { 2, 4 }, restScale = 0.8, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	revolver     = { range = 34, minRange = 4, peek = "hold", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.35, fragToFlush = false, smokeToCross = false, noFrags = false },
+	smg          = { range = 20, minRange = 3, peek = "strafe", burst = { 4, 7 }, restScale = 1.8, repositionAfterShots = 0, reloadUnder = 0.25, fragToFlush = false, smokeToCross = true, noFrags = false },
+	shotgun      = { range = 12, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = true, smokeToCross = true, noFrags = false },
+	doublebarrel = { range = 10, minRange = 2, peek = "push", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = true, smokeToCross = true, noFrags = false },
 	rifle        = { range = 55, minRange = 8, peek = "strafe", burst = { 2, 5 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
-	dmr          = { range = 90, minRange = 20, peek = "hold", burst = { 1, 2 }, restScale = 0.7, repositionAfterShots = 3, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
-	sniper       = { range = 130, minRange = 35, peek = "hold", burst = { 1, 1 }, restScale = 0.6, repositionAfterShots = 1, reloadUnder = 0.4, fragToFlush = false, smokeToCross = false, noFrags = false },
-	lmg          = { range = 60, minRange = 10, peek = "suppress", burst = { 6, 10 }, restScale = 2.2, repositionAfterShots = 0, reloadUnder = 0.2, fragToFlush = false, smokeToCross = false, noFrags = true },
-	minigun      = { range = 45, minRange = 8, peek = "suppress", burst = { 8, 14 }, restScale = 2.6, repositionAfterShots = 0, reloadUnder = 0.15, fragToFlush = false, smokeToCross = false, noFrags = true },
-	launcher     = { range = 45, minRange = 18, peek = "lob", burst = { 1, 1 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
-	blaster      = { range = 28, minRange = 4, peek = "strafe", burst = { 3, 6 }, restScale = 1.3, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
-	crossbow     = { range = 70, minRange = 12, peek = "hold", burst = { 1, 1 }, restScale = 0.6, repositionAfterShots = 2, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
-	railgun      = { range = 110, minRange = 25, peek = "hold", burst = { 1, 1 }, restScale = 0.6, repositionAfterShots = 1, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
-	cannon       = { range = 50, minRange = 15, peek = "lob", burst = { 1, 2 }, restScale = 1, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
+	dmr          = { range = 90, minRange = 20, peek = "hold", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 3, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	sniper       = { range = 130, minRange = 35, peek = "hold", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 1, reloadUnder = 0.4, fragToFlush = false, smokeToCross = false, noFrags = false },
+	lmg          = { range = 60, minRange = 10, peek = "suppress", burst = { 6, 10 }, restScale = 2.75, repositionAfterShots = 0, reloadUnder = 0.2, fragToFlush = false, smokeToCross = false, noFrags = true },
+	minigun      = { range = 45, minRange = 8, peek = "suppress", burst = { 8, 14 }, restScale = 3.9, repositionAfterShots = 0, reloadUnder = 0.15, fragToFlush = false, smokeToCross = false, noFrags = true },
+	launcher     = { range = 45, minRange = 18, peek = "lob", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
+	blaster      = { range = 28, minRange = 4, peek = "strafe", burst = { 3, 6 }, restScale = 1.4, repositionAfterShots = 0, reloadUnder = 0.3, fragToFlush = false, smokeToCross = false, noFrags = false },
+	crossbow     = { range = 70, minRange = 12, peek = "hold", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 2, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
+	railgun      = { range = 110, minRange = 25, peek = "hold", burst = { 1, 1 }, restScale = 0.05, repositionAfterShots = 1, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = false },
+	cannon       = { range = 50, minRange = 15, peek = "lob", burst = { 1, 2 }, restScale = 0.25, repositionAfterShots = 0, reloadUnder = 0.5, fragToFlush = false, smokeToCross = false, noFrags = true, aimLow = true },
 }
 ARCH.Classes.default = ARCH.Classes.rifle
 -- Empty-handed: the fight code never runs without a gun, but the dials must still exist.
@@ -940,6 +944,12 @@ local function coverBetween(bot, head, targetRoot)
 	return structure, hit.Position
 end
 
+-- Team modes: the target a teammate is fighting right now, one per team, so a squad puts its fire on
+-- one body (focus fire) instead of six bots on six targets. Written by reportSighting from fight(),
+-- read by findTarget through bot.focusTeam (set at the same time, so a bot that has never fought
+-- pays nothing). Cleared in Clear().
+local teamFocus = {}
+
 -- The best target this bot can see and has noticed, or nil. Candidates are scored before any ray:
 -- nearest first, players pulled closer by BotPlayerBias, whoever just shot us far closer, the current
 -- target a little closer (so a bot doesn't flick between two), and the badly hurt a little closer.
@@ -971,6 +981,26 @@ local function findTarget(bot, root, head, now)
 				end
 				if humanoid.Health < humanoid.MaxHealth * 0.4 then
 					score *= 0.85
+				end
+				-- BOT ARCHETYPES: what the personality favours. "weakest" pulls the hurt closer in
+				-- proportion to what they have lost; "threat" doubles down on whoever is shooting us;
+				-- "engaged" (Flanker, Opportunist) prefers someone busy fighting somebody else. "closest"
+				-- is the score as it stands. A team's focus target is pulled closer for everyone on it.
+				local pick = bot.archetype and bot.archetype.targetPick
+				if pick == "weakest" then
+					score *= 0.45 + 0.55 * humanoid.Health / math.max(1, humanoid.MaxHealth)
+				elseif pick == "threat" and token == threat then
+					score *= 0.5
+				elseif pick == "engaged" then
+					local attacker, _, hitAt = CombatService.GetLastAttacker(token)
+					if attacker and attacker ~= bot and hitAt and now - hitAt < THREAT_WINDOW then
+						score *= 0.55
+					end
+				end
+				local focus = bot.focusTeam and teamFocus[bot.focusTeam]
+				if focus and focus.token == token and focus.by ~= bot and now - focus.at < THREAT_WINDOW then
+					score *= 0.6
+					STATS.focusFire += 1
 				end
 				table.insert(candidates, { token = token, character = entry.character, root = entry.root, distance = distance, score = score })
 			end
@@ -1164,10 +1194,18 @@ end
 -- instead of each bot toward its own memory. Written in fight(), cleared in Clear().
 local teamSightings = {}
 
-local function reportSighting(bot, position, now)
+local function reportSighting(bot, position, now, token)
 	local state = BotService.ModeState(bot)
 	if state and state.team then
 		teamSightings[state.team] = { position = position, at = now }
+		bot.focusTeam = state.team
+		if token then
+			local focus = teamFocus[state.team]
+			-- The first bot on a target names the focus; it is kept while that bot keeps fighting it.
+			if not focus or focus.by == bot or now - focus.at >= THREAT_WINDOW then
+				teamFocus[state.team] = { token = token, by = bot, at = now }
+			end
+		end
 	end
 end
 
@@ -1206,7 +1244,17 @@ local function modeObjective(bot, root, state, now)
 	if state.hill then
 		local ring = Vector3.new(math.cos(slot), 0, math.sin(slot)) * HILL_RADIUS * HILL_SPREAD
 		if state.holder == state.team then
-			return state.hill + ring, "hold"
+			-- BOT ARCHETYPES: Anchors and Survivors sit on a hill the team holds; the rest leave it to
+			-- them and go for the enemy the team last saw, so a held hill has guards AND hunters.
+			local dials = ARCH.dialsOf(bot)
+			local sighting = teamSightings[state.team]
+			if not dials.holdObjective and sighting and now - sighting.at < SIGHTING_MEMORY
+				and flatDistance(root.Position, sighting.position) > 20 then
+				return sighting.position + Vector3.new(math.cos(slot), 0, math.sin(slot)) * 10, "push"
+			end
+			-- A Marksman holds from the ring's edge, where its range counts; nobody stands past it.
+			local spread = math.min(0.9, HILL_SPREAD * math.max(1, dials.rangeScale))
+			return state.hill + ring.Unit * HILL_RADIUS * spread, "hold"
 		end
 		return state.hill + ring, "contest"
 	end
@@ -1474,10 +1522,15 @@ local function shootAt(bot, target, targetRoot, distance, head)
 		end
 	end
 
-	-- Burst discipline: a handful of shots at the weapon's rate, then a rest.
+	-- Burst discipline: a handful of shots at the weapon's rate, then a rest. The shape is the gun
+	-- class's (BOT ARCHETYPES: a sniper fires one and waits, an LMG six to ten): restScale stretches
+	-- the rest so a longer burst is not more rounds a minute. Rounds a minute and the hit chance are
+	-- lethality, which stays where Oliver set it; tools/bot_archetype_sim.py checks the throughput
+	-- of every class against the stock 2-5 burst.
+	local dials = ARCH.dialsOf(bot)
 	if bot.burstLeft <= 0 then
-		bot.burstLeft = math.random(2, 5)
-		bot.nextShotAt = now + MatchConfig.BotBurstRest + math.random() * 0.35
+		bot.burstLeft = math.random(dials.burst[1], dials.burst[2])
+		bot.nextShotAt = now + MatchConfig.BotBurstRest * dials.restScale + math.random() * 0.35
 		return
 	end
 
@@ -1486,11 +1539,16 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	if size then
 		bot.mag -= 1
 	end
+	-- Shots since the last deliberate reposition, for the class's rule (fight() resets it there).
+	bot.shotsFromSpot = (bot.shotsFromSpot or 0) + 1
 
 	if projectiles then
+		-- A launcher aims at the feet (aimLow): the round lands and splashes where a torso shot that
+		-- misses would sail past. Where it lands, not whether it hits: the accuracy roll is below.
+		local aimAt = dials.aimLow and targetRoot.Position - Vector3.new(0, 2.5, 0) or targetRoot.Position
 		local aim = projectiles.LeadAim
-			and projectiles.LeadAim(def.id, head.Position, targetRoot.Position, targetRoot.AssemblyLinearVelocity)
-			or targetRoot.Position
+			and projectiles.LeadAim(def.id, head.Position, aimAt, targetRoot.AssemblyLinearVelocity)
+			or aimAt
 		-- A miss has to land clear of its own blast, or splash turns every miss into a hit: the round
 		-- goes a blast radius and more to one side.
 		if math.random() >= accuracyAt(distance) then
@@ -1582,8 +1640,10 @@ local COMBAT_REPLAN = 0.45
 local COMBAT_CHECKS = 5
 
 local function planCombatMove(bot, root, threatPosition, distance, retreating, now)
-	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
-	local preferred = math.min(MatchConfig.BotEngagePreferred, reach * 0.6)
+	-- BOT ARCHETYPES: the range is the gun class's, scaled by the personality (ARCH.dialsOf): a
+	-- shotgun Rusher wants 7 studs, a sniper Marksman 130. It used to be one number for everyone.
+	local dials = ARCH.dialsOf(bot)
+	local preferred = dials.range
 	-- Closing in on a target that's nearly dead (set in fight()).
 	if bot.pushing and not retreating then
 		preferred *= 0.5
@@ -1592,11 +1652,15 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 	if bot.weapon and bot.weapon.projectile then
 		preferred = math.max(preferred, 30)
 	end
+	-- Inside the class's dead zone (a sniper at 20 studs, a launcher at 10): open the distance, and
+	-- count it as a retreat for the scoring below so every option that gains range wins.
+	local opening = not retreating and distance < dials.minRange
 	local dangers = dangersNear(root.Position, 40)
 	local toThreat = flat(threatPosition - root.Position)
 	local forward = toThreat.Magnitude > 0.5 and toThreat.Unit or flatLook(root)
 	local right = Vector3.new(-forward.Z, 0, forward.X)
 	local reloading = bot.reloadUntil ~= nil
+	local relocating = bot.relocateUntil ~= nil and now < bot.relocateUntil
 
 	local options = {
 		{ offset = Vector3.zero, hold = true },
@@ -1609,17 +1673,61 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 		{ offset = -forward * 18 + right * 10, side = 1 },
 		{ offset = -forward * 18 - right * 10, side = -1 },
 	}
+	-- A Flanker works round the target: two points on the arc at its range, 35 degrees round in the
+	-- direction it settled on when the fight began (bot.flankDir), so the angle keeps growing instead
+	-- of wobbling either side of the line between them.
+	if dials.flank and not retreating and toThreat.Magnitude > 8 then
+		local fromThreat = -forward
+		for _, step in ipairs({ math.rad(35), math.rad(60) }) do
+			local angle = step * (bot.flankDir or 1)
+			local turned = Vector3.new(
+				fromThreat.X * math.cos(angle) - fromThreat.Z * math.sin(angle), 0,
+				fromThreat.X * math.sin(angle) + fromThreat.Z * math.cos(angle))
+			local point = threatPosition + turned * math.max(preferred, 12)
+			table.insert(options, { offset = point - root.Position, side = bot.flankDir or 1, flank = true })
+		end
+	end
+	-- Team modes: the nearest teammate also on this target. Points that line up behind or in front of
+	-- it are worse (one target, one line of fire); points off to a side make a crossfire.
+	local friendBearing = nil
+	if bot.focusTeam then
+		local nearest = 60
+		for _, entry in ipairs(combatantList) do
+			if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token) then
+				local gap = flatDistance(entry.position, root.Position)
+				if gap < nearest then
+					local away = flat(entry.position - threatPosition)
+					if away.Magnitude > 1 then
+						nearest, friendBearing = gap, away.Unit
+					end
+				end
+			end
+		end
+	end
 	for _, option in ipairs(options) do
 		local point = root.Position + option.offset
 		local range = flatDistance(point, threatPosition)
 		local score
-		if retreating then
+		if retreating or opening then
 			score = -range / 25
 		else
 			score = math.abs(range - preferred) / math.max(preferred, 1) * 3
 			if reloading then
 				score -= range / 60
 			end
+		end
+		if option.flank then
+			score -= 0.8
+		end
+		if friendBearing and not option.hold then
+			local away = flat(point - threatPosition)
+			if away.Magnitude > 1 and away.Unit:Dot(friendBearing) > math.cos(math.rad(25)) then
+				score += 0.8
+			end
+		end
+		-- Just hit, or too many shots from one spot: anything but here.
+		if relocating and option.hold then
+			score += 3
 		end
 		if option.hold then
 			-- Standing still is normally the worst option, but a bot already at the range it wants,
@@ -1662,6 +1770,9 @@ local function planCombatMove(bot, root, threatPosition, distance, retreating, n
 		if stormAllows(root.Position, option.point) then
 			checked += 1
 			if BotNav.CanStep(root, bot.character, option.point, params) then
+				if option.flank then
+					STATS.flankMoves += 1
+				end
 				return option.point, false
 			end
 			if checked >= COMBAT_CHECKS then
@@ -1901,6 +2012,15 @@ local function placeBarricade(bot, root, toward, now, reason)
 		bot.lastBuildAt = now - BOT_BUILD_COOLDOWN + 3
 		return false
 	end
+	-- Never across a teammate's path: a friendly within a couple of body widths of the site would be
+	-- walled in or walled off (Oliver: "never block teammates' paths").
+	for _, entry in ipairs(combatantList) do
+		if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token)
+			and flatDistance(entry.position, centre) < 9 then
+			STATS.buildsRefusedFriendly += 1
+			return false
+		end
+	end
 	-- A site that won't take it (a wall, a slope, someone in the way) is retried in a few seconds
 	-- rather than every tick.
 	local model = DefenseService.Deploy(bot, bot.character, "RotBarricade", centre, facing)
@@ -1912,24 +2032,95 @@ local function placeBarricade(bot, root, toward, now, reason)
 	bot.defenses -= 1
 	bot.lastBuildAt = now
 	bot.ownStructures[model] = true
-	if reason == "angle" then
-		STATS.buildsAngle += 1
+	if reason == "angle" or reason == "fortify" then
+		if reason == "angle" then
+			STATS.buildsAngle += 1
+		else
+			STATS.buildsFortify += 1
+		end
 		bot.anchor = { position = root.Position, untilTime = now + BOT_ANGLE_TIME }
 	else
 		if reason == "heal" then
 			STATS.buildsHeal += 1
+		elseif reason == "block" then
+			STATS.buildsBlock += 1
+		elseif reason == "cross" then
+			STATS.buildsCross += 1
+		elseif reason == "pushed" then
+			STATS.buildsPushed += 1
 		else
 			STATS.buildsExposed += 1
 		end
 		bot.coverUntil = now + BOT_COVER_TIME
+		bot.coverAt = root.Position
+		bot.peek = nil
 		-- Out of sight now: patch up straight away rather than after the usual lull.
 		bot.lastCombatAt = now - MatchConfig.BotHealLull
 	end
 	return true
 end
 
+-- BOT ARCHETYPES: buildRate is the share of fights in which this bot builds at all (rolled once per
+-- target, bot.buildRoll, so it is a decision rather than a coin flipped every think); a fortifier
+-- (Anchor, Marksman) rebuilds sooner after its wall comes down.
 local function canBuild(bot, now)
-	return bot.defenses > 0 and now - bot.lastBuildAt >= BOT_BUILD_COOLDOWN
+	if bot.defenses <= 0 then
+		return false
+	end
+	local dials = ARCH.dialsOf(bot)
+	if (bot.buildRoll or 0) > dials.buildRate then
+		return false
+	end
+	return now - bot.lastBuildAt >= BOT_BUILD_COOLDOWN * (dials.buildFortify and 0.6 or 1)
+end
+
+-- A quick wall when a target is coming at a bot that fights from range (a sniper or DMR pushed by
+-- a shotgun): built in the target's path while it is still 15-40 studs out, then the bot fights from
+-- beside it rather than being caught reloading in the open.
+function ARCH.tryBuildPushed(bot, humanoid, root, targetRoot, distance, now)
+	local dials = ARCH.dialsOf(bot)
+	if dials.peekStyle ~= "hold" or not canBuild(bot, now) then
+		return false
+	end
+	if distance < 15 or distance > 40 then
+		return false
+	end
+	local closing = flat(targetRoot.AssemblyLinearVelocity):Dot(flat(root.Position - targetRoot.Position).Unit)
+	if closing < 8 then
+		return false
+	end
+	return placeBarricade(bot, root, targetRoot.Position, now, "pushed")
+end
+
+-- A Flanker crossing open ground toward its target with nothing to hide behind: a wall mid-field to
+-- work from, only once it is being hit out there.
+function ARCH.tryBuildCross(bot, humanoid, root, targetRoot, distance, now)
+	local dials = ARCH.dialsOf(bot)
+	if not dials.buildToCross or not canBuild(bot, now) or now - bot.lastHurtAt > 1 then
+		return false
+	end
+	if distance < 30 or distance > BOT_BUILD_MAX or now >= (bot.coverBlockedUntil or 0) then
+		return false
+	end
+	return placeBarricade(bot, root, targetRoot.Position, now, "cross")
+end
+
+-- Anchors on a hill (or Marksmen at a firing position): a wall toward where the enemy was last seen,
+-- before anyone is shooting yet, when the bot is exposed from there. The cooldown and the
+-- 3-structure cap keep it to a couple of walls, rebuilt when they come down.
+function ARCH.tryBuildFortify(bot, humanoid, root, toward, now)
+	local dials = ARCH.dialsOf(bot)
+	if not dials.buildFortify or not canBuild(bot, now) then
+		return false
+	end
+	local distance = flatDistance(root.Position, toward)
+	if distance < BOT_BUILD_MIN or distance > 200 then
+		return false
+	end
+	if not exposedTo(bot, root, toward + Vector3.new(0, 1.5, 0)) then
+		return false
+	end
+	return placeBarricade(bot, root, toward, now, "fortify")
 end
 
 -- Getting shot up, hurt, with nowhere to hide.
@@ -1951,8 +2142,7 @@ local function tryBuildAngle(bot, humanoid, root, targetRoot, distance, now)
 		return false
 	end
 	bot.angleCheckAt = now + BOT_ANGLE_CHECK
-	local reach = bot.weapon and bot.weapon.range or MatchConfig.BotEngagePreferred
-	local preferred = math.min(MatchConfig.BotEngagePreferred, reach * 0.6)
+	local preferred = ARCH.dialsOf(bot).range
 	if distance < math.max(BOT_BUILD_MIN, preferred * 1.1) or distance > BOT_BUILD_MAX then
 		return false
 	end
@@ -1960,7 +2150,10 @@ local function tryBuildAngle(bot, humanoid, root, targetRoot, distance, now)
 		return false
 	end
 	local closing = flat(targetRoot.AssemblyLinearVelocity):Dot(flat(root.Position - targetRoot.Position).Unit)
-	if closing > 6 or math.random() > BOT_ANGLE_CHANCE then
+	-- An LMG (suppress) or a fortifier settles in far more readily than the stock roll.
+	local dials = ARCH.dialsOf(bot)
+	local chance = (dials.peekStyle == "suppress" or dials.buildFortify) and 0.6 or BOT_ANGLE_CHANCE
+	if closing > 6 or math.random() > chance then
 		return false
 	end
 	return placeBarricade(bot, root, targetRoot.Position, now, "angle")
@@ -1997,7 +2190,9 @@ end
 
 local function tryHeal(bot, humanoid, now)
 	local missing = humanoid.MaxHealth - humanoid.Health
-	if missing <= 0 or humanoid.Health > humanoid.MaxHealth * MatchConfig.BotHealBelow then
+	-- BOT ARCHETYPES: a Survivor patches up at 75%, a Rusher waits until 45%; MatchConfig is the default.
+	local healBelow = ARCH.dialsOf(bot).healBelow or MatchConfig.BotHealBelow
+	if missing <= 0 or humanoid.Health > humanoid.MaxHealth * healBelow then
 		return
 	end
 	if now - bot.lastCombatAt < MatchConfig.BotHealLull or now - bot.lastHealAt < MatchConfig.BotHealCooldown then
@@ -2039,6 +2234,9 @@ end
 local THROWABLES = {
 	grenade = { itemId = "CookedCoconut", cooldown = 8, minRange = 14, maxRange = 70, blast = 13, chestWeight = 14 },
 	smoke = { itemId = "LowkeyLatte", cooldown = 15, minRange = 0, maxRange = 40, blast = 0, chestWeight = 10 },
+	-- The Clingy Crumpet: thrown at a vehicle the target is in, or the barricade it is behind (fight()).
+	-- Bots only hold them from a mode's SpawnLoadout kit for now; a chest's roll is grenade or smoke.
+	sticky = { itemId = "ClingyCrumpet", cooldown = 12, minRange = 8, maxRange = 45, blast = 12, chestWeight = 0 },
 }
 -- What a player's chest gives: a 30% chance of one throwable, a pickup of two.
 local CHEST_THROWABLE_CHANCE = 0.3
@@ -2096,6 +2294,14 @@ local function tryThrow(bot, root, head, kind, point, now)
 				return false
 			end
 		end
+		-- Nor onto a teammate (Oliver: "never throw frags at teammates' positions").
+		for _, entry in ipairs(combatantList) do
+			if entry.token ~= bot and entry.humanoid.Health > 0 and not hostile(bot, entry.token)
+				and (entry.position - point).Magnitude < blast + 3 then
+				STATS.throwsRefusedFriendly += 1
+				return false
+			end
+		end
 	end
 	if kind == "grenade" and not lobClear(bot, head, point) then
 		return false
@@ -2103,8 +2309,10 @@ local function tryThrow(bot, root, head, kind, point, now)
 	bot.throwReadyAt[kind] = now + spec.cooldown
 	-- A little cook on a frag, never much: flight time is estimated the way DefenseService.throwKit
 	-- times a lob, and at most 40% of what's left is burned, so there's still a moment to run.
+	-- BOT ARCHETYPES: only the archetypes rated for it cook at all (cookFrags); the rest lob it as
+	-- it comes and give the target the full fuse to run.
 	local options = nil
-	if kind == "grenade" and info and info.fuse then
+	if kind == "grenade" and info and info.fuse and ARCH.dialsOf(bot).cookFrags then
 		local flight = math.clamp(distance / 40, 0.5, 1.6)
 		options = { cook = math.max(0, info.fuse - flight - 0.3) * 0.4 * math.random() }
 	end
@@ -2113,6 +2321,8 @@ local function tryThrow(bot, root, head, kind, point, now)
 		bot.throwables[spec.itemId] -= 1
 		if kind == "grenade" then
 			STATS.throwsGrenade += 1
+		elseif kind == "sticky" then
+			STATS.throwsSticky += 1
 		else
 			STATS.throwsSmoke += 1
 		end
@@ -2401,6 +2611,29 @@ end
 -- Closer than this, a bot would rather keep its speed than its smaller profile.
 local CROUCH_MIN_RANGE = 25
 
+-- BOT ARCHETYPES: the peek cycle. From cover a peeking bot (peek, or a "hold" gun class) alternates a
+-- hidden spell with an exposed one instead of standing in the gap. Shared by fight(), where the
+-- target is in view, and by updateBot's hold-in-cover, where it isn't (a bot that has reached cover
+-- has usually broken line of sight, so without this it would sit behind the wall until the cover
+-- time ran out and never fire from it). Returns the phase row; `exposed` is what to do this think.
+-- On ARCH rather than a local, like the build rules below it: this chunk is near Luau's 200-local limit.
+function ARCH.peekPhase(bot, now)
+	local peek = bot.peek
+	if not peek or now >= peek.untilTime then
+		local exposed = not (peek and peek.exposed)
+		peek = {
+			exposed = exposed,
+			untilTime = now + (exposed and 0.9 + math.random() * 0.6 or 1.2 + math.random() * 1),
+			side = peek and peek.side or (math.random() < 0.5 and 1 or -1),
+		}
+		bot.peek = peek
+		if exposed then
+			STATS.peeks += 1
+		end
+	end
+	return peek
+end
+
 -- Seen and noticed, gun in range: fight. Returns having issued this think's movement.
 -- Reaction time is a time, not a count of thinks (#75/#81). A bot thinks every ~0.267 s (BotThinkInterval,
 -- rounded up to frames by the THINK_SLICES waits), so a reaction ending between two thinks used to
@@ -2444,16 +2677,27 @@ end
 local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	local target, targetRoot, distance = candidate.token, candidate.root, candidate.distance
 	local eye = targetRoot.Position + Vector3.new(0, 1.5, 0)
+	local dials = ARCH.dialsOf(bot)
 	bot.target = target
 	bot.lastCombatAt = now
+	bot.fightState = "engage"
 	-- Fighting interrupts a loot hold. Without resetting it, a bot pulled into combat mid-hold
 	-- would return with the time already "elapsed" and claim instantly.
 	bot.lootHoldStart = nil
 	bot.searchUntil = nil
 	remember(bot, target, targetRoot.Position, root, now)
-	reportSighting(bot, targetRoot.Position, now)
+	reportSighting(bot, targetRoot.Position, now, target)
 	if bot.acquiredAt == 0 then
 		bot.acquiredAt = now
+		-- BOT ARCHETYPES: the per-fight decisions, rolled once so a bot commits to them: whether it
+		-- takes cover this fight (coverUse), whether it builds (buildRate), which way round it
+		-- flanks, and where it was standing when the fight began (repositioning measures from here).
+		bot.coverRoll = math.random()
+		bot.buildRoll = math.random()
+		bot.flankDir = math.random() < 0.5 and 1 or -1
+		bot.shotsFromSpot = 0
+		bot.peek = nil
+		bot.thirdPartyFrom = now
 		-- Pre-arm the burst here, during the reaction delay, rather than leaving burstLeft at the 0
 		-- losing a target reset it to. Unarmed, shootAt's own burst-discipline check (below) treats
 		-- the first call after the reaction delay as "burst exhausted": it only sets burstLeft and
@@ -2490,10 +2734,35 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 
 	-- Newly spotted targets get the reaction delay before the first shot, whatever the bot is doing.
 	local reacted = now - bot.acquiredAt >= MatchConfig.BotReactionTime
+	local targetHumanoid = candidate.character and candidate.character:FindFirstChildOfClass("Humanoid")
+
+	-- Reposition: after a fresh hit (repositionOnHit, a Marksman 70% of the time, an Anchor 10%), or
+	-- after the class's count of shots since it last moved on purpose (a sniper moves after every
+	-- shot, a DMR after three; the strafe steps every bot takes don't count, this is a deliberate
+	-- change of position). The current move, cover spot and peek are dropped; for the next moment
+	-- standing still is the worst option (planCombatMove), and a smoker puts smoke down before it goes.
+	local freshHit = now - bot.lastHurtAt <= MatchConfig.BotThinkInterval + 0.05 and bot.lastHurtAt > bot.acquiredAt
+	local overstayed = dials.repositionAfterShots > 0 and (bot.shotsFromSpot or 0) >= dials.repositionAfterShots
+	if reacted and (overstayed or (freshHit and math.random() < dials.repositionOnHit)) and not (bot.relocateUntil and now < bot.relocateUntil) then
+		STATS.repositions += 1
+		bot.relocateUntil = now + 1.5
+		bot.combatMove = nil
+		bot.coverPoint = nil
+		bot.coverUntil = 0
+		bot.peek = nil
+		bot.shotsFromSpot = 0
+		bot.strafeDir = -bot.strafeDir
+		local toward = flat(targetRoot.Position - root.Position)
+		if dials.smokeToMove and toward.Magnitude > 1 then
+			tryThrow(bot, root, head, "smoke", root.Position + toward.Unit * math.min(12, distance / 2), now)
+		end
+	end
 
 	-- Losing badly and the shooter's close: leave by air, or smoke it and back off to cover,
-	-- facing the target so the retreat reads as backpedalling under fire.
-	if humanoid.Health <= MatchConfig.BotRetreatHealth and distance < 90 then
+	-- facing the target so the retreat reads as backpedalling under fire. BOT ARCHETYPES: the health
+	-- it happens at is the personality's (a Survivor at 35, a Rusher at 8); MatchConfig is the default.
+	if humanoid.Health <= (dials.retreatHealth or MatchConfig.BotRetreatHealth) and distance < 90 then
+		bot.fightState = "retreat"
 		-- Running for cover, so stand: crouched is 0.45x speed.
 		setCrouch(bot, false)
 		if tryRocket(bot, humanoid, root, targetRoot, distance, now) then
@@ -2527,17 +2796,61 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 			end
 		end
 	end
-	local targetHumanoid = candidate.character and candidate.character:FindFirstChildOfClass("Humanoid")
 	bot.pushing = targetHumanoid ~= nil and targetHumanoid.Health < targetHumanoid.MaxHealth * MatchConfig.BotPushTargetBelow
 		and humanoid.Health > humanoid.MaxHealth * MatchConfig.BotPushHealthAbove and not bot.reloadUntil
+	-- BOT ARCHETYPES: the push is the personality's call (a Rusher pushes anyone under 70% while it has
+	-- 30% itself; an Anchor waits for 30% and 80%). The MatchConfig line above is the stock rule and
+	-- what tools/bot_aggression_check.py reads; the dials replace it when the archetype sets them.
+	if targetHumanoid and dials.pushTargetBelow then
+		bot.pushing = targetHumanoid.Health < targetHumanoid.MaxHealth * dials.pushTargetBelow
+			and humanoid.Health > humanoid.MaxHealth * dials.pushHealthAbove and not bot.reloadUntil
+	end
+	if bot.pushing then
+		bot.fightState = "push"
+	end
 	local wantsCover = (humanoid.Health <= humanoid.MaxHealth * MatchConfig.BotCoverHealth and now - bot.lastHurtAt < 2)
 		or (bot.reloadUntil ~= nil and distance < 100)
 		or outnumbered >= 2
+	-- BOT ARCHETYPES: coverUse is the share of fights in which the bot takes cover when those rules say
+	-- it may (a Rusher one in four, an Anchor nine in ten). Reloading still sends everyone behind
+	-- something: standing in the open with an empty gun is not a personality.
+	if wantsCover and bot.coverRoll and bot.coverRoll > dials.coverUse and bot.reloadUntil == nil then
+		wantsCover = false
+	end
+
+	-- Third party (Opportunist): the target is busy with somebody else and still healthy, and nobody
+	-- is shooting us. Hang back out of the fight, low and behind something if there is anything, and
+	-- let them wear each other down; go in once the target is under thirdPartyBelow, once the wait
+	-- (thirdPartyWait) runs out, or the moment we are hit. tools/bot_archetype_sim.py measures how
+	-- much later an Opportunist's first shot comes than a Rusher's from the same spot.
+	if dials.thirdParty and reacted and targetHumanoid and now - bot.lastHurtAt >= THREAT_WINDOW
+		and targetHumanoid.Health >= targetHumanoid.MaxHealth * (dials.thirdPartyBelow or 0.6)
+		and now - (bot.thirdPartyFrom or now) < (dials.thirdPartyWait or 8) then
+		local attacker, _, hitAt = CombatService.GetLastAttacker(target)
+		if attacker and attacker ~= bot and hitAt and now - hitAt < THREAT_WINDOW then
+			STATS.thirdPartyHolds += 1
+			bot.fightState = "thirdParty"
+			local cover, direct = seekCover(bot, root, eye, now, candidate.character)
+			if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+				if flatDistance(root.Position, cover) < 3 then
+					bot.coverPoint = nil
+					bot.coverUntil = now + BOT_COVER_TIME
+					bot.coverAt = root.Position
+				end
+			else
+				holdStill(bot, humanoid, root, now)
+			end
+			setCrouch(bot, distance > CROUCH_MIN_RANGE)
+			faceTarget(bot, humanoid, root, targetRoot)
+			return
+		end
+	end
 
 	-- Hurt and being hit, reloading, or outnumbered: get behind something, or put something up.
 	if wantsCover and not bot.pushing then
 		local cover, direct = seekCover(bot, root, eye, now, candidate.character)
 		if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+			bot.fightState = "cover"
 			setCrouch(bot, false)
 			faceTarget(bot, humanoid, root, targetRoot)
 			if reacted then
@@ -2547,27 +2860,53 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 				STATS.coverReached += 1
 				bot.coverPoint = nil
 				bot.coverUntil = now + BOT_COVER_TIME
+				bot.coverAt = root.Position
+				bot.peek = nil
 				bot.lastCombatAt = now - MatchConfig.BotHealLull
 			end
 			return
 		end
-		if tryBuildExposed(bot, humanoid, root, targetRoot, distance, now) then
+		if tryBuildExposed(bot, humanoid, root, targetRoot, distance, now)
+			or ARCH.tryBuildCross(bot, humanoid, root, targetRoot, distance, now) then
 			holdStill(bot, humanoid, root, now)
 			faceTarget(bot, humanoid, root, targetRoot)
 			return
 		end
 	end
 
-	if tryBuildAngle(bot, humanoid, root, targetRoot, distance, now) then
+	if tryBuildAngle(bot, humanoid, root, targetRoot, distance, now)
+		or ARCH.tryBuildPushed(bot, humanoid, root, targetRoot, distance, now) then
 		holdStill(bot, humanoid, root, now)
 		faceTarget(bot, humanoid, root, targetRoot)
 		return
 	end
 
-	-- Two or more of them bunched up: a grenade in the middle.
-	local bunched, centre = clusterAround(bot, targetRoot)
-	if bunched >= 2 and centre then
-		tryThrow(bot, root, head, "grenade", centre, now)
+	-- Throwables, by gun and personality (Oliver: "make it change how they use throwables too").
+	-- A frag goes over when enough of them are bunched round the target (grenadeAt: a Rusher or
+	-- Anchor at two, a Marksman at three) and never from a gun that can simply shoot the problem
+	-- (noFrags: launcher, LMG, minigun). A corner gun (fragToFlush: shotguns) frags a target it can
+	-- only reach through a barricade, to flush it before the push. A sticky goes onto a target in a
+	-- vehicle, or onto the barricade it is behind. tryThrow refuses point-blank throws, a teammate in
+	-- the blast, and a second frag onto one still ticking.
+	if not dials.noFrags then
+		local bunched, centre = clusterAround(bot, targetRoot)
+		if bunched >= (dials.grenadeAt or 2) and centre then
+			tryThrow(bot, root, head, "grenade", centre, now)
+		elseif dials.fragToFlush and candidate.throughCover and candidate.throughCover.Parent then
+			tryThrow(bot, root, head, "grenade", targetRoot.Position, now)
+		end
+	end
+	if targetHumanoid and targetHumanoid.SeatPart then
+		tryThrow(bot, root, head, "sticky", targetRoot.Position, now)
+	elseif candidate.throughCover and candidate.throughCover.Parent and candidate.throughCover.GetPivot then
+		tryThrow(bot, root, head, "sticky", candidate.throughCover:GetPivot().Position, now)
+	end
+	-- Crossing open ground toward the target (a shotgun or SMG pushing in): smoke its own approach.
+	if dials.smokeToCross and bot.pushing and distance > 30 and distance < 60 then
+		local toward = flat(targetRoot.Position - root.Position)
+		if toward.Magnitude > 1 then
+			tryThrow(bot, root, head, "smoke", root.Position + toward.Unit * (distance * 0.5), now)
+		end
 	end
 
 	-- Brief reaction delay before the first shot of an engagement — turn toward them
@@ -2579,7 +2918,46 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 		return
 	end
 
+	-- Peek and shoot (BOT ARCHETYPES: peek, and the "hold" gun classes): from cover or beside its own
+	-- wall, a bot alternates a hidden spell (crouched, still, reloading if the magazine is low: the
+	-- class's reloadUnder) with an exposed one in which it stands and fires, rather than standing in
+	-- the gap the whole time. The magazine is topped up while hidden so the exposed spell never
+	-- opens with a reload.
+	local size = magazineOf(bot.weapon)
+	local inCover = (bot.coverUntil and now < bot.coverUntil) or (bot.anchor and now < bot.anchor.untilTime)
+	if inCover and (dials.peek or dials.peekStyle == "hold") and not bot.pushing then
+		local peek = ARCH.peekPhase(bot, now)
+		if not peek.exposed then
+			bot.fightState = "peekHide"
+			if size and bot.mag and bot.mag < size * dials.reloadUnder then
+				startReload(bot, now)
+			end
+			setCrouch(bot, true)
+			-- Back behind the cover it came out of, if it has stepped away from it.
+			if bot.coverAt and flatDistance(root.Position, bot.coverAt) > 1.5 then
+				humanoid:MoveTo(bot.coverAt)
+				BotNav.Progress(bot, humanoid, root, nil, now)
+			else
+				holdStill(bot, humanoid, root, now)
+			end
+			faceTarget(bot, humanoid, root, targetRoot)
+			return
+		end
+		bot.fightState = "peekShoot"
+		setCrouch(bot, false)
+		humanoid:MoveTo(combatMove(bot, root, targetRoot.Position, distance, false, now))
+		faceTarget(bot, humanoid, root, targetRoot)
+		shootAt(bot, target, targetRoot, distance, head)
+		return
+	elseif inCover and size and bot.mag and bot.mag < size * dials.reloadUnder then
+		-- Any class behind cover with a low magazine reloads there rather than in the open.
+		startReload(bot, now)
+	end
+
 	local point = combatMove(bot, root, targetRoot.Position, distance, false, now)
+	if bot.fightState == "engage" then
+		bot.fightState = distance < dials.minRange and "open" or "strafe"
+	end
 	-- Hop now and then while strafing in the open, like a player dodging (Oliver, 2026-09-22: "jump
 	-- and strafe more"). Never from cover, never at knife range.
 	local jumped = false
@@ -2658,6 +3036,20 @@ local function flee(bot, humanoid, root, threatPosition, now, threatToken)
 	STATS.flees += 1
 	bot.combatMove = bot.combatMove and bot.combatMove.retreating and bot.combatMove or nil
 	local threatCharacter = threatToken and Combatants.GetCharacter(threatToken) or nil
+	-- BOT ARCHETYPES: a Survivor breaks the pursuer's line of sight on the way out, with smoke on the
+	-- ground between them and a wall across the pursuer's path (placeBarricade puts it 5 studs toward
+	-- the threat, so it is between them, never across the bot's own way out).
+	local dials = ARCH.dialsOf(bot)
+	local toward = flat(threatPosition - root.Position)
+	if toward.Magnitude > 1 then
+		if dials.smokeToMove then
+			local head = bot.character:FindFirstChild("Head") or root
+			tryThrow(bot, root, head, "smoke", root.Position + toward.Unit * math.min(10, toward.Magnitude / 2), now)
+		end
+		if dials.buildToBlock and canBuild(bot, now) and toward.Magnitude >= BOT_BUILD_MIN and toward.Magnitude <= 60 then
+			placeBarricade(bot, root, threatPosition, now, "block")
+		end
+	end
 	local cover, direct = seekCover(bot, root, threatPosition + Vector3.new(0, 1.5, 0), now, threatCharacter)
 	setSprint(bot, true)
 	trySlide(bot, humanoid, now)
@@ -2896,6 +3288,10 @@ function ARCH.balance(bot, team, mix, teamOf)
 	end
 	local mine = (bot.archetype or ARCH.Types.Rusher).name
 	local size = total + 1
+	-- A side of three is too small to have a "shortest role": the deck's deal stands.
+	if size < 4 then
+		return
+	end
 	local shortest, shortfall = nil, 0
 	for _, name in ipairs(ARCH.Order) do
 		local want = (mix[name] or 0) / 100 * size
@@ -3014,11 +3410,35 @@ local function updateBot(bot)
 		remember(bot, candidate.token, candidate.root.Position, root, now)
 		candidate = nil
 	end
+	-- BOT ARCHETYPES: a Survivor (avoidUnforced) fights only when it has to: the target is shooting
+	-- it, is inside its own range, or is at a team objective it stands on. Anyone else it lets go,
+	-- ducking out of their sight if they could see it. It does not remember them to hunt.
+	if candidate and ARCH.dialsOf(bot).avoidUnforced then
+		local forced = now - bot.lastHurtAt < THREAT_WINDOW or candidate.distance <= ARCH.dialsOf(bot).range * 1.1
+			or (bot.objectiveKind == "hold" or bot.objectiveKind == "contest") and bot.wanderGoal
+				and flatDistance(root.Position, bot.wanderGoal) < 30
+		if not forced then
+			STATS.avoided += 1
+			bot.branch = "avoid"
+			bot.target = nil
+			bot.acquiredAt = 0
+			local threatEye = candidate.root.Position + Vector3.new(0, 1.5, 0)
+			if exposedTo(bot, root, threatEye) then
+				local cover, direct = seekCover(bot, root, threatEye, now, candidate.character)
+				if cover and goToCover(bot, humanoid, root, cover, direct, now) then
+					setSprint(bot, true)
+					return
+				end
+			end
+			candidate = nil
+		end
+	end
 	if candidate then
 		bot.branch = "fight"
 		fight(bot, humanoid, root, head, candidate, pressure, now)
 		return
 	end
+	bot.fightState = nil
 
 	bot.target = nil
 	bot.acquiredAt = 0
@@ -3070,6 +3490,31 @@ local function updateBot(bot)
 	-- Behind cover or our own barricade: hold there while the heals go in, then carry on. Down low
 	-- while doing it: the bot isn't going anywhere, and something is shooting at it.
 	if bot.coverUntil > now then
+		-- BOT ARCHETYPES: a peeker with a target it lost a moment ago steps out to the side of its cover
+		-- to look for it (peekPhase), and back in again; the moment the target is seen, fight() runs
+		-- the same cycle with the gun. Everyone else waits it out.
+		local dials = ARCH.dialsOf(bot)
+		local memory = bot.memory
+		if (dials.peek or dials.peekStyle == "hold") and bot.weapon and memory and now - memory.at < 6 then
+			local peek = ARCH.peekPhase(bot, now)
+			local toward = flat(memory.position - root.Position)
+			if peek.exposed and toward.Magnitude > 1 then
+				bot.branch = "peek"
+				setCrouch(bot, false)
+				local right = Vector3.new(-toward.Unit.Z, 0, toward.Unit.X)
+				local from = bot.coverAt or root.Position
+				humanoid:MoveTo(from + right * peek.side * 5 + toward.Unit * 2)
+				BotNav.Progress(bot, humanoid, root, nil, now)
+				facePoint(bot, humanoid, root, memory.position)
+				return
+			end
+			if bot.coverAt and flatDistance(root.Position, bot.coverAt) > 1.5 then
+				setCrouch(bot, true)
+				humanoid:MoveTo(bot.coverAt)
+				BotNav.Progress(bot, humanoid, root, nil, now)
+				return
+			end
+		end
 		setCrouch(bot, true)
 		holdStill(bot, humanoid, root, now)
 		BotNav.Drop(bot)
@@ -3145,7 +3590,9 @@ local function updateBot(bot)
 		bot.branch = "hunt"
 		releaseLoot(bot)
 		setSprint(bot, false)
-		local grenadeReady = now - memory.at < 4
+		-- A frag onto where they went, from a gun that can't just shoot round the corner (BOT ARCHETYPES:
+		-- noFrags classes keep theirs; a shotgun flushing a corner is the point of it).
+		local grenadeReady = now - memory.at < 4 and not ARCH.dialsOf(bot).noFrags
 		if grenadeReady then
 			tryThrow(bot, root, head, "grenade", memory.position, now)
 		end
@@ -3359,8 +3806,20 @@ local function updateBot(bot)
 			bot.wanderTarget = nil
 		end
 		-- Holding the hill: stand on the ring, low, facing out. Pacing around it reads as aimless and
-		-- walks bots off the zone.
+		-- walks bots off the zone. BOT ARCHETYPES: an Anchor fortifies it, a wall toward where the
+		-- enemy was last seen (or toward the enemy's own objective when nobody has been seen yet).
 		if objectiveKind == "hold" and flatDistance(root.Position, objective) < 6 then
+			local sighting = bot.focusTeam and teamSightings[bot.focusTeam]
+			local toward = sighting and now - sighting.at < 60 and sighting.position or nil
+			if not toward and modeState.hill then
+				local away = flat(root.Position - modeState.hill)
+				toward = away.Magnitude > 1 and root.Position + away.Unit * 40 or nil
+			end
+			if toward and ARCH.tryBuildFortify(bot, humanoid, root, toward, now) then
+				holdStill(bot, humanoid, root, now)
+				facePoint(bot, humanoid, root, toward)
+				return
+			end
 			setCrouch(bot, true)
 			holdStill(bot, humanoid, root, now)
 			return
@@ -3556,8 +4015,16 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				archetype = nil,
 				dials = nil,
 				archetypeBalancedFor = nil,
-				shotsFromSpot = 0,
-				spotAt = 0,
+				coverRoll = nil, -- rolled per fight against coverUse / buildRate
+				buildRoll = nil,
+				flankDir = 1,
+				shotsFromSpot = 0, -- shots since the last deliberate reposition (the class's repositionAfterShots)
+				relocateUntil = nil,
+				peek = nil, -- the peek cycle's phase row (peekPhase)
+				coverAt = nil, -- the cover spot the bot last reached, to peek from and step back to
+				thirdPartyFrom = nil,
+				focusTeam = nil,
+				fightState = nil, -- what fight() decided this think: engage/strafe/open/cover/peekHide/peekShoot/push/retreat/thirdParty
 			}
 			nextSlot += 1
 			BotNav.Attach(bot)
@@ -3774,6 +4241,7 @@ function BotService.Clear()
 	BotNav.Clear()
 	table.clear(lootClaims)
 	table.clear(teamSightings)
+	table.clear(teamFocus)
 	table.clear(combatantList)
 	table.clear(botDrivers)
 	lootSnapshot.at = -math.huge
