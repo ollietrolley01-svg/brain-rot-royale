@@ -32,6 +32,10 @@ every one of which must be caught.
     python tools/perf_bot_cost.py . --plant         the planted faults; every one must be caught
     python tools/perf_bot_cost.py . --before REV    compare against another revision
 
+Without git, or outside a checkout, there is no "before": it says so in one NOTE line and runs the
+working tree's table and checks alone (bot_archetype_sim and bot_aggression_check, which read their
+before through read_rev too, use the working tree as their own baseline).
+
 What this does NOT measure: milliseconds. A raycast or a ComputeAsync start has no fixed cost
 here; tools/perf_tick_probe.lua measures the worst server frame in Studio. The KB figure counts
 the interpreter's allocations, Vector3 mocks included, so only its before/after difference means
@@ -72,9 +76,35 @@ def read_tree(root, path):
     return open(os.path.join(root, path), encoding="utf-8").read()
 
 
+class NoRevision(Exception):
+    """A "before" revision can't be read: git is not installed, `root` is not a checkout (a tarball, a
+    zip), or the revision or the file isn't in it. The message says which."""
+
+
 def read_rev(root, rev, path):
-    return subprocess.run(["git", "-C", root, "show", f"{rev}:{path}"], capture_output=True, text=True,
-                          check=True).stdout
+    try:
+        return subprocess.run(["git", "-C", root, "show", f"{rev}:{path}"], capture_output=True, text=True,
+                              check=True).stdout
+    except FileNotFoundError:
+        raise NoRevision("git is not installed") from None
+    except subprocess.CalledProcessError as err:
+        reason = (err.stderr or "").strip().splitlines()
+        raise NoRevision(f"git show {rev}:{path}: {reason[0] if reason else 'failed'}") from None
+
+
+def default_before(root, tool):
+    """The commit before `tool`'s first commit; HEAD if it is not committed yet or git can't say."""
+    try:
+        log = subprocess.run(["git", "-C", root, "log", "--format=%H", "--diff-filter=A", "--", tool],
+                             capture_output=True, text=True).stdout.split()
+    except FileNotFoundError:
+        log = []
+    return (log[-1] + "~1") if log else "HEAD"
+
+
+def no_before_note(tool, err):
+    print(f"NOTE {tool}: no \"before\" revision to compare against ({err}); the before/after comparison is "
+          f"skipped and only the working tree's own checks run.")
 
 
 # Also imported by tools/bot_aggression_check.py: keep the names and the MatchConfig line below.
@@ -953,11 +983,14 @@ def main():
 
     if before_rev is None:
         # The commit before this tool's first commit; HEAD if the tool is not committed yet.
-        log = subprocess.run(["git", "-C", root, "log", "--format=%H", "--diff-filter=A", "--", "tools/perf_bot_cost.py"],
-                             capture_output=True, text=True).stdout.split()
-        before_rev = (log[-1] + "~1") if log else "HEAD"
-    before = {p: read_rev(root, before_rev, p) for p in tree}
-    table(f"before ({before_rev})", before[BOTSERVICE], before[BOTNAV], before[COMPANION])
+        before_rev = default_before(root, "tools/perf_bot_cost.py")
+    try:
+        before = {p: read_rev(root, before_rev, p) for p in tree}
+        table(f"before ({before_rev})", before[BOTSERVICE], before[BOTNAV], before[COMPANION])
+    except NoRevision as err:
+        # Outside a git checkout (or without git) the table is the working tree's alone; every check
+        # below reads only the working tree, so nothing it decides depends on the before.
+        no_before_note("perf_bot_cost", err)
     table("after (working tree)", tree[BOTSERVICE], tree[BOTNAV], tree[COMPANION])
     fails = checks(tree[BOTSERVICE], tree[BOTNAV], tree[COMPANION])
     for f in fails:
