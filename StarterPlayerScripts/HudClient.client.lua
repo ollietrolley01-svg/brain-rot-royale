@@ -3633,66 +3633,70 @@ local resultsBody = create("TextLabel", {
 -- Winner celebration
 --------------------------------------------------------------------------------
 
-local CONFETTI_COLORS = {
-	C.Accent, C.Green, C.Storm, C.Red, Color3.fromRGB(80, 200, 255), Color3.fromRGB(255, 255, 255),
-}
+local celebrateWin
+-- In a do-block: this script's main chunk is close to Luau's 200-local limit.
+do
+	local CONFETTI_COLORS = {
+		C.Accent, C.Green, C.Storm, C.Red, Color3.fromRGB(80, 200, 255), Color3.fromRGB(255, 255, 255),
+	}
 
-local championBanner = create("TextLabel", {
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	Position = UDim2.fromScale(0.5, 0.2),
-	Size = UDim2.fromOffset(760, 90),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.FredokaOne,
-	Text = "BRAINROT CHAMPION",
-	TextColor3 = C.Accent,
-	TextStrokeTransparency = 1,
-	TextScaled = true,
-	TextTransparency = 1,
-	Visible = false,
-	ZIndex = 20,
-	Parent = screenGui,
-})
-local championScale = create("UIScale", { Parent = championBanner })
+	local championBanner = create("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.2),
+		Size = UDim2.fromOffset(760, 90),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.FredokaOne,
+		Text = "BRAINROT CHAMPION",
+		TextColor3 = C.Accent,
+		TextStrokeTransparency = 1,
+		TextScaled = true,
+		TextTransparency = 1,
+		Visible = false,
+		ZIndex = 20,
+		Parent = screenGui,
+	})
+	local championScale = create("UIScale", { Parent = championBanner })
 
--- Taking #1: the banner pops in and confetti rains down the screen. GUI frames only, so it
--- costs nothing in the world and needs no assets.
-local function celebrateWin()
-	championBanner.Visible = true
-	championBanner.TextTransparency = 0
-	championBanner.TextStrokeTransparency = 0.2
-	championScale.Scale = 0.3
-	TweenService:Create(championScale, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-	Sfx.Play("CrateOpen")
+	-- Taking #1: the banner pops in and confetti rains down the screen. GUI frames only, so it
+	-- costs nothing in the world and needs no assets.
+	function celebrateWin()
+		championBanner.Visible = true
+		championBanner.TextTransparency = 0
+		championBanner.TextStrokeTransparency = 0.2
+		championScale.Scale = 0.3
+		TweenService:Create(championScale, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		Sfx.Play("CrateOpen")
 
-	local viewport = camera.ViewportSize
-	for _ = 1, 70 do
-		local size = math.random(6, 12)
-		local startX = math.random(0, math.floor(viewport.X))
-		local piece = create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromOffset(startX, -20 - math.random(0, 220)),
-			Size = UDim2.fromOffset(size, math.floor(size * 1.6)),
-			Rotation = math.random(0, 360),
-			BackgroundColor3 = CONFETTI_COLORS[math.random(1, #CONFETTI_COLORS)],
-			BorderSizePixel = 0,
-			ZIndex = 19,
-			Parent = screenGui,
-		})
-		local fall = 2.2 + math.random() * 1.8
-		TweenService:Create(piece, TweenInfo.new(fall, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-			Position = UDim2.fromOffset(startX + math.random(-120, 120), viewport.Y + 40),
-			Rotation = piece.Rotation + math.random(-540, 540),
-		}):Play()
-		task.delay(fall + 0.1, function()
-			piece:Destroy()
+		local viewport = camera.ViewportSize
+		for _ = 1, 70 do
+			local size = math.random(6, 12)
+			local startX = math.random(0, math.floor(viewport.X))
+			local piece = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromOffset(startX, -20 - math.random(0, 220)),
+				Size = UDim2.fromOffset(size, math.floor(size * 1.6)),
+				Rotation = math.random(0, 360),
+				BackgroundColor3 = CONFETTI_COLORS[math.random(1, #CONFETTI_COLORS)],
+				BorderSizePixel = 0,
+				ZIndex = 19,
+				Parent = screenGui,
+			})
+			local fall = 2.2 + math.random() * 1.8
+			TweenService:Create(piece, TweenInfo.new(fall, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Position = UDim2.fromOffset(startX + math.random(-120, 120), viewport.Y + 40),
+				Rotation = piece.Rotation + math.random(-540, 540),
+			}):Play()
+			task.delay(fall + 0.1, function()
+				piece:Destroy()
+			end)
+		end
+
+		task.delay(4.5, function()
+			TweenService:Create(championBanner, TweenInfo.new(0.6), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+			task.wait(0.6)
+			championBanner.Visible = false
 		end)
 	end
-
-	task.delay(4.5, function()
-		TweenService:Create(championBanner, TweenInfo.new(0.6), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
-		task.wait(0.6)
-		championBanner.Visible = false
-	end)
 end
 
 --------------------------------------------------------------------------------
@@ -3701,134 +3705,138 @@ end
 
 -- Who did it, with what, from how far, what they had left, and where the last twelve seconds
 -- of damage came from — shown under the banner while you go down, gone when the results come.
-local deathRecap = Remotes.Event("DeathRecap")
-
-local recapPanel = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 80),
-	Size = UDim2.new(0, 480, 0, 104),
-	BackgroundColor3 = C.Background,
-	BackgroundTransparency = 0.1,
-	BorderSizePixel = 0,
-	Visible = false,
-	ZIndex = 12,
-	Parent = screenGui,
-}, { rounded(12), padding(12) })
-
--- Scaled down to fit rather than cut off: "DOWNED BY <a long display name> — BACK IN 5" is wider than
--- the panel at 22 pt.
-local recapTitle = create("TextLabel", {
-	Size = UDim2.new(1, 0, 0, 28),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.FredokaOne,
-	Text = "",
-	TextColor3 = C.Red,
-	TextSize = 22,
-	TextScaled = true,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	ZIndex = 13,
-	Parent = recapPanel,
-}, { create("UITextSizeConstraint", { MaxTextSize = 22 }) })
-
-local recapBody = create("TextLabel", {
-	Position = UDim2.new(0, 0, 0, 30),
-	Size = UDim2.new(1, 0, 1, -30),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham,
-	Text = "",
-	TextColor3 = C.Text,
-	TextSize = 14,
-	TextWrapped = true,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextYAlignment = Enum.TextYAlignment.Top,
-	ZIndex = 13,
-	Parent = recapPanel,
-})
-
--- `token` retires an old recap's hide timer; `killer`, `title` and `backAt` feed the respawn countdown.
-local recap = { token = 0 }
-
--- In a respawn mode the recap says when you are back (#86 M32): "DOWNED BY RIVAL — BACK IN 4", counting
--- down. The wait used to be only in a 2.6 s toast. The time comes from the recap's own `respawnDelay`
--- when it carries one, else from the RespawnAt attribute GameMode puts on the player at the moment it
--- schedules the respawn (server time; GetServerTimeNow is the same clock here). The two can arrive in
--- either order, so the title is re-judged every frame while the panel is up, and a stale RespawnAt
--- from an earlier death is already in the past and says nothing.
+local recapPanel
+-- In a do-block: this script's main chunk is close to Luau's 200-local limit.
 do
-	local function respawnIn()
-		local at = recap.backAt or player:GetAttribute("RespawnAt")
-		if type(at) ~= "number" then
-			return nil
+	local deathRecap = Remotes.Event("DeathRecap")
+
+	recapPanel = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 80),
+		Size = UDim2.new(0, 480, 0, 104),
+		BackgroundColor3 = C.Background,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 12,
+		Parent = screenGui,
+	}, { rounded(12), padding(12) })
+
+	-- Scaled down to fit rather than cut off: "DOWNED BY <a long display name> — BACK IN 5" is wider than
+	-- the panel at 22 pt.
+	local recapTitle = create("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 28),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.FredokaOne,
+		Text = "",
+		TextColor3 = C.Red,
+		TextSize = 22,
+		TextScaled = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 13,
+		Parent = recapPanel,
+	}, { create("UITextSizeConstraint", { MaxTextSize = 22 }) })
+
+	local recapBody = create("TextLabel", {
+		Position = UDim2.new(0, 0, 0, 30),
+		Size = UDim2.new(1, 0, 1, -30),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		Text = "",
+		TextColor3 = C.Text,
+		TextSize = 14,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 13,
+		Parent = recapPanel,
+	})
+
+	-- `token` retires an old recap's hide timer; `killer`, `title` and `backAt` feed the respawn countdown.
+	local recap = { token = 0 }
+
+	-- In a respawn mode the recap says when you are back (#86 M32): "DOWNED BY RIVAL — BACK IN 4", counting
+	-- down. The wait used to be only in a 2.6 s toast. The time comes from the recap's own `respawnDelay`
+	-- when it carries one, else from the RespawnAt attribute GameMode puts on the player at the moment it
+	-- schedules the respawn (server time; GetServerTimeNow is the same clock here). The two can arrive in
+	-- either order, so the title is re-judged every frame while the panel is up, and a stale RespawnAt
+	-- from an earlier death is already in the past and says nothing.
+	do
+		local function respawnIn()
+			local at = recap.backAt or player:GetAttribute("RespawnAt")
+			if type(at) ~= "number" then
+				return nil
+			end
+			local left = math.ceil(at - workspace:GetServerTimeNow())
+			return left > 0 and left or nil
 		end
-		local left = math.ceil(at - workspace:GetServerTimeNow())
-		return left > 0 and left or nil
+		function recap.update()
+			local left = respawnIn()
+			local text = recap.title or ""
+			if left then
+				text = (recap.killer and ("DOWNED BY " .. string.upper(recap.killer)) or "DOWNED") .. " — BACK IN " .. left
+			end
+			if recapTitle.Text ~= text then
+				recapTitle.Text = text
+			end
+		end
+		RunService.Heartbeat:Connect(function()
+			if recapPanel.Visible then
+				recap.update()
+			end
+		end)
 	end
-	function recap.update()
-		local left = respawnIn()
-		local text = recap.title or ""
-		if left then
-			text = (recap.killer and ("DOWNED BY " .. string.upper(recap.killer)) or "DOWNED") .. " — BACK IN " .. left
+
+	deathRecap.OnClientEvent:Connect(function(info)
+		recap.token += 1
+		local token = recap.token
+		recap.killer = info.killer
+		recap.backAt = type(info.respawnDelay) == "number" and (workspace:GetServerTimeNow() + info.respawnDelay) or nil
+
+		local lines = {}
+		if info.killer then
+			recapTitle.Text = "ELIMINATED BY " .. string.upper(info.killer)
+			local how = {}
+			if info.weapon then
+				table.insert(how, info.weapon)
+			end
+			if info.distance then
+				table.insert(how, string.format("%d studs", math.floor(info.distance + 0.5)))
+			end
+			if info.headshot then
+				table.insert(how, "headshot")
+			end
+			if #how > 0 then
+				table.insert(lines, table.concat(how, "  •  "))
+			end
+			if info.killerHealth then
+				table.insert(lines, string.format("They had %d HP%s left", info.killerHealth,
+					info.killerShield and string.format(" + %d shield", info.killerShield) or ""))
+			end
+		else
+			-- The storm's finishing blow is named as the storm's even after a shooter had hit you (#86 C6).
+			recapTitle.Text = (info.finishedBy == "Storm" or (info.taken or 0) == 0) and "THE STORM GOT YOU" or "ELIMINATED"
 		end
-		if recapTitle.Text ~= text then
-			recapTitle.Text = text
+		if (info.taken or 0) > 0 then
+			local sources = {}
+			for _, source in ipairs(info.sources or {}) do
+				table.insert(sources, string.format("%s %d", source.name, source.amount))
+			end
+			table.insert(lines, string.format("%d damage in the last 12 s%s", info.taken,
+				#sources > 0 and ("  —  " .. table.concat(sources, ", ")) or ""))
 		end
-	end
-	RunService.Heartbeat:Connect(function()
-		if recapPanel.Visible then
-			recap.update()
-		end
+		recapBody.Text = table.concat(lines, "\n")
+		recap.title = recapTitle.Text
+		recap.update()
+		recapPanel.Visible = true
+
+		task.delay(10, function()
+			if recap.token == token then
+				recapPanel.Visible = false
+			end
+		end)
 	end)
 end
-
-deathRecap.OnClientEvent:Connect(function(info)
-	recap.token += 1
-	local token = recap.token
-	recap.killer = info.killer
-	recap.backAt = type(info.respawnDelay) == "number" and (workspace:GetServerTimeNow() + info.respawnDelay) or nil
-
-	local lines = {}
-	if info.killer then
-		recapTitle.Text = "ELIMINATED BY " .. string.upper(info.killer)
-		local how = {}
-		if info.weapon then
-			table.insert(how, info.weapon)
-		end
-		if info.distance then
-			table.insert(how, string.format("%d studs", math.floor(info.distance + 0.5)))
-		end
-		if info.headshot then
-			table.insert(how, "headshot")
-		end
-		if #how > 0 then
-			table.insert(lines, table.concat(how, "  •  "))
-		end
-		if info.killerHealth then
-			table.insert(lines, string.format("They had %d HP%s left", info.killerHealth,
-				info.killerShield and string.format(" + %d shield", info.killerShield) or ""))
-		end
-	else
-		-- The storm's finishing blow is named as the storm's even after a shooter had hit you (#86 C6).
-		recapTitle.Text = (info.finishedBy == "Storm" or (info.taken or 0) == 0) and "THE STORM GOT YOU" or "ELIMINATED"
-	end
-	if (info.taken or 0) > 0 then
-		local sources = {}
-		for _, source in ipairs(info.sources or {}) do
-			table.insert(sources, string.format("%s %d", source.name, source.amount))
-		end
-		table.insert(lines, string.format("%d damage in the last 12 s%s", info.taken,
-			#sources > 0 and ("  —  " .. table.concat(sources, ", ")) or ""))
-	end
-	recapBody.Text = table.concat(lines, "\n")
-	recap.title = recapTitle.Text
-	recap.update()
-	recapPanel.Visible = true
-
-	task.delay(10, function()
-		if recap.token == token then
-			recapPanel.Visible = false
-		end
-	end)
-end)
 
 matchResults.OnClientEvent:Connect(function(result)
 	recapPanel.Visible = false
@@ -4090,79 +4098,82 @@ companionAttackRemote.OnClientEvent:Connect(function(info)
 	TweenService:Create(companionDot, TweenInfo.new(0.3, Enum.EasingStyle.Back), { Size = UDim2.fromOffset(22, 22) }):Play()
 end)
 
--- The pill counts down. It used to read "SPEED BOOST" with no seconds, so a player could not tell
--- whether they had eight seconds of it left or half of one -- and the moment it ends, their speed
--- changes under them with nothing on screen having said it was about to.
---
--- `SpeedBoostUntil` is a SERVER-TIME stamp (MatchService:1040, cleared with the flag at :1052), and
--- `workspace:GetServerTimeNow()` gives the client the same clock, so this needs no remote and cannot
--- drift from the server's own idea of when the boost ends. If the stamp is ever missing the pill
--- falls back to its old wording rather than showing a wrong number.
---
--- Driven off Heartbeat only while the pill is visible: a per-frame connection that exists for the
--- eighteen seconds a boost lasts, not for the whole match.
-local speedBoostTick = nil
-local function stopSpeedBoostTick()
-	if speedBoostTick then
-		speedBoostTick:Disconnect()
-		speedBoostTick = nil
+-- In a do-block: this script's main chunk is close to Luau's 200-local limit.
+do
+	-- The pill counts down. It used to read "SPEED BOOST" with no seconds, so a player could not tell
+	-- whether they had eight seconds of it left or half of one -- and the moment it ends, their speed
+	-- changes under them with nothing on screen having said it was about to.
+	--
+	-- `SpeedBoostUntil` is a SERVER-TIME stamp (MatchService:1040, cleared with the flag at :1052), and
+	-- `workspace:GetServerTimeNow()` gives the client the same clock, so this needs no remote and cannot
+	-- drift from the server's own idea of when the boost ends. If the stamp is ever missing the pill
+	-- falls back to its old wording rather than showing a wrong number.
+	--
+	-- Driven off Heartbeat only while the pill is visible: a per-frame connection that exists for the
+	-- eighteen seconds a boost lasts, not for the whole match.
+	local speedBoostTick = nil
+	local function stopSpeedBoostTick()
+		if speedBoostTick then
+			speedBoostTick:Disconnect()
+			speedBoostTick = nil
+		end
 	end
-end
 
---
--- The same pill carries the other things on you that run out (#86): Bounce Boots, counted down off
--- `BounceBootsUntil` (MovementService, a server-time stamp like the soda's; C17), and spawn protection
--- in a team mode, off the character's `SpawnProtected` (ModeTeams; C32), which ends the moment you
--- shoot. One pill rather than three, so there is still one thing in that spot to keep clear.
-local function refreshSpeedPill()
-	local function effects()
-		local now = workspace:GetServerTimeNow()
-		local out = {}
-		if player:GetAttribute("SpeedBoosted") == true then
-			local endsAt = player:GetAttribute("SpeedBoostUntil")
-			local left = endsAt and endsAt - now or 0
-			table.insert(out, left > 0 and string.format("SPEED BOOST  %ds", math.ceil(left)) or "SPEED BOOST")
+	--
+	-- The same pill carries the other things on you that run out (#86): Bounce Boots, counted down off
+	-- `BounceBootsUntil` (MovementService, a server-time stamp like the soda's; C17), and spawn protection
+	-- in a team mode, off the character's `SpawnProtected` (ModeTeams; C32), which ends the moment you
+	-- shoot. One pill rather than three, so there is still one thing in that spot to keep clear.
+	local function refreshSpeedPill()
+		local function effects()
+			local now = workspace:GetServerTimeNow()
+			local out = {}
+			if player:GetAttribute("SpeedBoosted") == true then
+				local endsAt = player:GetAttribute("SpeedBoostUntil")
+				local left = endsAt and endsAt - now or 0
+				table.insert(out, left > 0 and string.format("SPEED BOOST  %ds", math.ceil(left)) or "SPEED BOOST")
+			end
+			local boots = player:GetAttribute("BounceBootsUntil")
+			if boots and boots - now > 0 then
+				table.insert(out, string.format("BOUNCE BOOTS  %ds", math.ceil(boots - now)))
+			end
+			if player.Character and player.Character:GetAttribute("SpawnProtected") == true then
+				table.insert(out, "PROTECTED")
+			end
+			return out
 		end
-		local boots = player:GetAttribute("BounceBootsUntil")
-		if boots and boots - now > 0 then
-			table.insert(out, string.format("BOUNCE BOOTS  %ds", math.ceil(boots - now)))
+		local current = effects()
+		hudLayout.show(speedPill, #current > 0)
+		if #current == 0 then
+			stopSpeedBoostTick()
+			speedPill.Text = "SPEED BOOST"
+			return
 		end
-		if player.Character and player.Character:GetAttribute("SpawnProtected") == true then
-			table.insert(out, "PROTECTED")
+		speedPill.Text = table.concat(current, "  •  ")
+		if speedBoostTick then
+			return
 		end
-		return out
+		speedBoostTick = RunService.Heartbeat:Connect(function()
+			local live = effects()
+			if #live == 0 then
+				refreshSpeedPill()
+			else
+				speedPill.Text = table.concat(live, "  •  ")
+			end
+		end)
 	end
-	local current = effects()
-	hudLayout.show(speedPill, #current > 0)
-	if #current == 0 then
-		stopSpeedBoostTick()
-		speedPill.Text = "SPEED BOOST"
-		return
-	end
-	speedPill.Text = table.concat(current, "  •  ")
-	if speedBoostTick then
-		return
-	end
-	speedBoostTick = RunService.Heartbeat:Connect(function()
-		local live = effects()
-		if #live == 0 then
-			refreshSpeedPill()
-		else
-			speedPill.Text = table.concat(live, "  •  ")
-		end
+
+	player:GetAttributeChangedSignal("SpeedBoosted"):Connect(refreshSpeedPill)
+	player:GetAttributeChangedSignal("BounceBootsUntil"):Connect(refreshSpeedPill)
+	player.CharacterAdded:Connect(function(character)
+		character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+		refreshSpeedPill()
 	end)
-end
-
-player:GetAttributeChangedSignal("SpeedBoosted"):Connect(refreshSpeedPill)
-player:GetAttributeChangedSignal("BounceBootsUntil"):Connect(refreshSpeedPill)
-player.CharacterAdded:Connect(function(character)
-	character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+	if player.Character then
+		player.Character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
+	end
 	refreshSpeedPill()
-end)
-if player.Character then
-	player.Character:GetAttributeChangedSignal("SpawnProtected"):Connect(refreshSpeedPill)
 end
-refreshSpeedPill()
 
 --------------------------------------------------------------------------------
 -- Match event banner (StarterPlayerScripts/EventBanner draws it)
