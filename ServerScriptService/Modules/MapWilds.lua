@@ -2076,6 +2076,7 @@ function MapWilds.Build(map, ctx)
 	-- onto a bank, a cabin door onto a two-stud rise, a slate shelter over a three-stud drop: a door
 	-- into a hill or off a ledge (Oliver, 2026-09-24; tools/foundation_check.py).
 	local DOOR_RISE, DOOR_DROP, DOOR_REACH = 1.5, 2.5, 5
+	local DOOR_SILL = 0.25
 	-- Where the shelters and the stands of trees went: the grass goes round them.
 	local shelterSpots, woodsSpots = {}, {}
 
@@ -2140,7 +2141,8 @@ function MapWilds.Build(map, ctx)
 			for out = 1, DOOR_REACH do
 				local w = centre * CFrame.new(across * spec.halfX, 0, -spec.halfZ - out)
 				local y = sample(w.X, w.Z)
-				if not y or y > high + DOOR_RISE or (out <= 4 and y < high - DOOR_DROP) then
+				-- Right outside, the step down: the ground may not stand over the floor at the sill.
+				if not y or y > high + (out == 1 and DOOR_SILL or DOOR_RISE) or (out <= 4 and y < high - DOOR_DROP) then
 					return false
 				end
 			end

@@ -437,6 +437,21 @@ for _, top in ipairs(map:GetChildren()) do
 					{ parts = list })
 				s.name = "Shed"
 				s.noBury = true
+				-- Its doorway (critic C9): the lintel over it, 5 wide, against the ground under and either
+				-- side of it. Under 6 studs clear is a door buried in the slope.
+				for _, d in ipairs(list) do
+					if d.Name == "Wall" and math.abs(d.Size.X - 5) < 0.01 and math.abs(d.Size.Z - 0.8) < 0.01 then
+						local e = entryOf(d)
+						local high = -math.huge
+						for _, a in ipairs({ -2.5, 0, 2.5 }) do
+							for _, o in ipairs({ -0.9, 0.9 }) do
+								local w = d.CFrame * Vector3.new(a, 0, o)
+								high = math.max(high, T.surface(w.X, w.Z, true) or -math.huge)
+							end
+						end
+						s.shedDoor = e.lo - high
+					end
+				end
 			end
 		end
 	end
@@ -1035,7 +1050,9 @@ for _, s in ipairs(structures) do
 		local half = math.min(s.door.half, s.halfX * 0.6)
 		-- Just outside the door: the ground there against the floor.
 		local sx, sz = at(s, 0, s.halfZ + 1.0)
-		local g = ground(sx, sz)
+		-- The lower of the two terrain models, as for burial: flagged only if both see the ground over
+		-- the sill (the column-step model alone read a slate shelter 0.41 up where the drawn slope is under it).
+		local g = groundLow(sx, sz)
 		-- Against the door's own floor: a town building's threshold is its floor top, half a stud up.
 		v.sill = g and (g - s.base - (s.door.sill or 0)) or math.huge
 		v.doorClear = DOOR_CLEAR
@@ -1096,6 +1113,9 @@ for _, s in ipairs(structures) do
 	end
 	if s.door and v.sill > SILL then
 		flag(s, "sill", v.sill)
+	end
+	if s.shedDoor and s.shedDoor < 6 then
+		flag(s, "door", s.shedDoor, "shed doorway only this clear over the ground at it")
 	end
 	if s.door and v.doorClear < DOOR_CLEAR then
 		flag(s, "door", v.doorClear, v.doorWhy)

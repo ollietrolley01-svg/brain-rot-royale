@@ -1802,7 +1802,23 @@ local function shed(parent, position, groundAt, lootSpots)
 	-- Sunk like the trees are, and further by however far the ground falls away under its walls from
 	-- the point it was placed on: a rigid box on one sampled height stood a corner up to 17 studs over
 	-- a hillside (tools/foundation_check.py).
-	local turn = CFrame.Angles(0, math.random() * math.pi * 2, 0)
+	-- The door faces downhill (critic C9): a random yaw put it uphill as often as not, and the doorway
+	-- is cut to a fixed height, so on a slope the ground outside rose into it and the loot inside was
+	-- behind a buried door. Of eight directions the one whose ground is lowest out front, turned by up
+	-- to 15 degrees either way with the same one roll the random yaw took.
+	local jitter = (math.random() - 0.5) * math.rad(30)
+	local facing, lowest = 0, math.huge
+	if groundAt then
+		for step = 0, 7 do
+			local angle = step * math.pi / 4
+			local y = groundAt(position.X + math.sin(angle) * (halfD + 2), position.Z + math.cos(angle) * (halfD + 2))
+			if y and y < lowest then
+				facing, lowest = angle, y
+			end
+		end
+	end
+	-- Local -Z (the front) toward `facing`.
+	local turn = CFrame.Angles(0, facing + math.pi + jitter, 0)
 	local drop = 0
 	if groundAt then
 		for _, corner in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
@@ -1823,7 +1839,23 @@ local function shed(parent, position, groundAt, lootSpots)
 	end
 
 	-- The front, split round a doorway you can actually walk through.
-	local doorway, doorTop = 5, SINK + drop + 7
+	-- The opening is 7 studs clear over the ground at the door itself, not over the ground at the
+	-- shed's middle, and never taller than the wall.
+	local doorway = 5
+	local doorGround = -math.huge
+	if groundAt then
+		-- Across the doorway, just outside it and just inside: a shed sunk into a slope has its own
+		-- ground rising inside the threshold too.
+		for _, x in ipairs({ -doorway / 2, 0, doorway / 2 }) do
+			for _, z in ipairs({ -halfD - 0.9, -halfD + 0.9 }) do
+				local at = (base * CFrame.new(x, 0, z)).Position
+				doorGround = math.max(doorGround, groundAt(at.X, at.Z) or position.Y)
+			end
+		end
+	else
+		doorGround = position.Y
+	end
+	local doorTop = math.min(wallHeight - 1, (doorGround - base.Position.Y) + 7)
 	local pier = (width - doorway) / 2
 	for _, side in ipairs({ -1, 1 }) do
 		makePart(parent, Vector3.new(pier, wallHeight, 0.8), base * CFrame.new(side * (width - pier) / 2, wallHeight / 2, -halfD),

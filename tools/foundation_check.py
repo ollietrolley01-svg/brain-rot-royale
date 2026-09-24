@@ -33,43 +33,10 @@ from foundation_world import World, luau_to_lua, TOOLS  # noqa: E402
 MAPS = ["SahurSprings", "TralalaTown", "BombardiroBay", "RotRidge", "PatapimPlains"]
 SEEDS = [101, 202, 303]
 
-# Structures built by modules this worker does not own: reported, never hidden, but they fail the run
-# only with --propose (which applies the edit proposed for their owner) or --strict.
-ELSEWHERE = {
-    "decor:hut": "MapDecor.shed (the open-country sheds): proposed edit in PROPOSED['MapDecor']",
-}
-
-# The proposed edit to MapDecor.lua (not this worker's file): a shed sinks by the ground's fall under
-# its own walls, not just by SINK, so on a slope its downhill walls reach the ground.
-PROPOSED = [
-    ("MapDecor",
-     """	-- Sunk like the trees are, so a slope never leaves a shed standing on one corner.
-	local base = CFrame.new(position - Vector3.new(0, SINK, 0)) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
-	local wallHeight = height + SINK
-""",
-     """	-- Sunk like the trees are, and further by however far the ground falls away under its walls from
-	-- the point it was placed on: a rigid box on one sampled height stood a corner up to 17 studs over
-	-- a hillside (tools/foundation_check.py).
-	local turn = CFrame.Angles(0, math.random() * math.pi * 2, 0)
-	local drop = 0
-	if groundAt then
-		for _, corner in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
-			local at = (CFrame.new(position) * turn * CFrame.new(corner[1] * (halfW + 0.4), 0, corner[2] * (halfD + 0.4))).Position
-			local y = groundAt(at.X, at.Z)
-			if y then
-				drop = math.max(drop, position.Y - y)
-			end
-		end
-	end
-	local base = CFrame.new(position - Vector3.new(0, SINK + drop, 0)) * turn
-	local wallHeight = height + SINK + drop
-"""),
-    ("MapDecor",
-     """	local doorway, doorTop = 5, SINK + 7
-""",
-     """	local doorway, doorTop = 5, SINK + drop + 7
-"""),
-]
+# Structures built by modules outside this check's owner that fail the run only with --strict. Empty:
+# the MapDecor shed edit once proposed here landed in 22b6f77, and sheds count like everything else.
+ELSEWHERE = {}
+PROPOSED = []
 
 # Planted faults, each aimed at an invariant the placement code must keep forever, not at a bug that
 # was fixed: (label, [(module, old, new)], map, seed, what, kind prefix). The check must find at least
@@ -102,7 +69,10 @@ PLANTS = [
      "SahurSprings", 101, "tree", ""),
     ("a set piece's entrance stays clear of street furniture: the entrance check off",
      [("TownThemes", "local function entranceClear(ctx, at, front, halfDepth, reach)\n", "local function entranceClear(ctx, at, front, halfDepth, reach)\n\tdo return true end\n")],
-     "TralalaTown", 101, "door", "theme:setpiece"),
+     "BombardiroBay", 2, "door", "theme:setpiece"),
+    ("a shed's doorway faces downhill and clears the ground at it (critic C9): facing ignored",
+     [("MapDecor", "\t\t\tif y and y < lowest then\n", "\t\t\tif false then\n")],
+     "PatapimPlains", 303, "door", "decor:hut"),
     ("a front door's path to the pavement stays clear: the path not claimed",
      [("MapGenerator", "\t\t\t\tspace:AddStrip(doorstep, doorstep - sideVector * (setback + 0.5), MapBuildings.DoorWidth / 2 + 1)\n", "")],
      "SahurSprings", 101, "door", "town:"),

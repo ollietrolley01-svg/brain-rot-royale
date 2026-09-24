@@ -1558,8 +1558,16 @@ local function sahurAqueduct(model, origin, ctx)
 	local frames = {}
 	for index = 0, piers - 1 do
 		local at = origin * CFrame.new(-half + index * spacing, 0, 0)
-		local ground = ctx.groundHeightAt(at.X, at.Z) or origin.Y
-		local bottom = ground - 2
+		-- The ground across the pier's own footprint: it meets the slope at the highest, and its foot
+		-- goes in below the lowest, so a pier on a hillside is neither swallowed on its uphill face
+		-- nor standing clear on its downhill one (tools/foundation_check.py: buried 2.4).
+		local ground, lowest = -math.huge, math.huge
+		for _, corner in ipairs({ { 0, 0 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } }) do
+			local c = at * CFrame.new(corner[1] * 2.5, 0, corner[2] * width / 2)
+			local y = ctx.groundHeightAt(c.X, c.Z) or origin.Y
+			ground, lowest = math.max(ground, y), math.min(lowest, y)
+		end
+		local bottom = lowest - 2
 		local height = deckY - bottom
 		-- Each pier stands on its own ground, so each is measured on its own rather than as one box
 		-- stretched down the whole line of arches.
@@ -2029,7 +2037,13 @@ local function turbineRidge(model, origin, ctx)
 	local anchors = {}
 	for index, offset in ipairs(spots) do
 		local at = origin * CFrame.new(offset)
+		-- The pad sits at the highest ground under its rim, not the ground at its middle: on a slope the
+		-- uphill edge was buried 2 studs; the downhill side is carried down by MapTerrain.Underpin.
 		local g = ctx.groundHeightAt(at.X, at.Z) or origin.Y
+		for step = 0, 7 do
+			local angle = step * math.pi / 4
+			g = math.max(g, ctx.groundHeightAt(at.X + math.cos(angle) * 5.5, at.Z + math.sin(angle) * 5.5) or g)
+		end
 		local base = CFrame.new(at.X, g, at.Z) * origin.Rotation
 		-- The tower stands on its own pad on its own ground: 7.8 square is the biggest square inside
 		-- the 11-stud pad, so the audit's edge ring stays on concrete.
