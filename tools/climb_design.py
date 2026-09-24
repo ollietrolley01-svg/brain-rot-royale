@@ -983,12 +983,25 @@ for p in problems:
 
 
 # --- Output --------------------------------------------------------------------------------------
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def f2(x, places=2):
+    # Snap away last-bit float noise, then round half up, so a value sitting on a .xx5 boundary
+    # (50.824999999999996 here, 50.825000000000003 on another machine's libm) prints the same everywhere.
+    return str(Decimal(repr(round(x, 9))).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP))
+
+
+def f2s(values):
+    return ", ".join(f2(x) for x in values)
+
+
 def v(p):
-    return "{ %.2f, %.2f, %.2f }" % tuple(p[:3])
+    return "{ %s }" % f2s(p[:3])
 
 
 def lua_limb(limb):
-    points = ", ".join("{ %.2f, %.2f, %.2f, %.2f }" % p for p in limb.points)
+    points = ", ".join("{ %s }" % f2s(p) for p in limb.points)
     fields = [f"points = {{ {points} }}", f"solidFrom = {limb.solid_from + 1}"]
     if limb.motion:
         fields.append(f'motion = "{limb.motion}"')
@@ -997,7 +1010,7 @@ def lua_limb(limb):
     if limb.round_tip and limb.solid_from < len(limb.points) - 1:
         fields.append("roundTip = true")
     if limb.flap:
-        fields.append("flap = { angle = %.1f, speed = %.2f, phase = %.2f }" % (limb.flap["angle"], limb.flap["speed"], limb.flap["phase"]))
+        fields.append("flap = { angle = %s, speed = %s, phase = %s }" % (f2(limb.flap["angle"], 1), f2(limb.flap["speed"]), f2(limb.flap["phase"])))
     return "{ " + ", ".join(fields) + " }"
 
 
@@ -1016,8 +1029,8 @@ lines = [
     "",
     "return {",
     f"\ttrunk = {{ height = {TRUNK_HEIGHT}, lengths = {TRUNK_LENGTHS}, bottomRadius = {TRUNK_BOTTOM_RADIUS}, topRadius = {TRUNK_TOP_RADIUS} }},",
-    f"\tsummitTop = {SUMMIT_TOP:.2f},",
-    f"\tsummitDiameter = {SUMMIT_DIAMETER:.2f},",
+    f"\tsummitTop = {f2(SUMMIT_TOP)},",
+    f"\tsummitDiameter = {f2(SUMMIT_DIAMETER)},",
     "\telements = {",
 ]
 for element in elements:
@@ -1034,9 +1047,9 @@ for element in elements:
         lines.append("\t\t\t\t" + lua_limb(limb) + ",")
     lines.append("\t\t\t},")
     if element.balls:
-        lines.append("\t\t\tballs = { " + ", ".join("{ %.2f, %.2f, %.2f, %.2f }" % b[:4] for b in element.balls) + " },")
+        lines.append("\t\t\tballs = { " + ", ".join("{ %s }" % f2s(b[:4]) for b in element.balls) + " },")
     if element.collars:
-        lines.append("\t\t\tcollars = { " + ", ".join("{ from = %s, to = %s, diameter = %.2f }" % (v(a), v(b), d) for a, b, d in element.collars) + " },")
+        lines.append("\t\t\tcollars = { " + ", ".join("{ from = %s, to = %s, diameter = %s }" % (v(a), v(b), f2(d)) for a, b, d in element.collars) + " },")
     lines.append("\t\t},")
 lines.append("\t},")
 lines.append("\t-- The tree's roots: solid, walkable ramps up to the trunk, so the skip check has them too.")
@@ -1046,8 +1059,8 @@ for root in ROOTS:
 lines.append("\t},")
 lines.append("\trotors = {")
 for r in rotors:
-    fields = [f'name = "{r["name"]}"', f"hub = {v(r['hub'])}", f"arm = {r['arm']:.2f}", f"speed = {r['speed']}",
-              f"arms = {r['arms']}", f"thickness = {r['thickness']:.2f}"]
+    fields = [f'name = "{r["name"]}"', f"hub = {v(r['hub'])}", f"arm = {f2(r['arm'])}", f"speed = {r['speed']}",
+              f"arms = {r['arms']}", f"thickness = {f2(r['thickness'])}"]
     if r.get("post"):
         fields.append(f"post = {v(r['post'])}")
     if r["trunk"]:
@@ -1058,8 +1071,8 @@ lines.append("\t-- The easiest crossing of each jump (standing spots on top of t
 lines.append("\t-- reach, walking or, for a sprint leap, sprinting. tools/climb_gallery.lua has a rig make them.")
 lines.append("\tjumps = {")
 for tag, p, q, sprint_leap, ratio in jumps:
-    lines.append('\t\t{ name = "%s", from = %s, fromWidth = %.2f, to = %s, toWidth = %.2f, sprint = %s, share = %.2f },'
-                 % (tag, v(p), p[3] * 2, v(q), q[3] * 2, "true" if sprint_leap else "false", ratio))
+    lines.append('\t\t{ name = "%s", from = %s, fromWidth = %s, to = %s, toWidth = %s, sprint = %s, share = %s },'
+                 % (tag, v(p), f2(p[3] * 2), v(q), f2(q[3] * 2), "true" if sprint_leap else "false", f2(ratio)))
 lines.append("\t},")
 lines.append("}")
 lines.append("")
