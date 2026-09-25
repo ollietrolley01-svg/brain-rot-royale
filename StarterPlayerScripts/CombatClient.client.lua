@@ -685,6 +685,48 @@ local kickViewmodel
 -- "AutoReload" setting). Asked once per dry pull; the server refuses if there's no ammo left.
 local autoReloadAskedAt = 0
 
+-- THE CLIENT COUNTS ITS OWN ROUNDS (#97 F3). `slot.mag` only changes when a loadout push lands, about
+-- one round trip after a shot, so on a fast gun the client used to keep firing for that round trip
+-- after the last round: 1-2 shots a magazine at 100-150 ms that kicked and flashed here and that the
+-- server refused at ConsumeAmmo (no tracer, no damage). Every shot sent is remembered for a round
+-- trip; a push that lands at time P reflects only the shots sent before about P - rtt, so the ones
+-- after that are taken off what it says. A shot the server refuses (the budget or the aim check, both
+-- ahead of ConsumeAmmo) sends no push; it simply ages out after the round trip and the round comes
+-- back, so a wrong guess costs a fraction of a second, never a stuck empty gun. The server stays the
+-- only authority over ammo.
+local FLIGHT_MARGIN = 0.1 -- seconds past the round trip a sent shot is still counted
+local shotsInFlight = {} -- { t = os.clock(), slot = loadout index, id = weapon id }
+local loadoutPushedAt = 0
+
+local function roundTrip()
+	local ok, ping = pcall(function()
+		return player:GetNetworkPing()
+	end)
+	if not ok or type(ping) ~= "number" or ping ~= ping then
+		return 0.1
+	end
+	return math.clamp(ping, 0.03, 0.5)
+end
+
+-- The rounds left in `slot` once the shots the server hasn't reported yet are taken off.
+local function roundsInHand(slot)
+	if not slot or type(slot.mag) ~= "number" then
+		return 0
+	end
+	local now = os.clock()
+	local rtt = roundTrip()
+	local pending = 0
+	for i = #shotsInFlight, 1, -1 do
+		local shot = shotsInFlight[i]
+		if now - shot.t >= rtt + FLIGHT_MARGIN then
+			table.remove(shotsInFlight, i)
+		elseif shot.t > loadoutPushedAt - rtt and loadout and shot.slot == loadout.equipped and shot.id == slot.id then
+			pending += 1
+		end
+	end
+	return math.max(0, slot.mag - pending)
+end
+
 -- The driver has both hands on the wheel, and a gamepad's triggers are the throttle and brake: while
 -- driving, the fire and aim bindings neither shoot, click nor aim (they still pass the input on to the
 -- vehicle). Passengers can do both.
@@ -710,9 +752,12 @@ local function tryFire()
 	if not slot then
 		return
 	end
-	if slot.mag <= 0 then
+	if roundsInHand(slot) <= 0 then
+		-- Hold fire on the local count, but reload only on the server's: a shot it refused without
+		-- spending ammo (budget, aim check) sends no push, so the local count can read empty with rounds
+		-- still in the magazine, and a reload asked for then would sit through a full reload for nothing.
 		local now = os.clock()
-		if Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
+		if slot.mag <= 0 and Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
 			autoReloadAskedAt = now
 			reloadRemote:FireServer()
 		end
@@ -754,6 +799,7 @@ local function tryFire()
 		end
 		addRecoil(def)
 		kickViewmodel(def)
+		table.insert(shotsInFlight, { t = os.clock(), slot = loadout.equipped, id = slot.id })
 	end
 end
 
@@ -889,7 +935,7 @@ ContextActionService:BindAction("BRR_Fire", function(_, inputState, inputObject)
 		-- An empty gun clicks, once per pull of the trigger rather than once per fire tick.
 		local emptyDef = inCombat() and equippedDef()
 		local emptySlot = emptyDef and loadout.slots[loadout.equipped]
-		if emptySlot and emptySlot.mag <= 0 and not loadout.reloading then
+		if emptySlot and emptySlot.mag <= 0 and not loadout.reloading then -- the server's count, as for the auto-reload
 			Sfx.Play("DryFire", 0.05)
 		end
 		tryFire()
@@ -1574,7 +1620,7 @@ function kickViewmodel(def)
 		return
 	end
 	local slot = loadout and loadout.equipped and loadout.slots[loadout.equipped]
-	local roundsLeft = slot and math.max(0, (slot.mag or 1) - 1) or 0
+	local roundsLeft = slot and math.max(0, roundsInHand(slot) - 1) or 0
 	local vm = viewmodel.vm
 	local muzzle = vm:Fire(roundsLeft)
 	if muzzle and not viewmodel.scopedIn then
@@ -2252,6 +2298,7 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	end
 
 	loadout = newLoadout
+	loadoutPushedAt = os.clock()
 	-- Build each carried gun's viewmodel template now, while it's being picked up, rather than on its
 	-- first draw (Viewmodel.Preload; it had no caller, so every first draw built one and hitched). One
 	-- gun per frame so a full loadout arriving at once doesn't hitch here instead. Unskinned only: a

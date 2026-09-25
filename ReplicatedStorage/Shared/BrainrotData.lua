@@ -176,7 +176,10 @@ BrainrotData.AbilityCooldown = 1.8
 -- can. Set near the top of what each rarity lands at level 1, so the buff's feel is kept and the cap
 -- mostly bites on levelled, merged copies. Secret has no entry: a Secret may still one-shot.
 -- Enforced in CompanionService (per use, per target); tools/companion_ability_check.py sweeps it.
-BrainrotData.MaxUseDamage = { Common = 34, Uncommon = 42, Rare = 50, Epic = 60, Legendary = 70, Mythic = 80 }
+-- x0.8 on 2026-09-25 with CombatDamageScale 0.92 -> 0.736 (Oliver: "increase ttk of players and vehicles
+-- 25%"): the cap is counted after that scale, so without this a capped use would only have lost ~10%.
+-- (Was 34, 42, 50, 60, 70, 80.)
+BrainrotData.MaxUseDamage = { Common = 27, Uncommon = 34, Rare = 40, Epic = 48, Legendary = 56, Mythic = 64 }
 
 --------------------------------------------------------------------------------
 -- Boons: what a companion does FOR its owner
