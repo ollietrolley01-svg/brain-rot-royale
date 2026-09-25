@@ -1071,6 +1071,31 @@ local function furnishRoom(parent, origin, width, depth, baseY, room, purpose, f
 		placeOnWall(ctx, extra[index])
 	end
 
+	-- Framed pictures on up to two bare stretches of wall (clear floor in front, so never over a
+	-- piece, and never in a window's lane): trim, hung at eye height.
+	currentName = "WallArt"
+	local hung = 0
+	for _, spot in ipairs(wallSpots(ctx, { len = 3.2 })) do
+		if hung >= 2 then
+			break
+		end
+		local face, along = spot[1], spot[2]
+		local x, z = face.at(along, 0.6)
+		local hx, hz = 1.6, 0.6
+		if not face.alongX then
+			hx, hz = hz, hx
+		end
+		if rectFree(room, x, z, hx, hz) then
+			room:AddRect(x, z, hx, hz)
+			hung += 1
+			local fx, fz = face.at(along, 0.08)
+			local turn = CFrame.new(fx, baseY + 6.6, fz) * CFrame.Angles(0, face.yaw, 0)
+			trim(parent, Vector3.new(3.2, 2.4, 0.12), turn, style.dark, Enum.Material.Wood)
+			trim(parent, Vector3.new(2.7, 1.9, 0.06), turn * CFrame.new(0, 0, 0.08), pick(style.fabric):Lerp(style.accent, 0.4),
+				Enum.Material.SmoothPlastic)
+		end
+	end
+
 	-- A rug under the centre piece, or in the middle of the room when there is none. Trim: it never
 	-- collides, so it can't be what blocks a door, a stair or a vault.
 	currentName = "Rug"

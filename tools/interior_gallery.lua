@@ -107,13 +107,17 @@ local function interiorView(name, purpose, palette)
 		settle = 2,
 		setup = function(folder, camera)
 			local target, floorBase = build(folder, purpose, palette)
+			-- A dozen studs out from the piece toward the middle of the room, a little to one side,
+			-- so the piece and its neighbours fill the frame.
 			local reach = PLAN.width / 2 - 1.6
-			local flat = Vector3.new(target.Position.X - ORIGIN.X, 0, target.Position.Z - ORIGIN.Z)
-			local away = flat.Magnitude > 0.1 and -flat.Unit or Vector3.new(0, 0, -1)
+			local flat = Vector3.new(ORIGIN.X - target.Position.X, 0, ORIGIN.Z - target.Position.Z)
+			local away = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, 1)
+			local side = Vector3.new(-away.Z, 0, away.X)
+			local spot = target.Position + away * 13 + side * 3
 			local eye = Vector3.new(
-				ORIGIN.X + math.clamp(away.X * reach, -reach, reach),
+				ORIGIN.X + math.clamp(spot.X - ORIGIN.X, -reach, reach),
 				floorBase + 0.5 + EYE_HEIGHT,
-				ORIGIN.Z + math.clamp(away.Z * reach, -reach, reach))
+				ORIGIN.Z + math.clamp(spot.Z - ORIGIN.Z, -reach, reach))
 			-- Step toward the piece until the eye is out of any furniture or stair it landed in.
 			local toward = Vector3.new(target.Position.X, eye.Y, target.Position.Z) - eye
 			for _ = 1, 12 do
@@ -123,7 +127,7 @@ local function interiorView(name, purpose, palette)
 				eye += toward.Unit * 1.2
 			end
 			lamp(folder, Vector3.new(ORIGIN.X, floorBase + 10, ORIGIN.Z))
-			camera.FieldOfView = 78
+			camera.FieldOfView = 72
 			camera.CFrame = CFrame.lookAt(eye, Vector3.new(target.Position.X, floorBase + 3, target.Position.Z))
 		end,
 	})
@@ -142,9 +146,9 @@ table.insert(views, {
 		local _, floorBase = build(folder, "living", "oldTown")
 		lamp(folder, Vector3.new(ORIGIN.X, floorBase + 10, ORIGIN.Z))
 		local windowX = ORIGIN.X - PLAN.width / 2 + (PLAN.width - 10) / 3 + 2.5
-		local eye = Vector3.new(windowX + 3, floorBase + 6.5, ORIGIN.Z + PLAN.depth / 2 + 9)
-		camera.FieldOfView = 60
-		camera.CFrame = CFrame.lookAt(eye, Vector3.new(windowX, floorBase + 4, ORIGIN.Z))
+		local eye = Vector3.new(windowX, floorBase + 6.8, ORIGIN.Z + PLAN.depth / 2 + 3.5)
+		camera.FieldOfView = 70
+		camera.CFrame = CFrame.lookAt(eye, Vector3.new(windowX, floorBase + 2.5, ORIGIN.Z - 4))
 	end,
 })
 

@@ -60,7 +60,7 @@ WINDOW_ZONE_DEPTH = 4.0       # ... and this far into the room
 DOOR_LANE_DEPTH = 6.0
 EPS = 0.02
 
-FURNITURE_TRIM = {"Rug", "Skirting", "DoorFrame"}
+FURNITURE_TRIM = {"Rug", "Skirting", "DoorFrame", "WallArt"}
 STOCKROOM = {"Crate", "Barrel", "Table", "Shelf", "Part"}
 
 PRELUDE = r"""
