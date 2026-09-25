@@ -191,8 +191,17 @@ def run(fx_src):
         Vector3.zero = Vector3.zero or Vector3.new(0, 0, 0)
         Vector3.one = Vector3.one or Vector3.new(1, 1, 1)
         Vector2 = { new = function(x, y) return { X = x, Y = y } end }
-        require = function() return setmetatable({}, { __index = function() return function() return 0 end end }) end
-        script = { Parent = {} }
+        require = function(module)
+            -- The realistic blast: no silly-gun theme (ThemeFor nil), so ExplosiveFx draws its own look.
+            if module and module.Name == "SillyExplosionFx" then
+                return setmetatable({ ThemeFor = function() return nil end }, { __index = function() return function() end end })
+            end
+            return setmetatable({}, { __index = function() return function() return 0 end end })
+        end
+        -- ExplosiveFx's siblings (SillyExplosionFx since the silly guns): a folder the script sits in.
+        local scripts = Instance.new("Folder")
+        Instance.new("ModuleScript", scripts).Name = "SillyExplosionFx"
+        script = { Parent = scripts }
         local shared = Instance.new("Folder", game:GetService("ReplicatedStorage"))
         shared.Name = "Shared"
         for _, n in ipairs({ "Ballistics", "SoundConfig" }) do Instance.new("ModuleScript", shared).Name = n end
