@@ -61,6 +61,8 @@ TIMEOUTS = {
     # 20 whole maps and 17 plants x 4 more, on a process pool: 110 s alone on a quiet machine.
     "parking_lot_check.py": 900,
     "team_base_ruins_check.py": 1200,
+    # The 172-radius battleground (2026-09-24): 211 s alone on a quiet machine, --plant 330 s.
+    "team_battleground_check.py": 1500,
     "vehicle_models_axis_check.py": 1200,
     "gun_tube_check.py": 1200,
     # --plant reruns the whole arsenal once per plant: 1183 s alone on a quiet machine after gun rework
