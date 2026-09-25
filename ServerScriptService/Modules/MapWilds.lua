@@ -2080,6 +2080,91 @@ function MapWilds.Build(map, ctx)
 	-- Where the shelters and the stands of trees went: the grass goes round them.
 	local shelterSpots, woodsSpots = {}, {}
 
+	-- Shed loot (Oliver, 2026-09-24: "make loot spawn in some of the sheds/structures that are spread
+	-- around the map"). This only ever adds spot positions to ctx.lootSpots / ctx.chestSpots, exactly
+	-- as a town building or a landmark does (see Landmarks.lua's chestAt/lootAt) -- LootService.Populate
+	-- is what actually rolls and spawns from those lists, so the odds tables, the despawn rules and
+	-- chest behaviour are all untouched. One chance in [0.4, 0.6), picked once per map so every shed
+	-- roll isn't independent noise. Remoteness (distance from the nearest town, 0..1 of the map radius)
+	-- nudges a ground item toward a better roll by rerolling and keeping the best, the same trick
+	-- spawnChest already uses for LootService.ChestRarityFloor -- no new rarity tier, no new table.
+	local SHED_LOOT_CHANCE = rand(0.4, 0.6)
+	local SHED_LOOT_CHEST_CHANCE = 0.22
+	local SHED_LOOT_REMOTE_CHEST_BONUS = 0.18
+	local SHED_LOOT_DOOR_INSET = { 2.5, 4, 5.5 }
+	-- Never within a town's own reach: it has its own loot already, and this is meant for the
+	-- outlying structures ("sheds/structures spread around the map"), never a lobby or a spawn.
+	-- 260: the closest a wilds shelter otherwise lands to a town centre is ~180-310 studs across
+	-- SahurSprings/TralalaTown/RotRidge/PatapimPlains/BombardiroBay (tools/shed_loot_check.py), so
+	-- this sits inside that range rather than under it, where it would never bind.
+	local SHED_LOOT_KEEPOUT = 260
+	-- `records`: one entry per spot this places, with the ground truth tools/shed_loot_check.py
+	-- measures against (its own footprint and floor, not a footprint the checker has to re-derive by
+	-- guessing which shelter a spot belongs to -- two shelters can stand close enough that a
+	-- nearest-neighbour guess picks the wrong one).
+	local shedLootCounts = { structures = 0, items = 0, chests = 0, records = {} }
+
+	-- `centre` is the shelter's footprint CFrame (see tryShelter), `high` its floor height, `yaw` its
+	-- facing. The opening faces out along centre.LookVector (tryShelter's own WorldPivot convention),
+	-- and the builders keep a clear run in from it (cabin: "a clear run in from the doorway"), so a
+	-- point a few studs in from the door, short of the side walls, is reliably clear floor.
+	local function addShedLoot(spec, centre, yaw, high)
+		if not ctx.lootSpots then
+			return
+		end
+		local nearest = math.huge
+		for _, town in ipairs(centers or {}) do
+			nearest = math.min(nearest, Vector2.new(centre.X - town.X, centre.Z - town.Z).Magnitude)
+		end
+		if nearest < SHED_LOOT_KEEPOUT or not chance(SHED_LOOT_CHANCE) then
+			return
+		end
+		local remote = (centers and #centers > 0) and math.clamp(nearest / radius, 0, 1) or 0.5
+
+		local itemCount = chance(0.25 + remote * 0.25) and (chance(0.4) and 3 or 2) or 1
+		local halfWidth = math.max(spec.halfX - 2, 0.5)
+		-- The door wall sits at local Z = -halfZ, which is world `centre.Position + centre.LookVector *
+		-- spec.halfZ` (a CFrame's local -Z axis is its LookVector -- Landmarks.lua's ziplineFrom and
+		-- tryShelter's own WorldPivot both rely on the same convention). `along` steps back in from
+		-- there; `doorInLimit` keeps every step at least a stud short of the door wall itself, so a
+		-- narrow shelter (a bus shelter's halfZ is 3.5) can never push a spot out through the opening.
+		local along, side = centre.LookVector, centre.RightVector
+		local doorInLimit = math.max(spec.halfZ - 1, 1.5)
+		local boost = remote > 0.8 and 2 or (remote > 0.5 and 1 or 0)
+		local function record(pos, spotKind)
+			table.insert(shedLootCounts.records, {
+				pos = pos, kind = spotKind, nearest = nearest,
+				pivotX = centre.X, pivotZ = centre.Z, halfX = spec.halfX, halfZ = spec.halfZ, base = high,
+				lookX = along.X, lookZ = along.Z, rightX = side.X, rightZ = side.Z,
+			})
+		end
+		for i = 1, itemCount do
+			local inset = math.min(SHED_LOOT_DOOR_INSET[i] or SHED_LOOT_DOOR_INSET[#SHED_LOOT_DOOR_INSET], doorInLimit)
+			local drift = (i - (itemCount + 1) / 2) * math.min(2.2, halfWidth)
+			local at = centre.Position + along * (spec.halfZ - inset) + side * math.clamp(drift, -halfWidth, halfWidth)
+			local pos = Vector3.new(at.X, high, at.Z)
+			local roll = rng:NextNumber()
+			local kindKey = roll < 0.45 and "weapon" or (roll < 0.75 and "heal" or "item")
+			table.insert(ctx.lootSpots[kindKey], pos)
+			if boost > 0 and kindKey ~= "item" then
+				ctx.lootSpots.rarityBoost = ctx.lootSpots.rarityBoost or {}
+				ctx.lootSpots.rarityBoost[string.format("%.3f,%.3f,%.3f", pos.X, pos.Y, pos.Z)] = boost
+			end
+			record(pos, kindKey)
+			shedLootCounts.items += 1
+		end
+		shedLootCounts.structures += 1
+
+		-- Sometimes a chest, seated at the deepest allowed step so the loose items and the doorway
+		-- itself stay clear of it.
+		if ctx.chestSpots and chance(SHED_LOOT_CHEST_CHANCE + remote * SHED_LOOT_REMOTE_CHEST_BONUS) then
+			local at = centre.Position + along * (spec.halfZ - doorInLimit)
+			table.insert(ctx.chestSpots, CFrame.new(at.X, high, at.Z) * CFrame.Angles(0, yaw, 0))
+			record(Vector3.new(at.X, high, at.Z), "chest")
+			shedLootCounts.chests += 1
+		end
+	end
+
 	-- Tries to put shelter `kind` at (x, z) facing `yaw` (its opening down local -Z). Returns true
 	-- when built. With no `yaw` given, a random one, turned a quarter at a time until the opening
 	-- looks out on open ground; a caller's yaw (a bus stop facing its road) is kept or the spot goes.
@@ -2162,6 +2247,7 @@ function MapWilds.Build(map, ctx)
 		table.insert(shelterSpots, centre.Position)
 		counts.shelters += 1
 		count(kind)
+		addShedLoot(spec, centre, yaw, high)
 		return true
 	end
 
@@ -3085,6 +3171,7 @@ function MapWilds.Build(map, ctx)
 		budget = budget,
 		seconds = (DateTime.now().UnixTimestampMillis - started) / 1000,
 		counts = counts,
+		shedLoot = shedLootCounts,
 		paintedPatches = paintedPatches,
 		cappedAt = cappedAt,
 		vetoed = vetoed,
