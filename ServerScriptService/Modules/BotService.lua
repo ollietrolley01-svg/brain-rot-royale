@@ -3739,6 +3739,10 @@ end
 -- (BotDriveTactics); moved there once the seat's own exit has put the bot down, if there is ground.
 function Vehicles.leaveRide(bot, reason, cooldown, dismount)
 	local ride = riders[bot] or bot.ride
+	local BotGunner = ride and ride.model and lazy("BotGunner")
+	if BotGunner and BotGunner.IsGun(ride.model) then
+		BotGunner.Left(bot, ride.model, tick())
+	end
 	riders[bot] = nil
 	bot.ride = nil
 	bot.boarding = nil
@@ -4056,7 +4060,7 @@ end
 -- Manned guns hostile to this bot within VEHICLE.THREAT_RANGE: other vehicles' gun seats, from the
 -- list driverThink already read (a turret: all round). Mounted gun emplacements (pc/mounted-guns) join
 -- this list once they land, with their facing and arc: BotDriveTactics already takes { facing, cosArc }.
-function Vehicles.hostileGuns(bot, _position, nearVehicles)
+function Vehicles.hostileGuns(bot, position, nearVehicles)
 	local guns = {}
 	local VehicleService = lazy("VehicleService")
 	local VehicleWeapons = lazy("VehicleWeapons")
@@ -4072,6 +4076,15 @@ function Vehicles.hostileGuns(bot, _position, nearVehicles)
 			end
 			table.insert(guns, { pos = flat(near.model:GetPivot().Position), cosArc = -1,
 				range = math.min(VEHICLE.GUN_DANGER, spec and spec.range or VEHICLE.GUN_DANGER) })
+		end
+	end
+	-- Manned stationary guns, with their facing and arc (BotGunner's cached list, no scan).
+	local BotGunner = lazy("BotGunner")
+	if BotGunner and BotGunner.Threats then
+		for _, gun in ipairs(BotGunner.Threats(position, VEHICLE.THREAT_RANGE, function(token)
+			return token ~= bot and hostile(bot, token)
+		end)) do
+			table.insert(guns, gun)
 		end
 	end
 	return guns
@@ -4281,6 +4294,19 @@ function Vehicles.gunnerThink(bot, root, head, ride, now)
 	end
 	Vehicles.refreshFoes(bot, now)
 	local candidate = findTarget(bot, root, head, now)
+	-- A stationary gun (BotGunner): off when idle, flanked, broken or hurt, and on to something else.
+	local BotGunner = lazy("BotGunner")
+	if BotGunner and BotGunner.IsGun(model) then
+		local foes = {}
+		for token in pairs(bot.vehicleFoes or {}) do
+			table.insert(foes, token)
+		end
+		local why = BotGunner.Leave(bot, ride, candidate, foes, now)
+		if why then
+			Vehicles.leaveRide(bot, "gun " .. why, why == "idle" and 4 or 8)
+			return
+		end
+	end
 	if candidate then
 		Vehicles.noteFight(bot, ride, candidate, now)
 		ride.trigger = true
@@ -4393,17 +4419,30 @@ function Vehicles.preference(bot)
 	return 1
 end
 
--- The seat of a free mountable gun this bot on foot should take, or nil (see pickSeat).
-function Vehicles.mountedGunSeat(bot, root, fighting)
-	local MountedGuns = lazy("MountedGuns")
-	if not MountedGuns or not MountedGuns.FreeNear then
+-- The seat of a free mountable gun this bot on foot should take, or nil (see pickSeat): BotGunner's
+-- choice (a gun close by with an enemy in its arc, or covering the battleground in a team mode; capped
+-- per side, not one it left lately, own half first).
+function Vehicles.mountedGunSeat(bot, root, fighting, now)
+	local BotGunner = lazy("BotGunner")
+	if not BotGunner or not BotGunner.Choose then
 		return nil
 	end
-	local chance = (fighting and VEHICLE.FIGHT_CHANCE or VEHICLE.ROAM_GUN_CHANCE) * Vehicles.preference(bot)
-	if math.random() > chance then
-		return nil
+	now = now or tick()
+	Vehicles.refreshFoes(bot, now)
+	local foes = {}
+	for token in pairs(bot.vehicleFoes or {}) do
+		table.insert(foes, token)
 	end
-	return (MountedGuns.FreeNear(root.Position, VEHICLE.FIGHT_SEEK))
+	local team = Vehicles.teamOf(bot)
+	local teams = team ~= nil and lazy("ModeTeams") or nil
+	local humanoid = bot.humanoid
+	return BotGunner.Choose(bot, root, now, {
+		team = team, teamMode = team ~= nil, teamOf = Vehicles.teamOf, foes = foes,
+		busy = bot.dropping == true or (not fighting and bot.gearUntil ~= nil and now < bot.gearUntil),
+		health = humanoid and humanoid.Health / math.max(1, humanoid.MaxHealth) or 1,
+		home = teams and teams.BaseOf and teams.BaseOf(team) or nil,
+		away = teams and teams.BaseOf and teams.BaseOf(team == 1 and 2 or 1) or nil,
+	})
 end
 
 function Vehicles.pickSeat(bot, root, now)
@@ -4415,7 +4454,7 @@ function Vehicles.pickSeat(bot, root, now)
 	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
 	-- A mountable gun (MountedGuns) close by is manned like a vehicle's turret: in a fight, or now and then
 	-- roaming past one. The gunner branch (gunnerThink, vehicleTrigger) then works it through VehicleWeapons.
-	local gunSeat = Vehicles.mountedGunSeat(bot, root, fighting)
+	local gunSeat = Vehicles.mountedGunSeat(bot, root, fighting, now)
 	if gunSeat then
 		return gunSeat, "gunner", "fight"
 	end

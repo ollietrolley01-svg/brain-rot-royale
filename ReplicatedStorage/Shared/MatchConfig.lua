@@ -220,8 +220,14 @@ MatchConfig.XpPerKill = 60
 --                  the 8-stud box a pad keeps clear, plus a few to walk round the bumper.
 --   Gap            studs between two base vehicles' centres, so none is parked into another.
 --   LootClearance  studs from any loot already lying there (the base caches).
---   RespawnDelay   seconds after a base vehicle is wrecked (or lost off the map) before a replacement
---                  is parked; never more live base vehicles than slots.
+--   RespawnDelay   seconds after a base vehicle is lost before a replacement is parked; never more
+--                  live base vehicles than slots. Lost: wrecked, its chassis broken or gone, fallen
+--                  below the map, sunk in water with nobody in it, or abandoned (below).
+--                  Oliver, 2026-09-25: "make the vehicles at the bases respawn when destroyed". Was
+--                  45, which in play read as never; 20 is a base's respawn, not a map vehicle's.
+--   AbandonSeconds / AbandonDistance  a base vehicle nobody has sat in for AbandonSeconds, standing
+--                  more than AbandonDistance studs (flat) from its base, is lost too, so a base
+--                  whose cars were driven off and left refills. Someone getting back in keeps it.
 MatchConfig.TeamBaseVehicles = {
 	Enabled = true,
 	-- Oliver, 2026-09-24: "add more cars to spawn bases". Six, one for each bay of the compound's yard.
@@ -235,7 +241,9 @@ MatchConfig.TeamBaseVehicles = {
 	PadClearance = 18,
 	Gap = 18,
 	LootClearance = 10,
-	RespawnDelay = 45,
+	RespawnDelay = 20,
+	AbandonSeconds = 30,
+	AbandonDistance = 150,
 }
 
 -- Bots backfill the lobby and play for real: they carry actual weapons from WeaponData,

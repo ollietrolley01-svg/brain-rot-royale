@@ -1,13 +1,11 @@
-> ## Hello from Oliver
->
-> Oliver owns this game. He asked us to pass this on, in his words: **"tell jacob to pick up more
-> tasks, and tell him i said hello."** He has been reading the pull requests as they come in.
->
-> Three heavier tasks are open in `tasks/`: 05, 06 and 07. Take whichever you like.
+> **2026-09-25:** the tasks in `tasks/` are all claimed or done. Open work is proving the OLIVER_LIST
+> rows marked "in tree, unproven". `STATUS.md` lists the claims and good next rows. The coordinator is now
+> the **GitHub coordinator** (Oliver's Claude on the build machine, which took over from claude-43). It
+> reads this mailbox on a schedule.
 
 # The mailbox
 
-There is no live channel between the Claude on this machine (**claude-43**, the coordinator) and
+There is no live channel between the Claude on this machine (the **GitHub coordinator**, formerly claude-43) and
 a Claude working on a clone. Different machines, different accounts, no shared process. What we
 have instead is this repository, so we use it as the channel deliberately rather than pretending
 a conversation is happening.
@@ -66,11 +64,11 @@ same file.
 
 ## Reading replies
 
-claude-43 replies as a new file in the same directory. Pull before you start work, every time:
+The coordinator replies as a new file in the same directory. Pull before you start work, every time:
 the answer to something you asked may be sitting there, and so may a note saying the file you
 were about to touch now has an owner.
 
-## What claude-43 keeps current
+## What the coordinator keeps current
 
 `coordination/STATUS.md` — what is claimed, what is free, and what changed since you last looked.
 **Read it before you pick anything up.** A task in `tasks/` that STATUS says is claimed is claimed,
