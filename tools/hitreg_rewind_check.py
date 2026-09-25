@@ -303,8 +303,30 @@ def budget(root, source=None):
                   "firePellet raycasts only through LagCompensation.Raycast(..., rewindTo)"))
     lines.append(("firePellet(player, character, origin, pelletDirection, def, rewindTo)" in fire,
                   "every pellet of a shot is handed the same rewindTo"))
+    # A rewound rider's cover: body before glass, as the present-time world ray meets them (glass is
+    # CanQuery=false; Hull_Upper encloses the TartarugaScout/CameloCarrier ArmorGlass). Source order only:
+    # the geometry case (a shot through the Scout's ArmorGlass) needs Studio.
+    cover = pellet[pellet.index("VehicleCover.SeatOf(victimCharacter)"):]
+    body_at, glass_at = cover.find("bodyBetween(coverModel"), cover.find("VehicleCover.CrossesGlass(coverModel")
+    lines.append((0 <= body_at < glass_at, "a rewound rider's cover tests the car's body before its glass (sealed screens read body, not glass)"))
     lines.extend(accessories(root, src))
     return lines
+
+
+def client(root, src=None):
+    """The client's own round count holds fire, but only the server's count reloads or dry-fires."""
+    src = src or read(root, "StarterPlayerScripts", "CombatClient.client.lua")
+    fire = src[src.index("local function tryFire()"):]
+    fire = fire[: fire.index("\nend\n")]
+    gate = fire[fire.index("if roundsInHand(slot) <= 0 then"):]
+    gate = gate[: gate.index("reloadRemote:FireServer()")]
+    empty = src[src.index("An empty gun clicks"):]
+    empty = empty[: empty.index('Sfx.Play("DryFire"')]
+    return [
+        ("slot.mag <= 0" in gate, "auto-reload asks only when the server's count is empty, not the local one"),
+        ("emptySlot.mag <= 0" in empty and "roundsInHand(emptySlot)" not in empty,
+         "the dry-fire click plays only when the server's count is empty"),
+    ]
 
 
 ACCESSORY_HARNESS = r"""
@@ -387,10 +409,27 @@ def main():
             hit = any(not ok for ok, _ in bad)
             print(("CAUGHT  " if hit else "MISSED  ") + name)
             caught += hit
-        total = len(PLANTS) + len(source_plants)
+        # Glass first again (the pre-fix order): swap the two tests back.
+        glass_first = src.replace("if result.Rewound and result.Carry and bodyBetween(coverModel, from, to, params) then",
+                                  "if VehicleCover.CrossesGlass(coverModel, from, to) then --", 1)
+        csrc = read(root, "StarterPlayerScripts", "CombatClient.client.lua")
+        more = [
+            ("rewound rider: glass before body (2.5x through sealed screens)", src, glass_first, budget),
+            ("auto-reload on the local round count", csrc,
+             csrc.replace("if slot.mag <= 0 and Settings.Get(\"AutoReload\")", "if Settings.Get(\"AutoReload\")", 1), client),
+            ("dry-fire on the local round count", csrc,
+             csrc.replace("if emptySlot and emptySlot.mag <= 0 and", "if emptySlot and roundsInHand(emptySlot) <= 0 and", 1), client),
+        ]
+        for name, before, after, check in more:
+            if after == before:
+                sys.exit("hitreg_rewind_check: plant target missing: " + name)
+            hit = any(not ok for ok, _ in check(root, after))
+            print(("CAUGHT  " if hit else "MISSED  ") + name)
+            caught += hit
+        total = len(PLANTS) + len(source_plants) + len(more)
         print("hitreg_rewind_check plants: %d of %d caught" % (caught, total))
         sys.exit(0 if caught == total else 1)
-    rows = [r for r in dynamic(root) if r[1]] + budget(root)
+    rows = [r for r in dynamic(root) if r[1]] + budget(root) + client(root)
     for ok, line in rows:
         print(("ok    " if ok else "FAIL  ") + line)
     failed = sum(1 for ok, _ in rows if not ok)

@@ -753,8 +753,11 @@ local function tryFire()
 		return
 	end
 	if roundsInHand(slot) <= 0 then
+		-- Hold fire on the local count, but reload only on the server's: a shot it refused without
+		-- spending ammo (budget, aim check) sends no push, so the local count can read empty with rounds
+		-- still in the magazine, and a reload asked for then would sit through a full reload for nothing.
 		local now = os.clock()
-		if Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
+		if slot.mag <= 0 and Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
 			autoReloadAskedAt = now
 			reloadRemote:FireServer()
 		end
@@ -932,7 +935,7 @@ ContextActionService:BindAction("BRR_Fire", function(_, inputState, inputObject)
 		-- An empty gun clicks, once per pull of the trigger rather than once per fire tick.
 		local emptyDef = inCombat() and equippedDef()
 		local emptySlot = emptyDef and loadout.slots[loadout.equipped]
-		if emptySlot and roundsInHand(emptySlot) <= 0 and not loadout.reloading then
+		if emptySlot and emptySlot.mag <= 0 and not loadout.reloading then -- the server's count, as for the auto-reload
 			Sfx.Play("DryFire", 0.05)
 		end
 		tryFire()

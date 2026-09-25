@@ -992,10 +992,18 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 				local back = result.Carry:Inverse()
 				from, to = back * from, back * to
 			end
-			local via = VehicleCover.CrossesGlass(coverModel, from, to) and "glass" or "open"
-			if via == "open" and result.Rewound and result.Carry and bodyBetween(coverModel, from, to, params) then
+			-- Body before glass on a rewound shot: that is what the world ray meets in present time (glass is
+			-- CanQuery=false, and Hull_Upper encloses the ArmorGlass/ArmorSlit on the TartarugaScout and
+			-- CameloCarrier). Glass first read a shot through a sealed screen as "glass" (20%) rewound but
+			-- "body" (8%) in present time: 2.5x the damage from lag compensation alone.
+			local via
+			if result.Rewound and result.Carry and bodyBetween(coverModel, from, to, params) then
 				-- The world ray never met this car's body (it was somewhere else by now), so it's asked here.
 				via = "body"
+			elseif VehicleCover.CrossesGlass(coverModel, from, to) then
+				via = "glass"
+			else
+				via = "open"
 			end
 			local share = VehicleCover.Share(coverId, coverSeat.Name, via)
 			if share < 1 then
