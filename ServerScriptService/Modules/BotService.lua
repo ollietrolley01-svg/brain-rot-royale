@@ -3597,6 +3597,14 @@ BotService.IsUnderArmed = isUnderArmed
 -- An armed vehicle with nobody on its gun is not driven anywhere (Oliver: "wait till it's manned"):
 -- the bot holds it, works the gun itself only once attacked, and gives it up after BotGunnerWait.
 -- With a gunner, the bot at the wheel circles the target at the gun's range and the gunner fires.
+-- WHERE and HOW it drives near enemies is BotDriveTactics (Oliver 09-24: "the bots need to be more
+-- strategic about where and how they drive too, especially when driving near enemies"): round a known
+-- enemy's reach or a manned gun's field of fire, behind cover where there is some; turn away and
+-- accelerate when hit; ram only a lone body on foot with a healthy car and a clear approach; never
+-- into a crowd; out before the hit that would wreck it, stopped side-on, on the far side of the car;
+-- back off and go round once when stuck, and give the car up (shunned) if it sticks there again.
+-- driverThink gathers what the bot knows (Vehicles.tacticsContext) and applies the plan;
+-- tools/bot_driving_tactics_check.py runs the module against BotNav's driving and the real handling.
 --
 -- Each seat works its own weapon (VehicleWeapons, WHO WORKS WHAT): the bot at the wheel fires the
 -- driver's gun, a short-arc gun at the front, at whoever passes through its arc (and, waiting for a
@@ -3637,13 +3645,16 @@ VEHICLE.BAIL_HEALTH = 0.15    -- ...and under which it gets out before the vehic
 VEHICLE.GUARD_RANGE = 70      -- people on foot this close are handed to BotNav to stop for
 VEHICLE.ARRIVE = 30           -- studs short of the goal a trip ends (it parks and gets out)
 VEHICLE.OFFER = 4             -- seconds a team driver waits at the start for a teammate walking over
+VEHICLE.KNOW_RANGE = 300     -- hostiles this close that the bot has seen (or fights) are handed to the tactics
+VEHICLE.THREAT_RANGE = 250   -- manned hostile guns (vehicles' and emplacements') this close are avoided
+VEHICLE.GUN_DANGER = 200     -- the most of a gun's range a route keeps out of
 VEHICLE.BASE_LANE = 40        -- studs straight out along a parked base vehicle's nose: the yard's way out
 VEHICLE.BODY_RADIUS = 0.75    -- half a body's width, for the share of a mount's spread it catches (tools/bot_driving_combat.py DIAL)
 VEHICLE.GUN_RANGE = { hitscan = 70, rocket = 80, grenade = 200 } -- where a driver keeps a target
 VEHICLE.TAKEOVER_STOP = 1.5   -- seconds the wheel is held stopped for a takeover before the bot gets out
 
 for _, key in ipairs({ "vehicleBoards", "vehicleShots", "vehicleAimedHits", "vehicleTakeovers", "vehicleExits",
-	"vehicleWaits" }) do
+	"vehicleWaits", "vehicleRams", "vehicleEvades", "vehicleDetours", "vehicleBails", "vehicleShuns" }) do
 	STATS[key] = STATS[key] or 0
 end
 
@@ -3724,7 +3735,9 @@ function BotService.TakeoverAllowed(bot, player)
 end
 
 -- Gets out. The seat's own exit puts the bot down beside the vehicle (VehicleService.onSeatChanged).
-function Vehicles.leaveRide(bot, reason, cooldown)
+-- `dismount` (optional): where to stand instead, beside the car on the side away from a shooter
+-- (BotDriveTactics); moved there once the seat's own exit has put the bot down, if there is ground.
+function Vehicles.leaveRide(bot, reason, cooldown, dismount)
 	local ride = riders[bot] or bot.ride
 	riders[bot] = nil
 	bot.ride = nil
@@ -3740,6 +3753,22 @@ function Vehicles.leaveRide(bot, reason, cooldown)
 	local humanoid = bot.humanoid
 	if humanoid and humanoid.SeatPart then
 		humanoid.Sit = false
+		local root = bot.character and bot.character:FindFirstChild("HumanoidRootPart")
+		if dismount and root and ride and ride.drive then
+			local params = ride.drive.params
+			local chassisY = ride.drive.chassis.Position.Y
+			task.delay(0.1, function()
+				if not root.Parent or humanoid.SeatPart or humanoid.Health <= 0 then
+					return
+				end
+				local from = Vector3.new(dismount.X, chassisY + 4, dismount.Z)
+				local ground = castRay(from, Vector3.new(0, -14, 0), params, "navigation")
+				if ground and math.abs(ground.Position.Y - root.Position.Y) < 6 then
+					local at = ground.Position + Vector3.new(0, 3.1, 0)
+					root.CFrame = CFrame.lookAt(at, at + flatLook(root))
+				end
+			end)
+		end
 	end
 	bot.noVehicleUntil = tick() + (cooldown or VEHICLE.REBOARD)
 	bot.lastVehicleExit = reason
@@ -3998,8 +4027,8 @@ function Vehicles.guardsNear(bot, position)
 end
 
 -- The sweeps must see past everyone sitting in the car, not stop at the gunner's head.
-function Vehicles.riderFilter(ride)
-	local list = { ride.model }
+function Vehicles.riderFilter(ride, extra)
+	local list = { ride.model, extra }
 	for _, child in ipairs(ride.model:GetChildren()) do
 		if child:IsA("Seat") or child:IsA("VehicleSeat") then
 			local occupant = child.Occupant
@@ -4024,33 +4053,89 @@ function Vehicles.noteFight(bot, ride, candidate, now)
 	reportSighting(bot, candidate.root.Position, now)
 end
 
--- Where the wheel takes an armed vehicle with a gunner in a fight: round the target at the gun's
--- range, a little ahead of where it is on that circle, so the car keeps moving (a parked car is the
--- easiest thing to hit) and the target stays out to the side, inside every mount's arc. Badly
--- damaged, away from it.
-function Vehicles.combatGoal(ride, candidate, health, now)
+-- Manned guns hostile to this bot within VEHICLE.THREAT_RANGE: other vehicles' gun seats, from the
+-- list driverThink already read (a turret: all round). Mounted gun emplacements (pc/mounted-guns) join
+-- this list once they land, with their facing and arc: BotDriveTactics already takes { facing, cosArc }.
+function Vehicles.hostileGuns(bot, _position, nearVehicles)
+	local guns = {}
+	local VehicleService = lazy("VehicleService")
 	local VehicleWeapons = lazy("VehicleWeapons")
-	local _, spec = VehicleWeapons.AmmoOf(ride.model)
-	local want = spec and (spec.kind == "hitscan" and VEHICLE.GUN_RANGE.hitscan
-		or VEHICLE.GUN_RANGE[spec.projectile] or VEHICLE.GUN_RANGE.rocket) or VEHICLE.GUN_RANGE.hitscan
-	local chassis = ride.drive.chassis
-	local target = flat(candidate.root.Position)
-	local away = flat(chassis.Position) - target
-	if away.Magnitude < 1 then
-		away = -flat(chassis.CFrame.LookVector)
+	for _, near in ipairs(nearVehicles) do
+		local seats = VehicleService.SeatsOf(near.model)
+		local occupant = seats and seats.gunner and seats.gunner.Occupant
+		local token = occupant and occupant.Parent and Combatants.FromCharacter(occupant.Parent)
+		if token and token ~= bot and hostile(bot, token) then
+			local spec = nil
+			if VehicleWeapons then
+				local _, found = VehicleWeapons.AmmoOf(near.model)
+				spec = found
+			end
+			table.insert(guns, { pos = flat(near.model:GetPivot().Position), cosArc = -1,
+				range = math.min(VEHICLE.GUN_DANGER, spec and spec.range or VEHICLE.GUN_DANGER) })
+		end
 	end
-	away = away.Unit
-	if health < VEHICLE.RETREAT_HEALTH then
-		return target + away * 220, { arrive = 25, maxSpeed = nil, loiter = false }
+	return guns
+end
+
+-- What BotDriveTactics is handed: the hostiles within VEHICLE.KNOW_RANGE the bot knows of (seen in the
+-- last few seconds, fighting it, or its target), read from the tick's combatant grid; the guns; the
+-- car's state; where it is going. The only rays are the tactics' own sight checks (at most
+-- BotDriveTactics.SIGHTS, through the frame's budget; a refused one reads as "in view").
+function Vehicles.tacticsContext(bot, root, ride, candidate, health, gunnerSeat, nearVehicles, now)
+	local Tactics = lazy("BotDriveTactics")
+	local drive = ride.drive
+	local chassis = drive.chassis
+	local look = flat(chassis.CFrame.LookVector)
+	look = look.Magnitude > 0.05 and look.Unit or Vector3.new(0, 0, -1)
+	local enemies, target = {}, nil
+	local near, count = combatantsNear(chassis.Position, VEHICLE.KNOW_RANGE)
+	for index = 1, count do
+		local entry = near[index]
+		if #enemies >= Tactics.MAX_ENEMIES then
+			break
+		end
+		if entry.token ~= bot and entry.humanoid.Health > 0 then
+			local isTarget = candidate ~= nil and candidate.token == entry.token
+			local seen = isTarget or (bot.seen ~= nil and bot.seen[entry.token] ~= nil)
+			if (seen or (bot.vehicleFoes and bot.vehicleFoes[entry.token])) and hostile(bot, entry.token) then
+				local row = { pos = flat(entry.root.Position), vel = entry.root.AssemblyLinearVelocity,
+					onFoot = entry.humanoid.SeatPart == nil, token = entry.token, seen = seen, character = entry.root.Parent }
+				table.insert(enemies, row)
+				if isTarget then
+					target = row
+				end
+			end
+		end
 	end
-	if not ride.orbit or now > (ride.orbitFlipAt or 0) then
-		ride.orbit = ride.orbit and -ride.orbit or (math.random() < 0.5 and 1 or -1)
-		ride.orbitFlipAt = now + 12 + math.random() * 8
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local spec = nil
+	if VehicleWeapons and gunnerSeat then
+		local _, found = VehicleWeapons.AmmoOf(ride.model)
+		spec = found
 	end
-	local turn = ride.orbit * math.rad(35)
-	local c, s = math.cos(turn), math.sin(turn)
-	local around = Vector3.new(away.X * c - away.Z * s, 0, away.Z * c + away.X * s)
-	return target + around * want, { arrive = 8, maxSpeed = 40, loiter = true }
+	local goal, arrive = Vehicles.travelGoal(bot, root, now)
+	local threat = bot.threat
+	local recent = threat ~= nil and now - threat.at < FLEE_WINDOW
+	local params = drive.params
+	local model = ride.model
+	return {
+		now = now, pos = flat(chassis.Position), look = look, speed = chassis.AssemblyLinearVelocity.Magnitude,
+		health = health, halfWidth = drive.halfWidth, armed = gunnerSeat ~= nil,
+		gunner = gunnerSeat ~= nil and gunnerSeat.Occupant ~= nil,
+		gunKind = spec and (spec.kind == "hitscan" and "hitscan" or spec.projectile) or "hitscan",
+		goal = goal, arrive = arrive, enemies = enemies, target = target,
+		guns = Vehicles.hostileGuns(bot, chassis.Position, nearVehicles),
+		shotAt = recent and threat.at or nil, threatPos = recent and threat.position or nil,
+		status = ride.lastStatus, bounds = Vehicles.driveBounds(),
+		inArc = VehicleWeapons and VehicleWeapons.InArc and function(point)
+			return VehicleWeapons.InArc(model, Vector3.new(point.X, chassis.Position.Y, point.Z))
+		end or nil,
+		sight = function(from, to)
+			local origin = Vector3.new(from.X, chassis.Position.Y + 4, from.Z)
+			local hit, ok = castRay(origin, Vector3.new(to.X, chassis.Position.Y + 2, to.Z) - origin, params, "navigation")
+			return hit == nil or not ok
+		end,
+	}
 end
 
 -- At the wheel. Returns nothing; gets out itself when the drive is over.
@@ -4074,11 +4159,15 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 	-- The vehicles about, so BotNav only pulls out to overtake into a clear lane (read from
 	-- VehicleService's list, not a spatial query).
 	local traffic = {}
+	local nearVehicles = {}
 	if VehicleService and VehicleService.VehiclesNear then
-		for _, near in ipairs(VehicleService.VehiclesNear(drive.chassis.Position, 160)) do
+		for _, near in ipairs(VehicleService.VehiclesNear(drive.chassis.Position, VEHICLE.THREAT_RANGE)) do
 			local chassis = near.entry.rig and near.entry.rig.chassis
 			if chassis and chassis ~= drive.chassis then
-				table.insert(traffic, chassis)
+				table.insert(nearVehicles, near)
+				if near.distance <= 160 then
+					table.insert(traffic, chassis)
+				end
 			end
 		end
 	end
@@ -4106,6 +4195,12 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 		ride.trigger = attacked and candidate ~= nil
 		if now - ride.waitSince > (MatchConfig.BotGunnerWait or 25) and not attacked then
 			Vehicles.leaveRide(bot, "no gunner")
+		elseif candidate and not attacked and candidate.distance < 100
+			and now - ride.waitSince > lazy("BotDriveTactics").PARK_EXPOSED + 1 then
+			-- Parked in plain view of someone, with no gunner: out, behind the car.
+			local away = flat(drive.chassis.Position - candidate.root.Position)
+			away = away.Magnitude > 0.1 and away.Unit or -flat(drive.chassis.CFrame.LookVector)
+			Vehicles.leaveRide(bot, "exposed", 8, flat(drive.chassis.Position) + away * (drive.halfWidth + 3))
 		end
 		return
 	end
@@ -4120,52 +4215,58 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 		return
 	end
 
-	local goal, options
-	if candidate and gunnerSeat then
-		goal, options = Vehicles.combatGoal(ride, candidate, health, now)
-	elseif candidate and not gunnerSeat and candidate.distance < 45
-		and drive.chassis.AssemblyLinearVelocity.Magnitude < 8 then
-		-- No gun, someone close, and not going anywhere: better on foot.
-		Vehicles.leaveRide(bot, "fight", 6)
-		return
-	else
-		local arrive
-		goal, arrive = Vehicles.travelGoal(bot, root, now)
-		if not goal then
-			Vehicles.leaveRide(bot, "nowhere", 8)
-			return
+	local Tactics = lazy("BotDriveTactics")
+	ride.tactics = ride.tactics or Tactics.new()
+	local plan = Tactics.Think(ride.tactics,
+		Vehicles.tacticsContext(bot, root, ride, candidate, health, gunnerSeat, nearVehicles, now))
+	if plan.mode ~= ride.plan then
+		if plan.mode == "ram" then
+			STATS.vehicleRams += 1
+		elseif plan.mode == "evade" then
+			STATS.vehicleEvades += 1
+		elseif plan.mode == "cover" then
+			STATS.vehicleDetours += 1
 		end
-		options = { arrive = arrive }
+		ride.plan = plan.mode
 	end
-	goal = flat(goal)
-	local moved = ride.goal and flatDistance(ride.goal, goal) or math.huge
-	if ride.replan or moved > (options.loiter and 12 or 40) or ride.goalLoiter ~= (options.loiter == true) then
-		options.roads = Vehicles.roads
-		options.bounds = Vehicles.driveBounds()
-		options.preferRoads = ride.preferRoads
-		options.via = ride.lane and { ride.lane } or nil
-		BotNav.DriveTo(drive, goal, options)
-		ride.goal = goal
-		ride.goalLoiter = options.loiter == true
-		ride.replan = false
+	if plan.mode == "leave" then
+		STATS.vehicleBails += plan.leave == "wrecked" and 1 or 0
+		if plan.shun then
+			STATS.vehicleShuns += 1
+			bot.vehicleShun = { model = model, untilTime = now + plan.shun }
+		end
+		Vehicles.leaveRide(bot, plan.leave, plan.cooldown, plan.dismount)
+		return
+	end
+	-- A ram goes through the body, so the sweep must not brake for it.
+	if plan.ram then
+		Vehicles.riderFilter(ride, plan.ram.character)
+	end
+	local route = ride.route
+	if not route then
+		route = { lane = ride.lane }
+		ride.route = route
 		ride.lane = nil
 	end
+	route.roads = Vehicles.roads
+	route.bounds = Vehicles.driveBounds()
+	Tactics.Apply(ride.tactics, drive, plan, BotNav, route)
 
 	local status = BotNav.DriveSense(drive, now)
+	ride.lastStatus = status
 	bot.branch = "drive"
 	if status == "arrived" then
 		Vehicles.leaveRide(bot, "arrived", 8)
 	elseif status == "hazard" then
 		-- Water or a drop in the way of the straight line: the roads, once; then on foot.
-		if Vehicles.roads and not ride.preferRoads then
-			ride.preferRoads = true
-			ride.replan = true
+		if Vehicles.roads and not route.preferRoads then
+			route.preferRoads = true
+			route.replan = true
 		else
 			Vehicles.leaveRide(bot, "hazard")
 		end
-	elseif status == "stuck" or status == "lost" or status == "flipped" then
-		Vehicles.leaveRide(bot, status)
 	end
+	-- Stuck, lost or flipped: BotDriveTactics answers on the next think (go round once, else out).
 end
 
 -- On the gun: find a target and hold the trigger (the servo fires). Nothing to shoot for a while
@@ -4270,6 +4371,13 @@ function Vehicles.startRide(bot, role, seat, purpose, now)
 	return ride
 end
 
+-- A car this bot gave up for sticking in the same spot twice (BotDriveTactics' unstick) is not taken
+-- again for a while: the bot would only drive it into the same obstacle.
+function Vehicles.shunned(bot, model, now)
+	local shun = bot.vehicleShun
+	return shun ~= nil and shun.model == model and now < shun.untilTime
+end
+
 -- The seat this bot on foot should go for now, if any, with its role and reason.
 -- How keen this bot is on vehicles, scaling its chance of jumping on a gun (1 = the numbers above):
 -- BotService.Loot.vehiclePreference(bot), the archetype's vehiclePreference dial (BOT LOOTING &
@@ -4285,6 +4393,19 @@ function Vehicles.preference(bot)
 	return 1
 end
 
+-- The seat of a free mountable gun this bot on foot should take, or nil (see pickSeat).
+function Vehicles.mountedGunSeat(bot, root, fighting)
+	local MountedGuns = lazy("MountedGuns")
+	if not MountedGuns or not MountedGuns.FreeNear then
+		return nil
+	end
+	local chance = (fighting and VEHICLE.FIGHT_CHANCE or VEHICLE.ROAM_GUN_CHANCE) * Vehicles.preference(bot)
+	if math.random() > chance then
+		return nil
+	end
+	return (MountedGuns.FreeNear(root.Position, VEHICLE.FIGHT_SEEK))
+end
+
 function Vehicles.pickSeat(bot, root, now)
 	local VehicleService = lazy("VehicleService")
 	if not VehicleService or not VehicleService.VehiclesNear then
@@ -4292,6 +4413,12 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 	local team = Vehicles.teamOf(bot)
 	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	-- A mountable gun (MountedGuns) close by is manned like a vehicle's turret: in a fight, or now and then
+	-- roaming past one. The gunner branch (gunnerThink, vehicleTrigger) then works it through VehicleWeapons.
+	local gunSeat = Vehicles.mountedGunSeat(bot, root, fighting)
+	if gunSeat then
+		return gunSeat, "gunner", "fight"
+	end
 	local reach = math.max(MatchConfig.BotBoardReach or 60, VEHICLE.FIGHT_SEEK, VEHICLE.RIDE_REACH)
 	local near = VehicleService.VehiclesNear(root.Position, reach)
 	if #near == 0 then
@@ -4328,7 +4455,7 @@ function Vehicles.pickSeat(bot, root, now)
 			return nil
 		end
 		for _, found in ipairs(near) do
-			local seats = VehicleService.SeatsOf(found.model)
+			local seats = not Vehicles.shunned(bot, found.model, now) and VehicleService.SeatsOf(found.model)
 			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner then
 				if not seats.gunner.Occupant then
 					return seats.gunner, "gunner", "fight"
@@ -4363,7 +4490,7 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 	local best, bestScore = nil, math.huge
 	for _, found in ipairs(near) do
-		local seats = VehicleService.SeatsOf(found.model)
+		local seats = not Vehicles.shunned(bot, found.model, now) and VehicleService.SeatsOf(found.model)
 		if seats and not seats.driver.Occupant and found.distance <= (MatchConfig.BotBoardReach or 60) then
 			local position = found.model:GetPivot().Position
 			if flatDistance(position, goal) < flatDistance(root.Position, goal) + 20 then
@@ -4392,7 +4519,9 @@ function Vehicles.considerVehicle(bot, humanoid, root, now)
 			return false
 		end
 		local VehicleService = lazy("VehicleService")
-		if VehicleService and VehicleService.BotSit(humanoid, seat) then
+		local MountedGuns = lazy("MountedGuns")
+		local onGun = MountedGuns and MountedGuns.IsGunSeat and MountedGuns.IsGunSeat(seat)
+		if (onGun and MountedGuns.BotSit(humanoid, seat)) or (not onGun and VehicleService and VehicleService.BotSit(humanoid, seat)) then
 			if Vehicles.startRide(bot, boarding.role, seat, boarding.purpose, now) then
 				return true
 			end

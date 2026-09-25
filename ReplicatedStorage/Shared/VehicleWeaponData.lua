@@ -400,4 +400,17 @@ function VehicleWeaponData.Solve(spec, frame, pivot, muzzle, aim)
 	return yaw, pitch, origin, direction
 end
 
+-- The stationary emplacements (Shared/MountedGunData, ServerScriptService MountedGuns) are turrets with
+-- no vehicle under them: their weapons and model ids are merged in here so every reader of this table
+-- finds them. Additive only; outside Roblox (the lupa checks) there is no `script` and this is skipped.
+pcall(function()
+	local MountedGunData = require(script.Parent:WaitForChild("MountedGunData"))
+	for key, spec in pairs(MountedGunData.Weapons) do
+		VehicleWeaponData.Weapons[key] = VehicleWeaponData.Weapons[key] or spec
+	end
+	for modelId, key in pairs(MountedGunData.ByModel) do
+		VehicleWeaponData.ByModel[modelId] = VehicleWeaponData.ByModel[modelId] or key
+	end
+end)
+
 return VehicleWeaponData

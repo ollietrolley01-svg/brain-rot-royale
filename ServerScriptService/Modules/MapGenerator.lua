@@ -1222,10 +1222,19 @@ function MapGenerator.Build(mapId)
 		roads = roads, river = river,
 		avoid = eggSpots,
 		seed = math.random(1, 2147483646),
+		-- Shed loot (Oliver, 2026-09-24): MapWilds inserts straight into these, the same tables every
+		-- town and landmark already feeds, so LootService.Populate spawns and rolls it identically.
+		lootSpots = lootSpots, chestSpots = chestSpots,
 	})
 	if okWilds and type(wilds) == "table" then
 		map:SetAttribute("WildsParts", wilds.parts)
 		map:SetAttribute("WildsTrees", wilds.counts.trees)
+		map:SetAttribute("WildsShelters", wilds.counts.shelters)
+		if wilds.shedLoot then
+			map:SetAttribute("ShedLootStructures", wilds.shedLoot.structures)
+			map:SetAttribute("ShedLootItems", wilds.shedLoot.items)
+			map:SetAttribute("ShedLootChests", wilds.shedLoot.chests)
+		end
 	else
 		map:SetAttribute("WildsFailed", tostring(wilds))
 		warn("[MapGenerator] MapWilds.Build failed; map built with no foliage: " .. tostring(wilds))
@@ -1257,6 +1266,9 @@ function MapGenerator.Build(mapId)
 		plateaus = plateaus,
 		hills = hillCount,
 		zfight = zfight,
+		-- okWilds/wilds: see MapWilds.Build above. shedLoot carries its own placement records
+		-- (tools/shed_loot_check.py), not just the counts already on the map's attributes.
+		shedLoot = (okWilds and type(wilds) == "table") and wilds.shedLoot or nil,
 		chestSpots = chestSpots,
 		lootSpots = lootSpots,
 		-- Kept for anything that still reads the old flat list.

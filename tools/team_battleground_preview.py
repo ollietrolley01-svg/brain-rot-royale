@@ -146,9 +146,10 @@ def top_down(parts, size=900, extent=132.0):
 
 
 def main(argv):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    from PIL import Image
+
+    def imsave(path, img):
+        Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)).save(path)
     repo = argv[1] if len(argv) > 2 else "."
     out = Path(argv[-1])
     out.mkdir(parents=True, exist_ok=True)
@@ -156,7 +157,7 @@ def main(argv):
     model, _ = rt.layout(C.SEED)
     parts = rt.dump(model)
     if not (out / "00_plan.png").exists():
-        plt.imsave(out / "00_plan.png", top_down(parts))
+        imsave(out / "00_plan.png", top_down(parts))
     views = {
         "01_overview_from_team1": ((0, 150, -230), (0, 0, -10)),
         "02_overview_high_west": ((-230, 170, -60), (-10, 0, 0)),
@@ -171,7 +172,7 @@ def main(argv):
     }
     for name, (eye, target) in views.items():
         img = render(parts, eye, target, 640, 360)
-        plt.imsave(out / (name + ".png"), img)
+        imsave(out / (name + ".png"), img)
         print("wrote", name, flush=True)
 
 

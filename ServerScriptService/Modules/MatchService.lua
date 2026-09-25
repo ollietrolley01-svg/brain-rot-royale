@@ -35,6 +35,7 @@ local StormService = require(script.Parent:WaitForChild("StormService"))
 local SupplyDropService = require(script.Parent:WaitForChild("SupplyDropService"))
 local VendorService = require(script.Parent:WaitForChild("VendorService"))
 local VoteService = require(script.Parent:WaitForChild("VoteService"))
+local TeamPicker = require(script.Parent:WaitForChild("TeamPicker"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 -- S1. The mode table this file consults; it never consults this file back. Required after
 -- BotService and CombatService above, which GameMode also requires — neither of those requires
@@ -55,6 +56,8 @@ local countdown = 0
 -- True only during the window after the map is built and before anyone is placed, while players
 -- pick where to land. Player -> Vector2 of the spot they picked, in world X/Z.
 local dropSelect = false
+-- True while the team picker is up (a team mode's Loading, the way dropSelect is the battle royale's).
+local teamSelect = false
 local chosenDrop = {}
 local participants = {}
 local alive = {}
@@ -229,6 +232,7 @@ local bountyMinKills, bountyMultiplier = BOUNTY_MIN_KILLS, 1
 -- systems (trades in progress) can shut themselves down.
 MatchService.OnMatchStart = nil
 MatchService.OnMatchEnd = nil
+MatchService.OnMapBuilt = nil
 
 local function countKeys(map)
 	local total = 0
@@ -349,6 +353,7 @@ local function broadcast()
 		state = state,
 		countdown = math.max(0, math.floor(countdown)),
 		dropSelect = dropSelect,
+		teamSelect = teamSelect,
 		readyCount = #readyPlayers(),
 		aliveCount = aliveCount,
 		participantCount = countKeys(participants),
@@ -1789,11 +1794,20 @@ local function startMatch()
 
 	local winningMap = VoteService.Resolve()
 	VoteService.Close()
+	-- The team picker waits out the vote's winner reveal, which starts now on every client.
+	local revealUntil = TeamPicker.Clock() + TeamPicker.RevealGuard
 
 	mapInfo = MapGenerator.Build(winningMap)
 	-- A Night Ops match lays its own lighting over the map's time of day.
 	MapGenerator.ApplyLightingOverride(event.lighting)
 	LootService.Populate(mapInfo)
+	-- The map is built: MountedGuns puts its guns up (Bootstrap sets this; the mode says which guns).
+	if MatchService.OnMapBuilt then
+		local okGuns, gunsErr = pcall(MatchService.OnMapBuilt, mapInfo, currentMode)
+		if not okGuns then
+			warn("[MatchService] OnMapBuilt failed: " .. tostring(gunsErr))
+		end
+	end
 	BotService.Clear()
 	-- The map's RoadNetwork, so bot drivers route along the roads (BotService.SetRoads).
 	if BotService.SetRoads then
@@ -1875,6 +1889,25 @@ local function startMatch()
 			end
 		end
 		dropSelect = false
+		countdown = 0
+		broadcast()
+	end
+
+	-- The team picker (TeamPicker): a team mode's side choice, in the same slot as the drop window and
+	-- for the same reason. It ends in ModeTeams.SetPicks, so the placement below deals each player onto
+	-- the side they chose (or were balanced onto) and the bots fill round them. Protected: a failure
+	-- costs the match its picker, never its start -- everyone is then auto-assigned as before.
+	if currentMode.teams then
+		teamSelect = true
+		local ok, err = pcall(TeamPicker.Run, joining, total, currentMode, revealUntil, function(left)
+			countdown = left
+			broadcast()
+		end)
+		if not ok then
+			warn("[MatchService] team picker failed, everyone is auto-assigned: " .. tostring(err))
+			pcall(TeamPicker.Close)
+		end
+		teamSelect = false
 		countdown = 0
 		broadcast()
 	end

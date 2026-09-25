@@ -43,7 +43,7 @@ REPO_CHECKS = ["balance.py", "lua_static_check.py", "verify.py"]
 
 # Harnesses whose names don't follow the *_check.py / *_sim.py convention but that are checks all the same
 # (they exit non-zero on a failure and run their own plants). Found by name they would never run.
-EXTRA_CHECKS = ["bot_driving_combat.py"]
+EXTRA_CHECKS = ["bot_driving_combat.py", "bot_driving_takeover.py"]
 
 # Checks the gate knows about but does not run. Keep each reason honest: "slow" is not a reason,
 # raise its timeout instead.
@@ -61,6 +61,8 @@ TIMEOUTS = {
     # 20 whole maps and 17 plants x 4 more, on a process pool: 110 s alone on a quiet machine.
     "parking_lot_check.py": 900,
     "team_base_ruins_check.py": 1200,
+    # The 172-radius battleground (2026-09-24): 211 s alone on a quiet machine, --plant 330 s.
+    "team_battleground_check.py": 1500,
     "vehicle_models_axis_check.py": 1200,
     "gun_tube_check.py": 1200,
     # --plant reruns the whole arsenal once per plant: 1183 s alone on a quiet machine after gun rework
