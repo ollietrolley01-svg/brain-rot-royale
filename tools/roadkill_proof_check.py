@@ -19,6 +19,13 @@ The invariants (each one has a planted fault aimed at it, see PLANTS):
   I4  at or under 12 studs/s nothing is ever dealt, whichever path;
   I5  a team-mate, or an enemy under spawn protection, is never hurt;
   I6  a roadkill kill reaches the kill feed as "Roadkill" with the driver's name.
+Oliver's rules of 2026-09-25 (report findings 2-4, each with a planted fault too):
+  I7  a vetoed hit (a team-mate) does nothing to the body: no throw, no knock-down, no RoadkillThrow; the
+      car still goes through. A hit that hurts and does not kill still throws;
+  I8  a rider inside an armoured cabin is never run over (the sweep leaves them out, the server refuses
+      them); a rider of an open car still is;
+  I9  a car nobody drives deals the same CombatDamageScale'd hit as a driven one, credited to nobody;
+  I10 no mode grants spawn protection (GameModes, "get rid of spawn prot").
 Things it finds but does not fail on are printed as FINDING lines (the report says what they mean).
 
     python tools/roadkill_proof_check.py [root]            the checks
@@ -40,9 +47,11 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# The numbers the report's damage table was written from (VehicleService.lua:131-132, MatchConfig.lua:107).
-# They are pinned here, not read from the game, so a retune shows up as a failure and the table gets redone.
-PIN_FLOOR, PIN_PER, PIN_SCALE = 12, 1.8, 0.92
+# The numbers the report's damage table was written from (VehicleService's ROADKILL_FLOOR and
+# ROADKILL_DAMAGE_PER, MatchConfig.CombatDamageScale). They are pinned here, not read from the game, so a
+# retune shows up as a failure and the table gets redone. The scale was 0.92 when the report was written;
+# main moved it to 0.736 (pc/ttk-plus-25), so the report's numbers are these times 0.8.
+PIN_FLOOR, PIN_PER, PIN_SCALE = 12, 1.8, 0.736
 
 
 # ---------------------------------------------------------------------------------------------- Luau
@@ -131,7 +140,7 @@ FILES = {
     "SafeValue": ("ReplicatedStorage", "Shared"), "VehicleArmor": ("ReplicatedStorage", "Shared"),
     "VehicleCover": ("ReplicatedStorage", "Shared"), "MatchConfig": ("ReplicatedStorage", "Shared"),
     "MovementConfig": ("ReplicatedStorage", "Shared"), "VehicleDynamics": ("ReplicatedStorage", "Shared"),
-    "VehicleModels": ("ReplicatedStorage", "Shared"),
+    "VehicleModels": ("ReplicatedStorage", "Shared"), "GameModes": ("ReplicatedStorage", "Shared"),
 }
 
 
@@ -500,7 +509,7 @@ for _, id in ipairs(ids) do
     end
     clear()
 end
-check("I1 every model, player driver at top speed into an enemy player: the driver's client reports it, the server deals (top-12)*1.8*0.92, credits the driver, marks the driver's HUD and the victim's",
+check("I1 every model, player driver at top speed into an enemy player: the driver's client reports it, the server deals (top-12)*1.8*CombatDamageScale, credits the driver, marks the driver's HUD and the victim's",
     i1ok, #ids .. " models: " .. table.concat(i1detail, ", "))
 
 -- The same into a bot.
@@ -510,12 +519,22 @@ do
     sitPlayer(driver, entry, entry.seat)
     startDriving(driver, entry)
     run(0.1)
-    local victim, _, hum = bot("botvictim", ahead(entry, 30), 1000)
+    local victim, victimModel, hum = bot("botvictim", ahead(entry, 30), 1000)
+    local launchesBefore = #W.launches
     drive(entry, 60)
     run(2, function() return hum.Health < 1000 end)
     local who = CS.GetLastAttacker(victim)
     check("I1 a player driver into a bot: dealt and credited", near(1000 - hum.Health, expected(60)) and who == driver,
         "dealt " .. f(1000 - hum.Health) .. " want " .. f(expected(60)) .. ", credited " .. tostring(who and who.Name))
+    local thrown = false
+    for index = launchesBefore + 1, #W.launches do
+        if W.launches[index].character == victimModel then
+            thrown = W.launches[index].velocity
+        end
+    end
+    local down = w.raw(hum).states[1] ~= nil
+    check("I7 a hit that hurts and does not kill still throws the body (a bot knocked down first)", thrown and down and hum.Health > 0,
+        "thrown " .. tostring(thrown) .. ", knocked down " .. tostring(down))
     clear()
 end
 
@@ -549,14 +568,15 @@ check("I2 every model, bot driver at top speed into a player: the server's own s
 -- I6: a roadkill kill in the kill feed, and what each side is sent
 --------------------------------------------------------------------------------
 do
-    local entry = vehicle("Rotster", nextPlace())
+    -- A Tralala GT at its top speed: one hit kills 100 health (a Rotster no longer does at 0.736).
+    local entry = vehicle("TralalaGT", nextPlace())
     local driver = player("feed_driver", entry.seat.Position)
     sitPlayer(driver, entry, entry.seat)
     startDriving(driver, entry)
     run(0.1)
     local victim, _, hum = player("feed_victim", ahead(entry, 30))
     local before = #feed
-    drive(entry, 84)
+    drive(entry, 106)
     run(2, function() return hum.Health <= 0 end)
     local row = feed[before + 1]
     local marks = sentTo(driver, "DamageDealt")
@@ -625,7 +645,7 @@ end
 --------------------------------------------------------------------------------
 do
     local under = { 0, 4, 8, 11.9, 12 }
-    local worst = 0
+    local worst, let = 0, 0
     local launchesBefore = #W.launches
     for _, speed in ipairs(under) do
         -- The client path, a player at the wheel.
@@ -650,11 +670,17 @@ do
         drive(botEntry, speed)
         run(1.2)
         worst = math.max(worst, 1000 - hum.Health, 1000 - hum2.Health)
+        -- And the body still collides: nobody is let through the car (the server's pass on either car).
+        for _, e in ipairs({ entry, botEntry }) do
+            for _ in pairs(e.roadkillPass.passed) do
+                let = let + 1
+            end
+        end
     end
     -- Nothing at all: no damage, and no throw either (a nudge stays a nudge).
     local thrown = #W.launches - launchesBefore
-    check("I4 at or under 12 studs/s nothing happens: no damage, no throw (0, 4, 8, 11.9, 12; client report, Touched, forged report, server sweep)",
-        worst == 0 and thrown == 0, "most dealt " .. f(worst) .. ", thrown " .. thrown)
+    check("I4 at or under 12 studs/s nothing happens: no damage, no throw, not let through (0, 4, 8, 11.9, 12; client report, Touched, forged report, server sweep)",
+        worst == 0 and thrown == 0 and let == 0, "most dealt " .. f(worst) .. ", thrown " .. thrown .. ", let through " .. let)
     local over, bad = { 12.5, 18, 18 * 1.45 }, {}
     for _, speed in ipairs(over) do
         local entry = vehicle("Rotster", nextPlace())
@@ -697,6 +723,7 @@ do
             mateLaunched = W.launches[index].velocity
         end
     end
+    local mateMarked = mateModel:GetAttribute("RoadkillThrow") ~= nil
     local marks = sentTo(driver, "DamageDealt")
     local grey = false
     for _, m in ipairs(marks) do
@@ -710,8 +737,17 @@ do
     sitBot(botDriver, botEntry, botEntry.seat)
     local botMate, botMateModel, botMateHum = bot("team_botmate", ahead(botEntry, 25), 1000)
     mt.teamOf[botDriver], mt.teamOf[botMate] = 2, 2
+    local botLaunchesBefore = #W.launches
     drive(botEntry, 72)
     run(1)
+    local botMateLaunched = false
+    for index = botLaunchesBefore + 1, #W.launches do
+        if W.launches[index].character == botMateModel then
+            botMateLaunched = W.launches[index].velocity
+        end
+    end
+    -- The van went through its team-mate (the body was let through), not stopped on it.
+    local botMatePassed = botEntry.roadkillPass.passed[botMateModel] ~= nil
 
     local protectedEntry = vehicle("Rotster", nextPlace())
     local pDriver = player("prot_driver", protectedEntry.seat.Position)
@@ -736,13 +772,16 @@ do
         mateHum.Health == 1000 and botMateHum.Health == 1000 and near(1000 - enemyHum.Health, expected(84 * (1 - 0.025))),
         string.format("mate %s, bot's mate %s, enemy dealt %s (want %s: the car paid the 2.5%% toll going through the mate)",
             f(mateHum.Health), f(botMateHum.Health), f(1000 - enemyHum.Health), f(expected(84 * (1 - 0.025)))))
+    -- No mode grants spawn protection since 09-25 (I10); the veto is still held here, should one again.
     check("I5 team mode: an enemy under spawn protection is never hurt", freshHum.Health == 1000, "health " .. f(freshHum.Health))
     check("the vetoed hit gives the driver the grey \"+\" (#86), not silence", grey, grey and "kind structure" or "no grey marker")
-    finding("a team-mate the car goes through takes no damage but is still thrown",
-        mateLaunched and string.format("launch %s (MovementService.Launch \"blast\"); a bot team-mate knocked down: %s",
-            tostring(mateLaunched), tostring(w.raw(botMateHum).states[1] ~= nil)) or "not thrown")
-    finding("an enemy under spawn protection takes no damage but is still thrown",
-        freshLaunched and ("launch " .. tostring(freshLaunched)) or "not thrown")
+    local botMateDown = w.raw(botMateHum).states[1] ~= nil
+    check("I7 a vetoed hit does nothing to the body: a team-mate (player driver, bot driver) and a protected enemy are not thrown, not knocked down, not marked RoadkillThrow; the car still goes through",
+        not mateLaunched and not mateMarked and not botMateLaunched and not botMateDown and not freshLaunched
+            and freshModel:GetAttribute("RoadkillThrow") == nil and botMatePassed,
+        string.format("mate thrown %s marked %s; bot's mate thrown %s knocked down %s, let through %s; protected enemy thrown %s",
+            tostring(mateLaunched), tostring(mateMarked), tostring(botMateLaunched), tostring(botMateDown),
+            tostring(botMatePassed), tostring(freshLaunched)))
     clear()
 end
 
@@ -799,9 +838,10 @@ do
     local victim, _, hum = player("bail_victim", ahead(entry, 20), 1000)
     run(1.5, function() return hum.Health < 1000 end)
     local who = CS.GetLastAttacker(victim)
-    finding("a car its driver bailed out of still hurts, credited to nobody as intended, but skipping the 0.92 scale and the team veto",
-        string.format("dealt %s (want (60-12)*1.8 = %s), credited %s, owner %s; the driver kept %s health", f(1000 - hum.Health),
-            f((60 - pins.floor) * pins.per), tostring(who), tostring(entry.owner), f(driverHum.Health)))
+    check("I9 a car its driver bailed out of still hurts, credited to nobody, at the same scale as a driven car",
+        near(1000 - hum.Health, expected(60)) and who == nil and driverHum.Health == 100,
+        string.format("dealt %s (want %s), credited %s, owner %s; the driver kept %s health", f(1000 - hum.Health),
+            f(expected(60)), tostring(who), tostring(entry.owner), f(driverHum.Health)))
     clear()
 end
 
@@ -813,16 +853,16 @@ do
     local victim, _, hum = player("parked_victim", ahead(entry, 15), 1000)
     drive(entry, 40)
     run(1, function() return hum.Health < 1000 end)
-    -- Nobody drives it, so nobody is credited, and CombatDamageScale is not applied (CombatService.lua:447-448
-    -- scales only a hit with an attacker): (40 - 12) * 1.8, not * 0.92 as well.
-    check("a1eb7a8: a parked car is held at rest, and one shoved into someone at 40 still hits (the sweep runs before the hold), unscaled and credited to nobody",
-        held and near(1000 - hum.Health, (40 - pins.floor) * pins.per) and CS.GetLastAttacker(victim) == nil,
+    -- Nobody drives it, so nobody is credited; VehicleService scales the hit itself (DealDamage scales only
+    -- a hit with an attacker), so it is the driven formula (I9).
+    check("a1eb7a8: a parked car is held at rest, and one shoved into someone at 40 still hits (the sweep runs before the hold), scaled and credited to nobody",
+        held and near(1000 - hum.Health, expected(40)) and CS.GetLastAttacker(victim) == nil,
         "held " .. tostring(held) .. ", dealt " .. f(1000 - hum.Health))
     clear()
 end
 
 do
-    -- The code's own claim (VehicleService.lua:122-125): a full-health, full-shield player survives
+    -- The code's own claim (VehicleService's vehicle-health comment): a full-health, full-shield player survives
     -- even the fastest bike at its top speed.
     local entry = vehicle("BrrStreetfighter", nextPlace())
     local driver = player("shield_driver", entry.seat.Position)
@@ -851,17 +891,40 @@ do
     rammer.stopAtZ = side
     local botDriver = bot("ram_bot", rammer.seat.Position)
     sitBot(botDriver, rammer, rammer.seat)
+    local launchesBefore = #W.launches
     drive(rammer, 60)
-    local gap = nil
+    local let = false
     run(1.2, function()
-        if seatedHum.Health < 1000 and not gap then
-            gap = rammer.rig.chassis.Position.Z - rammer.rig.chassis.Size.Z / 2 - side
-        end
+        let = let or rammer.roadkillPass.passed[seatedModel] ~= nil or rammer.roadkillPass.passed[farModel] ~= nil
         return rammer.stopped
     end)
-    finding("riders of another vehicle are roadkill too: a car T-boning a parked armoured Tartaruga Scout at 60",
-        string.format("near-side driver dealt %s (the rammer's nose %s studs short of the hull when it landed), far-side passenger dealt %s",
-            f(1000 - seatedHum.Health), gap and f(gap) or "-", f(1000 - farHum.Health)))
+    local thrown = #W.launches - launchesBefore
+    -- The server path on its own: a moving car's Touched with the armoured driver's own part.
+    local mover = vehicle("Rotster", nextPlace())
+    local moverBot = bot("touch_bot", mover.seat.Position)
+    sitBot(moverBot, mover, mover.seat)
+    drive(mover, 60)
+    run(0.1)
+    mover.rig.chassis.Touched:Fire(seatedModel.Torso)
+    check("I8 riders inside an armoured cabin are never run over: a car T-boning a parked Tartaruga Scout at 60, and a moving car's Touched on its driver",
+        seatedHum.Health == 1000 and farHum.Health == 1000 and thrown == 0 and not let,
+        string.format("near-side driver %s, far-side passenger %s, thrown %d, let through the rammer %s", f(seatedHum.Health),
+            f(farHum.Health), thrown, tostring(let)))
+    clear()
+
+    -- The same T-bone into an open car (a Rotster): its near-side driver is still roadkill.
+    local open = vehicle("Rotster", nextPlace(), math.pi / 2)
+    local exposed, _, exposedHum = player("seated_open", open.seat.Position, 1000)
+    sitPlayer(exposed, open, open.seat)
+    local openSide = open.rig.chassis.Position.Z + open.rig.chassis.Size.X / 2
+    local openRammer = vehicle("Rotster", V3(open.rig.chassis.Position.X, 2, openSide + 40))
+    openRammer.stopAtZ = openSide
+    local openBot = bot("ram_open_bot", openRammer.seat.Position)
+    sitBot(openBot, openRammer, openRammer.seat)
+    drive(openRammer, 60)
+    run(1.2, function() return openRammer.stopped end)
+    check("I8 a rider of an open car can still be run over (a Rotster T-boned at 60)", exposedHum.Health < 1000,
+        "near-side driver dealt " .. f(1000 - exposedHum.Health))
     clear()
 end
 
@@ -885,6 +948,11 @@ def run(root, swaps=None):
     pins = lua.table_from({"floor": PIN_FLOOR, "per": PIN_PER, "scale": PIN_SCALE})
     results, findings, rows = lua.execute(SCENES, world, ctable, pins)
     out = [(r[1], bool(r[2]), r[3]) for r in results.values()]
+    # I10: GameModes grants nobody spawn protection (ModeTeams.grantProtection does nothing at 0).
+    granted = [m.group(0) for m in re.finditer(r"spawnProtection = ([\d.]+)", tree.text("GameModes"))
+               if float(m.group(1)) > 0]
+    out.append(("I10 no mode grants spawn protection (GameModes spawnProtection 0 everywhere)", not granted,
+                "; ".join(granted) if granted else "none granted"))
     return out, [(x[1], x[2]) for x in findings.values()], [dict(r) for r in rows.values()]
 
 
@@ -916,6 +984,16 @@ PLANTS = [
     ("Touched no longer connected", sub("VehicleService", "\tchassis.Touched:Connect(function(hit)\n\t\tonChassisTouched(entry, hit)\n",
                                         "\tchassis.Touched:Connect(function(hit)\n\t\tlocal _ = hit\n")),
     ("damage retuned (the report's table would be stale)", sub("VehicleService", "local ROADKILL_DAMAGE_PER = 1.8", "local ROADKILL_DAMAGE_PER = 2")),
+    ("I7: a vetoed hit still throws the body", sub("VehicleService", "\tif throw and dealt <= 0 then\n", "\tif false then\n")),
+    ("I7: every hit's throw dropped", sub("VehicleService", "\t\tlaunch(character, throw)\n", "\n")),
+    ("I8: the server ignores the armoured cabin",
+     sub("VehicleService", "\tif VehicleService.ShieldingVehicle(victimToken) then\n", "\tif false then\n")),
+    ("I8: the sweep lets armoured riders through",
+     sub("RoadkillPass", "\t\t\t\t\tand not RoadkillPass.Sheltered(humanoid) then", "\t\t\t\t\tthen")),
+    ("I8: every seated rider sheltered", sub("VehicleService", "\tif VehicleService.ShieldingVehicle(victimToken) then\n",
+                                             "\tif humanoid.SeatPart then\n")),
+    ("I9: a driverless car unscaled", sub("VehicleService", "\tif driverToken == nil then\n\t\tamount *=", "\tif false then\n\t\tamount *=")),
+    ("I10: a mode grants spawn protection again", sub("GameModes", "spawnProtection = 0, -- none", "spawnProtection = 3, -- none")),
 ]
 
 

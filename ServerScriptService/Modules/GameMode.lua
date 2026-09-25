@@ -434,7 +434,8 @@ end
 -- the player spends looking at the lobby. That wait WAS the bug, and it measured 3075 ms.
 --
 -- Three answers, in order:
---   1. the best pad -- or, when every pad is refused, the least bad one, under spawn protection;
+--   1. the best pad -- or, when every pad is refused, the least bad one (with whatever spawn protection
+--      the mode grants: none since Oliver 09-25);
 --   2. no pads at all: the nearest real ground to the arena centre (ModeTeams.PlaceWithoutPad);
 --   3. nothing anywhere: say so loudly and leave the body alone rather than drop it into the void.
 local place
