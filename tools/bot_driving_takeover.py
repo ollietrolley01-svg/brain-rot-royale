@@ -25,10 +25,17 @@ TAKEOVER  a player asks for a seat a bot holds, by the seat's own prompt, throug
   agree on every case of a matrix (teams, foes, a player driver, a free seat).
 GUNNER    a bot at the wheel of an armed vehicle with nobody on its gun holds it (drive.hold, no
   route), fires its gun only once shot at, gives it up after BotGunnerWait; with a gunner it drives.
-  A bot on foot beside it (its teammate) takes the gun seat.
+  A bot on foot beside it (its teammate) takes the gun seat. In the battle royale no bot takes a
+  vehicle's gun (Vehicles.botGunners), so the driver waits only while a player could come
+  (Vehicles.gunnerMayCome): with nobody, a player 60 studs off, its own fight, a player at another
+  wheel or a dead one, it gives the car up on its first think; a live player 12 studs off is waited for
+  the full BotGunnerWait, and one walking over from 25 studs mans the gun and is driven. Shot at, it
+  stays and fires whoever could come.
 Planted faults, each aimed at one of those: the enemy let in, the car not stopped first, the prompt
 hidden for a bot's seat, the client showing the prompt to the bot's target, the armed car driven off
-unmanned, the gun seat never picked, the seat not held during a takeover.
+unmanned, a wait for a gunner nobody can be, the bot's own fight counted as a gunner, a player by the
+car not waited for, a team mode's wait cut short, the gun seat never picked, the seat not held during
+a takeover.
 
 Usage:  python3 tools/bot_driving_takeover.py [repo_root]
 Not modelled: Roblox's own seat welding and the network (a prompt's Triggered is called directly), the
@@ -183,7 +190,9 @@ end
 
 -- Players and bots ------------------------------------------------------------------------------
 local playersByCharacter, tokenByCharacter = {}, {}
-Players = { GetPlayerFromCharacter = function(_, c) return playersByCharacter[c] end }
+PLAYERS = {}
+Players = { GetPlayerFromCharacter = function(_, c) return playersByCharacter[c] end,
+  GetPlayers = function() return PLAYERS end }
 game = { GetService = function(_, n)
   if n == "Players" then return Players end
   if n == "RunService" then return { Heartbeat = { Connect = function(_, fn) HEARTBEAT = fn; return {} end } } end
@@ -204,6 +213,7 @@ function makePlayer(name, userId, at)
   local player = newInst("Player", name, { UserId = userId, Character = c })
   playersByCharacter[c] = player
   tokenByCharacter[c] = player
+  table.insert(PLAYERS, player)
   return player, h, root
 end
 ALLBOTS = {}
@@ -221,6 +231,7 @@ function freshWorld()
     bot.ride = nil
   end
   active = {}; byModel = {}; HEARTBEAT = nil; Vehicles.servo = nil
+  PLAYERS = {}
   CLOCK = CLOCK + 10
 end
 Combatants = {
@@ -415,10 +426,18 @@ function scenarioTakeover(teams, relation, seatKind, speed)
   return out
 end
 
--- 2: an armed car at the wheel with nobody on the gun.
-function scenarioWait(attacked, gunnerManned, seconds)
+-- 2: an armed car at the wheel with nobody on the gun. `who` (optional) says who else is about:
+--   teams = true      a team mode (bots may gun), nobody else about
+--   player = "near"   the battle royale, a player standing 12 studs from the car, not the bot's fight
+--   player = "far"    ...the same player 60 studs off
+--   player = "foe"    ...12 studs off, but the one the bot is fighting
+--   player = "seated" ...12 studs off, but at the wheel of another car
+--   player = "dead"   ...12 studs off, dead
+--   player = "coming" ...starts 25 studs off, walks over at 18 studs/s and mans the gun by its prompt
+function scenarioWait(attacked, gunnerManned, seconds, who)
   freshWorld()
-  MODULES.ModeTeams = { IsActive = function() return false end, TeamOf = function() return nil end,
+  who = who or {}
+  MODULES.ModeTeams = { IsActive = function() return who.teams == true end, TeamOf = function() return who.teams and 1 or nil end,
     Arena = function() return nil end, BaseVehicleFolder = function() return nil end }
   local entry = makeCar(true, V(0, 0, 0))
   local bot, bh, ride = seatBot(entry, entry.seat, "driver", 0)
@@ -426,6 +445,15 @@ function scenarioWait(attacked, gunnerManned, seconds)
     local gunner = makeBot("Gunner", V(0, 0, 0))
     entry.gunnerSeat:Sit(gunner.humanoid)
   end
+  local player, ph, proot
+  if who.player then
+    local start = ({ near = 12, far = 60, foe = 12, seated = 12, dead = 12, coming = 25 })[who.player]
+    player, ph, proot = makePlayer("Walker", 8100, V(start, 3, 0))
+    if who.player == "foe" then bot.target = player end
+    if who.player == "dead" then ph.Health = 0 end
+    if who.player == "seated" then makeSeatInst("VehicleSeat", "DriverSeat", newInst("Model", "OtherCar")):Sit(ph) end
+  end
+  local manned = nil
   OBJECTIVE = nil
   bot.wanderGoal = V(0, 0, -600)
   TARGET = attacked and { token = makePlayer("Shooter", 8001, V(0, 3, -60)), root = { Position = V(0, 3, -60),
@@ -439,6 +467,15 @@ function scenarioWait(attacked, gunnerManned, seconds)
   local t0 = CLOCK
   frames(seconds, function()
     if attacked then bot.threat = { token = TARGET.token, position = TARGET.root.Position, at = CLOCK } end
+    if who.player == "coming" and not manned and not ph.SeatPart then
+      local to = entry.gunnerSeat.Position - proot.Position
+      if to.Magnitude > 8 then
+        proot.Position = proot.Position + to.Unit * (18 / 60)
+      else
+        trigger(entry, player, entry.gunnerSeat)
+        manned = CLOCK - t0
+      end
+    end
     if math.floor(CLOCK * 4) ~= math.floor((CLOCK - 1 / 60) * 4) and bot.ride then
       thinks = thinks + 1
       Vehicles.botVehicleThink(bot, bh, bot.character.HumanoidRootPart, bot.character.HumanoidRootPart, CLOCK)
@@ -452,18 +489,19 @@ function scenarioWait(attacked, gunnerManned, seconds)
   end)
   BotNav.DriveTo = realDriveTo
   TARGET = nil
+  bot.target = nil
   return { thinks = thinks, held = held, triggered = triggered, planned = planned, left = left or -1,
-    reason = bot.lastVehicleExit }
+    reason = bot.lastVehicleExit, manned = manned or -1, gunnerIsPlayer = ph ~= nil and ph.SeatPart == entry.gunnerSeat }
 end
 
--- 3: a team mate on foot beside an armed car whose bot driver waits for a gunner.
-function scenarioGunnerPick()
+-- 3: a team mate (or, with no teams, another bot) on foot beside an armed car whose bot driver waits for a gunner.
+function scenarioGunnerPick(teams)
   freshWorld()
   local entry = makeCar(true, V(0, 0, 0))
   local driver = seatBot(entry, entry.seat, "driver", 0)
   local mate, mh, mroot = makeBot("Mate", V(12, 3, 0))
   TEAMS = { [driver] = 1, [mate] = 1 }
-  MODULES.ModeTeams = { IsActive = function() return true end, TeamOf = function(t) return TEAMS[t] end,
+  MODULES.ModeTeams = { IsActive = function() return teams end, TeamOf = function(t) return TEAMS[t] end,
     Arena = function() return nil end, BaseVehicleFolder = function() return nil end }
   VehicleService.VehiclesNear = VehicleService.VehiclesNear
   local seat, role, purpose = Vehicles.pickSeat(mate, mroot, CLOCK)
@@ -569,23 +607,53 @@ def run(sources):
             if server != expected or client != server:
                 P.append(f"RULE teams={teams} {relation}: server {server}, client {client}, expected {expected}")
 
-    wait = {k: v for k, v in G.scenarioWait(False, False, 30).items()}
-    if wait["planned"] > 0 or wait["held"] < wait["thinks"] - 1 - (30 - 25) * 4 - 2:
-        P.append(f"GUNNER unmanned: planned {wait['planned']} routes, held {wait['held']} of {wait['thinks']} thinks")
-    if wait["triggered"] > 0:
-        P.append(f"GUNNER unmanned, not attacked: fired {wait['triggered']} thinks")
-    if not (24 <= wait["left"] <= 27):
-        P.append(f"GUNNER unmanned: gave the car up after {wait['left']:.1f} s (want BotGunnerWait, 25)")
-    attacked = {k: v for k, v in G.scenarioWait(True, False, 8).items()}
-    if attacked["triggered"] < attacked["thinks"] - 2 or attacked["planned"] > 0:
-        P.append(f"GUNNER unmanned, attacked: fired on {attacked['triggered']} of {attacked['thinks']} thinks, planned {attacked['planned']}")
+    def wait_for(attacked, seconds, **who):
+        o = G.scenarioWait(attacked, False, seconds, lua.table_from(who) if who else None)
+        return {k: o[k] for k in o}
+
+    # The invariant: a driver never waits for a gunner nobody can be. Nobody, in the battle royale, is
+    # every case below but "near" (where no bot takes a vehicle's gun, Vehicles.botGunners): out on its
+    # first think (0.25 s), never driven off unmanned.
+    waits = {}
+    for case, who in (("nobody", {}), ("far", {"player": "far"}), ("foe", {"player": "foe"}),
+                      ("seated", {"player": "seated"}), ("dead", {"player": "dead"})):
+        o = waits[case] = wait_for(False, 30, **who)
+        if o["planned"] > 0:
+            P.append(f"GUNNER battle royale, {case}: planned {o['planned']} routes unmanned")
+        if not (0 <= o["left"] <= 1) or o["reason"] != "no gunner":
+            P.append(f"GUNNER battle royale, {case}: waited {o['left']:.1f} s for a gunner nobody can be ({o['reason']})")
+    # The guard: a gunner who can come is still waited for, BotGunnerWait (25 s) as before, held, not fired.
+    for case, who in (("team mode", {"teams": True}), ("player near", {"player": "near"})):
+        o = waits[case] = wait_for(False, 30, **who)
+        if o["planned"] > 0 or o["held"] < o["thinks"] - 1 - (30 - 25) * 4 - 2:
+            P.append(f"GUNNER {case}: planned {o['planned']} routes, held {o['held']} of {o['thinks']} thinks")
+        if o["triggered"] > 0:
+            P.append(f"GUNNER {case}, not attacked: fired {o['triggered']} thinks")
+        if not (24 <= o["left"] <= 27):
+            P.append(f"GUNNER {case}: gave the car up after {o['left']:.1f} s (want BotGunnerWait, 25)")
+    # A player walking over from 25 studs mans the gun by its prompt: the bot is still at the wheel, and drives.
+    o = waits["player coming"] = wait_for(False, 12, player="coming")
+    if o["left"] >= 0 or not o["gunnerIsPlayer"] or o["planned"] < 1:
+        P.append(f"GUNNER player coming: bot left at {o['left']:.1f} s, player on the gun {o['gunnerIsPlayer']}, "
+                 f"planned {o['planned']} routes")
+    # Shot at with nobody to come: the wait is kept (the attacked exit), the driver fires its own gun.
+    attacked = wait_for(True, 8)
+    if attacked["triggered"] < attacked["thinks"] - 2 or attacked["planned"] > 0 or attacked["left"] >= 0:
+        P.append(f"GUNNER unmanned, attacked: fired on {attacked['triggered']} of {attacked['thinks']} thinks, "
+                 f"planned {attacked['planned']}, left at {attacked['left']:.1f} s")
     manned = {k: v for k, v in G.scenarioWait(False, True, 8).items()}
     if manned["planned"] < 1 or manned["held"] > 0:
         P.append(f"GUNNER manned: planned {manned['planned']} routes, held {manned['held']} thinks (should drive)")
-    pick = {k: v for k, v in G.scenarioGunnerPick().items()}
+    pick = {k: v for k, v in G.scenarioGunnerPick(True).items()}
     if pick["picked"] != "GunnerSeat":
         P.append(f"GUNNER: a team mate beside a waiting driver picked {pick['picked']} ({pick['role']})")
-    return rows, matrix, (wait, attacked, manned, pick), P
+    # Why nobody but a player can come in the battle royale (Vehicles.botGunners): a bot beside the waiting
+    # driver does not take the gun. If that changes, Vehicles.gunnerMayCome must count bots again.
+    br_pick = {k: v for k, v in G.scenarioGunnerPick(False).items()}
+    pick["br"] = br_pick["picked"]
+    if br_pick["picked"] == "GunnerSeat":
+        P.append("GUNNER: in the battle royale a bot took a waiting driver's gun; gunnerMayCome counts only players")
+    return rows, matrix, (waits, attacked, manned, pick), P
 
 
 PLANTS = [
@@ -597,6 +665,12 @@ PLANTS = [
     ("the client shows the prompt to the bot's target", VC,
      'return not (type(foes) == "string" and string.find(foes, "," .. tostring(userId) .. ",", 1, true) ~= nil)', "return true"),
     ("the armed car driven off unmanned", BS, "\tif gunnerSeat and not gunnerSeat.Occupant then", "\tif false then"),
+    # Invariant: a driver never waits for a gunner nobody can be (the battle royale counted as a team mode).
+    ("a wait for a gunner nobody can be", BS, "\tif Vehicles.botGunners() then\n\t\treturn true", "\tif true then\n\t\treturn true"),
+    ("the bot's own fight counted as a gunner", BS, "not (bot.vehicleFoes and bot.vehicleFoes[player])", "true"),
+    # Guards: a gunner who can come is still waited for.
+    ("a player by the car not waited for", BS, "(root.Position - at).Magnitude <= VEHICLE.RIDE_REACH", "false"),
+    ("a team mode's wait cut short", BS, "\tif Vehicles.botGunners() then\n\t\treturn true", "\tif false then\n\t\treturn true"),
     ("the gun seat never picked", BS, '\t\t\t\t\treturn seats.gunner, "gunner", "gunner"', '\t\t\t\t\treturn nil'),
     ("the seat not held during a takeover", VS, "\tif entry.wrecked or entry.takeover or entry.rig.chassis.CFrame.UpVector.Y < 0.4 then",
      "\tif entry.wrecked or entry.rig.chassis.CFrame.UpVector.Y < 0.4 then"),
@@ -614,12 +688,17 @@ def main():
     print("RULE (server TakeoverAllowed, client mayTakeOver):")
     for teams, relation, server, client in matrix:
         print(f"  teams {teams!s:5} {relation:8} server {server!s:5} client {client}")
-    wait, attacked, manned, pick = gunner
-    print(f"GUNNER unmanned 30 s: held {wait['held']}/{wait['thinks']} thinks, {wait['planned']} routes, "
-          f"fired {wait['triggered']}, got out after {wait['left']:.1f} s ({wait['reason']})")
-    print(f"GUNNER unmanned, shot at, 8 s: fired on {attacked['triggered']}/{attacked['thinks']} thinks, {attacked['planned']} routes")
+    waits, attacked, manned, pick = gunner
+    for case, wait in waits.items():
+        got_out = f"got out after {wait['left']:.2f} s ({wait['reason']})" if wait["left"] >= 0 else "still at the wheel"
+        extra = f", player manned the gun at {wait['manned']:.1f} s" if wait["manned"] >= 0 else ""
+        print(f"GUNNER unmanned, {case:13}: held {wait['held']}/{wait['thinks']} thinks, {wait['planned']} routes, "
+              f"fired {wait['triggered']}, {got_out}{extra}")
+    print(f"GUNNER unmanned, shot at, 8 s, nobody to come: fired on {attacked['triggered']}/{attacked['thinks']} thinks, "
+          f"{attacked['planned']} routes, {'got out' if attacked['left'] >= 0 else 'still at the wheel'}")
     print(f"GUNNER manned 8 s: {manned['planned']} routes planned, held {manned['held']} thinks")
-    print(f"GUNNER team mate beside a waiting driver picks: {pick['picked']} as {pick['role']}")
+    print(f"GUNNER team mate beside a waiting driver picks: {pick['picked']} as {pick['role']}; "
+          f"in the battle royale another bot picks: {pick['br']}")
     for p in problems:
         print("PROBLEM", p)
     caught = 0
