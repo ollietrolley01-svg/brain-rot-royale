@@ -104,7 +104,10 @@ MatchConfig.PlacementBrackets = {
 -- Every hit between combatants is multiplied by this (CombatService.DealDamage). 1 = the weapons' raw damage.
 -- 0.85 (Oliver, 2026-09-22 21:38: "increase the ttk a bit") turned out too slow (2026-09-23 15:07: "make it
 -- a good middleground"), so 0.92: a kill takes about 9% longer than raw damage instead of 18%.
-MatchConfig.CombatDamageScale = 0.92
+-- Then 0.92 / 1.25 = 0.736 (Oliver, 2026-09-25: "increase ttk of players and vehicles 25%"): every kill of a
+-- player, bot, vehicle or mounted gun takes 25% longer than at 0.92 (about 36% longer than raw damage).
+-- Storm, fall, crash and self-damage have no attacker and are not scaled, so they are unchanged.
+MatchConfig.CombatDamageScale = 0.736
 
 MatchConfig.CoinsPerKill = 75
 -- Team Deathmatch / Objective Capture payouts. Oliver, 2026-09-23 16:10: "theres no rewards for the team

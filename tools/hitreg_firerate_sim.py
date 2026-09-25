@@ -92,8 +92,11 @@ def server_block(src):
 def vehicle_client_line(src):
     """VehicleWeaponClient's gate is inline in a RenderStepped; the sim models it by hand, so check the
     source still says exactly what the model does."""
-    want = "if firing and now - lastShotAt >= 1 / spec.fireRate and ready then\n\t\t\tlastShotAt = now"
-    return want in src
+    gate = "if firing and now - lastShotAt >= interval and ready then"
+    advance = ("\t\t\tlastShotAt += interval\n\t\t\tif now - lastShotAt > interval then\n"
+               "\t\t\t\t-- A fresh pull of the trigger, or a frame hitch: start from now, bank no burst.\n"
+               "\t\t\t\tlastShotAt = now")
+    return "local interval = 1 / spec.fireRate" in src and gate in src and advance in src
 
 
 CLIENT_FACTORY = """
@@ -130,13 +133,18 @@ return function()
 end
 """
 
-# The vehicle gun's client gate as VehicleWeaponClient:564-565 writes it (reset to `now`).
+# The vehicle gun's client gate as VehicleWeaponClient writes it since #97 F4: advance by a whole
+# interval, start from now after a gap (it used to reset to `now`, quantising to the frame rate).
 VEHICLE_CLIENT = """
 return function()
     local lastShotAt = 0
     return function(spec, now)
-        if now - lastShotAt >= 1 / spec.fireRate then
-            lastShotAt = now
+        local interval = 1 / spec.fireRate
+        if now - lastShotAt >= interval then
+            lastShotAt = lastShotAt + interval
+            if now - lastShotAt > interval then
+                lastShotAt = now
+            end
             return true
         end
         return false
@@ -193,8 +201,13 @@ return #sends, accepted
 # about one round trip after the last round, the client keeps sending shots the server refuses for ammo
 # (CombatService.Fire: `if not WeaponService.ConsumeAmmo(player) then return end`, no BroadcastShot),
 # each one kicked and flashed on the shooter's own screen (addRecoil, kickViewmodel). Counts those.
+# With `predict` the client counts its own rounds as CombatClient's roundsInHand does since #97 F3: a
+# shot sent is taken off the pushed count until a push that must include it lands, and ages out after a
+# round trip + FLIGHT_MARGIN (GetNetworkPing modelled as 2 x oneWay). Returns phantoms, the rounds the
+# server never got to fire (must be 0: prediction may hold a shot back, never lose one), and when the
+# server fired its last round.
 MAG = """
-local makeClient, makeServer, rate, mag, fps, oneWay, netJitter, seed = ...
+local makeClient, makeServer, rate, mag, fps, oneWay, netJitter, seed, predict = ...
 math.randomseed(seed)
 local client, server = makeClient(), makeServer()
 local def = { fireRate = rate }
@@ -206,11 +219,26 @@ local pushes = {}          -- { arrival at the client, mag }, in arrival order (
 local seen, nextPush = mag, 1
 local upPrev, downPrev, lastFrame, k = -1, -1, nil, 0
 local phantoms = 0
+local flights, pushedAt, lastFired = {}, -1, 0
+local function inHand(now)
+    if not predict then return seen end
+    local rtt, pending = 2 * oneWay, 0
+    for i = #flights, 1, -1 do
+        local sent = flights[i]
+        if now - sent >= rtt + 0.1 then table.remove(flights, i)
+        elseif sent > pushedAt - rtt then pending = pending + 1 end
+    end
+    return math.max(0, seen - pending)
+end
 local function jitter() return netJitter > 0 and -netJitter * math.log(1 - math.random()) or 0 end
 for _ = 1, 100000 do
-    while pushes[nextPush] and pushes[nextPush][1] <= t do seen = pushes[nextPush][2]; nextPush = nextPush + 1 end
+    while pushes[nextPush] and pushes[nextPush][1] <= t do
+        seen, pushedAt = pushes[nextPush][2], pushes[nextPush][1]
+        nextPush = nextPush + 1
+    end
     if seen <= 0 or t > 60 then break end
-    if client(def, t) then
+    if inHand(t) > 0 and client(def, t) then
+        flights[#flights + 1] = t
         local arrival = math.max(upPrev, t + oneWay + jitter())
         upPrev = arrival
         local f = math.ceil((arrival - phase) / SF)
@@ -220,6 +248,7 @@ for _ = 1, 100000 do
             phantoms = phantoms + 1
         elseif server(def, handled) then
             serverMag = serverMag - 1
+            lastFired = handled
             local back = math.max(downPrev, phase + f * SF + SF * 0.5 + oneWay + jitter())
             downPrev = back
             pushes[#pushes + 1] = { back, serverMag }
@@ -227,7 +256,7 @@ for _ = 1, 100000 do
     end
     t = t + frame * (1 + 0.1 * (2 * math.random() - 1))
 end
-return phantoms
+return phantoms, serverMag, lastFired
 """
 
 # A modified client: a send every millisecond for `seconds`, no network. The server must hold it to
@@ -365,6 +394,19 @@ def checks(g, rates, table):
         return prelude, [l for l in block.splitlines() if "credit" in l or "os.clock" in l]
     same = g.sources[FIX][0] == g.sources[None][0] and budget_lines(FIX) == budget_lines(None)
     rows.append((same, "main's client gate and server budget are byte-identical to 1e964ca's" if same else "main's gates differ from 1e964ca's"))
+    # 6. #97 F3: a client that counts its own rounds sends (almost) no shot past the end of a magazine,
+    #    and still gets every round out of it; the old client, as the control, sends phantoms.
+    fastest = max(MAGS.values(), key=lambda v: v[0])
+    for rtt in (0.05, 0.10, 0.15):
+        runs = [g.mag(g.client(None), g.server(None), fastest[0], fastest[1], 60, rtt / 2, 0.005, seed, True) for seed in range(100)]
+        phantoms = sum(r[0] for r in runs) / len(runs)
+        unfired = sum(r[1] for r in runs)
+        rows.append((phantoms <= 0.1 and unfired == 0, "F3, %.0f/s mag %d, RTT %3d ms: %.2f phantom shots a magazine with the round count, %d rounds left unfired in 100 magazines" % (fastest[0], fastest[1], rtt * 1000, phantoms, unfired)))
+    control = sum(g.mag(g.client(None), g.server(None), fastest[0], fastest[1], 60, 0.05, 0.005, seed, False)[0] for seed in range(100)) / 100
+    rows.append((control > 0.5, "F3 control: the old client (no round count) at RTT 100 ms sends %.2f phantoms a magazine" % control))
+    # 7. #97 F4: vehicle guns deliver their fireRate within 2% at every frame rate.
+    worst = max((abs(g.vehicle(rate, fps, 0.0)[1] / (SECONDS * rate) - 1), fps, rate) for rate in g.vrates for fps in FPS)
+    rows.append((worst[0] < 0.02, "F4, vehicle guns' delivered rate vs fireRate: worst %.2f%% off (at %d fps, %.2f/s)" % (worst[0] * 100, worst[1], worst[2])))
     return rows
 
 
@@ -397,15 +439,17 @@ def report(g, by_rate, vrates, table):
             cells.append("%s %d/%d (%.2f%%)" % (name, s - a, s, 100 * (s - a) / s))
         print("%3d fps: " % fps + " | ".join(cells))
     print("\n== end of a magazine on main, 60 fps, jitter 5 ms: phantom shots per magazine (sent, kicked on the")
-    print("   shooter's screen, refused by the server for ammo), mean of 200 magazines, by round trip")
+    print("   shooter's screen, refused by the server for ammo), mean of 200 magazines, by round trip;")
+    print("   old client (no round count) -> main (roundsInHand, #97 F3)")
     shown = sorted(MAGS.items(), key=lambda kv: -kv[1][0])
     for key, (rate, mag) in [kv for kv in shown if kv[1][0] >= 4][:12] + [kv for kv in shown if kv[1][0] < 1.5][:2]:
         cells = []
         for rtt in (0.05, 0.10, 0.15):
-            total = sum(g.mag(g.client(None), g.server(None), rate, mag, 60, rtt / 2, 0.005, seed) for seed in range(200))
-            cells.append("RTT %3d ms: %.2f" % (rtt * 1000, total / 200))
+            old = sum(g.mag(g.client(None), g.server(None), rate, mag, 60, rtt / 2, 0.005, seed, False)[0] for seed in range(200))
+            new = sum(g.mag(g.client(None), g.server(None), rate, mag, 60, rtt / 2, 0.005, seed, True)[0] for seed in range(200))
+            cells.append("RTT %3d ms: %.2f -> %.2f" % (rtt * 1000, old / 200, new / 200))
         print("%-22s %5.2f/s mag %3d   %s" % (key, rate, mag, "   ".join(cells)))
-    print("\n== vehicle guns on main (client VehicleWeaponClient:564-565 resets to `now`; server ShotCredit)")
+    print("\n== vehicle guns on main (client VehicleWeaponClient advances by whole intervals (#97 F4); server ShotCredit)")
     for rate in vrates:
         line = "%-6.2f" % rate
         for fps in FPS:
@@ -437,6 +481,7 @@ def main():
         caught = 0
         for name, pc, ps in PLANTS:
             g = Gates(root, pc, ps)
+            g.vrates = vrates
             table = measure(g, rates, jitters=(0.0, 0.005), fpss=(60, 144))
             failed = [line for ok, line in checks(g, rates, table)[:5] if not ok]
             print(("CAUGHT  " if failed else "MISSED  ") + name + (("  <- " + failed[0]) if failed else ""))
@@ -444,6 +489,7 @@ def main():
         print("hitreg_firerate_sim plants: %d of %d caught" % (caught, len(PLANTS)))
         sys.exit(0 if caught == len(PLANTS) else 1)
     g = Gates(root)
+    g.vrates = vrates
     table = measure(g, rates)
     report(g, by_rate, vrates, table)
     print()
