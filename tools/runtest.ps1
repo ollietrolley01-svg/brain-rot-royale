@@ -635,144 +635,148 @@ task.delay(30, function()
 		-- them from each other; and the loot has grenades and smoke bombs in it. The targets are
 		-- stand-in rigs registered as combatants on a plate 300 studs above the map, so no bot the
 		-- later checks index is touched, and everything is unregistered and removed after.
-		local ProjectileService = require(modules:WaitForChild("ProjectileService"))
-		local Combatants = require(modules:WaitForChild("Combatants"))
-		local Ballistics = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Ballistics"))
-		local stage = Instance.new("Model")
-		stage.Name = "ExplosivesStage"
-		local stageAt = (spots[1] or Vector3.zero) + Vector3.new(0, 300, 0)
-		local plate = Instance.new("Part")
-		plate.Size = Vector3.new(90, 2, 90)
-		plate.CFrame = CFrame.new(stageAt - Vector3.new(0, 1, 0))
-		plate.Anchored = true
-		plate.Parent = stage
-		stage.Parent = workspace
-		local stands = {}
-		local function stand(name, offset)
-			local model = Instance.new("Model")
-			model.Name = name
-			local at = stageAt + offset
-			local function limb(limbName, size, lift)
-				local part = Instance.new("Part")
-				part.Name = limbName
-				part.Size = size
-				part.CFrame = CFrame.new(at + Vector3.new(0, lift, 0))
-				part.Anchored = true
-				part.CanCollide = false
-				part.Parent = model
-				return part
+		do
+			local ProjectileService = require(modules:WaitForChild("ProjectileService"))
+			local Combatants = require(modules:WaitForChild("Combatants"))
+			local Ballistics = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Ballistics"))
+			local stage = Instance.new("Model")
+			stage.Name = "ExplosivesStage"
+			local stageAt = (spots[1] or Vector3.zero) + Vector3.new(0, 300, 0)
+			local plate = Instance.new("Part")
+			plate.Size = Vector3.new(90, 2, 90)
+			plate.CFrame = CFrame.new(stageAt - Vector3.new(0, 1, 0))
+			plate.Anchored = true
+			plate.Parent = stage
+			stage.Parent = workspace
+			local stands = {}
+			local function stand(name, offset)
+				local model = Instance.new("Model")
+				model.Name = name
+				local at = stageAt + offset
+				local function limb(limbName, size, lift)
+					local part = Instance.new("Part")
+					part.Name = limbName
+					part.Size = size
+					part.CFrame = CFrame.new(at + Vector3.new(0, lift, 0))
+					part.Anchored = true
+					part.CanCollide = false
+					part.Parent = model
+					return part
+				end
+				model.PrimaryPart = limb("HumanoidRootPart", Vector3.new(2, 2, 1), 3)
+				limb("UpperTorso", Vector3.new(2, 1.6, 1), 3.2)
+				limb("Head", Vector3.new(1.2, 1.2, 1.2), 4.6)
+				limb("LowerTorso", Vector3.new(1.8, 2, 1), 1)
+				local humanoid = Instance.new("Humanoid")
+				humanoid.Parent = model
+				model.Parent = stage
+				humanoid.MaxHealth = 100
+				humanoid.Health = 100
+				local token = { isBot = true, name = name, character = model }
+				Combatants.Register(model, token)
+				table.insert(stands, model)
+				return token, humanoid, model
 			end
-			model.PrimaryPart = limb("HumanoidRootPart", Vector3.new(2, 2, 1), 3)
-			limb("UpperTorso", Vector3.new(2, 1.6, 1), 3.2)
-			limb("Head", Vector3.new(1.2, 1.2, 1.2), 4.6)
-			limb("LowerTorso", Vector3.new(1.8, 2, 1), 1)
-			local humanoid = Instance.new("Humanoid")
-			humanoid.Parent = model
-			model.Parent = stage
-			humanoid.MaxHealth = 100
-			humanoid.Health = 100
-			local token = { isBot = true, name = name, character = model }
-			Combatants.Register(model, token)
-			table.insert(stands, model)
-			return token, humanoid, model
-		end
-		local shooter = stand("ExplosivesShooter", Vector3.new(0, 0, -30))
-		local rocketTarget, rocketHumanoid, rocketModel = stand("RocketTarget", Vector3.new(20, 0, 0))
-		local fired = ProjectileService.FireWeapon(shooter, "CappuccinaLauncher", stageAt + Vector3.new(-10, 5, 0), rocketModel.PrimaryPart.Position - Vector3.new(0, 2.9, 0))
-		local flight = 0
-		repeat
-			task.wait(0.05)
-			flight += 0.05
-		until ProjectileService.Counts() == 0 or flight > 3
-		task.wait(0.2)
-		print(string.format("[BRR_AutoRun] explosives rocket: fired=%s (want true), burst after ~%.2fs (want < 0.5), target 100 -> %.0f HP (want less)",
-			tostring(fired), flight, rocketHumanoid.Health))
+			local shooter = stand("ExplosivesShooter", Vector3.new(0, 0, -30))
+			local rocketTarget, rocketHumanoid, rocketModel = stand("RocketTarget", Vector3.new(20, 0, 0))
+			local fired = ProjectileService.FireWeapon(shooter, "CappuccinaLauncher", stageAt + Vector3.new(-10, 5, 0), rocketModel.PrimaryPart.Position - Vector3.new(0, 2.9, 0))
+			local flight = 0
+			repeat
+				task.wait(0.05)
+				flight += 0.05
+			until ProjectileService.Counts() == 0 or flight > 3
+			task.wait(0.2)
+			print(string.format("[BRR_AutoRun] explosives rocket: fired=%s (want true), burst after ~%.2fs (want < 0.5), target 100 -> %.0f HP (want less)",
+				tostring(fired), flight, rocketHumanoid.Health))
 
-		local fragTarget, fragHumanoid, fragModel = stand("FragTarget", Vector3.new(-25, 0, 10))
-		local spec = Ballistics.Throwables.CookedCoconut
-		-- Dropped from four studs up beside it, cooked so only 0.7 s of fuse is left.
-		local entry = ProjectileService.SpawnThrown(shooter, nil, "CookedCoconut", spec, fragModel.PrimaryPart.Position + Vector3.new(3, 1.5, 0), Vector3.zero, spec.fuse - 0.7)
-		local elapsed = 0
-		repeat
-			task.wait(0.05)
-			elapsed += 0.05
-		until not ProjectileService.Peek(entry.id) or elapsed > 3
-		task.wait(0.2)
-		-- The shooter's own lob, twenty studs ahead of it: accepted, lands on the plate.
-		local lobbed = ProjectileService.Throw(shooter, "CookedCoconut", stageAt + Vector3.new(0, 0, -10), { cook = 1 })
-		local lobRounds, lobBodies = ProjectileService.Counts()
-		print(string.format("[BRR_AutoRun] explosives frag: dropped frag went off after %.2fs (want ~0.7), target 100 -> %.0f HP (want less); lob accepted=%s (want true), in flight %d",
-			elapsed, fragHumanoid.Health, tostring(lobbed), lobBodies))
+			local fragTarget, fragHumanoid, fragModel = stand("FragTarget", Vector3.new(-25, 0, 10))
+			local spec = Ballistics.Throwables.CookedCoconut
+			-- Dropped from four studs up beside it, cooked so only 0.7 s of fuse is left.
+			local entry = ProjectileService.SpawnThrown(shooter, nil, "CookedCoconut", spec, fragModel.PrimaryPart.Position + Vector3.new(3, 1.5, 0), Vector3.zero, spec.fuse - 0.7)
+			local elapsed = 0
+			repeat
+				task.wait(0.05)
+				elapsed += 0.05
+			until not ProjectileService.Peek(entry.id) or elapsed > 3
+			task.wait(0.2)
+			-- The shooter's own lob, twenty studs ahead of it: accepted, lands on the plate.
+			local lobbed = ProjectileService.Throw(shooter, "CookedCoconut", stageAt + Vector3.new(0, 0, -10), { cook = 1 })
+			local lobRounds, lobBodies = ProjectileService.Counts()
+			print(string.format("[BRR_AutoRun] explosives frag: dropped frag went off after %.2fs (want ~0.7), target 100 -> %.0f HP (want less); lob accepted=%s (want true), in flight %d",
+				elapsed, fragHumanoid.Health, tostring(lobbed), lobBodies))
 
-		local smokeA, _, smokeAModel = stand("SmokeA", Vector3.new(-20, 0, 30))
-		local smokeB, _, smokeBModel = stand("SmokeB", Vector3.new(20, 0, 30))
-		local a, b = smokeAModel.PrimaryPart.Position, smokeBModel.PrimaryPart.Position
-		local cloud = ProjectileService.AddCloud((a + b) / 2, "LowkeyLatte", ProjectileService.Clock() - 4)
-		local blocked = ProjectileService.SmokeBlocks(a, b)
-		local high = ProjectileService.SmokeBlocks(a + Vector3.new(0, 120, 0), b + Vector3.new(0, 120, 0))
-		print(string.format("[BRR_AutoRun] explosives smoke: stands %.0f studs apart with a full cloud (r %.0f) between them: hidden=%s (want true), a line well above it hidden=%s (want false)",
-			(a - b).Magnitude, Ballistics.SmokeRadius(cloud, ProjectileService.Clock()), tostring(blocked), tostring(high)))
-		task.wait(3.5)
-		ProjectileService.Clear()
-		for _, model in ipairs(stands) do
-			Combatants.Unregister(model)
-		end
-		stage:Destroy()
+			local smokeA, _, smokeAModel = stand("SmokeA", Vector3.new(-20, 0, 30))
+			local smokeB, _, smokeBModel = stand("SmokeB", Vector3.new(20, 0, 30))
+			local a, b = smokeAModel.PrimaryPart.Position, smokeBModel.PrimaryPart.Position
+			local cloud = ProjectileService.AddCloud((a + b) / 2, "LowkeyLatte", ProjectileService.Clock() - 4)
+			local blocked = ProjectileService.SmokeBlocks(a, b)
+			local high = ProjectileService.SmokeBlocks(a + Vector3.new(0, 120, 0), b + Vector3.new(0, 120, 0))
+			print(string.format("[BRR_AutoRun] explosives smoke: stands %.0f studs apart with a full cloud (r %.0f) between them: hidden=%s (want true), a line well above it hidden=%s (want false)",
+				(a - b).Magnitude, Ballistics.SmokeRadius(cloud, ProjectileService.Clock()), tostring(blocked), tostring(high)))
+			task.wait(3.5)
+			ProjectileService.Clear()
+			for _, model in ipairs(stands) do
+				Combatants.Unregister(model)
+			end
+			stage:Destroy()
 
-		-- A pickup is a base part carrying ItemId (LootService.spawnConsumable), not a model.
-		local coconuts, lattes = 0, 0
-		local lootFolder = workspace:FindFirstChild("Loot")
-		if lootFolder then
-			for _, d in ipairs(lootFolder:GetDescendants()) do
-				if d:IsA("BasePart") then
-					local itemId = d:GetAttribute("ItemId")
-					if itemId == "CookedCoconut" then
-						coconuts += 1
-					elseif itemId == "LowkeyLatte" then
-						lattes += 1
+			-- A pickup is a base part carrying ItemId (LootService.spawnConsumable), not a model.
+			local coconuts, lattes = 0, 0
+			local lootFolder = workspace:FindFirstChild("Loot")
+			if lootFolder then
+				for _, d in ipairs(lootFolder:GetDescendants()) do
+					if d:IsA("BasePart") then
+						local itemId = d:GetAttribute("ItemId")
+						if itemId == "CookedCoconut" then
+							coconuts += 1
+						elseif itemId == "LowkeyLatte" then
+							lattes += 1
+						end
 					end
 				end
 			end
+			print(string.format("[BRR_AutoRun] explosives loot: %d Cooked Coconuts and %d Lowkey Lattes on the floor (want some of each)", coconuts, lattes))
 		end
-		print(string.format("[BRR_AutoRun] explosives loot: %d Cooked Coconuts and %d Lowkey Lattes on the floor (want some of each)", coconuts, lattes))
 
 		-- The lobby firing range. Handing out a gun needs a real Player, which this run hasn't
 		-- got, so what is checked is that the rack was actually built and the remotes exist —
 		-- the realistic failure being a rack that silently never appears.
-		local RangeService = require(modules:WaitForChild("RangeService"))
-		-- Guns are taken off the Legendary podiums now; there is no separate rack.
-		local racks = 0
-		for _, d in ipairs(workspace:GetDescendants()) do
-			if d.Name == "RangePodium" and d:FindFirstChildOfClass("ProximityPrompt") then
-				racks += 1
+		do
+			local RangeService = require(modules:WaitForChild("RangeService"))
+			-- Guns are taken off the Legendary podiums now; there is no separate rack.
+			local racks = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if d.Name == "RangePodium" and d:FindFirstChildOfClass("ProximityPrompt") then
+					racks += 1
+				end
 			end
-		end
-		local remoteFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-		local haveState = remoteFolder ~= nil and remoteFolder:FindFirstChild("RangeState") ~= nil
-		local haveFire = remoteFolder ~= nil and remoteFolder:FindFirstChild("RangeFire") ~= nil
-		print(string.format("[BRR_AutoRun] range: %d podiums with a take prompt (want 3), RangeState=%s RangeFire=%s, module=%s",
-			racks, tostring(haveState), tostring(haveFire), tostring(RangeService ~= nil)))
+			local remoteFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+			local haveState = remoteFolder ~= nil and remoteFolder:FindFirstChild("RangeState") ~= nil
+			local haveFire = remoteFolder ~= nil and remoteFolder:FindFirstChild("RangeFire") ~= nil
+			print(string.format("[BRR_AutoRun] range: %d podiums with a take prompt (want 3), RangeState=%s RangeFire=%s, module=%s",
+				racks, tostring(haveState), tostring(haveFire), tostring(RangeService ~= nil)))
 
-		-- Sliding. The burst is a factor inside applySpeed rather than a write to WalkSpeed, so
-		-- what matters is that the composed speed actually rises and falls back afterwards. A bot
-		-- is a combatant token like a player, so it can be sprinted and slid here.
-		local SlideMatch = require(modules:WaitForChild("MatchService"))
-		local slideBot = BotService.GetAll()[6]
-		local slideResult = "no bot to test with"
-		if slideBot and slideBot.humanoid and slideBot.humanoid.Health > 0 then
-			SlideMatch.SetSprinting(slideBot, true)
-			local sprintSpeed = slideBot.humanoid.WalkSpeed
-			local grounded = slideBot.humanoid.FloorMaterial ~= Enum.Material.Air
-			local started = SlideMatch.StartSlide(slideBot)
-			local slideSpeed = slideBot.humanoid.WalkSpeed
-			local secondAttempt = SlideMatch.StartSlide(slideBot)
-			task.wait(1.1)
-			local settled = slideBot.humanoid.WalkSpeed
-			SlideMatch.SetSprinting(slideBot, false)
-			slideResult = string.format("grounded=%s started=%s (want true), sprint %.1f -> sliding %.1f (want higher) -> settled %.1f (want back to sprint), second attempt=%s (want false, on cooldown)",
-				tostring(grounded), tostring(started), sprintSpeed, slideSpeed, settled, tostring(secondAttempt))
+			-- Sliding. The burst is a factor inside applySpeed rather than a write to WalkSpeed, so
+			-- what matters is that the composed speed actually rises and falls back afterwards. A bot
+			-- is a combatant token like a player, so it can be sprinted and slid here.
+			local SlideMatch = require(modules:WaitForChild("MatchService"))
+			local slideBot = BotService.GetAll()[6]
+			local slideResult = "no bot to test with"
+			if slideBot and slideBot.humanoid and slideBot.humanoid.Health > 0 then
+				SlideMatch.SetSprinting(slideBot, true)
+				local sprintSpeed = slideBot.humanoid.WalkSpeed
+				local grounded = slideBot.humanoid.FloorMaterial ~= Enum.Material.Air
+				local started = SlideMatch.StartSlide(slideBot)
+				local slideSpeed = slideBot.humanoid.WalkSpeed
+				local secondAttempt = SlideMatch.StartSlide(slideBot)
+				task.wait(1.1)
+				local settled = slideBot.humanoid.WalkSpeed
+				SlideMatch.SetSprinting(slideBot, false)
+				slideResult = string.format("grounded=%s started=%s (want true), sprint %.1f -> sliding %.1f (want higher) -> settled %.1f (want back to sprint), second attempt=%s (want false, on cooldown)",
+					tostring(grounded), tostring(started), sprintSpeed, slideSpeed, settled, tostring(secondAttempt))
+			end
+			print(string.format("[BRR_AutoRun] slide: %s", slideResult))
 		end
-		print(string.format("[BRR_AutoRun] slide: %s", slideResult))
 
 		-- Every gun can be aimed, and aims where the crosshair is. The viewmodel puts the camera
 		-- EyeRelief studs behind KP_Sight looking down it, so the line itself always lands on the
@@ -781,332 +785,336 @@ task.delay(30, function()
 		-- All silent in play, so all want to stay at zero. Rays are traced by hand: Roblox's query
 		-- geometry pads millimetre-sized parts by several millimetres. tools/ads_align_probe.lua is
 		-- the long form with per-gun measurements.
-		local SightShared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
-		local SightWeaponData = require(SightShared:WaitForChild("WeaponData"))
-		local SightGunMM = require(SightShared:WaitForChild("GunModels")).StudsPerMillimetre
-		local SightWeaponService = require(modules:WaitForChild("WeaponService"))
-		local OPTICS = { iron = true, reddot = true, holo = true, scope = true }
-		local function rayInterval(part, origin, direction)
-			local o, d, h = part.CFrame:PointToObjectSpace(origin), part.CFrame:VectorToObjectSpace(direction), part.Size / 2
-			local t0, t1 = 0, 1
-			local function slab(oi, di, hi)
-				if math.abs(di) < 1e-9 then return math.abs(oi) <= hi end
-				local a, b = (-hi - oi) / di, (hi - oi) / di
-				t0, t1 = math.max(t0, math.min(a, b)), math.min(t1, math.max(a, b))
+		do
+			local SightShared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+			local SightWeaponData = require(SightShared:WaitForChild("WeaponData"))
+			local SightGunMM = require(SightShared:WaitForChild("GunModels")).StudsPerMillimetre
+			local SightWeaponService = require(modules:WaitForChild("WeaponService"))
+			local OPTICS = { iron = true, reddot = true, holo = true, scope = true }
+			local function rayInterval(part, origin, direction)
+				local o, d, h = part.CFrame:PointToObjectSpace(origin), part.CFrame:VectorToObjectSpace(direction), part.Size / 2
+				local t0, t1 = 0, 1
+				local function slab(oi, di, hi)
+					if math.abs(di) < 1e-9 then return math.abs(oi) <= hi end
+					local a, b = (-hi - oi) / di, (hi - oi) / di
+					t0, t1 = math.max(t0, math.min(a, b)), math.min(t1, math.max(a, b))
+					return t0 <= t1
+				end
+				local function quad(a, b, c)
+					if a < 1e-9 then return c <= 0 end
+					local disc = b * b - 4 * a * c
+					if disc < 0 then return false end
+					t0, t1 = math.max(t0, (-b - math.sqrt(disc)) / (2 * a)), math.min(t1, (-b + math.sqrt(disc)) / (2 * a))
+					return t0 <= t1
+				end
+				local shape = part:IsA("Part") and part.Shape or nil
+				if shape == Enum.PartType.Ball then
+					local r = math.min(h.X, h.Y, h.Z)
+					return quad(d:Dot(d), 2 * o:Dot(d), o:Dot(o) - r * r)
+				elseif shape == Enum.PartType.Cylinder then
+					local r = math.min(h.Y, h.Z)
+					return slab(o.X, d.X, h.X) and quad(d.Y * d.Y + d.Z * d.Z, 2 * (o.Y * d.Y + o.Z * d.Z), o.Y * o.Y + o.Z * o.Z - r * r)
+				end
+				if not (slab(o.X, d.X, h.X) and slab(o.Y, d.Y, h.Y) and slab(o.Z, d.Z, h.Z)) then return false end
+				if part:IsA("WedgePart") or shape == Enum.PartType.Wedge then
+					local f, g = o.Y * h.Z - o.Z * h.Y, d.Y * h.Z - d.Z * h.Y
+					if math.abs(g) < 1e-9 then return f <= 0 end
+					if g > 0 then t1 = math.min(t1, -f / g) else t0 = math.max(t0, -f / g) end
+				end
 				return t0 <= t1
 			end
-			local function quad(a, b, c)
-				if a < 1e-9 then return c <= 0 end
-				local disc = b * b - 4 * a * c
-				if disc < 0 then return false end
-				t0, t1 = math.max(t0, (-b - math.sqrt(disc)) / (2 * a)), math.min(t1, (-b + math.sqrt(disc)) / (2 * a))
-				return t0 <= t1
-			end
-			local shape = part:IsA("Part") and part.Shape or nil
-			if shape == Enum.PartType.Ball then
-				local r = math.min(h.X, h.Y, h.Z)
-				return quad(d:Dot(d), 2 * o:Dot(d), o:Dot(o) - r * r)
-			elseif shape == Enum.PartType.Cylinder then
-				local r = math.min(h.Y, h.Z)
-				return slab(o.X, d.X, h.X) and quad(d.Y * d.Y + d.Z * d.Z, 2 * (o.Y * d.Y + o.Z * d.Z), o.Y * o.Y + o.Z * o.Z - r * r)
-			end
-			if not (slab(o.X, d.X, h.X) and slab(o.Y, d.Y, h.Y) and slab(o.Z, d.Z, h.Z)) then return false end
-			if part:IsA("WedgePart") or shape == Enum.PartType.Wedge then
-				local f, g = o.Y * h.Z - o.Z * h.Y, d.Y * h.Z - d.Z * h.Y
-				if math.abs(g) < 1e-9 then return f <= 0 end
-				if g > 0 then t1 = math.min(t1, -f / g) else t0 = math.max(t0, -f / g) end
-			end
-			return t0 <= t1
-		end
-		-- What stands in the line of sight: straight down the line from the eye (irons a hair above it, so a
-		-- post top on the line grazes), every part solid enough to hide the target (under 0.5 transparent,
-		-- the rule ads_align_probe uses for glass), and for irons a rear sight right across the line with no
-		-- notch. Scopes are included: an opaque scope lens is exactly what has to fail here.
-		local function sightBlockers(gunModel, kp, optic, relief, centredBead)
-			local eye = (kp * CFrame.new(0, optic == "iron" and 0.3 * SightGunMM or 0, relief)).Position
-			local hits = {}
-			for _, part in ipairs(gunModel:GetDescendants()) do
-				if part:IsA("BasePart") and part.Transparency < 0.5 and rayInterval(part, eye, kp.LookVector * 40) then
-					if part.Name ~= "SightDot" and part.Name ~= "SightReticle" and part.Name ~= "ScopeReticle" and not centredBead[part] then
-						hits[part.Name] = true
-					end
-				end
-				-- A rear sight straight across the line with its top on it has no notch: the ray skims it, but
-				-- it hides the whole front post.
-				if optic == "iron" and part:IsA("BasePart") and string.sub(part.Name, 1, 9) == "RearSight" then
-					local lo, hi = Vector3.one * math.huge, -Vector3.one * math.huge
-					for _, corner in ipairs({ -1, 1 }) do
-						for _, cy in ipairs({ -1, 1 }) do
-							for _, cz in ipairs({ -1, 1 }) do
-								local p = kp:PointToObjectSpace(part.CFrame * (part.Size / 2 * Vector3.new(corner, cy, cz)))
-								lo, hi = lo:Min(p), hi:Max(p)
-							end
+			-- What stands in the line of sight: straight down the line from the eye (irons a hair above it, so a
+			-- post top on the line grazes), every part solid enough to hide the target (under 0.5 transparent,
+			-- the rule ads_align_probe uses for glass), and for irons a rear sight right across the line with no
+			-- notch. Scopes are included: an opaque scope lens is exactly what has to fail here.
+			local function sightBlockers(gunModel, kp, optic, relief, centredBead)
+				local eye = (kp * CFrame.new(0, optic == "iron" and 0.3 * SightGunMM or 0, relief)).Position
+				local hits = {}
+				for _, part in ipairs(gunModel:GetDescendants()) do
+					if part:IsA("BasePart") and part.Transparency < 0.5 and rayInterval(part, eye, kp.LookVector * 40) then
+						if part.Name ~= "SightDot" and part.Name ~= "SightReticle" and part.Name ~= "ScopeReticle" and not centredBead[part] then
+							hits[part.Name] = true
 						end
 					end
-					local mm = SightGunMM
-					if lo.X < -0.5 * mm and hi.X > 0.5 * mm and lo.Y < 0 and hi.Y > -1 * mm then
-						hits[part.Name .. " (no notch)"] = true
-					end
-				end
-			end
-			local names = {}
-			for name in pairs(hits) do
-				table.insert(names, name)
-			end
-			table.sort(names)
-			return names
-		end
-		local noContract, offLine, blocked, builtGuns = {}, {}, {}, 0
-		for id in pairs(SightWeaponData.Weapons) do
-			local okBuild, gunModel = pcall(SightWeaponService.BuildGunModel, SightWeaponData.Get(id), Color3.fromRGB(200, 200, 200), Enum.Material.Metal)
-			if okBuild and gunModel then
-				builtGuns += 1
-				-- Built at the design origin, so part CFrames are model space, the same as KP_Sight.
-				local kp, optic, relief = gunModel:GetAttribute("KP_Sight"), gunModel:GetAttribute("Optic"), gunModel:GetAttribute("EyeRelief")
-				local muzzle = gunModel.PrimaryPart and gunModel.PrimaryPart:FindFirstChild("Muzzle")
-				if typeof(kp) ~= "CFrame" or not OPTICS[optic] or type(relief) ~= "number" or relief <= 0 or not muzzle then
-					table.insert(noContract, id)
-				else
-					local function offBy(point) -- worst of right/up offset from the line, in mm
-						local p = kp:PointToObjectSpace(point)
-						return math.max(math.abs(p.X), math.abs(p.Y)) / SightGunMM
-					end
-					-- The reference each optic is aimed with, taking the best candidate of its kind.
-					local best, centredBead = math.huge, {}
-					for _, part in ipairs(gunModel:GetDescendants()) do
-						if part:IsA("BasePart") then
-							local candidates = {}
-							if optic == "iron" and part.Name == "FrontSight" then
-								table.insert(candidates, part.CFrame * Vector3.new(0, part.Size.Y / 2, 0))
-							elseif optic == "iron" and part.Name == "FrontBead" then
-								table.insert(candidates, part.Position + kp.UpVector * part.Size.Y / 2)
-								table.insert(candidates, part.Position)
-								if offBy(part.Position) <= 0.5 then centredBead[part] = true end
-							elseif (optic == "reddot" or optic == "holo") and part.Name == "SightDot" then
-								table.insert(candidates, part.Position)
-							elseif optic == "scope" and part.Name == "Scope" then
-								table.insert(candidates, part.Position)
-							end
-							for _, point in ipairs(candidates) do
-								best = math.min(best, offBy(point))
+					-- A rear sight straight across the line with its top on it has no notch: the ray skims it, but
+					-- it hides the whole front post.
+					if optic == "iron" and part:IsA("BasePart") and string.sub(part.Name, 1, 9) == "RearSight" then
+						local lo, hi = Vector3.one * math.huge, -Vector3.one * math.huge
+						for _, corner in ipairs({ -1, 1 }) do
+							for _, cy in ipairs({ -1, 1 }) do
+								for _, cz in ipairs({ -1, 1 }) do
+									local p = kp:PointToObjectSpace(part.CFrame * (part.Size / 2 * Vector3.new(corner, cy, cz)))
+									lo, hi = lo:Min(p), hi:Max(p)
+								end
 							end
 						end
-					end
-					local skew = math.deg(math.acos(math.clamp(muzzle.WorldCFrame.LookVector:Dot(kp.LookVector), -1, 1)))
-					if best > 0.5 or skew > 0.05 then
-						table.insert(offLine, string.format("%s(%.1fmm,%.2fdeg)", id, math.min(best, 999), skew))
-					end
-					local okBlockers, names = pcall(sightBlockers, gunModel, kp, optic, relief, centredBead)
-					if not okBlockers then
-						print("[BRR_AutoRun] sights block ERROR (" .. id .. "): " .. tostring(names))
-						table.insert(blocked, id .. "(ERROR)")
-					elseif #names > 0 then
-						table.insert(blocked, id .. "(" .. table.concat(names, "/") .. ")")
+						local mm = SightGunMM
+						if lo.X < -0.5 * mm and hi.X > 0.5 * mm and lo.Y < 0 and hi.Y > -1 * mm then
+							hits[part.Name .. " (no notch)"] = true
+						end
 					end
 				end
-				gunModel:Destroy()
+				local names = {}
+				for name in pairs(hits) do
+					table.insert(names, name)
+				end
+				table.sort(names)
+				return names
 			end
-		end
-		local function listed(list)
-			table.sort(list)
-			return #list > 0 and (" -> " .. table.concat(list, ", ")) or ""
-		end
-		print(string.format("[BRR_AutoRun] sights: %d guns built; no ADS contract %d (want 0)%s; sight off its line or bore %d (want 0)%s; line of sight blocked %d (want 0)%s",
-			builtGuns, #noContract, listed(noContract), #offLine, listed(offLine), #blocked, listed(blocked)))
-		-- Self-test: a scoped gun with its scope glass made opaque must come out blocked. In its own pcall, so
-		-- an error here is reported and the checks after it still run.
-		local okLensTest, lensTestError = pcall(function()
-			local lensTest = "no scoped gun found: FAILED"
-			local sightIds = {}
+			local noContract, offLine, blocked, builtGuns = {}, {}, {}, 0
 			for id in pairs(SightWeaponData.Weapons) do
-				table.insert(sightIds, id)
-			end
-			table.sort(sightIds)
-			for _, id in ipairs(sightIds) do
-				local def = SightWeaponData.Get(id)
-				if def.style == "sniper" or def.style == "dmr" or def.style == "railgun" then
-					local okBuild, gunModel = pcall(SightWeaponService.BuildGunModel, def, Color3.fromRGB(200, 200, 200), Enum.Material.Metal)
-					if okBuild and gunModel and gunModel:GetAttribute("Optic") == "scope" then
-						local lenses = 0
+				local okBuild, gunModel = pcall(SightWeaponService.BuildGunModel, SightWeaponData.Get(id), Color3.fromRGB(200, 200, 200), Enum.Material.Metal)
+				if okBuild and gunModel then
+					builtGuns += 1
+					-- Built at the design origin, so part CFrames are model space, the same as KP_Sight.
+					local kp, optic, relief = gunModel:GetAttribute("KP_Sight"), gunModel:GetAttribute("Optic"), gunModel:GetAttribute("EyeRelief")
+					local muzzle = gunModel.PrimaryPart and gunModel.PrimaryPart:FindFirstChild("Muzzle")
+					if typeof(kp) ~= "CFrame" or not OPTICS[optic] or type(relief) ~= "number" or relief <= 0 or not muzzle then
+						table.insert(noContract, id)
+					else
+						local function offBy(point) -- worst of right/up offset from the line, in mm
+							local p = kp:PointToObjectSpace(point)
+							return math.max(math.abs(p.X), math.abs(p.Y)) / SightGunMM
+						end
+						-- The reference each optic is aimed with, taking the best candidate of its kind.
+						local best, centredBead = math.huge, {}
 						for _, part in ipairs(gunModel:GetDescendants()) do
-							if part:IsA("BasePart") and part.Name == "ScopeLens" then
-								part.Transparency = 0
-								lenses += 1
+							if part:IsA("BasePart") then
+								local candidates = {}
+								if optic == "iron" and part.Name == "FrontSight" then
+									table.insert(candidates, part.CFrame * Vector3.new(0, part.Size.Y / 2, 0))
+								elseif optic == "iron" and part.Name == "FrontBead" then
+									table.insert(candidates, part.Position + kp.UpVector * part.Size.Y / 2)
+									table.insert(candidates, part.Position)
+									if offBy(part.Position) <= 0.5 then centredBead[part] = true end
+								elseif (optic == "reddot" or optic == "holo") and part.Name == "SightDot" then
+									table.insert(candidates, part.Position)
+								elseif optic == "scope" and part.Name == "Scope" then
+									table.insert(candidates, part.Position)
+								end
+								for _, point in ipairs(candidates) do
+									best = math.min(best, offBy(point))
+								end
 							end
 						end
-						local names = sightBlockers(gunModel, gunModel:GetAttribute("KP_Sight"), "scope", gunModel:GetAttribute("EyeRelief"), {})
-						lensTest = string.format("%s with its %d scope lens(es) made opaque -> %s", id, lenses,
-							#names > 0 and ("blocked by " .. table.concat(names, "/") .. ": ok") or "NOT blocked: FAILED")
-						gunModel:Destroy()
-						break
-					elseif okBuild and gunModel then
-						gunModel:Destroy()
+						local skew = math.deg(math.acos(math.clamp(muzzle.WorldCFrame.LookVector:Dot(kp.LookVector), -1, 1)))
+						if best > 0.5 or skew > 0.05 then
+							table.insert(offLine, string.format("%s(%.1fmm,%.2fdeg)", id, math.min(best, 999), skew))
+						end
+						local okBlockers, names = pcall(sightBlockers, gunModel, kp, optic, relief, centredBead)
+						if not okBlockers then
+							print("[BRR_AutoRun] sights block ERROR (" .. id .. "): " .. tostring(names))
+							table.insert(blocked, id .. "(ERROR)")
+						elseif #names > 0 then
+							table.insert(blocked, id .. "(" .. table.concat(names, "/") .. ")")
+						end
 					end
+					gunModel:Destroy()
 				end
 			end
-			print("[BRR_AutoRun] sights self-test: " .. lensTest)
-		end)
-		if not okLensTest then
-			print("[BRR_AutoRun] sights self-test block ERROR: " .. tostring(lensTestError))
+			local function listed(list)
+				table.sort(list)
+				return #list > 0 and (" -> " .. table.concat(list, ", ")) or ""
+			end
+			print(string.format("[BRR_AutoRun] sights: %d guns built; no ADS contract %d (want 0)%s; sight off its line or bore %d (want 0)%s; line of sight blocked %d (want 0)%s",
+				builtGuns, #noContract, listed(noContract), #offLine, listed(offLine), #blocked, listed(blocked)))
+			-- Self-test: a scoped gun with its scope glass made opaque must come out blocked. In its own pcall, so
+			-- an error here is reported and the checks after it still run.
+			local okLensTest, lensTestError = pcall(function()
+				local lensTest = "no scoped gun found: FAILED"
+				local sightIds = {}
+				for id in pairs(SightWeaponData.Weapons) do
+					table.insert(sightIds, id)
+				end
+				table.sort(sightIds)
+				for _, id in ipairs(sightIds) do
+					local def = SightWeaponData.Get(id)
+					if def.style == "sniper" or def.style == "dmr" or def.style == "railgun" then
+						local okBuild, gunModel = pcall(SightWeaponService.BuildGunModel, def, Color3.fromRGB(200, 200, 200), Enum.Material.Metal)
+						if okBuild and gunModel and gunModel:GetAttribute("Optic") == "scope" then
+							local lenses = 0
+							for _, part in ipairs(gunModel:GetDescendants()) do
+								if part:IsA("BasePart") and part.Name == "ScopeLens" then
+									part.Transparency = 0
+									lenses += 1
+								end
+							end
+							local names = sightBlockers(gunModel, gunModel:GetAttribute("KP_Sight"), "scope", gunModel:GetAttribute("EyeRelief"), {})
+							lensTest = string.format("%s with its %d scope lens(es) made opaque -> %s", id, lenses,
+								#names > 0 and ("blocked by " .. table.concat(names, "/") .. ": ok") or "NOT blocked: FAILED")
+							gunModel:Destroy()
+							break
+						elseif okBuild and gunModel then
+							gunModel:Destroy()
+						end
+					end
+				end
+				print("[BRR_AutoRun] sights self-test: " .. lensTest)
+			end)
+			if not okLensTest then
+				print("[BRR_AutoRun] sights self-test block ERROR: " .. tostring(lensTestError))
+			end
+			zreport("defenses", { workspace:FindFirstChild("Defenses") }, function(part)
+				local model = part:FindFirstAncestorOfClass("Model")
+				return model and model.Name or "?"
+			end)
 		end
-		zreport("defenses", { workspace:FindFirstChild("Defenses") }, function(part)
-			local model = part:FindFirstAncestorOfClass("Model")
-			return model and model.Name or "?"
-		end)
 
 		-- Every gun model builds (variants included), with its grip and muzzle, and nothing on any of
 		-- them left flush. Guns are scanned at their own millimetre tolerance
 		-- (GunModels.ZFightTolerance): the map's 0.045 studs is about 12 mm and would call every rail
 		-- slot and serration a fight.
-		local WeaponService = require(modules:WaitForChild("WeaponService"))
-		local SharedFolder = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
-		local WeaponDataForGuns = require(SharedFolder:WaitForChild("WeaponData"))
-		local Rarity = require(SharedFolder:WaitForChild("Rarity"))
-		local gunParts, gunCount, gunErrors, noGrip = 0, 0, {}, {}
-		local gunNudged, gunFlush, gunFlushLines = 0, 0, {}
-		local nudgeByGun = {}
-		for gunId, gunDef in pairs(WeaponDataForGuns.Weapons) do
-			local okGun, modelOrErr = pcall(WeaponService.BuildGunModel, gunDef, Rarity.Color(gunDef.rarity), Enum.Material.Metal)
-			if okGun and modelOrErr then
-				gunCount += 1
-				gunParts += #modelOrErr:GetChildren()
-				if not modelOrErr:FindFirstChild("Grip") or not modelOrErr.PrimaryPart or not modelOrErr.PrimaryPart:FindFirstChild("Muzzle") then
-					table.insert(noGrip, gunId)
-				end
-				local touched = ZFight.Report({ modelOrErr }, nil, 1)
-				gunNudged += touched
-				nudgeByGun[gunId] = touched
-				local flush = ZFight.Scan({ modelOrErr }, require(SharedFolder:WaitForChild("GunModels")).ZFightTolerance)
-				gunFlush += #flush
-				if #flush > 0 then
-					table.insert(gunFlushLines, gunId .. ": " .. table.concat(ZFight.Describe(flush, function() return gunId end, 4), " ; "))
-				end
-				modelOrErr:Destroy()
-			else
-				table.insert(gunErrors, gunId .. ": " .. tostring(modelOrErr))
-			end
-		end
-		print(string.format("[BRR_AutoRun] guns: %d models, %d parts total; missing grip/muzzle: %s; errors: %s",
-			gunCount, gunParts, #noGrip > 0 and table.concat(noGrip, ", ") or "none", #gunErrors > 0 and table.concat(gunErrors, " | ") or "none"))
-		-- "Still flush" is scanned after each gun's own build pass (the shipped model), so it only counts what
-		-- that pass couldn't resolve.
-		print(string.format("[BRR_AutoRun] zfight guns: nudged at build %d parts; still flush after the build's pass %d%s", gunNudged, gunFlush,
-			#gunFlushLines > 0 and (" [" .. table.concat(gunFlushLines, " | ") .. "]") or ""))
-		-- The design check the pass can't hide: a gun whose builder now needs more parts nudged than its
-		-- recorded count has gained faces lying in each other's planes. The counts live in
-		-- tools/gun_nudge_baseline.json, which this run only reads; after reviewing a run, record new counts
-		-- deliberately with `python tools/update_gun_nudge_baseline.py <this run's output> --note "why"`.
-		-- Both in their own pcalls, so an error is reported and the checks after them still run.
-		local okBaseline, baselineError = pcall(function()
-			local nudgeBaseline = GUN_NUDGE_BASELINE
-			local perGun, grown, unrecorded = {}, {}, {}
-			for gunId, count in pairs(nudgeByGun) do
-				table.insert(perGun, gunId .. "=" .. count)
-				local recorded = nudgeBaseline and nudgeBaseline[gunId]
-				if recorded == nil then
-					table.insert(unrecorded, gunId)
-				elseif count > recorded then
-					table.insert(grown, string.format("%s %d>%d", gunId, count, recorded))
+		do
+			local WeaponService = require(modules:WaitForChild("WeaponService"))
+			local SharedFolder = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+			local WeaponDataForGuns = require(SharedFolder:WaitForChild("WeaponData"))
+			local Rarity = require(SharedFolder:WaitForChild("Rarity"))
+			local gunParts, gunCount, gunErrors, noGrip = 0, 0, {}, {}
+			local gunNudged, gunFlush, gunFlushLines = 0, 0, {}
+			local nudgeByGun = {}
+			for gunId, gunDef in pairs(WeaponDataForGuns.Weapons) do
+				local okGun, modelOrErr = pcall(WeaponService.BuildGunModel, gunDef, Rarity.Color(gunDef.rarity), Enum.Material.Metal)
+				if okGun and modelOrErr then
+					gunCount += 1
+					gunParts += #modelOrErr:GetChildren()
+					if not modelOrErr:FindFirstChild("Grip") or not modelOrErr.PrimaryPart or not modelOrErr.PrimaryPart:FindFirstChild("Muzzle") then
+						table.insert(noGrip, gunId)
+					end
+					local touched = ZFight.Report({ modelOrErr }, nil, 1)
+					gunNudged += touched
+					nudgeByGun[gunId] = touched
+					local flush = ZFight.Scan({ modelOrErr }, require(SharedFolder:WaitForChild("GunModels")).ZFightTolerance)
+					gunFlush += #flush
+					if #flush > 0 then
+						table.insert(gunFlushLines, gunId .. ": " .. table.concat(ZFight.Describe(flush, function() return gunId end, 4), " ; "))
+					end
+					modelOrErr:Destroy()
+				else
+					table.insert(gunErrors, gunId .. ": " .. tostring(modelOrErr))
 				end
 			end
-			table.sort(perGun)
-			table.sort(grown)
-			table.sort(unrecorded)
-			print("[BRR_AutoRun] zfight guns nudged per gun: " .. table.concat(perGun, ","))
-			print(string.format("[BRR_AutoRun] zfight guns nudge baseline %s: grown past it %d%s; without a recorded count %d%s (want 0 and 0)",
-				nudgeBaseline and "loaded" or "MISSING", #grown, #grown > 0 and (" [" .. table.concat(grown, ", ") .. "]") or "",
-				#unrecorded, #unrecorded > 0 and (" [" .. table.concat(unrecorded, ", ") .. "]") or ""))
-		end)
-		if not okBaseline then
-			print("[BRR_AutoRun] zfight guns baseline block ERROR: " .. tostring(baselineError))
-		end
-		-- Self-test: two coplanar boxes the build pass never saw must scan as flush.
-		local okPlanted, plantedError = pcall(function()
-			local planted = Instance.new("Model")
-			for _, size in ipairs({ Vector3.new(1, 1, 1), Vector3.new(0.5, 1, 0.5) }) do
-				local box = Instance.new("Part")
-				box.Size = size
-				box.CFrame = CFrame.new(0, 9000, 0)
-				box.Anchored = true
-				box.Parent = planted
-			end
-			local plantedFlush = #ZFight.Scan({ planted }, require(SharedFolder:WaitForChild("GunModels")).ZFightTolerance)
-			print(string.format("[BRR_AutoRun] zfight guns self-test: a planted coplanar pair scans as %d flush (want at least 1): %s",
-				plantedFlush, plantedFlush >= 1 and "ok" or "FAILED"))
-			planted:Destroy()
-		end)
-		if not okPlanted then
-			print("[BRR_AutoRun] zfight guns self-test block ERROR: " .. tostring(plantedError))
-		end
-
-		-- Crates, chest, every item (the glider open too), every brainrot and every accessory: built
-		-- once each through their builders, which run the pass themselves; nothing may be left flush.
-		local function sampleSet(label, build)
-			local nudged, flush, lines, count, errors = 0, 0, {}, 0, {}
-			local ok, err = pcall(build, function(name, model)
-				if typeof(model) ~= "Instance" then
-					table.insert(errors, name .. ": nothing built")
-					return
-				end
-				count += 1
-				nudged += ZFight.Report({ model }, nil, 1)
-				local pairsFound = ZFight.Scan({ model })
-				flush += #pairsFound
-				if #pairsFound > 0 and #lines < 12 then
-					table.insert(lines, name .. ": " .. table.concat(ZFight.Describe(pairsFound, function() return name end, 3), " ; "))
-				end
-				model:Destroy()
-			end)
-			if not ok then
-				table.insert(errors, tostring(err))
-			end
-			print(string.format("[BRR_AutoRun] zfight %s: %d models, nudged at build %d parts; still flush %d%s%s", label, count, nudged, flush,
-				#lines > 0 and (" [" .. table.concat(lines, " | ") .. "]") or "", #errors > 0 and ("; errors: " .. table.concat(errors, " | ")) or ""))
-		end
-		local CrateModels = require(SharedFolder:WaitForChild("CrateModels"))
-		sampleSet("crates", function(check)
-			for _, tier in ipairs({ "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Super" }) do
-				check("Crate " .. tier, (CrateModels.Crate(tier)))
-			end
-			check("Chest", (CrateModels.Chest(CFrame.new(0, 500, 0))))
-		end)
-		local ItemModels = require(SharedFolder:WaitForChild("ItemModels"))
-		local ItemData = require(SharedFolder:WaitForChild("ItemData"))
-		sampleSet("items", function(check)
-			for _, id in ipairs(ItemData.Order) do
-				check(id, (ItemModels.Build(id)))
-			end
-			check("RotGlider open", (ItemModels.Build("RotGlider", { open = true })))
-		end)
-		local BrainrotModels = require(SharedFolder:WaitForChild("BrainrotModels"))
-		local BrainrotData = require(SharedFolder:WaitForChild("BrainrotData"))
-		sampleSet("brainrots", function(check)
-			for _, def in ipairs(BrainrotData.Types) do
-				check(def.name, BrainrotModels.Build(def, { flair = false }))
-			end
-		end)
-		local AccessoryService = require(modules:WaitForChild("AccessoryService"))
-		local CosmeticData = require(SharedFolder:WaitForChild("CosmeticData"))
-		sampleSet("accessories", function(check)
-			local dummy = BotService.GetAll()[1] and BotService.GetAll()[1].character
-			if not dummy then
-				error("no bot character to dress")
-			end
-			for id, item in pairs(CosmeticData.Items) do
-				if item.kind == "Accessory" then
-					AccessoryService.Attach(dummy, id)
-					local worn = dummy:FindFirstChild("CosmeticAccessory")
-					if worn then
-						-- Report without destroying the character's own parts.
-						local clone = worn:Clone()
-						worn:Destroy()
-						check(item.name or id, clone)
-					else
-						check(item.name or id, nil)
+			print(string.format("[BRR_AutoRun] guns: %d models, %d parts total; missing grip/muzzle: %s; errors: %s",
+				gunCount, gunParts, #noGrip > 0 and table.concat(noGrip, ", ") or "none", #gunErrors > 0 and table.concat(gunErrors, " | ") or "none"))
+			-- "Still flush" is scanned after each gun's own build pass (the shipped model), so it only counts what
+			-- that pass couldn't resolve.
+			print(string.format("[BRR_AutoRun] zfight guns: nudged at build %d parts; still flush after the build's pass %d%s", gunNudged, gunFlush,
+				#gunFlushLines > 0 and (" [" .. table.concat(gunFlushLines, " | ") .. "]") or ""))
+			-- The design check the pass can't hide: a gun whose builder now needs more parts nudged than its
+			-- recorded count has gained faces lying in each other's planes. The counts live in
+			-- tools/gun_nudge_baseline.json, which this run only reads; after reviewing a run, record new counts
+			-- deliberately with `python tools/update_gun_nudge_baseline.py <this run's output> --note "why"`.
+			-- Both in their own pcalls, so an error is reported and the checks after them still run.
+			local okBaseline, baselineError = pcall(function()
+				local nudgeBaseline = GUN_NUDGE_BASELINE
+				local perGun, grown, unrecorded = {}, {}, {}
+				for gunId, count in pairs(nudgeByGun) do
+					table.insert(perGun, gunId .. "=" .. count)
+					local recorded = nudgeBaseline and nudgeBaseline[gunId]
+					if recorded == nil then
+						table.insert(unrecorded, gunId)
+					elseif count > recorded then
+						table.insert(grown, string.format("%s %d>%d", gunId, count, recorded))
 					end
 				end
+				table.sort(perGun)
+				table.sort(grown)
+				table.sort(unrecorded)
+				print("[BRR_AutoRun] zfight guns nudged per gun: " .. table.concat(perGun, ","))
+				print(string.format("[BRR_AutoRun] zfight guns nudge baseline %s: grown past it %d%s; without a recorded count %d%s (want 0 and 0)",
+					nudgeBaseline and "loaded" or "MISSING", #grown, #grown > 0 and (" [" .. table.concat(grown, ", ") .. "]") or "",
+					#unrecorded, #unrecorded > 0 and (" [" .. table.concat(unrecorded, ", ") .. "]") or ""))
+			end)
+			if not okBaseline then
+				print("[BRR_AutoRun] zfight guns baseline block ERROR: " .. tostring(baselineError))
 			end
-		end)
+			-- Self-test: two coplanar boxes the build pass never saw must scan as flush.
+			local okPlanted, plantedError = pcall(function()
+				local planted = Instance.new("Model")
+				for _, size in ipairs({ Vector3.new(1, 1, 1), Vector3.new(0.5, 1, 0.5) }) do
+					local box = Instance.new("Part")
+					box.Size = size
+					box.CFrame = CFrame.new(0, 9000, 0)
+					box.Anchored = true
+					box.Parent = planted
+				end
+				local plantedFlush = #ZFight.Scan({ planted }, require(SharedFolder:WaitForChild("GunModels")).ZFightTolerance)
+				print(string.format("[BRR_AutoRun] zfight guns self-test: a planted coplanar pair scans as %d flush (want at least 1): %s",
+					plantedFlush, plantedFlush >= 1 and "ok" or "FAILED"))
+				planted:Destroy()
+			end)
+			if not okPlanted then
+				print("[BRR_AutoRun] zfight guns self-test block ERROR: " .. tostring(plantedError))
+			end
+
+			-- Crates, chest, every item (the glider open too), every brainrot and every accessory: built
+			-- once each through their builders, which run the pass themselves; nothing may be left flush.
+			local function sampleSet(label, build)
+				local nudged, flush, lines, count, errors = 0, 0, {}, 0, {}
+				local ok, err = pcall(build, function(name, model)
+					if typeof(model) ~= "Instance" then
+						table.insert(errors, name .. ": nothing built")
+						return
+					end
+					count += 1
+					nudged += ZFight.Report({ model }, nil, 1)
+					local pairsFound = ZFight.Scan({ model })
+					flush += #pairsFound
+					if #pairsFound > 0 and #lines < 12 then
+						table.insert(lines, name .. ": " .. table.concat(ZFight.Describe(pairsFound, function() return name end, 3), " ; "))
+					end
+					model:Destroy()
+				end)
+				if not ok then
+					table.insert(errors, tostring(err))
+				end
+				print(string.format("[BRR_AutoRun] zfight %s: %d models, nudged at build %d parts; still flush %d%s%s", label, count, nudged, flush,
+					#lines > 0 and (" [" .. table.concat(lines, " | ") .. "]") or "", #errors > 0 and ("; errors: " .. table.concat(errors, " | ")) or ""))
+			end
+			local CrateModels = require(SharedFolder:WaitForChild("CrateModels"))
+			sampleSet("crates", function(check)
+				for _, tier in ipairs({ "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Super" }) do
+					check("Crate " .. tier, (CrateModels.Crate(tier)))
+				end
+				check("Chest", (CrateModels.Chest(CFrame.new(0, 500, 0))))
+			end)
+			local ItemModels = require(SharedFolder:WaitForChild("ItemModels"))
+			local ItemData = require(SharedFolder:WaitForChild("ItemData"))
+			sampleSet("items", function(check)
+				for _, id in ipairs(ItemData.Order) do
+					check(id, (ItemModels.Build(id)))
+				end
+				check("RotGlider open", (ItemModels.Build("RotGlider", { open = true })))
+			end)
+			local BrainrotModels = require(SharedFolder:WaitForChild("BrainrotModels"))
+			local BrainrotData = require(SharedFolder:WaitForChild("BrainrotData"))
+			sampleSet("brainrots", function(check)
+				for _, def in ipairs(BrainrotData.Types) do
+					check(def.name, BrainrotModels.Build(def, { flair = false }))
+				end
+			end)
+			local AccessoryService = require(modules:WaitForChild("AccessoryService"))
+			local CosmeticData = require(SharedFolder:WaitForChild("CosmeticData"))
+			sampleSet("accessories", function(check)
+				local dummy = BotService.GetAll()[1] and BotService.GetAll()[1].character
+				if not dummy then
+					error("no bot character to dress")
+				end
+				for id, item in pairs(CosmeticData.Items) do
+					if item.kind == "Accessory" then
+						AccessoryService.Attach(dummy, id)
+						local worn = dummy:FindFirstChild("CosmeticAccessory")
+						if worn then
+							-- Report without destroying the character's own parts.
+							local clone = worn:Clone()
+							worn:Destroy()
+							check(item.name or id, clone)
+						else
+							check(item.name or id, nil)
+						end
+					end
+				end
+			end)
+		end
 
 		-- A bot throws a barricade up in front of itself, the way BotService does under fire. Bots
 		-- on a slope are refused (that's the site check working); the first on flat ground builds.
