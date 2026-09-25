@@ -1,7 +1,11 @@
 # #57 / #110 roadkill: does it fire?
 
-Jacob's branch `task/prove-roadkill`, fast-forwarded to main **`30e4e77`** (30e4e77efe8f) before the final
-runs. Main's game code is the same as at `fafed9c`: only coordination files changed between the two.
+Jacob's branch `task/prove-roadkill`, cut from main `fafed9c`, first run on main `30e4e77`, then merged with
+main **`f1bb3b4`** and run again. Since `30e4e77`, main changed the vehicle physics (52a5608: ride lift and a
+rough-ground underside, in `VehicleService.lua`, `VehicleDynamics.lua` and `VehicleModels.lua`). No roadkill
+code changed. Every check, plant and number below came out the same on `f1bb3b4`, and every line reference
+is to `f1bb3b4`. `VehicleService.lua` gained one line at 349, so its references past that are one higher
+than in the first version of this report.
 I either measured things outside Studio (Python + lupa, running the game's own Lua) or read them from
 source. Nothing was run in Roblox, and no game file or existing tool was edited.
 
@@ -23,8 +27,8 @@ switches roadkill off: no flag, no mode check, no ownership state, and not the p
 1. **Nobody has ever run a player-driven roadkill in Roblox, and one Roblox fact decides whether it works.**
    (On main.) Since 7fab339, a player's car is swept by the driver's own client, and the hit is reported
    to the server (`VehicleRoadkill`). The server then caps the speed it believes at
-   `seen * 1.15 + 4` (`VehicleService.lua:1090`). `seen` is the server's own copy of the car's
-   velocity. The other route, the server's `chassis.Touched` (`:1060-1064`), reads the same copy. If
+   `seen * 1.15 + 4` (`VehicleService.lua:1091`). `seen` is the server's own copy of the car's
+   velocity. The other route, the server's `chassis.Touched` (`:1061-1065`), reads the same copy. If
    the server read 0 for a car a client owns, the cap would be 4 studs/s, under the 12 floor, and
    **every player's roadkill would be silent: no damage, no marker, no feed line.** I planted exactly that fault in a
    copy of the game (see "My own planted fault"): 8 of my 16 checks fail. Roblox does replicate a
@@ -33,7 +37,7 @@ switches roadkill off: no flag, no mode check, no ownership state, and not the p
    (`vehicle_health_probe.lua`, `roadkill_momentum_probe.lua`) drive **server-simulated** cars, and
    HANDOFF says a probe cannot run a LocalScript, so the client path has never run in Studio. It needs
    a two-person playtest (see "For the coordinator").
-2. **A vetoed hit still throws the body.** (On main, `VehicleService.lua:1030-1051`.) `roadkill()` sets
+2. **A vetoed hit still throws the body.** (On main, `VehicleService.lua:1031-1052`.) `roadkill()` sets
    up the throw and launches a survivor whatever `CombatService.DealDamage` returned. A team-mate in a
    team mode, and an enemy under spawn protection, take **0 damage but are launched** at
    `(26, 40, -40)` studs/s from an 84 studs/s car (MovementService "blast"). A bot team-mate is also
@@ -50,7 +54,7 @@ switches roadkill off: no flag, no mode check, no ownership state, and not the p
    (reasoning, not a measurement of the real car). Whether ramming a car should roadkill its riders,
    through an armoured cabin, is Oliver's call.
 4. **A driverless car hits 8.7% harder than a driven one.** (On main.) A car its driver bailed out of
-   credits nobody. That is intended: the comment at `VehicleService.lua:962-963` says a car nobody is
+   credits nobody. That is intended: the comment at `VehicleService.lua:963-964` says a car nobody is
    driving "still hurts, credited to no one, as before". The side effect is that the 0.92 time-to-kill
    scale is skipped, because `DealDamage` scales only a hit that has an attacker
    (`CombatService.lua:447-448`). The team veto is skipped for the same reason. Measured: a Tralala GT
@@ -58,7 +62,7 @@ switches roadkill off: no flag, no mode check, no ownership state, and not the p
    driven. It gave no kill-feed name and no quest progress. Minor. Whether the bailer should get the
    kill is Oliver's call.
 5. **A Sahur Van at full speed leaves an unshielded player on 0.64 health.** (Balance, on main.) The van
-   tops out at 72 (`VehicleDynamics.lua:92`) and deals **99.36**. A one-hit kill on 100 health needs
+   tops out at 72 (`VehicleDynamics.lua:97`) and deals **99.36**. A one-hit kill on 100 health needs
    **72.39** studs/s. The Tartaruga Scout (96.05), Bananini Scoot (89.42) and Camelo Carrier (82.80) are
    also short. For Oliver, if "a van at full speed kills" matters to him.
 6. **Stale numbers in a comment.** (On main, `VehicleService.lua:119-125`.) The comment gives 10.8 at
@@ -75,18 +79,18 @@ driver's roadkill credited nobody (fixed by 41631ba, 09-24). A player's car reli
 shipped together in `playtest-2026-09-24-2000` (main 8f16a5f). That build is the first one where
 Oliver could see the current behaviour.
 
-## 1. The path, end to end (on main 30e4e77)
+## 1. The path, end to end (on main f1bb3b4)
 
 **Detection. There are three ways in, and all three reach one function, `roadkill()`
-(`VehicleService.lua:994-1058`):**
+(`VehicleService.lua:995-1059`):**
 
 | Who simulates the car | What detects the contact | Where |
 |---|---|---|
-| The driver's client (a player at the wheel; the server hands the chassis over in `updateOwnership`, `VehicleService.lua:1448-1475`, `SetNetworkOwner` at `:1457`) | `RoadkillPass:Sweep` in VehicleClient's `RunService.Stepped` loop (`VehicleClient.client.lua:472`, sweep at `:493`, skipped while `ServerControl` is set, `:483`). The sweep uses a `GetPartBoundsInBox` look-ahead of 2.5 frames of travel plus 0.6 studs round each collider (`RoadkillPass.lua:195-222`). A live body is reported once: `FireServer(model, character, speed)` (`VehicleClient.client.lua:386-388`) | Server: `Remotes.Event("VehicleRoadkill")` handler (`VehicleService.lua:1687-1692`), rate limit 8 burst, 4/s (`RateLimit.lua:85`), then `onRoadkillReport` (`:1069-1091`) |
-| The server (a bot at the wheel, an empty car, a car the honesty check took back) | `entry.roadkillPass:Sweep(dt, now)` in `step()` (`VehicleService.lua:1574-1576`). It runs before the registered-kind hook and before the parked rest hold, so a1eb7a8 does not skip it | `roadkill()` directly, through the callback made in `Create` (`:1397-1399`) |
-| Either | `chassis.Touched` on the server (connected in `Create`, `:1437-1439`) | `onChassisTouched` (`:1060-1064`) |
+| The driver's client (a player at the wheel; the server hands the chassis over in `updateOwnership`, `VehicleService.lua:1449-1476`, `SetNetworkOwner` at `:1458`) | `RoadkillPass:Sweep` in VehicleClient's `RunService.Stepped` loop (`VehicleClient.client.lua:472`, sweep at `:493`, skipped while `ServerControl` is set, `:483`). The sweep uses a `GetPartBoundsInBox` look-ahead of 2.5 frames of travel plus 0.6 studs round each collider (`RoadkillPass.lua:195-222`). A live body is reported once: `FireServer(model, character, speed)` (`VehicleClient.client.lua:386-388`) | Server: `Remotes.Event("VehicleRoadkill")` handler (`VehicleService.lua:1688-1693`), rate limit 8 burst, 4/s (`RateLimit.lua:85`), then `onRoadkillReport` (`:1070-1092`) |
+| The server (a bot at the wheel, an empty car, a car the honesty check took back) | `entry.roadkillPass:Sweep(dt, now)` in `step()` (`VehicleService.lua:1575-1577`). It runs before the registered-kind hook and before the parked rest hold, so a1eb7a8 does not skip it | `roadkill()` directly, through the callback made in `Create` (`:1398-1400`) |
+| Either | `chassis.Touched` on the server (connected in `Create`, `:1438-1440`) | `onChassisTouched` (`:1061-1065`) |
 
-A player-driven car is never swept by the server: the owner branch of `step()` returns at `:1562-1572`
+A player-driven car is never swept by the server: the owner branch of `step()` returns at `:1563-1573`
 before the sweep. The harness confirms it: the server's `roadkillPass.lastVelocity` stayed nil on all 9
 player-driven cars.
 
@@ -98,24 +102,24 @@ max(server's flat speed, entry.lastFlatSpeed)`. So the server does not trust the
 trusts its own copy of the car's velocity (problem 1).
 
 **The vetoes, in the order they run** (`roadkill()`):
-1. No humanoid, or already dead: nothing (`:995-998`).
-2. **Any rider of this car** (`entry.occupants`, driver included): nothing (`:999-1003`).
+1. No humanoid, or already dead: nothing (`:996-999`).
+2. **Any rider of this car** (`entry.occupants`, driver included): nothing (`:1000-1004`).
    `RoadkillPass` also leaves its own riders out of the look-ahead (`:196-202`, `isRider` `:124-131`).
 3. **Walking pace**: `flat <= ROADKILL_FLOOR` (12, `:131`), checked before the debounce is armed
-   (`:1005-1007`). The client sweep has the same floor (`RoadkillPass.FLOOR = 12`, `:34`), and
+   (`:1006-1008`). The client sweep has the same floor (`RoadkillPass.FLOOR = 12`, `:34`), and
    `roadkill_check` holds the two equal. Walking speed is 18 (`MatchConfig.BaseWalkSpeed`), so a car at
    walking pace does hurt (9.94). "Nothing below walking pace" is true of anything under 12.
-4. **Debounce**: 0.5 s per victim per car (`:133`, `:1009-1020`). The keys are strong, so a Touched and
+4. **Debounce**: 0.5 s per victim per car (`:133`, `:1010-1021`). The keys are strong, so a Touched and
    a report for one body inside 0.5 s make one hit (measured).
-5. The body must be a combatant (`Combatants.FromCharacter`, `:1021-1024`).
-6. **The driver themself**: `driverToken == victimToken` returns (`:1026-1029`).
-7. Then `CombatService.DealDamage(driverToken, victimToken, (flat - 12) * 1.8, "Roadkill", false)` (`:1043`).
+5. The body must be a combatant (`Combatants.FromCharacter`, `:1022-1025`).
+6. **The driver themself**: `driverToken == victimToken` returns (`:1027-1030`).
+7. Then `CombatService.DealDamage(driverToken, victimToken, (flat - 12) * 1.8, "Roadkill", false)` (`:1044`).
    `DealDamage` (`CombatService.lua:424`) applies the **mode's veto** (`:432`,
    `ModeTeams.DamageVeto`, `ModeTeams.lua:1333-1356`: team-mates and spawn protection, hung on only in a
    team mode, `GameMode.lua:733`). Then the **0.92 time-to-kill scale** when there is an attacker
    (`:447-448`), then the shield, then `TakeDamage`.
 
-**Credit.** `roadkillDriverToken` (`VehicleService.lua:964-968`): `Combatants.FromCharacter` of whoever
+**Credit.** `roadkillDriverToken` (`VehicleService.lua:965-969`): `Combatants.FromCharacter` of whoever
 sits in the driving seat. That covers players and bots alike (41631ba), and bots drive every vehicle
 since 0f0f28e, through `VehicleService.BotSit`, `BotService.lua:4563`. The credit is stored as
 `lastAttacker[victim] = { driver, "Roadkill" }` (`CombatService.lua:474`), read back by `HandleDeath`
@@ -129,7 +133,7 @@ since 0f0f28e, through `VehicleService.BotSit`, `BotService.lua:4563`. The credi
   measured).
 - **The victim** (player): `DamageTaken` with the driver's position (`:501`): the red direction arc. A
   survivor is thrown along the car's travel (`RoadkillPass.Throw`, `MovementService.Launch` "blast");
-  a bot is knocked down first (`VehicleService.lua:983-986`). On death, the recap names the driver and
+  a bot is knocked down first (`VehicleService.lua:984-987`). On death, the recap names the driver and
   "Roadkill" (`:1225`, measured), and the ragdoll carries the throw (`RoadkillThrow`,
   `DeathFxService.lua:715`).
 - **Everyone**: the kill feed row `driver ➜ victim [Roadkill]`. `CombatService.OnElimination`
@@ -140,7 +144,7 @@ since 0f0f28e, through `VehicleService.BotSit`, `BotService.lua:4563`. The credi
 (NoCollisionConstraints, every collider × every limb, plus the riders' solid parts). The car gives up
 its **toll** of flat speed per live body: bike 4%, car 2.5%, armoured 1% (`:45`). It keeps its heading,
 vertical speed and spin. A dead body goes through for free. The crash check ignores the speed change
-for 0.4 s (`ROADKILL_GRACE`, `VehicleService.lua:138`, used at `:939`). The throw at speed `v` is
+for 0.4 s (`ROADKILL_GRACE`, `VehicleService.lua:138`, used at `:940`). The throw at speed `v` is
 `forward min(0.6v, 40)`, `sideways min(0.45v, 26)`, `up clamp(14 + 0.35v, 16, 40)` (`:66-79`). Measured:
 an enemy behind a team-mate took the hit at 84 × 0.975 (115.75 dealt), because the car paid the toll
 going through the team-mate.
@@ -149,7 +153,7 @@ going through the team-mate.
 
 Damage = `(v - 12) × 1.8 × 0.92` for a driven car. Sources: `ROADKILL_FLOOR` and `ROADKILL_DAMAGE_PER`
 (`VehicleService.lua:131-132`), `MatchConfig.CombatDamageScale` (`MatchConfig.lua:107`), top speeds
-from `VehicleDynamics.Handling` (`VehicleDynamics.lua:69-135`). There are **nine** models, not six: six cars
+from `VehicleDynamics.Handling` (`VehicleDynamics.lua:73-140`). There are **nine** models, not six: six cars
 (two of them armoured) and three bikes. The "dealt" column is **measured** through the real modules,
 not computed. The "marker" column is the whole number the driver's HUD shows.
 
@@ -204,7 +208,7 @@ Every vehicle is made by the real `VehicleService.Create`. Players sit through t
 **Examined:** 9 of 9 models with a player at the wheel, 9 of 9 with a bot at the wheel, 18 more vehicles
 in the other scenes, and 5 under-floor speeds × 4 paths.
 
-Verbatim, on main 30e4e77:
+Verbatim, on main f1bb3b4:
 
 ```
 ok    I1 every model, player driver at top speed into an enemy player: the driver's client reports it, the server deals (top-12)*1.8*0.92, credits the driver, marks the driver's HUD and the victim's  (9 models: BananiniScoot 66.00->89.42, BrrStreetfighter 114.00->168.91, CameloCarrier 62.00->82.80, CrocodiloRanger 78.00->109.30, PatapimScrambler 90.00->129.17, Rotster 84.00->119.23, SahurVan 72.00->99.36, TartarugaScout 70.00->96.05, TralalaGT 106.00->155.66)
@@ -260,7 +264,7 @@ failed, 1 skipped; planted faults 34/34 caught`.
 
 ### My own planted fault, in a copy of the game
 
-I made a temp copy of the tree (`git archive HEAD`), then edited its `VehicleService.lua`, line 1086,
+I made a temp copy of the tree (`git archive HEAD`), then edited its `VehicleService.lua`, line 1087,
 so the server reads a client-owned car's speed as 0. This is the Roblox failure in problem 1:
 
 ```
