@@ -108,12 +108,61 @@ local function inBox(p, boxes)
 	return false
 end
 
+-- The rules every route is held to, whichever planner drew it: no longer than MAX_LENGTH, no bend
+-- tighter than MIN_RADIUS, clear of the `avoid` discs, across no other road, out of the compounds once
+-- past the gate's lead. Returns the route, or nil and why.
+local function checkRoute(path, start, edge, t, join, centre, normal, roads, options, target)
+	local total = 0
+	for i = 2, #path do
+		total += (path[i] - path[i - 1]).Magnitude
+	end
+	if total > MAX_LENGTH then
+		return nil, "too long"
+	end
+	for i = 2, #path - 1 do
+		local u, v = path[i] - path[i - 1], path[i + 1] - path[i]
+		local chord = (u.Magnitude + v.Magnitude) / 2
+		local cosine = math.clamp(u.Unit:Dot(v.Unit), -1, 1)
+		local turn = math.acos(cosine)
+		if turn > 1e-6 and chord / turn < MIN_RADIUS then
+			return nil, "bends too tight"
+		end
+	end
+	for _, disc in ipairs(options.avoid or {}) do
+		for i = 2, #path do
+			if distanceToSegment(flat(disc.centre), path[i - 1], path[i]) < disc.radius + HALF then
+				return nil, "through the " .. (disc.name or "arena")
+			end
+		end
+	end
+	for _, other in ipairs(roads.edges) do
+		if other ~= edge then
+			local c, d = flat(other.from or other.a.position), flat(other.to or other.b.position)
+			for i = 2, #path - 1 do
+				if segmentsCross(path[i - 1], path[i], c, d) then
+					return nil, "crosses another road"
+				end
+			end
+		end
+	end
+	-- Out of the compounds (its own included), once clear of the gate's straight lead.
+	for i = 1, #path do
+		if (path[i] - start).Magnitude > LEAD + 1 and inBox(path[i], options.boxes) then
+			return nil, "through a compound"
+		end
+	end
+	-- The whole way to the arena: this road, then along the map road to the gateway (when there is one).
+	local to = target and math.abs(t - target.at) or 0
+	return { points = path, edge = edge, along = t, join = join, centre = centre, normal = normal, length = total,
+		total = total + to, gateway = target and target.gateway, alongRoad = to }
+end
+
 -- One candidate route to `edge` from `start` heading `heading` (flat unit vectors), or nil and why.
 local function routeTo(start, heading, edge, roads, options, shift, tension, target)
 	local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
 	local along = b - a
 	local length = along.Magnitude
-	if length < 2 * END_CLEAR + TeamBaseRoads.Width then
+	if not target and length < 2 * END_CLEAR + TeamBaseRoads.Width then
 		return nil, "edge too short"
 	end
 	local dir = along / length
@@ -121,7 +170,8 @@ local function routeTo(start, heading, edge, roads, options, shift, tension, tar
 	-- A target (an arena gateway's road) limits where on the edge the junction may go.
 	local lo, hi = END_CLEAR + HALF, length - END_CLEAR - HALF
 	if target then
-		lo, hi = math.max(lo, target.lo), math.min(hi, target.hi)
+		-- The gateway's end of its road is a cut, not a junction box: only the outer end keeps clear.
+		lo, hi = math.max(HALF + 4, target.lo), math.min(length - HALF - 4, target.hi)
 		if hi < lo then
 			return nil, "no room on the gateway's road"
 		end
@@ -172,50 +222,7 @@ local function routeTo(start, heading, edge, roads, options, shift, tension, tar
 		path[#path] = join
 	end
 	local _ = points
-	-- The rules.
-	local total = 0
-	for i = 2, #path do
-		total += (path[i] - path[i - 1]).Magnitude
-	end
-	if total > MAX_LENGTH then
-		return nil, "too long"
-	end
-	for i = 2, #path - 1 do
-		local u, v = path[i] - path[i - 1], path[i + 1] - path[i]
-		local chord = (u.Magnitude + v.Magnitude) / 2
-		local cosine = math.clamp(u.Unit:Dot(v.Unit), -1, 1)
-		local turn = math.acos(cosine)
-		if turn > 1e-6 and chord / turn < MIN_RADIUS then
-			return nil, "bends too tight"
-		end
-	end
-	for _, disc in ipairs(options.avoid or {}) do
-		for i = 2, #path do
-			if distanceToSegment(flat(disc.centre), path[i - 1], path[i]) < disc.radius + HALF then
-				return nil, "through the " .. (disc.name or "arena")
-			end
-		end
-	end
-	for _, other in ipairs(roads.edges) do
-		if other ~= edge then
-			local c, d = flat(other.from or other.a.position), flat(other.to or other.b.position)
-			for i = 2, #path - 1 do
-				if segmentsCross(path[i - 1], path[i], c, d) then
-					return nil, "crosses another road"
-				end
-			end
-		end
-	end
-	-- Out of the compounds (its own included), once clear of the gate's straight lead.
-	for i = 1, #path do
-		if (path[i] - start).Magnitude > LEAD + 1 and inBox(path[i], options.boxes) then
-			return nil, "through a compound"
-		end
-	end
-	-- The whole way to the arena: this road, then along the map road to the gateway (when there is one).
-	local to = target and math.abs(t - target.at) or 0
-	return { points = path, edge = edge, along = t, join = join, centre = centre, normal = normal, length = total,
-		total = total + to, gateway = target and target.gateway, alongRoad = to }
+	return checkRoute(path, start, edge, t, join, centre, normal, roads, options, target)
 end
 
 -- What options.blocked says about a whole route: nil when every stretch is clear.
@@ -229,6 +236,313 @@ local function blockedRoute(route, options)
 		end
 	end
 	return nil
+end
+
+-- THE GRID PLANNER, for where no single smooth curve gets through (a town, a hill, the arena, a road in
+-- the way): A* over an 8-stud grid round the start and the targets -- the battleground's disc, the
+-- compounds and every other road's corridor out of bounds, climbs costed -- to a point square off the
+-- target road, then smoothed (ends held: the gate's straight lead, the straight run in) until it bends
+-- no tighter than MIN_RADIUS, and put through the same rules as a curve. Something that cannot be
+-- cleared in the smoothed way (options.blocked) is cut out of the grid and the search run again.
+local GRID = 8
+local GRID_MARGIN = 160
+local GRID_TRIES = 4
+
+local function heapPush(heap, item)
+	table.insert(heap, item)
+	local i = #heap
+	while i > 1 do
+		local parent = i // 2
+		if heap[parent].f <= heap[i].f then
+			break
+		end
+		heap[parent], heap[i] = heap[i], heap[parent]
+		i = parent
+	end
+end
+
+local function heapPop(heap)
+	local top = heap[1]
+	local last = table.remove(heap)
+	if #heap > 0 then
+		heap[1] = last
+		local i = 1
+		while true do
+			local l, r, small = 2 * i, 2 * i + 1, i
+			if heap[l] and heap[l].f < heap[small].f then
+				small = l
+			end
+			if heap[r] and heap[r].f < heap[small].f then
+				small = r
+			end
+			if small == i then
+				break
+			end
+			heap[i], heap[small] = heap[small], heap[i]
+			i = small
+		end
+	end
+	return top
+end
+
+-- Ends held, the middle relaxed toward its neighbours until no bend is tighter than MIN_RADIUS.
+local function smoothPath(path, holdStart, holdEnd)
+	local n = #path
+	for pass = 1, 400 do
+		local worst = math.huge
+		for i = 2, n - 1 do
+			local u, v = path[i] - path[i - 1], path[i + 1] - path[i]
+			if u.Magnitude > 0.01 and v.Magnitude > 0.01 then
+				local turn = math.acos(math.clamp(u.Unit:Dot(v.Unit), -1, 1))
+				if turn > 1e-6 then
+					worst = math.min(worst, ((u.Magnitude + v.Magnitude) / 2) / turn)
+				end
+			end
+		end
+		if worst >= MIN_RADIUS * 1.05 and pass > 20 then
+			break
+		end
+		local copy = table.clone(path)
+		for i = holdStart + 1, n - holdEnd do
+			path[i] = copy[i] * 0.5 + (copy[i - 1] + copy[i + 1]) * 0.25
+		end
+	end
+	return path
+end
+
+local function resample(chain)
+	local path = { chain[1] }
+	local carry = 0
+	for i = 2, #chain do
+		local p, q = chain[i - 1], chain[i]
+		local seg = (q - p).Magnitude
+		local walked = 0
+		while seg - walked + carry >= STEP do
+			walked += STEP - carry
+			carry = 0
+			table.insert(path, p + (q - p) * (walked / seg))
+		end
+		carry += seg - walked
+	end
+	if (path[#path] - chain[#chain]).Magnitude > STEP / 2 then
+		table.insert(path, chain[#chain])
+	else
+		path[#path] = chain[#chain]
+	end
+	return path
+end
+
+-- Routes from `start` (heading `dir`) onto `targets` (Plan's ranked { edge, target }), by the grid.
+local function gridRoutes(start, dir, targets, roads, options)
+	local lead = start + dir * LEAD
+	-- The goals: points square off each target edge, along its allowed stretch every 16.
+	local goals = {}
+	for _, item in ipairs(targets) do
+		local edge, target = item.edge, item.target
+		local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
+		local length = (b - a).Magnitude
+		if length > 1 then
+			local along = (b - a) / length
+			local lo, hi = END_CLEAR + HALF, length - END_CLEAR - HALF
+			if target then
+				lo, hi = math.max(HALF + 4, target.lo), math.min(length - HALF - 4, target.hi)
+			end
+			local t = lo
+			while t <= hi + 0.01 do
+				local centre = a + along * t
+				local normal = Vector3.new(-along.Z, 0, along.X)
+				if (lead - centre):Dot(normal) < 0 then
+					normal = -normal
+				end
+				local join = centre + normal * HALF
+				table.insert(goals, { edge = edge, target = target, t = t, centre = centre, normal = normal, join = join,
+					approach = join + normal * (APPROACH + GRID), extra = target and math.abs(t - target.at) or 0 })
+				t += 16
+			end
+		end
+	end
+	if #goals == 0 then
+		return {}
+	end
+	local x0, z0, x1, z1 = lead.X, lead.Z, lead.X, lead.Z
+	for _, goal in ipairs(goals) do
+		x0, x1 = math.min(x0, goal.approach.X), math.max(x1, goal.approach.X)
+		z0, z1 = math.min(z0, goal.approach.Z), math.max(z1, goal.approach.Z)
+	end
+	x0, z0, x1, z1 = x0 - GRID_MARGIN, z0 - GRID_MARGIN, x1 + GRID_MARGIN, z1 + GRID_MARGIN
+	local nx, nz = math.ceil((x1 - x0) / GRID), math.ceil((z1 - z0) / GRID)
+	if nx * nz > 90000 then
+		return {}
+	end
+	local function centreOf(ix, iz)
+		return Vector3.new(x0 + (ix - 0.5) * GRID, 0, z0 + (iz - 0.5) * GRID)
+	end
+	-- Other roads' corridors, bucketed.
+	local tile = 64
+	local buckets = {}
+	local targetEdges = {}
+	for _, item in ipairs(targets) do
+		targetEdges[item.edge] = true
+	end
+	for _, e in ipairs(roads.edges) do
+		if not targetEdges[e] then
+			local a, b = flat(e.from or e.a.position), flat(e.to or e.b.position)
+			local reach = HALF + 8
+			for tx = math.floor((math.min(a.X, b.X) - reach) / tile), math.floor((math.max(a.X, b.X) + reach) / tile) do
+				for tz = math.floor((math.min(a.Z, b.Z) - reach) / tile), math.floor((math.max(a.Z, b.Z) + reach) / tile) do
+					local key = tx * 100003 + tz
+					buckets[key] = buckets[key] or {}
+					table.insert(buckets[key], { a, b })
+				end
+			end
+		end
+	end
+	local banned = {}
+	local function free(ix, iz)
+		local key = ix * 65536 + iz
+		if banned[key] ~= nil then
+			return not banned[key]
+		end
+		local p = centreOf(ix, iz)
+		local bad = false
+		for _, disc in ipairs(options.avoid or {}) do
+			if (p - flat(disc.centre)).Magnitude < disc.radius + HALF + 4 then
+				bad = true
+			end
+		end
+		if not bad and (p - start).Magnitude > LEAD + 16 and inBox(p, options.boxes) then
+			bad = true
+		end
+		if not bad then
+			for _, seg in ipairs(buckets[math.floor(p.X / tile) * 100003 + math.floor(p.Z / tile)] or {}) do
+				if distanceToSegment(p, seg[1], seg[2]) < HALF + 8 then
+					bad = true
+					break
+				end
+			end
+		end
+		banned[key] = bad
+		return not bad
+	end
+	local ground = options.fastGround or options.groundAt
+	local heights = {}
+	local function heightAt(ix, iz)
+		local key = ix * 65536 + iz
+		local h = heights[key]
+		if h == nil then
+			local p = centreOf(ix, iz)
+			h = ground and ground(p.X, p.Z) or 0
+			heights[key] = h
+		end
+		return h
+	end
+	local routes = {}
+	for _ = 1, GRID_TRIES do
+		local sx, sz = math.floor((lead.X - x0) / GRID) + 1, math.floor((lead.Z - z0) / GRID) + 1
+		local goalAt = {}
+		for _, goal in ipairs(goals) do
+			local gx, gz = math.floor((goal.approach.X - x0) / GRID) + 1, math.floor((goal.approach.Z - z0) / GRID) + 1
+			local key = gx * 65536 + gz
+			if not goalAt[key] or goal.extra < goalAt[key].extra then
+				goalAt[key] = goal
+			end
+		end
+		local function h(ix, iz)
+			local p = centreOf(ix, iz)
+			local best = math.huge
+			for _, goal in ipairs(goals) do
+				best = math.min(best, (p - goal.approach).Magnitude + goal.extra)
+			end
+			return best
+		end
+		local open, g, came = {}, {}, {}
+		local startKey = sx * 65536 + sz
+		g[startKey] = 0
+		heapPush(open, { f = h(sx, sz), ix = sx, iz = sz, key = startKey })
+		local found, foundKey = nil, nil
+		local expanded = 0
+		while #open > 0 and expanded < 60000 do
+			local node = heapPop(open)
+			expanded += 1
+			if g[node.key] and node.f - h(node.ix, node.iz) <= g[node.key] + 1e-6 then
+				local goal = goalAt[node.key]
+				if goal then
+					found, foundKey = goal, node.key
+					break
+				end
+				for dx = -1, 1 do
+					for dz = -1, 1 do
+						if dx ~= 0 or dz ~= 0 then
+							local ix, iz = node.ix + dx, node.iz + dz
+							if ix >= 1 and iz >= 1 and ix <= nx and iz <= nz and free(ix, iz) then
+								local step = (dx ~= 0 and dz ~= 0) and GRID * 1.4142 or GRID
+								local climb = math.abs(heightAt(ix, iz) - heightAt(node.ix, node.iz)) / step
+								local cost = step * (1 + 12 * math.max(0, climb - MAX_GRADE * 0.8))
+								local key = ix * 65536 + iz
+								local ng = g[node.key] + cost
+								if ng < (g[key] or math.huge) then
+									g[key] = ng
+									came[key] = node.key
+									heapPush(open, { f = ng + h(ix, iz), ix = ix, iz = iz, key = key })
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+		if not found then
+			break
+		end
+		-- The cells back to the start, then the path: start, lead, cells, the run in.
+		local cells = {}
+		local key = foundKey
+		while key do
+			table.insert(cells, 1, centreOf(key // 65536, key % 65536))
+			key = came[key]
+		end
+		local chain = { start, lead }
+		for i = 2, #cells do
+			table.insert(chain, cells[i])
+		end
+		table.insert(chain, found.approach)
+		table.insert(chain, found.join)
+		local path = resample(chain)
+		-- Held: the straight lead (LEAD / STEP samples) and the straight run in (APPROACH + GRID).
+		local holdStart = math.floor(LEAD / STEP) + 1
+		local holdEnd = math.floor((APPROACH + GRID) / STEP) + 1
+		smoothPath(path, holdStart, holdEnd)
+		path = resample(path)
+		local route, why = checkRoute(path, start, found.edge, found.t, found.join, found.centre, found.normal, roads, options, found.target)
+		if route then
+			local blockedAt = nil
+			if options.blocked then
+				for i = 2, #path do
+					if options.blocked(path[i - 1], path[i]) then
+						blockedAt = (path[i - 1] + path[i]) / 2
+						break
+					end
+				end
+			end
+			if not blockedAt then
+				route.grid = true
+				table.insert(routes, route)
+				break
+			end
+			-- Cut what stood there out of the grid and search again.
+			for ix = 1, nx do
+				for iz = 1, nz do
+					if (centreOf(ix, iz) - blockedAt).Magnitude < 32 then
+						banned[ix * 65536 + iz] = true
+					end
+				end
+			end
+		else
+			routes.why = why
+			break
+		end
+	end
+	return routes
 end
 
 -- Where along an edge the junction may go (from the lead's own square-on point) and how hard the
@@ -494,6 +808,19 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 		table.sort(ranked, function(p, q)
 			return p.d < q.d
 		end)
+		-- The grid planner too, over the nearest few (it finds a way where no single curve does).
+		local near = {}
+		for index = 1, math.min(#ranked, 12) do
+			table.insert(near, ranked[index])
+		end
+		local gridFound = gridRoutes(from, dir, near, roads, options)
+		for _, route in ipairs(gridFound) do
+			route.gate, route.heading = gateIndex, dir
+			table.insert(found, route)
+		end
+		if gridFound.why then
+			reasons["grid: " .. gridFound.why] = (reasons["grid: " .. gridFound.why] or 0) + 1
+		end
 		for index = 1, math.min(#ranked, 24) do
 			for _, shift in ipairs(SHIFTS) do
 				for _, tension in ipairs(TENSIONS) do

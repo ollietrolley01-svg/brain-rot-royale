@@ -388,6 +388,8 @@ def run(root, edits=None, log=print, botnav_edits=None):
         name = "pair at (%d, %d)" % (bx, bz)
         net = g.makeNetwork(g.hills)
         mod.CutAtArena(net, g.Vector3.new(0, 0, 0), GATEWAY_RADIUS - 1)
+        # As ModeTeams sets it: bots into the arena only through a gateway.
+        botnav.Arena = lua.table_from({"center": g.Vector3.new(0, 0, 0), "radius": APRON, "gateways": gateways})
         targets = mod.GatewayTargets(net, gateways, g.Vector3.new(0, 0, 0))
         options = []
         frames = []
@@ -537,8 +539,9 @@ def run(root, edits=None, log=print, botnav_edits=None):
 PLANTS = [
     ("a broken link near the gateway", [("local added = { first, second }", "local added = { second }")]),
     ("an unfair pair", [("local fair, wasFair = gap <= share, bestGap <= share", "local fair, wasFair = true, true")]),
-    ("a wrong cost: the arena's middle too far to end a road trip",
-     [], [("local DRIVE_ROAD_JOIN_PREFERRED = 400", "local DRIVE_ROAD_JOIN_PREFERRED = 0")]),
+    ("the arena's cut roads left open (a wrong cost through the apron)",
+     [("							piece.blocked = (mid - c).Magnitude < radius or nil", "							piece.blocked = nil")],
+     [("	if arena and arena.gateways", "	if false and arena and arena.gateways")]),
     ("a missing link", [("\t\ttable.insert(added, newEdge(chain, node, \"up\" .. i, \"down\" .. i))",
                          "\t\tnewEdge(chain, node, \"up\" .. i, \"down\" .. i)")]),
     ("through the battleground", [("for _, disc in ipairs(options.avoid or {}) do", "for _, disc in ipairs({}) do")]),

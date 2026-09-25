@@ -202,7 +202,7 @@ local PAD_SPREADS = { 60, 110, 180 }
 -- How many of the best pairs of compound sites (ModeTeams.RankBaseAxes) Setup builds on before giving
 -- up on compounds: a site FlattenPad refuses after all (SiteCost samples every 8 studs, FlattenPad
 -- every 4) sends both compounds to the next pair.
-local RUIN_TRIES = 4
+local RUIN_TRIES = 10
 
 -- The arena: a disc centred on town 1. MapGenerator's placeTowns puts town index 1 at distance 0
 -- (plus a +/-40 jitter) on every map and every seed, so it is the one stable anchor there is, and
@@ -499,6 +499,10 @@ local accessUndo = {}
 local ACCESS_CLEAR = (TeamBaseRoads and TeamBaseRoads.Width or 18) / 2 + 3
 
 function ModeTeams.UnregisterAccessRoads()
+	local okNav, nav = pcall(require, script.Parent:WaitForChild("BotNav"))
+	if okNav and type(nav) == "table" then
+		nav.Arena = nil
+	end
 	for index = #accessUndo, 1, -1 do
 		pcall(accessUndo[index])
 		accessUndo[index] = nil
@@ -603,6 +607,11 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 	local gateways = arenaGateways()
 	if #gateways > 0 then
 		table.insert(accessUndo, (TeamBaseRoads.CutAtArena(roads, arenaCentre, (ModeTeams.ArenaReach or 200) - 1)))
+		-- Bots into the arena only through a gateway (BotNav.DriveRoute).
+		local okNav, nav = pcall(require, script.Parent:WaitForChild("BotNav"))
+		if okNav and type(nav) == "table" then
+			nav.Arena = { center = arenaCentre, radius = ModeTeams.ArenaReach or 200, gateways = gateways }
+		end
 	end
 	-- Each team's best way to each arena gateway (onto that gateway's road, outside it, then along it),
 	-- or -- no gateways -- to the nearest road.
@@ -656,6 +665,45 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 		end
 	end
 	local chosen, gap = TeamBaseRoads.ChooseFair(options[1] or {}, options[2] or {}, FAIR_SHARE)
+	-- Still unfair: the shorter way joins its gateway's road further out (it drives more of that road),
+	-- by the difference, up to three times.
+	for _ = 1, 3 do
+		if not (gap and gap > FAIR_SHARE and chosen[1] and chosen[2] and targets) then
+			break
+		end
+		local short = chosen[1].total < chosen[2].total and 1 or 2
+		local plan, want = chosen[short], chosen[3 - short].total * (1 - FAIR_SHARE * 0.6)
+		local mine = {}
+		for _, target in ipairs(targets) do
+			if target.gateway == plan.gateway and target.edge == plan.edge then
+				local outward = target.lo > target.at and 1 or -1
+				local extra = want - plan.total
+				local copy = table.clone(target)
+				if outward > 0 then
+					copy.lo = math.max(target.lo, plan.along + extra)
+				else
+					copy.hi = math.min(target.hi, plan.along - extra)
+				end
+				table.insert(mine, copy)
+			end
+		end
+		if #mine == 0 then
+			break
+		end
+		local ruin = ruins[short]
+		local gates = {
+			{ position = ruin.frame * TeamBaseRuins.GateOut, heading = ruin.frame.LookVector },
+			{ position = ruin.frame * TeamBaseRuins.GateOutEast, heading = ruin.frame.RightVector },
+		}
+		local longer = TeamBaseRoads.Plan(gates, nil, roads, { avoid = avoid, boxes = boxes, blocked = blocker(ruin), groundAt = groundAt,
+			startY = ruin.height, targets = mine })
+		if not longer then
+			break
+		end
+		chosen[short] = longer
+		local long = math.max(chosen[1].total, chosen[2].total)
+		gap = math.abs(chosen[1].total - chosen[2].total) / math.max(long, 1)
+	end
 	if gap and gap > FAIR_SHARE then
 		warn(string.format("ModeTeams: the bases' ways to the arena differ by %.0f%% (no fairer pair)", gap * 100))
 	end
@@ -677,7 +725,9 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 			ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model)
 			ruin.accessPlan = plan
 			ruin.accessGateway = plan.gateway and gateways[plan.gateway] or nil
-			table.insert(accessUndo, (TeamBaseRoads.Register(roads, plan, heights)))
+			local undo, gateNode = TeamBaseRoads.Register(roads, plan, heights)
+			table.insert(accessUndo, undo)
+			ruin.accessGateNode = gateNode
 		end
 	end
 end

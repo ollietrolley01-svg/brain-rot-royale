@@ -1309,7 +1309,31 @@ function BotNav.BlockRoadAt(roads, position, size)
 	return closed
 end
 
+-- The team arena (ModeTeams sets it with the bases' roads; nil otherwise): { center, radius, gateways }.
+-- A drive from outside it to a goal inside goes by road to the best gateway, then in: never across its
+-- apron and walls anywhere else.
+BotNav.Arena = nil
+
 function BotNav.DriveRoute(roads, from, goal, bounds, preferRoads)
+	local arena = BotNav.Arena
+	if arena and arena.gateways and #arena.gateways > 0 and flatDistance(goal, arena.center) < arena.radius
+		and flatDistance(from, arena.center) >= arena.radius then
+		local gate, cost = nil, math.huge
+		for _, g in ipairs(arena.gateways) do
+			local c = flatDistance(from, g) + flatDistance(g, goal)
+			if c < cost then
+				gate, cost = g, c
+			end
+		end
+		BotNav.Arena = nil
+		local ok, points, flags, onRoads = pcall(BotNav.DriveRoute, roads, from, gate, bounds, preferRoads)
+		BotNav.Arena = arena
+		if ok then
+			table.insert(points, flat(goal))
+			table.insert(flags, false)
+			return points, flags, onRoads
+		end
+	end
 	local direct = { flat(goal) }
 	local directFlags = { false }
 	local edges = roads and roads.edges
