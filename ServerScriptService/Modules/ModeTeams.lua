@@ -496,7 +496,7 @@ end
 -- scenery in its way (trees, rocks, props) is cleared. The road is parented into the compound, so it
 -- goes with it; the bot road data is put back by UnregisterAccessRoads.
 local accessUndo = {}
-local ACCESS_CLEAR = TeamBaseRoads.Width / 2 + 3
+local ACCESS_CLEAR = (TeamBaseRoads and TeamBaseRoads.Width or 18) / 2 + 3
 
 function ModeTeams.UnregisterAccessRoads()
 	for index = #accessUndo, 1, -1 do
@@ -531,7 +531,7 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 	ModeTeams.UnregisterAccessRoads()
 	local roads = mapInfo and mapInfo.roads
 	local map = mapInfo and mapInfo.map
-	if not (roads and roads.edges and map) then
+	if not (TeamBaseRoads and roads and roads.edges and map) then
 		return
 	end
 	local keep = { Roads = true, River = true, Ziplines = true }
