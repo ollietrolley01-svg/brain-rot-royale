@@ -580,12 +580,15 @@ local function onDetonate(info)
 	end
 end
 
--- A vehicle wrecked in sight goes up: its fuel lights (VehicleWreckFx sees the wreck happen).
+-- A vehicle goes up the moment it's wrecked: its fuel lights (VehicleWreckFx.Watch sees it happen,
+-- at any distance). Drawn within BLAST_CULL like any other blast; Sfx.Blast does its own falloff.
 VehicleWreckFx.OnWreck = function(model)
 	local chassis = model:FindFirstChild("Chassis")
 	if chassis and chassis:IsA("BasePart") then
 		-- And is seen to: ExplosiveFx's grenade-standard blast (look only; the wreck did no blast damage).
-		ExplosiveFx.Explosion(chassis.Position, nil, "grenade", 12, "VehicleWreck")
+		if (chassis.Position - camera.CFrame.Position).Magnitude < BLAST_CULL then
+			ExplosiveFx.Explosion(chassis.Position, nil, "grenade", 12, "VehicleWreck")
+		end
 		Sfx.Blast("ExplosionVehicle", chassis.Position, nil, 16)
 	end
 end

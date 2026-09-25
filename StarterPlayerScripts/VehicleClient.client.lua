@@ -70,6 +70,8 @@ local function track(model)
 		return
 	end
 	rigs[model] = false
+	-- Its blast goes off the moment it's wrecked, however far away (the loop below is range-gated).
+	VehicleWreckFx.Watch(model)
 	local pending = false
 	local function rebuild()
 		pending = false
