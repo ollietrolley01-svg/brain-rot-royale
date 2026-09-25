@@ -1213,6 +1213,27 @@ end
 -- Team assignment
 --------------------------------------------------------------------------------
 
+-- BEGIN TEAM PICKER (additive; TeamPicker.Close is the only writer). The sides the team picker settled
+-- on, token -> 1 | 2, for players who have not been dealt yet. Assign honours a player's entry and
+-- consumes it; for everyone else (bots, late joiners) the entries still waiting count as seats taken,
+-- so a bot dealt before a picked player's body arrives fills the OTHER side. Not cleared by Teardown:
+-- the picker closes before Setup runs. Replaced whole by the next SetPicks; Forget drops a leaver's.
+local picks = {}
+
+function ModeTeams.SetPicks(map)
+	picks = {}
+	for token, team in pairs(map or {}) do
+		if team == 1 or team == 2 then
+			picks[token] = team
+		end
+	end
+end
+
+function ModeTeams.PickOf(token)
+	return picks[token]
+end
+-- END TEAM PICKER
+
 -- Deals a combatant onto the smaller side, dealing alternately when they are level. Returns the
 -- team index.
 function ModeTeams.Assign(token)
@@ -1221,14 +1242,24 @@ function ModeTeams.Assign(token)
 		return existing
 	end
 	local counts = ModeTeams.Counts()
-	local team
-	if counts[1] < counts[2] then
-		team = 1
-	elseif counts[2] < counts[1] then
-		team = 2
+	-- The team picker's side for this player, if it chose one (see SetPicks).
+	local team = picks[token]
+	if team then
+		picks[token] = nil
 	else
-		team = nextTeam
-		nextTeam = GameModes.OtherTeam(nextTeam) or 1
+		for pending, side in pairs(picks) do
+			if teamOf[pending] == nil then
+				counts[side] += 1
+			end
+		end
+		if counts[1] < counts[2] then
+			team = 1
+		elseif counts[2] < counts[1] then
+			team = 2
+		else
+			team = nextTeam
+			nextTeam = GameModes.OtherTeam(nextTeam) or 1
+		end
 	end
 	teamOf[token] = team
 
@@ -1242,6 +1273,7 @@ end
 
 function ModeTeams.Forget(token)
 	teamOf[token] = nil
+	picks[token] = nil
 	protectedUntil[token] = nil
 	downed[token] = nil
 end

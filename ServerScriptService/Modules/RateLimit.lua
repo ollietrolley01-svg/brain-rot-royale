@@ -57,6 +57,8 @@ RateLimit.Budgets = {
 	-- a queued one would fire a respawn after the player had already given up and the match moved on.
 	LeaveSpectate = { burst = 3, rate = 1, peak = "the LEAVE button on the spectator hud, pressed once" },
 	ChooseDrop = { burst = 5, rate = 3, peak = "picking a landing spot on the drop map" },
+	-- Latest: a side is a state, and the last one asked for is the one that counts.
+	PickTeam = { burst = 4, rate = 2, peak = "tapping between the two team cards, or 1/2 on a keyboard" },
 	-- One request per player per match, plus a retry if the first lands in the moment between
 	-- the window opening and the map existing. The answer is the largest payload any remote here
 	-- sends -- 38.0 KB measured on SahurSprings (16384 class + 16384 height bytes, 309 road

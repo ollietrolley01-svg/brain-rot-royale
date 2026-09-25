@@ -46,6 +46,8 @@ MatchConfig.DropHeight = 170
 -- is placed. Not choosing leaves you on the spawn the spiral gave you, which is the old random
 -- behaviour unchanged.
 MatchConfig.DropSelectSeconds = 15
+-- The team modes' equivalent: how long the team picker is up once the map is built (TeamPicker).
+MatchConfig.TeamPickSeconds = 12
 MatchConfig.SpawnSpread = 0.96
 
 -- Spacing is driven by area per combatant, so pushing points outward only helps if the

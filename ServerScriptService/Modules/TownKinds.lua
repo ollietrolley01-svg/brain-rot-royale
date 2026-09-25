@@ -181,6 +181,10 @@ local PALETTES = {
 		roofColors = { rgb(60, 70, 84), rgb(150, 56, 48) },
 	},
 }
+-- Each palette knows its own name, so a building can lean its interior style to it (MapBuildings).
+for name, palette in pairs(PALETTES) do
+	palette.name = name
+end
 TownKinds.Palettes = PALETTES
 
 --------------------------------------------------------------------------------
