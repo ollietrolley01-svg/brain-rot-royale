@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 02:10 (EDT).
+Last updated: 2026-09-25 03:00 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -29,7 +29,8 @@ Last updated: 2026-09-25 02:10 (EDT).
 | Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` (PR #35) | **Done, awaiting Oliver's merge.** Players' explosive guns all reach the blast. Found: a bot's Golden Sahur Cannon never explodes (BotService `shootAt`); `explosive_ammo_check.py` crashes on main since d370e62. Row stays unproven for the on-screen look |
 | Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` (PR #37) | **Done, awaiting Oliver's merge.** No path opens the vote or team picker over a match. Latent: the failed-start fallback never clears `dropSelect` (build-machine fix) |
 | Jacob (bimjom) | playtime proof cut to the all-time rule | `task/playtime-proof-new-rule` (PR #38) | **Done, awaiting Oliver's merge** |
-| Jacob (bimjom) | #57/#110 roadkill proof | `task/prove-roadkill` | Claimed 09-25 01:31 (PR #36). Proof only |
+| Jacob (bimjom) | #57/#110 roadkill proof | `task/prove-roadkill` (PR #39) | **Done, awaiting Oliver's merge.** Fires for player and bot drivers. Oliver's calls (03:00 message): spawn protection removed; armour protects riders; the damage scale applies with no driver. The build machine does the fixes |
+| Jacob (bimjom) | #113/#126/#131/#99 lag: **optimize**, not just prove | `task/prove-bot-lag` | Claimed 09-25 02:22. Game-file edits allowed for lag work only (rules in the 03:00 message) |
 
 ## Recently changed on main: expect these to move under you
 
@@ -38,37 +39,33 @@ report it in the mailbox and don't edit.
 
 - Vehicles: `VehicleService.lua`, `VehicleDynamics.lua`, `VehicleModels.lua` (parked-rest a1eb7a8, base-vehicle respawn b5cbc05,
   ride lift and rough-ground underside 52a5608, on main at 05437cf)
-- **Waiting on Oliver's merge (touch nothing here):** `pc/hitreg-fixes` (`LagCompensation.lua`, `CombatService.lua`
+- **Merged to main since the last update:** `pc/hitreg-fixes` (`LagCompensation.lua`, `CombatService.lua`
   rider cover, `CombatClient.client.lua` round count, `VehicleWeaponClient.client.lua` fire gate, the hitreg tools)
   and `pc/mounted-guns-powerful` (`MountedGunData.lua`, `VehicleWeaponData.lua`, `mounted_guns_check.py`,
   `vehicle_ttk_check.py`: Oliver wants the ground and car guns very powerful)
   and `pc/ttk-plus-25` (stacked on the guns branch: `MatchConfig.CombatDamageScale` 0.92 -> 0.736, so every
   kill of a player, bot, vehicle or mounted gun takes 25% longer; companion caps x0.8; the TTK bands in
   `vehicle_ttk_check`, `mounted_guns_check` and `companion_ability_check` x1.25)
+- **Tonight, the build machine:** silly explosions (57fd4f0, f9f0af6), all-wheel drive (47200d3), and now
+  fixes to `BotService.lua` (bot cannon blast), `ProjectileService.lua`/`CombatService.lua` (explosive follow-ups),
+  `MatchService.lua`/`VoteDropClient` (drop picker), `VehicleService.lua`/`GameModes.lua` (roadkill, spawn protection)
 - Bots: `BotService.lua`, `BotGunner.lua` (new), `BotDriveTactics.lua`, `MountedGun*`
 - Team modes: `ModeTeams.lua`, `TeamBattleground.lua`, `MatchConfig.lua`
 - Lobby, roundabouts, interiors, wall durability, shed loot (the `pc/*` names on the branch list)
 
-## The rule that hasn't changed
+## The rule (changed by Oliver, 2026-09-25 03:00)
 
-**Contributors from outside don't edit game files.** You write reports, checks, probes and new files. A
-bug you find goes in the mailbox with the file and line. The build machine owns the fix. Proofs that
-end in "no bug, here is the evidence" count as much as fixes do.
+**Contributors from outside don't edit game files, except for lag optimizations** (one per PR, with
+before/after numbers and a check; nothing lands until Oliver merges). Bugs go in the mailbox with the
+file and line. The build machine owns the fix.
 
-## Good next work: only NEW, USEFUL work (Oliver, 2026-09-25)
+## What to work on (Oliver, 2026-09-25 03:00: "just have jacob run bug tests and optimizations for lag")
 
-Every OLIVER_LIST row has been built. **Don't build anything that's already on main.** The useful
-work is proving rows marked "in tree, unproven" and reporting bugs nobody has found yet. Before
-claiming, check STATUS, `git log origin/main --grep`, and the row itself (see
-`messages/2026-09-25-0120-oliver-jacob-only-new-useful-work.md`). Priority order:
+The task list is done. **Don't pick up OLIVER_LIST rows to prove.** Only two kinds of work:
 
-1. #57/#110 roadkill (32de759, 41631ba), claimed, Jacob
-2. #113/#126 bot lag, #99 movement looks low-fps
-3. #117 lobby trial guns change every pickup (e666c61)
-4. #85 chests and supply drops spill loot on the ground (3441c0f, d508889)
-5. #51 old road cars can't be destroyed (21c6199, 81c1263, d2be199)
-6. #114 popup barricade in the team kit, two KOTH objectives (7baed01)
+1. **Lag optimizations**: #113/#126/#131 bot lag and #99 movement, claimed by Jacob.
+2. **Bug tests on current main**: run the checks and harnesses and report new bugs. Start with what
+   landed tonight: silly explosions, all-wheel drive, the +25% time-to-kill (0.736), and the build
+   machine's explosive, drop-picker and roadkill fixes when they land.
 
-(#122 and #107 are done as proofs: PRs #35 and #37, awaiting Oliver's merge.)
-
-Claim a row with a one-line mailbox message before you start, as before.
+Claim with a one-line mailbox message before you start, as before.

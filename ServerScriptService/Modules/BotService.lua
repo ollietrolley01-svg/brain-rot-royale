@@ -6288,7 +6288,8 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 								giveBotHeal(bot, id, count)
 							elseif WeaponService.Shields[id] then
 								giveBotShield(bot, id, count)
-							elseif id == "RotBarricade" then
+							elseif id == "RotBarricade" or id == "PopupBunker" or id == "BrainrotFortress" then
+								-- A bot's defense is one generic pop-up; the team kit's other structures count toward it.
 								giveBotDefense(bot, count)
 							elseif id == "RotRocket" then
 								giveBotRocket(bot, count)

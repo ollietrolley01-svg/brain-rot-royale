@@ -742,8 +742,13 @@ local function startWorld(mapInfo)
 	-- BotService's contract: return a WeaponData def, a weapon id string, or nil. The second
 	-- return is the kit (heals, shields, throwables) and is ignored until BotService consumes it;
 	-- extra returns are discarded in Lua, so this is correct against the call site as it stands.
-	BotService.SpawnLoadout = function()
-		return ModeTeams.RollGreenWeapon(), GameModes.Loadout.items
+	-- The same per-life roll players get (GameModes.RollLoadout), and the same full shield. BotService
+	-- zeroes a new bot's Shield before calling this, so setting it here is what sticks.
+	BotService.SpawnLoadout = function(_, humanoid)
+		if GameModes.Loadout.fullShield and humanoid then
+			humanoid:SetAttribute("Shield", MatchConfig.MaxShield)
+		end
+		return ModeTeams.RollGreenWeapon(), GameModes.RollLoadout()
 	end
 
 	local myGeneration = generation

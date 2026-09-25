@@ -360,6 +360,8 @@ local function explode(blast)
 		normal = blast.normal,
 		kind = blast.kind,
 		radius = radius,
+		-- Which gun or item it was, so a silly one draws its own themed blast (SillyExplosionFx). Look only.
+		weaponId = blast.weaponId,
 	})
 
 	for _, victim in ipairs(CombatService.InRadius(centre, radius + Ballistics.BodyAllowance, nil)) do
@@ -521,7 +523,7 @@ local function burst(entry, position, normal, directToken, headshot)
 		return nil
 	end
 	if spec.explosive == false then
-		broadcast("impact", { id = entry.id, position = position, normal = normal, kind = entry.kindName })
+		broadcast("impact", { id = entry.id, position = position, normal = normal, kind = entry.kindName, weaponId = entry.weaponId })
 		local direct = blast.direct
 		if direct then
 			local amount = (blast.damage + (direct.bonus or 0)) * (direct.multiplier or 1)

@@ -47,6 +47,7 @@ local MountedGunData = require(Shared:WaitForChild("MountedGunData"))
 local MountedGunModels = require(Shared:WaitForChild("MountedGunModels"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
 -- Required for its side effect: the emplacements' weapons merged into VehicleWeaponData.
 require(Shared:WaitForChild("VehicleWeaponData"))
 
@@ -418,13 +419,16 @@ local function breakGun(model, attacker)
 	if joint then
 		joint.C0 = joint.C0 * CFrame.Angles(math.rad(-14), math.rad(9), 0)
 	end
-	local flash = Instance.new("Explosion")
-	flash.BlastPressure = 0
-	flash.BlastRadius = 0
-	flash.DestroyJointRadiusPercent = 0
-	flash.ExplosionType = Enum.ExplosionType.NoCraters
-	flash.Position = model:GetPivot().Position + Vector3.new(0, 3.5, 0)
-	flash.Parent = workspace
+	-- The look: ExplosiveFx's grenade-standard blast on every client (look only; the blast that broke
+	-- it did the damage). It used to be a bare Explosion.
+	local flash = { Position = model:GetPivot().Position + Vector3.new(0, 3.5, 0) }
+	Remotes.Event("ProjectileFx"):FireAllClients("detonate", {
+		position = flash.Position,
+		normal = Vector3.yAxis,
+		kind = "grenade",
+		radius = 8,
+		weaponId = "MountedGunWreck",
+	})
 	local smoke = Instance.new("Smoke")
 	smoke.Color = Color3.fromRGB(40, 38, 36)
 	smoke.Opacity = 0.35

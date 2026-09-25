@@ -1985,8 +1985,10 @@ local function startMatch()
 			Combatants.Register(character, player)
 			applyBoosts(player, humanoid)
 			WeaponService.Reset(player)
+			-- Never LOWER a shield the spawn kit already filled (the team kit spawns everyone full).
 			if currentEvent and currentEvent.startShield then
-				WeaponService.SetShield(player, currentEvent.startShield)
+				local now = (WeaponService.Get(player) or {}).shield or 0
+				WeaponService.SetShield(player, math.max(now, currentEvent.startShield))
 			end
 			-- Drop in from high above the spawn under a canopy, steering on the way down. Over
 			-- wherever you picked on the drop map, or over the spiral's spot if you picked nothing.
@@ -2116,8 +2118,10 @@ function MatchService.OnCharacterAdded(player, character)
 			-- GrantLoadout's Reset has just zeroed - re-applied from the record, not re-spent
 			-- (logic review #23).
 			reapplyBoosts(player, humanoid)
+			-- Never LOWER a shield the spawn kit already filled (the team kit spawns everyone full).
 			if currentEvent and currentEvent.startShield then
-				WeaponService.SetShield(player, currentEvent.startShield)
+				local now = (WeaponService.Get(player) or {}).shield or 0
+				WeaponService.SetShield(player, math.max(now, currentEvent.startShield))
 			end
 		end
 		-- Handled by startMatch, which pivots to the spawn point itself.
