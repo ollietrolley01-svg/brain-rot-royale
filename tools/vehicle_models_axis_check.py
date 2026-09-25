@@ -217,8 +217,7 @@ function dumpModel(model)
 			end
 			table.insert(out, { p.Name, p.ClassName, tostring(p.Shape), s.X, s.Y, s.Z,
 				c.p.X, c.p.Y, c.p.Z, c.r.X, c.r.Y, c.r.Z, c.u.X, c.u.Y, c.u.Z, c.b.X, c.b.Y, c.b.Z,
-				p.Transparency or 0, anchor,
-				(p.Color and p.Color.__color) and (p.Color[1] .. "," .. p.Color[2] .. "," .. p.Color[3]) or "", tostring(p.Material) })
+				p.Transparency or 0, anchor })
 		end
 	end
 	return out
@@ -227,13 +226,6 @@ end
 
 ROD_THIN, ROD_RATIO = 0.6, 2.5
 BAT_COAXIAL_TOL, BAT_ALONG_TOL = 1.0, 3.0
-# Invariant 7: the most two coaxial cylinders of one look may step in radius where they meet (end to
-# end within SEAM_REACH), before the step shows as a ring round the join.
-SEAM_STEP, SEAM_REACH = 0.035, 0.03
-SEAM_DISC = 0.2   # a cylinder shorter than this share of its diameter is a disc
-# A step over SEAM_FEATURE is a shaped feature standing proud on purpose -- a collar, a sleeve, a
-# rim lip -- and reads as one; a step between SEAM_STEP and it reads as a stepped taper, a seam.
-SEAM_FEATURE = 0.1
 PROTRUDE, HELD, ZFIGHT_DRIFT, CLEAR = 0.3, 0.06, 0.05, 0.05
 # A bare end longer than both of these reads as a pole. Under 0.4 it is a trim end at a panel's
 # edge: the arch lips' last segments on the van and the GT stop 0.07 past the arch panel's back
@@ -242,8 +234,7 @@ BARE, BARE_RATIO = 0.4, 2.0
 # The mount itself (ring, yoke, cheeks, cradle, trunnion) is squat; only the weapon's own barrel or
 # tubes may be long. The Ranger's pod stood on a 3.9-stud post, which read as a pole in the bed.
 MOUNT_POST = 2.5
-BAT_TAPER_STEPS = 12   # VehicleModels' TAPER_STEPS
-BAT_CHAIN = ("BatHandle",) + tuple(f"BatTaper{i}" for i in range(1, BAT_TAPER_STEPS + 1)) + ("BatBarrel",)
+BAT_CHAIN = ("BatHandle", "BatFlare", "BatTaper", "BatThroat", "BatShoulder", "BatBarrel")
 BAT_PIECES = ("BatKnob",) + BAT_CHAIN + ("BatEnd", "BatStrap1", "BatStrap2")
 TURRET = re.compile(r"^(Turret|Gun|Pod|Mortar|DriverGun)")
 # The weapon itself (not its mount), which is allowed to be long: barrels, tubes.
@@ -258,7 +249,7 @@ def luau_to_lua(src):
 def load_sources(repo):
     shared = Path(repo) / "ReplicatedStorage/Shared"
     return {name: luau_to_lua((shared / f"{name}.lua").read_text())
-            for name in ("VehicleModels", "ZFight", "VehicleWeaponData", "VehicleDynamics")}
+            for name in ("VehicleModels", "ZFight", "VehicleWeaponData")}
 
 
 def weapon_arcs(data_src, table="ByModel"):
@@ -286,8 +277,6 @@ class Runtime:
         self.lua.execute(MOCK)
         modules = self.lua.eval("function() MODULES = {}; return MODULES end")()
         modules["ZFight"] = self.lua.execute(sources["ZFight"])
-        # The struts (Builder:struts) are sized from VehicleDynamics' handling.
-        modules["VehicleDynamics"] = self.lua.execute(sources["VehicleDynamics"])
         if not zfight:
             modules["ZFight"]["Enabled"] = False
         self.vm = self.lua.execute(sources["VehicleModels"])
@@ -306,11 +295,10 @@ class Runtime:
         parts = []
         for i in range(1, len(rows) + 1):
             r = rows[i]
-            v = [r[j] for j in range(1, 23)]
+            v = [r[j] for j in range(1, 21)]
             parts.append({
                 "name": v[0], "cls": v[1], "shape": v[2].split(".")[-1], "size": list(v[3:6]), "pos": list(v[6:9]),
                 "cols": (list(v[9:12]), list(v[12:15]), list(v[15:18])), "transparency": v[18], "anchor": v[19],
-                "look": (v[20], v[21]),
             })
         return parts
 
@@ -658,47 +646,6 @@ def audit_bat(parts, label, verbose):
     return faults
 
 
-def audit_seams(parts, label, verbose):
-    """Invariant 7 (Oliver 09-25: "no visible seams, rings or stepped joints"): one round thing built
-    from several cylinders of the same look (colour and material) -- a tapered bat, a barrel, a pipe --
-    shows every step in radius where two of them meet end to end as a ring round it. Two coaxial
-    cylinders of one look that meet or overlap end to end may step by at most SEAM_STEP in radius, or
-    by more than SEAM_FEATURE (a collar or a sleeve, which reads as its own thing)."""
-    faults = []
-    cyls = []
-    for p in visible(parts):
-        if p["shape"] == "Cylinder":
-            axis = norm(p["cols"][0])
-            half = p["size"][0] / 2
-            r = min(p["size"][1], p["size"][2]) / 2
-            # A disc (a wheel's face or lip, a rim, a cap) is a feature standing proud, not a join.
-            if p["size"][0] >= SEAM_DISC * 2 * r:
-                cyls.append((p, axis, half, r))
-    worst = 0.0
-    for i in range(len(cyls)):
-        p, a, h, r = cyls[i]
-        for j in range(i + 1, len(cyls)):
-            q, b, g, t = cyls[j]
-            if p["look"] != q["look"] or angle(a, b) > 1.0:
-                continue
-            d = sub(q["pos"], p["pos"])
-            along = dot(d, a)
-            if length(sub(d, mul(a, along))) > 0.02:
-                continue
-            # End to end: q starts within SEAM_REACH of where p ends (or overlaps into it), and neither
-            # holds the other whole (a hub inside a tyre is not a joint).
-            gap = abs(along) - (h + g)
-            if gap > SEAM_REACH or abs(along) + min(h, g) <= max(h, g):
-                continue
-            step = abs(r - t)
-            worst = max(worst, step)
-            if SEAM_STEP < step <= SEAM_FEATURE:
-                faults.append(f"{label}/{p['name']}|{q['name']}: a {step:.2f}-stud ring where they meet (one look, coaxial)")
-    if verbose:
-        print(f"  seams: worst step between coaxial same-look cylinders {worst:.3f}")
-    return faults
-
-
 def rotate(v, axis, a):
     """Rodrigues: v turned by a radians about unit axis."""
     c, s = math.cos(a), math.sin(a)
@@ -765,7 +712,6 @@ def audit_model(rt, rt_raw, arcs, model_id, verbose=True, driver_arcs=None):
             parts = rt.build(model_id, how, scheme)
             faults += audit_rods(parts, label, talk)
             faults += audit_zfight(parts, rt_raw.build(model_id, how, scheme), label, talk)
-            faults += audit_seams(parts, label, talk)
             if model_id == "SahurVan":
                 faults += audit_bat(parts, label, talk)
             if how == "drive" and model_id in rt.mounts and scheme == 1:
@@ -808,13 +754,13 @@ def main(repo="."):
          'b:tube("BatBarrel", batAt(1.6), batAt(4.0)',
          'b:tube("BatBarrel", batAt(1.6), batAt(4.0, 0.2)', "BatBarrel: bat part"),
         ("bat in two pieces (gap before the barrel)", "SahurVan", VM,
-         'b:tube("BatBarrel", batAt(1.6)', 'b:tube("BatBarrel", batAt(1.75)', "BatTaper12->BatBarrel"),
+         'b:tube("BatBarrel", batAt(1.6)', 'b:tube("BatBarrel", batAt(1.75)', "BatShoulder->BatBarrel"),
         ("knob floating off the handle", "SahurVan", VM,
          'b:ball("BatKnob", 0.46, batAt(-3.8)', 'b:ball("BatKnob", 0.46, batAt(-4.2)', "BatKnob: knob"),
         ("bat floating above the rack", "SahurVan", VM,
          "local bat = CF(V(batX, batY, batZ))", "local bat = CF(V(batX, batY + 0.3, batZ))", "not resting on a rack bar"),
         ("parked van loses its bat", "SahurVan", VM,
-         'local STATIC_DROP = { ', 'local STATIC_DROP = { "^BatTaper6$", ', "pieces missing"),
+         'local STATIC_DROP = { ', 'local STATIC_DROP = { "^BatThroat", ', "pieces missing"),
         ("straps back in the bat's own frame (hanging off the bars)", "SahurVan", VM,
          "local z = (barZ - batZ) / math.cos(math.rad(rake))", "local z = barZ", "strap does not reach a rack bar"),
         ("mortar back on its old 0.4 plinth (swings through the bat)", "SahurVan", VM,
@@ -831,8 +777,6 @@ def main(repo="."):
          'local STATIC_CAR_DROP = { "^Column$" }', "local STATIC_CAR_DROP = {}", "Column: rod end sticks out"),
         ("z-fight pass shoves a bat piece", "SahurVan", ZF,
          "ZFight.Gap = 0.06", "ZFight.Gap = 0.06\nZFight.PlantBat = true", "z-fight pass moved it"),
-        ("the bat's taper back to four big steps (rings at the joins)", "SahurVan", VM,
-         "local TAPER_STEPS = 12", "local TAPER_STEPS = 4", "ring where they meet"),
         ("pole sticking out of the body", "CrocodiloRanger", VM,
          'b:box("BumperStep"',
          'b:tube("PlantPole", V(0, 3, 6), V(0, 3, 10.5), 0.2, "trim")\n\t\tb:box("BumperStep"', "PlantPole: rod reaches"),
@@ -849,7 +793,7 @@ def main(repo="."):
         if module == ZF:
             # The pass itself misbehaving: after it runs, one bat piece is pushed 0.3 off its line.
             planted[ZF] = planted[ZF].replace("\treturn stats\nend\n\n-- The pairs",
-                "\tif ZFight.PlantBat then for _, r in pairs(roots) do for _, p in ipairs(r:GetChildren()) do if p.Name == \"BatTaper6\" then p.CFrame = p.CFrame + Vector3.new(0.3, 0, 0) end end end end\n\treturn stats\nend\n\n-- The pairs", 1)
+                "\tif ZFight.PlantBat then for _, r in pairs(roots) do for _, p in ipairs(r:GetChildren()) do if p.Name == \"BatThroat\" then p.CFrame = p.CFrame + Vector3.new(0.3, 0, 0) end end end end\n\treturn stats\nend\n\n-- The pairs", 1)
             assert "PlantBat then" in planted[ZF]
         faults = run(planted, only=model_id, verbose=False)
         caught = [f for f in faults if tag in f]

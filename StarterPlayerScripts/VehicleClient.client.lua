@@ -18,13 +18,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Lighting = game:GetService("Lighting")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local VehicleDynamics = require(Shared:WaitForChild("VehicleDynamics"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 local VehicleWreckFx = require(Shared:WaitForChild("VehicleWreckFx"))
-local VehicleVisuals = require(Shared:WaitForChild("VehicleVisuals"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 -- Through someone at speed with the car's momentum: this client simulates the car it drives, so the
 -- bodies ahead are let through here, before the physics meets them (the server is told of each hit).
@@ -49,6 +47,8 @@ local POSE_DISTANCE = 200
 local ENGINE_DISTANCE = 150
 local FLIP_AFTER = 2.0
 -- Engine pitch from a standstill to top speed, and how much of the loop you hear when it idles.
+local ENGINE_PITCH_AT_TOP = 2.5
+local ENGINE_IDLE_VOLUME = 0.45
 -- The dial says KM/H, so it shows km/h: a stud is 0.28 m, so studs/s * 0.28 * 3.6 is almost exactly
 -- the speed itself. A car at 100 studs/s reads 101, and a sprinting player would read 26.
 local DISPLAY_SCALE = 1.008
@@ -70,7 +70,6 @@ local function track(model)
 		return
 	end
 	rigs[model] = false
-	VehicleWreckFx.Watch(model)
 	local pending = false
 	local function rebuild()
 		pending = false
@@ -556,15 +555,12 @@ end)
 -- Sound
 --------------------------------------------------------------------------------
 
--- One engine loop per vehicle you can hear, on an attachment at its chassis. Sfx.Loop keeps only the
--- nearest few audible, and stops any loop whose vehicle goes away. The note is an engine speed
--- driven by the throttle through a simulated gearbox (VehicleVisuals.EngineStep), in the model's
--- own register (Handling enginePitch / engineVolume); every machine can do it for every vehicle,
--- because a VehicleSeat's throttle replicates.
-local function updateEngine(model, rig, distance, dt)
+-- One engine loop per vehicle you can hear, on an attachment at its chassis, pitched by road
+-- speed. Sfx.Loop keeps only the nearest few audible, and stops any loop whose vehicle goes away.
+local function updateEngine(model, rig, distance)
 	local seat = model:FindFirstChild("DriverSeat")
-	local velocity = rig.chassis.AssemblyLinearVelocity
-	local wanted = distance < ENGINE_DISTANCE and ((seat and seat.Occupant) or velocity.Magnitude > 2)
+	local speed = math.abs(rig.chassis.AssemblyLinearVelocity.Magnitude)
+	local wanted = distance < ENGINE_DISTANCE and ((seat and seat.Occupant) or speed > 2)
 	if not wanted then
 		if rig.engineLoop then
 			rig.engineLoop:Stop()
@@ -583,37 +579,79 @@ local function updateEngine(model, rig, distance, dt)
 		if not rig.engineLoop then
 			return
 		end
-		rig.engine = {}
 	end
-	local h = rig.handling
-	local throttle = (seat and seat:IsA("VehicleSeat") and seat.Occupant) and seat.ThrottleFloat or 0
-	local pitch, volume = VehicleVisuals.EngineStep(rig.engine, { throttle = throttle,
-		speed = velocity:Dot(rig.chassis.CFrame.LookVector), top = h.topSpeed, grounded = (rig.visualGrounded or 1) > 0,
-		pitch = h.enginePitch, volume = h.engineVolume }, dt)
-	rig.engineLoop:SetPitch(pitch)
-	rig.engineLoop:SetVolume(math.clamp(volume, 0, 1))
+	local share = math.clamp(speed / rig.handling.topSpeed, 0, 1)
+	rig.engineLoop:SetPitch(1 + share * (ENGINE_PITCH_AT_TOP - 1))
+	rig.engineLoop:SetVolume(ENGINE_IDLE_VOLUME + (1 - ENGINE_IDLE_VOLUME) * share)
 end
 
--- Lamps and their lights (VehicleVisuals.Lights): a parked vehicle's lamps are dim and dark, a
--- driven one's head lamps come up and throw their beams, the brake lamps light under braking and the
--- reversing lamps in reverse -- which every machine can see, because a VehicleSeat's throttle and a
--- model's attributes replicate. A wreck shows none of it, and smokes (VehicleWreckFx).
+-- Lamps. The parts are Neon and lit by their colour whatever happens; what changes is how bright.
+-- A parked vehicle's lamps are dim, a driven one's head lamps come up, and the brake lamps come on
+-- when the driver brakes — which every machine can see, because a VehicleSeat's throttle and a
+-- model's attributes replicate to everyone. The brightness share itself (and what a wrecked vehicle
+-- does to smoke) lives in VehicleWreckFx.lua, a ModuleScript, so it can be required and proven from
+-- a gallery the way GunFx/ExplosiveFx already are -- this LocalScript can't be.
+-- STRONG keys (bug-hunt B3-2, 2026-09-21): a weak `lamps` table let a collected-and-rebuilt entry
+-- re-read `base` from `part.Color` in lampsOf below -- but updateLamps is the only writer of that
+-- same property, so a rebuild re-primed `base` from an ALREADY-DIMMED colour. Every drop multiplied
+-- the darkening again with no floor (0.34 -> 0.1156 -> 0.039 -> ...), permanently, on any car,
+-- wreck or no wreck -- the "harmless cache" verdict this table used to carry was wrong. Dropped
+-- explicitly in lampsOf, the same AncestryChanged shape `track()` above already uses for `rigs`.
+local lamps = {}
+
+local function lampsOf(model)
+	local found = lamps[model]
+	if found then
+		return found
+	end
+	found = {}
+	-- GetDescendants, not GetChildren (bug-hunt B3-3b): a lamp part nested under a sub-model would
+	-- have read as zero found under GetChildren, silently never lighting or dimming.
+	for _, part in ipairs(model:GetDescendants()) do
+		local role = part:IsA("BasePart") and part:GetAttribute("Lamp")
+		if role then
+			table.insert(found, { part = part, role = role, base = VehicleWreckFx.LampBaseColor(part) })
+		end
+	end
+	lamps[model] = found
+	-- One connection per build, gone with the entry: a vehicle streaming out and back in rebuilds it.
+	local watch
+	watch = model.AncestryChanged:Connect(function()
+		if not model:IsDescendantOf(workspace) then
+			lamps[model] = nil
+			watch:Disconnect()
+		end
+	end)
+	return found
+end
+
 local function updateLamps(model, distance)
+	local found = lampsOf(model)
 	local seat = model:FindFirstChild("DriverSeat")
 	local driven = seat ~= nil and seat.Occupant ~= nil
-	local braking, reversing = false, false
+	local braking = false
 	if driven and seat:IsA("VehicleSeat") then
 		local forward = seat.CFrame.LookVector:Dot(seat.AssemblyLinearVelocity)
 		braking = seat:GetAttribute("Handbrake") == true or (seat.ThrottleFloat < -0.05 and forward > 1)
 			or (seat.ThrottleFloat > 0.05 and forward < -1)
-		reversing = seat.ThrottleFloat < -0.05 and forward < 0.5
 	end
 	local wrecked = model:GetAttribute("Wrecked") == true
-	if distance <= ANIMATE_DISTANCE then
-		VehicleVisuals.Lights(model, { driven = driven, braking = braking, reversing = reversing, wrecked = wrecked }, distance,
-			Lighting.ClockTime)
+	-- One number describes the whole state, so nothing is written while nothing changes. This is
+	-- the ONLY place anything writes lamp Color -- "wrecked" is folded in as a third bit rather
+	-- than a second writer, the failure mode the prompt-reenable bug (#53/#57) already caught once.
+	if #found > 0 then
+		local state = (driven and 1 or 0) + (braking and 2 or 0) + (wrecked and 4 or 0)
+		if lamps[model].state ~= state and distance <= ANIMATE_DISTANCE then
+			lamps[model].state = state
+			for _, entry in ipairs(found) do
+				local share = VehicleWreckFx.LampShare(entry.role, wrecked, driven, braking)
+				entry.part.Color = Color3.new(entry.base.R * share, entry.base.G * share, entry.base.B * share)
+			end
+		end
 	end
-	-- Bug-hunt B3-3b: smoke never shares an early return with the lamps.
+	-- Bug-hunt B3-3b: this used to sit inside the `#found == 0` early return above, so a vehicle
+	-- with no lamp parts at all never smoked when wrecked -- two unrelated features shared one
+	-- early return that only ever belonged to lamps.
 	VehicleWreckFx.SetSmoke(model, wrecked)
 end
 
@@ -621,24 +659,12 @@ end
 -- Moving parts and riders
 --------------------------------------------------------------------------------
 
--- Each character's Motor6Ds by name, found once. STRONG keys (bug sweep 09-25, the B3 lamps pitfall):
--- weak Instance keys lose live entries, and every loss walked the rider's whole body again the next
--- frame. Characters gone from the world are swept out whenever a new one is added, and a character
--- whose root joint lost its parent (rebuilt in place) is scanned once more.
-local jointsOf = {}
+-- Each character's Motor6Ds by name, found once.
+local jointsOf = setmetatable({}, { __mode = "k" })
 
 local function jointsFor(character)
 	local joints = jointsOf[character]
-	local root = joints and (joints.Root or joints.RootJoint)
-	if joints and root and not root.Parent then
-		joints = nil
-	end
 	if not joints then
-		for known in pairs(jointsOf) do
-			if not known.Parent then
-				jointsOf[known] = nil
-			end
-		end
 		joints = {}
 		for _, descendant in ipairs(character:GetDescendants()) do
 			if descendant:IsA("Motor6D") then
@@ -713,29 +739,6 @@ local function poseRiders(model, focusDistance)
 	end
 end
 
-local function animateWheels(model, rig, dt)
-	if driving and driving.model == model then
-		VehicleDynamics.AnimateWheels(rig, dt)
-	else
-		local seat = model:FindFirstChild("DriverSeat")
-		local steer = seat and seat:IsA("VehicleSeat") and seat.SteerFloat * rig.handling.steerLow * 0.6 or 0
-		VehicleDynamics.AnimateWheels(rig, dt, steer, seat and seat:IsA("VehicleSeat") and seat.ThrottleFloat or 0)
-	end
-end
-
--- The wheels of the vehicles near the camera put back on the ground just before the frame is drawn
--- (a zero step: no spin, no easing, only each wheel's contact where the physics left the body). Drawn
--- in Stepped alone, the body moved on by the physics after them, and on rocks at speed a tyre showed
--- up to half a stud into or off the ground (tools/vehicle_visuals_check.py).
-RunService.RenderStepped:Connect(function()
-	local focus = camera.CFrame.Position
-	for model, rig in pairs(rigs) do
-		if rig and rig.chassis.Parent and (rig.chassis.Position - focus).Magnitude < FULL_RATE_DISTANCE then
-			animateWheels(model, rig, 0)
-		end
-	end
-end)
-
 RunService.Stepped:Connect(function(_, dt)
 	frameCount += 1
 	local focus = camera.CFrame.Position
@@ -745,10 +748,17 @@ RunService.Stepped:Connect(function(_, dt)
 			if distance < ANIMATE_DISTANCE then
 				-- Far vehicles animate every third frame; nobody can tell at that range.
 				if distance < FULL_RATE_DISTANCE or frameCount % 3 == 0 then
-					animateWheels(model, rig, distance < FULL_RATE_DISTANCE and dt or dt * 3)
+					local stepDt = distance < FULL_RATE_DISTANCE and dt or dt * 3
+					if driving and driving.model == model then
+						VehicleDynamics.AnimateWheels(rig, stepDt)
+					else
+						local seat = model:FindFirstChild("DriverSeat")
+						local steer = seat and seat:IsA("VehicleSeat") and seat.SteerFloat * rig.handling.steerLow * 0.6 or 0
+						VehicleDynamics.AnimateWheels(rig, stepDt, steer)
+					end
 				end
 				poseRiders(model, distance)
-				updateEngine(model, rig, distance, dt)
+				updateEngine(model, rig, distance)
 				updateLamps(model, distance)
 			end
 		end

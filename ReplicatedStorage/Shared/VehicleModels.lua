@@ -31,15 +31,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local ZFight = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("ZFight"))
--- For the struts' sizes (Builder:struts). Guarded: the offline tools that build these models with a
--- stand-in require (parked_car_check, destruct_*_check, ...) have no VehicleDynamics, and build them
--- without struts rather than not at all.
-local okDynamics, VehicleDynamics = pcall(function()
-	return require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("VehicleDynamics"))
-end)
-if not okDynamics then
-	VehicleDynamics = nil
-end
 
 local VehicleModels = {}
 
@@ -386,24 +377,20 @@ end
 --   Hull_NoseRamp / Hull_TailRamp  wedges bevelling the belly's front and rear edges (~25 deg), so
 --               a rock the wheels are climbing meets a slope the low-friction hull slides up, not a face
 local BELLY_RAISE, BELLY_RAMP, BELLY_RUN = 0.5, 0.9, 2.0
-function Builder:belly(tailScale)
+function Builder:belly()
 	local chassis = self.chassis
 	local size, at = chassis.Size, chassis.Position
 	local raise = math.min(BELLY_RAISE, size.Y * 0.25)
 	local ramp = math.min(BELLY_RAMP, (size.Y - raise) * 0.45)
 	local run = math.min(BELLY_RUN * ramp / BELLY_RAMP, size.Z * 0.2)
-	-- A long tail over the rear wheels (the van) gets a longer tail ramp: its corner is what caught the
-	-- rocky climb's crest behind it (tools/vehicle_rough_terrain_probe.lua's stall log).
-	local tailRun = math.min(run * (tailScale or 1), size.Z * 0.28)
 	local bottom = -size.Y / 2 + raise
 	local upper = size.Y / 2 - (bottom + ramp)
 	self:hull("Hull_Body", V(size.X, upper, size.Z), at + V(0, bottom + ramp + upper / 2, 0), 0.1)
-	self:hull("Hull_Belly", V(size.X, ramp, size.Z - run - tailRun), at + V(0, bottom + ramp / 2, (tailRun - run) / -2), 0.1)
+	self:hull("Hull_Belly", V(size.X, ramp, size.Z - 2 * run), at + V(0, bottom + ramp / 2, 0), 0.1)
 	-- A WedgePart's slope runs from its bottom front edge up to its top back edge; turned over about Z
 	-- the cut-away corner is the bottom front (-Z), turned over about X it is the bottom rear (+Z).
-	for _, end_ in ipairs({ { "Hull_NoseRamp", -1, CFrame.Angles(0, 0, math.pi), run }, { "Hull_TailRamp", 1, CFrame.Angles(math.pi, 0, 0), tailRun } }) do
-		local length = end_[4]
-		local part = self:hull(end_[1], V(size.X, ramp, length), at + V(0, bottom + ramp / 2, end_[2] * (size.Z / 2 - length / 2)), 0.1)
+	for _, end_ in ipairs({ { "Hull_NoseRamp", -1, CFrame.Angles(0, 0, math.pi) }, { "Hull_TailRamp", 1, CFrame.Angles(math.pi, 0, 0) } }) do
+		local part = self:hull(end_[1], V(size.X, ramp, run), at + V(0, bottom + ramp / 2, end_[2] * (size.Z / 2 - run / 2)), 0.1)
 		local wedge = Instance.new("WedgePart")
 		for _, key in ipairs({ "Name", "Size", "Transparency", "Anchored", "CanCollide", "CanTouch", "CanQuery", "Massless",
 			"CustomPhysicalProperties", "Parent" }) do
@@ -415,80 +402,6 @@ function Builder:belly(tailScale)
 		part:Destroy()
 	end
 	chassis.CanCollide = false
-end
-
--- Suspension struts (Oliver 09-25: "make the suspension visibly move"). A car's wheels had nothing
--- between them and the body; now each has a dark strut just inboard of the tyre: a sleeve with its
--- coil fixed to the chassis, and a rod from the hub's centre up into the sleeve on its own joint,
--- which VehicleDynamics.AnimateWheels slides with the drawn wheel. Sized from the model's handling so
--- the rod's top stays inside the sleeve over the whole drawn travel -- full droop (travelDown) to
--- full bump plus the drawn overtravel -- with STRUT_OVERLAP to spare at each end.
--- (Bikes have their own: the fork slides, the swingarm swings.)
-local STRUT_OVERLAP = 0.15
-local STRUT_COLOR, COIL_COLOR = Color3.fromRGB(38, 38, 42), Color3.fromRGB(70, 70, 76)
--- The lowest visible body part over a strut at (x, z) above `from` (world boxes: a turned panel counts
--- by its whole box, which only ever lowers the ceiling): the strut ends inside it, never through it.
--- A part the strut's foot is already inside caps it just under its own top.
-local function strutCeiling(self, x, z, from)
-	local ceiling = math.huge
-	for _, part in ipairs(self.model:GetDescendants()) do
-		if part:IsA("BasePart") and part.Transparency < 1 and not string.find(part.Name, "^Wheel_")
-			and not string.find(part.Name, "^Strut") and not string.find(part.Name, "^Hull_") and part.Name ~= "Chassis" then
-			local c, s = part.CFrame, part.Size
-			local hx = math.abs(c.XVector.X) * s.X / 2 + math.abs(c.YVector.X) * s.Y / 2 + math.abs(c.ZVector.X) * s.Z / 2
-			local hy = math.abs(c.XVector.Y) * s.X / 2 + math.abs(c.YVector.Y) * s.Y / 2 + math.abs(c.ZVector.Y) * s.Z / 2
-			local hz = math.abs(c.XVector.Z) * s.X / 2 + math.abs(c.YVector.Z) * s.Y / 2 + math.abs(c.ZVector.Z) * s.Z / 2
-			local p = c.Position
-			if math.abs(x - p.X) < hx - 0.1 and math.abs(z - p.Z) < hz - 0.1 then
-				local bottom, top = p.Y - hy, p.Y + hy
-				if bottom >= from then
-					ceiling = math.min(ceiling, bottom + math.min(0.1, hy))
-				elseif top > from then
-					ceiling = math.min(ceiling, top - 0.05)
-				end
-			end
-		end
-	end
-	return ceiling
-end
-
-function Builder:struts(modelId)
-	local h = VehicleDynamics and VehicleDynamics.Handling[modelId]
-	if not h then
-		return
-	end
-	for _, hub in ipairs(self.wheels) do
-		local r, w = hub:GetAttribute("Radius") or 1, hub:GetAttribute("Width") or 1
-		local at = hub.Position
-		local side = at.X < 0 and -1 or 1
-		local x, z = at.X - side * (w / 2 + 0.2), at.Z
-		-- The strut's top: over the whole travel from full droop to full bump, but never out through the
-		-- body over it (09-25: on the Rotster and the GT the sleeves stood up out of the bonnet).
-		local base = at.Y + r * 0.5
-		local top = math.min(base + h.travelDown + h.travelUp + VehicleDynamics.VISUAL_OVERTRAVEL * r + 2 * STRUT_OVERLAP,
-			strutCeiling(self, x, z, base))
-		-- The rod's top reaches the sleeve's top at full bump (drawn overtravel past that goes on up
-		-- inside the body), and the sleeve reaches down to where the rod's top is at full droop.
-		local rodLength = math.max(0.4, top - STRUT_OVERLAP - (at.Y + h.travelUp))
-		local bottom = math.min(base, at.Y - h.travelDown + rodLength - STRUT_OVERLAP)
-		local sleeveLength = top - bottom
-		local rod = self:make("Part", "StrutRod_" .. hub.Name, V(0.16, rodLength, 0.16), V(x, at.Y + rodLength / 2, z), STRUT_COLOR, false)
-		rod:SetAttribute("Pivot", "Strut")
-		rod:SetAttribute("Hub", hub.Name)
-		table.insert(self.joints, { part = rod })
-		self.jointed[rod] = true
-		self.anchors[rod] = nil
-		self:box("StrutSleeve_" .. hub.Name, V(0.32, sleeveLength, 0.32), V(x, bottom + sleeveLength / 2, z), STRUT_COLOR)
-		-- The coil over the sleeve's upper half, up to its top: nothing of the strut ends bare in the
-		-- wheel well (tools/vehicle_models_axis_check.py's rod audit).
-		self:make("Part", "StrutCoil_" .. hub.Name, V(sleeveLength * 0.5, 0.52, 0.52),
-			CF(x, bottom + sleeveLength * 0.75, z) * A(0, 0, 90), COIL_COLOR).Shape = Enum.PartType.Cylinder
-		-- The rod's foot joined to the wheel: a stub along the axle from the rod into the tyre's inner
-		-- face, riding on the rod's joint.
-		local stub = w / 2 + 0.2 + 0.1
-		local knuckle = self:make("Part", "StrutKnuckle_" .. hub.Name, V(stub, 0.3, 0.3), V(x + side * stub / 2 - side * 0.08, at.Y, z), STRUT_COLOR)
-		self.anchors[knuckle] = rod
-	end
 end
 
 local function invisible(name, frame, parent)
@@ -698,8 +611,7 @@ function Builder:castWheel(name, center, radius, width, opts)
 						axle * CF(s * (face + stand / 2), 0, 0) * A(angle + spread, 0, 0) * CF(0, rimRadius * 0.5, 0), "rim")
 				end
 			end
-			-- The cap stands 0.11 in from the carrier all round: a step, not a seam (09-25).
-			self:cyl(name .. "_Cap" .. n, 0.3, 0.24, axle * CF(s * (face + 0.22 - 0.15), 0, 0), "alloy")
+			self:cyl(name .. "_Cap" .. n, 0.3, 0.34, axle * CF(s * (face + 0.22 - 0.15), 0, 0), "alloy")
 			local disc = opts.discs == "twin" or (opts.discs == "right" and s > 0) or (opts.discs == "left" and s < 0)
 			if disc or opts.sprocket == s then
 				-- The carrier the disc or sprocket is bolted to. They stand 0.32 off the face, past the cap
@@ -1694,7 +1606,6 @@ VehicleModels.Models.TralalaGT = {
 -- Sahur Van: a tall, square delivery van with wooden side panels, and a drum and a giant bat strapped
 -- to the roof. Slow and steady, with room for four.
 VehicleModels.Models.SahurVan = {
-	tailRamp = 1.7, -- Builder:belly: the long tail behind the rear wheels
 	kind = "car",
 	displayName = "Sahur Van",
 	weight = 16,
@@ -1856,18 +1767,12 @@ VehicleModels.Models.SahurVan = {
 		-- the straps on the bars themselves, and the mortar high enough to pass over.
 		b:ball("BatKnob", 0.46, batAt(-3.8), "wood")
 		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), handleR * 2, "wood")
-		-- #116 a fourth time (Oliver 09-25: the bat looked see-through in the trial): the four steps of
-		-- 0.06-0.08 in radius showed as a ring at every join, which in motion reads as the bat going
-		-- clear. Now the taper is TAPER_STEPS pieces stepping under 0.03 each, which reads as one turned
-		-- bat (vehicle_models_axis_check.py's seam invariant: coaxial pieces of one look step at most
-		-- 0.035 where they meet).
-		local TAPER_STEPS = 12
-		local profile = {} -- name, from, to, diameter (the barrel's end is 4.0)
-		for index = 1, TAPER_STEPS do
-			local from = -1.6 + 3.2 * (index - 1) / TAPER_STEPS
-			table.insert(profile, { "BatTaper" .. index, from, from + 3.2 / TAPER_STEPS,
-				handleR * 2 + (barrelR - handleR) * 2 * index / (TAPER_STEPS + 1) })
-		end
+		local profile = { -- name, from, to, diameter (the barrel's end is 4.0)
+			{ "BatFlare", -1.6, -0.8, 0.42 },
+			{ "BatTaper", -0.8, 0.1, 0.54 },
+			{ "BatThroat", 0.1, 0.9, 0.68 },
+			{ "BatShoulder", 0.9, 1.6, 0.84 },
+		}
 		for _, piece in ipairs(profile) do
 			b:tube(piece[1], batAt(piece[2]), batAt(piece[3]), piece[4], "wood")
 		end
@@ -2038,8 +1943,7 @@ VehicleModels.Models.BananiniScoot = {
 			-- link and damper used to start 0.36 to the side of the column with nothing joining them
 			-- to it, so with the front wheel hanging (the slider 0.37 down the column) the whole
 			-- front wheel assembly hung clear of the scooter (vehicle_models_runtime_check).
-			-- A sleeve that reads as one: 0.11 proud of the column all round, not a hair (a seam, 09-25).
-			b:tube("ForkSleeve", P(1.7), P(2.55), 0.46, "chrome")
+			b:tube("ForkSleeve", P(1.7), P(2.55), 0.34, "chrome")
 			b:beam("LinkBracket", P(2.45), P(2.45, -0.42), 0.14, 0.14, "engine")
 			b:beam("DamperBracket", P(1.9), P(1.9, -0.42), 0.14, 0.14, "engine")
 			b:beam("TrailingLink", P(2.45, -0.36), V(-0.4, r, fz), 0.12, 0.26, "engine")
@@ -2320,13 +2224,6 @@ end
 -- the two up front are shot through the car, not the windows (VehicleArmor). Quick for its weight,
 -- still slower and heavier than any car (VehicleDynamics). Rarer than a car in the world, and never
 -- parked at the kerb (drivableOnly: VehicleModels.Pick leaves it out unless asked).
--- The armoured cars' ride height (Oliver 09-25: "higher off the ground", stuck on rocks): tyres
--- ARMOURED_TYRE bigger than the body was drawn round, on the same hub centres, so each car stands that
--- much taller on them (Build's pivot follows the tyres' bottoms down); VehicleDynamics' rideLift and
--- longer droop do the rest. The arches still clear the bigger tyres (R - r - ARMOURED_TYRE >= 0.05),
--- and with the lift the tyres ride well down out of them.
-local ARMOURED_TYRE = 0.3
-
 VehicleModels.Models.TartarugaScout = {
 	kind = "car",
 	displayName = "Tartaruga Scout",
@@ -2470,7 +2367,7 @@ VehicleModels.Models.TartarugaScout = {
 		b:bucketSeat("SeatPassenger", V(1.2, 2.64, -1.1), 1.8, 1.7, 2.1, 10)
 
 		for _, w in ipairs({ { "Wheel_FL", -1, fz, true }, { "Wheel_FR", 1, fz, true }, { "Wheel_RL", -1, rz, false }, { "Wheel_RR", 1, rz, false } }) do
-			b:roadWheel(w[1], V(w[2] * track, r, w[3]), r + ARMOURED_TYRE, tw, w[2], { steer = w[4], style = "offroad", spokes = 6, rimScale = 0.56, tread = 16 })
+			b:roadWheel(w[1], V(w[2] * track, r, w[3]), r, tw, w[2], { steer = w[4], style = "offroad", spokes = 6, rimScale = 0.56, tread = 16 })
 		end
 
 		return {
@@ -2654,7 +2551,7 @@ VehicleModels.Models.CameloCarrier = {
 		end
 
 		for _, w in ipairs({ { "Wheel_FL", -1, fz, true }, { "Wheel_FR", 1, fz, true }, { "Wheel_RL", -1, rz, false }, { "Wheel_RR", 1, rz, false } }) do
-			b:roadWheel(w[1], V(w[2] * track, r, w[3]), r + ARMOURED_TYRE, tw, w[2], { steer = w[4], style = "offroad", spokes = 8, rimScale = 0.54, tread = 18 })
+			b:roadWheel(w[1], V(w[2] * track, r, w[3]), r, tw, w[2], { steer = w[4], style = "offroad", spokes = 8, rimScale = 0.54, tread = 18 })
 		end
 
 		return {
@@ -3582,10 +3479,7 @@ function VehicleModels.Build(modelId, rng, opts)
 	local b = newBuilder(model, scheme)
 	local layout = def.build(b)
 	assert(b.chassis, modelId .. " built no Chassis")
-	b:belly(def.tailRamp)
-	if def.kind ~= "bike" then
-		b:struts(modelId)
-	end
+	b:belly()
 	-- An armed model's weapons (see Mounted weapons above): the turret, and the driver's gun; bikes have
 	-- none. opts.unarmed leaves both off: BuildStatic's parked cars are scenery, not something to man, and
 	-- get what an unarmed car has there instead (a lid on the Rotster's hatch, crates in the Ranger's bed).
@@ -3664,13 +3558,8 @@ function VehicleModels.Build(modelId, rng, opts)
 	-- The chassis stays the assembly's root even with a rider welded on (a HumanoidRootPart would
 	-- otherwise compete for it, and a root part's Massless is ignored).
 	b.chassis.RootPriority = 127
-	-- Pivot on the ground under the wheelbase, so PivotTo(position) puts the wheels on `position`: the
-	-- build's ground, or the tyres' bottoms where they reach below it (the armoured cars' bigger tyres).
-	local lowest = 0
-	for _, hub in ipairs(b.wheels) do
-		lowest = math.min(lowest, hub.Position.Y - (hub:GetAttribute("Radius") or 0))
-	end
-	b.chassis.PivotOffset = b.chassis.CFrame:Inverse() * CF(0, lowest, 0)
+	-- Pivot on the ground under the wheelbase, so PivotTo(position) puts the wheels on `position`.
+	b.chassis.PivotOffset = b.chassis.CFrame:Inverse()
 
 	return model, {
 		modelId = modelId,
