@@ -1,7 +1,7 @@
 # task/prove-trial-guns
 
-Cut from main `f1bb3b4`. Line references are to `f1bb3b4`. The check was also run on main `0a92f91` (team
-kit), with the same results. It proves OLIVER_LIST #117 (lobby trial guns change every pickup, commit
+Cut from main `f1bb3b4`, then merged with main `1c70de8` and run again with the same results. Line
+references are to `1c70de8`. It proves OLIVER_LIST #117 (lobby trial guns change every pickup, commit
 e666c61). New files only; no game file or existing tool changed.
 
 - `reports/trial-guns-proof.md`: the proof. Fixed on main: a second podium gun adds to the hotbar, and

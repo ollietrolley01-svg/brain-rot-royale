@@ -1,9 +1,10 @@
 # #117 lobby trial guns: does a second podium gun add to your hotbar?
 
-Jacob's branch `task/prove-trial-guns`, cut from main **`f1bb3b4`**. Every check, plant and line reference
-below is to `f1bb3b4`. Main has since moved to `0a92f91` (the team kit). That commit touches none of the
-range code: the check was run again on an export of `0a92f91` and gave the same 51 checks and the same
-15/15 plants. I measured things outside Studio (Python + lupa, running the game's own Lua) or read them
+Jacob's branch `task/prove-trial-guns`, cut from main `f1bb3b4`, then merged with main **`1c70de8`** (after
+Oliver merged `pc/ttk-plus-25`, `pc/mounted-guns-powerful` and `pc/hitreg-fixes`) and run again: the same 51
+checks and the same 15/15 plants. Every line reference below is to `1c70de8`. Of the files this report cites,
+those merges changed only `MatchService.lua` (a spawn shield is never lowered) and `CombatClient.client.lua`
+(the client counts its own rounds). Neither touches the range; they only move line numbers. I measured things outside Studio (Python + lupa, running the game's own Lua) or read them
 from source. Nothing was run in Roblox, and no game file or existing tool was edited.
 
 OLIVER_LIST #117 says "Lobby trial guns change every pickup". The row is marked "in tree, unproven (commit
@@ -53,7 +54,7 @@ the bug Oliver saw.
    the second (from `Equip`) moves the held slot. The last one always matches the server (checked at 43
    moments). Both are sent in the same server step, one after the other. Whether a client ever draws the
    in-between state for a frame is **reasoning, not measured**: I expect not. The pickup sound plays once
-   (CombatClient only plays it when the item count goes up, `CombatClient.client.lua:2223-2225`).
+   (CombatClient only plays it when the item count goes up, `CombatClient.client.lua:2296-2298`).
 4. **A full hotbar can't happen from the podiums; if it did, the gun in hand would be replaced.**
    (Measured.) There are 3 podiums and 8 slots. The podiums are the only thing in the lobby that gives a
    gun: `RangeService.Give` has one caller (`LobbyService.lua:2218`), LobbyService has no other gun
@@ -80,7 +81,7 @@ which one fired depended on where you looked. e666c61 fixed both (reach 8). Both
    (`z = -18, 0, 18`). Podium *i* shows gun `(day + i) mod 8`, where `day` is the UTC day number
    (`:2197`). Each podium's prompt captures its own entry, reaches 8 studs (`:2214`), and on `Triggered`
    calls `RangeService.Give(player, entry.id)` (`:2218`). The lobby is built once per server
-   (`MatchService.lua:2182`), so the podiums don't change while it runs. Today's (09-25) three are
+   (`MatchService.lua:2186`), so the podiums don't change while it runs. Today's (09-25) three are
    Golden Sahur Cannon, Nonna Double Barrel and Patapim Chaingun.
 2. **A take.** `RangeService.Give` (`RangeService.lua:107-179`) refuses during a match (`:108`), for an
    unknown gun, and off the terrace (radius 32 + 6 slack). If the player holds a loadout the range made
@@ -91,10 +92,10 @@ which one fired depended on where you looked. e666c61 fixed both (reach 8). Both
    The first take, or any take when the loadout isn't the range's, resets and gives one gun (`:166-178`).
 3. **What the client is told.** Every change goes out as a whole `LoadoutChanged` snapshot
    (`WeaponService.Push`, `:162-226`), with `equipped`. HudClient (`HudClient.client.lua:4534`) and
-   CombatClient (`:2219`) replace their copy with each one, and the hotbar highlights
+   CombatClient (`:2292`) replace their copy with each one, and the hotbar highlights
    `loadout.equipped == index` (`HudClient.client.lua:1470`). No client script reads `slots[1]` as the
    gun in hand or sets its own held slot (62 client files searched). Choosing a slot sends `EquipSlot` and
-   waits for the server's snapshot (`CombatClient.client.lua:1130-1136`, `HudClient.client.lua:1418-1420`).
+   waits for the server's snapshot (`CombatClient.client.lua:1176-1182`, `HudClient.client.lua:1418-1420`).
    `RangeState true` follows every successful take.
 4. **The gun on the character.** `selectSlot` asks for a rebuild, and the next Heartbeat builds whatever
    slot is held (`WeaponService.lua:1457-1512`).
@@ -102,10 +103,10 @@ which one fired depended on where you looked. e666c61 fixed both (reach 8). Both
    the terrace's rim, or when combat turns on. `stop` (`:57-101`) clears the loadout only if it is still
    the range's, destroys the welded `HeldGun`, pushes, and sends `RangeState false`.
 6. **Death in the lobby.** `humanoid.Died` → `LoadCharacter` → `OnCharacterAdded`'s lobby branch →
-   `PlaceInLobby`, which clears and pushes (`MatchService.lua:300-322, 2127-2141`). The range's entry is
+   `PlaceInLobby`, which clears and pushes (`MatchService.lua:300-322, 2131-2145`). The range's entry is
    left stale until the poll, and the identity check means the next take starts fresh.
 7. **A match.** `startMatch` reloads each joining player and gives them a new loadout with
-   `WeaponService.Reset` (`MatchService.lua:1987`) before it turns combat on (`:2075`). Because the new
+   `WeaponService.Reset` (`MatchService.lua:1987`) before it turns combat on (`:2077`). Because the new
    loadout is a new table, the range's identity check never touches it. Loadouts are never saved:
    `PlayerData.lua` never names a loadout, slots, WeaponService or RangeService, and the only `PlayerData`
    call either module makes is reading the gun skin (`WeaponService.lua:249`). A slot can't be dropped
@@ -163,16 +164,17 @@ The existing `tools/range_give_check.py` (from e666c61) still passes. It runs Ra
 hand-written WeaponService. This check runs the real one, plus the prompts, the respawn path and the
 match start.
 
-No damage was measured, so `CombatDamageScale` (0.92 on main) plays no part.
+No damage was measured, so `CombatDamageScale` plays no part.
 
-## Unmerged branches
+## Other branches
 
-- `pc/hitreg-fixes` changes `CombatClient.client.lua` (the client counts its own rounds) and
-  `CombatService.lua`. It reads `loadout.equipped` but still adopts each `LoadoutChanged` snapshot
-  whole. Nothing on the range path changes.
-- `pc/ttk-plus-25` and `pc/teambase-v2` change `MatchConfig.lua` (damage scale; vehicle slots).
-  `pc/mounted-guns-powerful` changes vehicle and mounted-gun data. None touch the range, the inventory,
-  the lobby or MatchService.
+- Merged into main since `f1bb3b4`, and included in the run above: `pc/hitreg-fixes` changes
+  `CombatClient.client.lua` (the client counts its own rounds) and `CombatService.lua`. It reads
+  `loadout.equipped` but still adopts each `LoadoutChanged` snapshot whole. `pc/ttk-plus-25` changes the
+  damage scale, and `pc/mounted-guns-powerful` changes vehicle and mounted-gun data. None of them change
+  the range path.
+- Still unmerged: `pc/teambase-v2` changes `MatchConfig.lua` (vehicle slots) and team-mode files. It
+  doesn't touch the range, the inventory, the lobby or MatchService.
 
 ## What was NOT proven
 
