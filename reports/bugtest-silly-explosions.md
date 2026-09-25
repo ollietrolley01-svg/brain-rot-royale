@@ -55,6 +55,10 @@ now that the work is merged, and on any other branch it raises false alarms.
 
 ### F2: a vehicle wreck's blast goes off late when you come back to it. Measured on the real module; the gating is read from the code. The visual is new in the merge 8ee9c9f / f9f0af6.
 
+**Already known:** Oliver's handoff (`coordination/messages/2026-09-25-0830-coordinator-handoff-remaining-to-jacob.md`,
+item 1, "Wreck blast") lists this cause: the blast fires from SetSmoke, which runs only within 320 studs. This section
+measures it. It isn't a new find.
+
 - `VehicleWreckFx.SetSmoke` fires `OnWreck` when it sees a vehicle whole on one call and wrecked on the
   next (`VehicleWreckFx.lua:78-81`). It has no idea how much time passed between the two calls.
 - VehicleClient only calls it for vehicles within `ANIMATE_DISTANCE` = 320 studs
