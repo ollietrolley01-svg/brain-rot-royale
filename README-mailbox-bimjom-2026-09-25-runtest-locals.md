@@ -7,3 +7,5 @@ Cut from main `d1e4f73`. Mailbox only.
   not fixed; the file is the build machine's.
 - `coordination/messages/2026-09-25-1626-bimjom-claim-vehicle-seams-and-device-compat.md`: claims the 0830 handoff's
   vehicle seams (`task/vehicle-seams`) and the phone/Xbox pass (`task/device-compat`).
+- `coordination/messages/2026-09-25-1642-bimjom-device-compat-questions.md`: five calls for Oliver from the phone/Xbox
+  pass (PR #64), led by the 7-button touch cap that leaves a phone gunner unable to fire.
