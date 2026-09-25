@@ -25,7 +25,7 @@ Last updated: 2026-09-25 01:08 (EDT).
 |---|---|---|---|
 | Jacob (bimjom) | #84/#109 car-bounce proof | `task/prove-car-bounce` (PR #31) | **Merged to main 09-25 (36aa63a).** #84/#109 stays unproven until a playtest `[VehicleJolt]` count |
 | Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` (PR #33) | **Merged to main 09-25.** Both fire-rate faults fixed on main (1e964ca); new bugs F3 (phantom end-of-mag shots) and F4 (vehicle guns still quantised) reported |
-| Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` (PR #34) | **Merged to main 09-25.** Payouts hold; spectators barely paid since a2ba3b4 (design question for Oliver) |
+| Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` (PR #34) | **Merged to main 09-25.** Payouts hold. Oliver decided spectator pay: **all time in the server counts** (pc/playtime-all-time, on main) |
 | Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` | Claimed 09-25 01:01 (PR #32) |
 | Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` | Claimed 09-25 01:03 (2731d7a, merged with PR #32). After #122 |
 | Dalton | Brainrot Battles icon: a 4x4 grid of candidates | `art/icon/` or mailbox | Asked 09-22 20:46, no reply yet |
