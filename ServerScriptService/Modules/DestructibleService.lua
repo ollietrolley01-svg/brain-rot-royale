@@ -2492,10 +2492,44 @@ local function craterAt(position, reach, damage, map)
 	-- The rings leave 4-stud stairs that the terrain rounds to ~37 degrees at each riser. Then every
 	-- voxel over the cone is thinned to the cone's height in its column (a voxel's occupancy is how
 	-- full of ground it is), so the wall follows the designed slope more closely. Only ever lowers.
+	-- SCORCH (Oliver 09-25): the same pass chars the bowl. The top ground in every column inside the
+	-- rim turns CHAR, thinning out over its last CHAR_FRINGE, and a few irregular streaks of it run
+	-- out past the rim. It is the terrain's own material: it replicates, lies on the surface wherever
+	-- that goes, never floats, never fades (#71), and a second blast repaints the same voxels instead
+	-- of stacking marks. Nothing per frame, one write per crater (the dig's own).
+	local CHAR, CHAR_FRINGE, CHAR_STREAKS = Enum.Material.Basalt, 0.2, 7
 	pcall(function()
 		local terrain = workspace.Terrain
-		local lo = Vector3.new(math.floor((surface.X - rim) / CELL) * CELL, math.floor(apexY / CELL) * CELL, math.floor((surface.Z - rim) / CELL) * CELL)
-		local hi = Vector3.new(math.ceil((surface.X + rim) / CELL) * CELL, math.ceil(top / CELL) * CELL, math.ceil((surface.Z + rim) / CELL) * CELL)
+		local reachChar = rim * 1.5 + CELL
+		local lo = Vector3.new(math.floor((surface.X - reachChar) / CELL) * CELL, math.floor(apexY / CELL) * CELL, math.floor((surface.Z - reachChar) / CELL) * CELL)
+		local hi = Vector3.new(math.ceil((surface.X + reachChar) / CELL) * CELL, math.ceil((top + CELL) / CELL) * CELL, math.ceil((surface.Z + reachChar) / CELL) * CELL)
+		-- The same streaks for the same spot, on every client and every repaint.
+		local streakRng = Random.new(math.floor(surface.X) * 7919 + math.floor(surface.Z) * 104729)
+		local streaks = {}
+		for index = 1, CHAR_STREAKS do
+			streaks[index] = { angle = (index + streakRng:NextNumber(-0.35, 0.35)) / CHAR_STREAKS * math.pi * 2,
+				width = streakRng:NextNumber(0.05, 0.11), reach = rim * streakRng:NextNumber(1.15, 1.5) }
+		end
+		local function charred(x, z, r)
+			if r <= rim * (1 - CHAR_FRINGE) then
+				return true
+			end
+			-- The fringe thins out by a hash of the cell, so the edge is ragged, not a circle.
+			local hash = (math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1
+			if r <= rim and hash > (r - rim * (1 - CHAR_FRINGE)) / (rim * CHAR_FRINGE) then
+				return true
+			end
+			local angle = math.atan2(z - surface.Z, x - surface.X)
+			for _, streak in ipairs(streaks) do
+				local off = math.abs((angle - streak.angle + math.pi) % (math.pi * 2) - math.pi)
+				-- Narrowing to its tip: a streak is widest at the rim.
+				local tip = 1 - math.clamp((r - rim) / math.max(streak.reach - rim, 1), 0, 1)
+				if r <= streak.reach and off <= streak.width * (0.4 + tip) + CELL / math.max(r, 1) * 0.5 then
+					return true
+				end
+			end
+			return false
+		end
 		local region = Region3.new(lo, hi)
 		local materials, occupancies = terrain:ReadVoxels(region, CELL)
 		for i = 1, #occupancies do
@@ -2503,6 +2537,7 @@ local function craterAt(position, reach, damage, map)
 				local x, z = lo.X + (i - 0.5) * CELL, lo.Z + (k - 0.5) * CELL
 				local r = math.sqrt((x - surface.X) ^ 2 + (z - surface.Z) ^ 2)
 				local height = apexY + math.max(0, r - FLOOR_RADIUS) / WALL_RUN
+				local topSolid = nil
 				for j = 1, #occupancies[i] do
 					local bottom = lo.Y + (j - 1) * CELL
 					local want = math.clamp((height - bottom) / CELL, 0, 1)
@@ -2510,6 +2545,17 @@ local function craterAt(position, reach, damage, map)
 						occupancies[i][j][k] = want
 						if want <= 0 then
 							materials[i][j][k] = Enum.Material.Air
+						end
+					end
+					if occupancies[i][j][k] > 0 and materials[i][j][k] ~= Enum.Material.Air and materials[i][j][k] ~= Enum.Material.Water then
+						topSolid = j
+					end
+				end
+				-- The top two solid voxels (a thin top one blends with the one under it).
+				if topSolid and charred(x, z, r) then
+					for j = math.max(1, topSolid - 1), topSolid do
+						if materials[i][j][k] ~= Enum.Material.Air and materials[i][j][k] ~= Enum.Material.Water then
+							materials[i][j][k] = CHAR
 						end
 					end
 				end
