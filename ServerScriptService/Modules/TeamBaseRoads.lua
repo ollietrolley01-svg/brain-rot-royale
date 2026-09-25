@@ -64,6 +64,9 @@ local GROUND_UNDER = 0.25
 local BANK_SLOPE = math.tan(math.rad(35))
 local BANK_REACH = 18
 local CELL = 4
+-- Smooth terrain draws its surface this far over the filled volume (MapTerrain.SurfaceLift): a read
+-- adds it, a write takes it off. Left out, the road's own ground came up 2 over the asphalt (Studio).
+TeamBaseRoads.SurfaceLift = 2
 
 local ASPHALT = Color3.fromRGB(62, 62, 66)
 local LINE = Color3.fromRGB(236, 232, 220)
@@ -437,7 +440,7 @@ function TeamBaseRoads.ShapeGround(terrain, plan, heights)
 			for iy = size.Y, 1, -1 do
 				local m = materials[ix][iy][iz]
 				if m ~= Enum.Material.Air and m ~= Enum.Material.Water and occupancy[ix][iy][iz] > 0 then
-					natural = y0 + (iy - 1) * CELL + occupancy[ix][iy][iz] * CELL
+					natural = y0 + (iy - 1) * CELL + occupancy[ix][iy][iz] * CELL + TeamBaseRoads.SurfaceLift
 					solid = m
 					break
 				end
@@ -447,7 +450,7 @@ function TeamBaseRoads.ShapeGround(terrain, plan, heights)
 				changed += 1
 				for iy = 1, size.Y do
 					local bottom = y0 + (iy - 1) * CELL
-					local fill = math.clamp((target - bottom) / CELL, 0, 1)
+					local fill = math.clamp((target - TeamBaseRoads.SurfaceLift - bottom) / CELL, 0, 1)
 					if materials[ix][iy][iz] ~= Enum.Material.Water then
 						occupancy[ix][iy][iz] = fill
 						if fill > 0 and materials[ix][iy][iz] == Enum.Material.Air then
