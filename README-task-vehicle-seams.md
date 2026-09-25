@@ -30,5 +30,19 @@ Measured by the new invariant (all 9 models, every scheme, drive/parked/unarmed)
 | main `d1e4f73` | 75 | 75 | 0.080 |
 | this branch | 345 | 0 | 0.015 |
 
-Not proven: how it looks. The numbers say no joint steps more than 0.015 studs; whether 22 slices
-read as one smooth bat needs a render (`tools/vehicle_gallery.lua`, SahurVan roof, close up).
+## Render
+
+`tools/vehicle_gallery.lua` limited to `closeup_bat_SahurVan` (a temp copy with
+`SHOW_OVERRIDE = { "SahurVan" }` and `VIEW_KINDS_OVERRIDE = { "closeup_bat_SahurVan" }` glued in
+front), run on the Linux harness against each tree's own build. Same camera in both.
+
+![before: main d1e4f73](reports/vehicle-seams/bat_before_main.jpg)
+
+Main `d1e4f73`: the handle widens into the barrel in four visible steps, each a lip with a ring
+round it.
+
+![after: this branch](reports/vehicle-seams/bat_after_branch.jpg)
+
+This branch: one continuous flare from handle to barrel with no ring or gap. Up close the handle to
+`BatTaper1` joint shows a faint shoulder (that first step is 0.015), and the grain shows fine
+striations along the taper. There is no see-through gap. Straps and barrel look the same as on main.
