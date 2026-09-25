@@ -177,6 +177,48 @@ DestructibleService.StageTint = STAGE_TINT
 local HEALTH_BASE, HEALTH_PER_STUD, SIZE_CAP = 20, 14, 12
 local MIN_HEALTH, MAX_HEALTH = 15, 1500
 
+-- THE MAP'S STRUCTURE BY MATERIAL (Oliver 2026-09-24: "increase the health of the walls in the map
+-- depending on the material"). A building's named Wall and every untagged structural part (a keep's
+-- wall, a bunker, a landmark's pier) take their health from what they are made of, spread wide: glass
+-- gives at a touch, cloth and wood and plaster soon, brick holds, concrete and stone hold longer, metal
+-- longest and diamond plate (the reinforced stuff) longest of all. Tagged props (trees, cars, crates)
+-- keep CLASS_TOUGHNESS above. A named Wall is STRUCTURE.wall times this (a wood wall 150, brick 300,
+-- concrete 420, metal 510, diamond plate 600); an untagged part is this times (BASE + PER_STUD *
+-- size) times STRUCTURE.scale; a blast counts STRUCTURE.blast times over on them. tools/destruct_material_check.py holds the order and the numbers.
+local STRUCTURE_TOUGHNESS = {
+	[M.Glass] = 0.3, [M.Neon] = 0.3, [M.ForceField] = 0.3, [M.Ice] = 0.5, [M.Glacier] = 0.8,
+	[M.Cardboard] = 0.45, [M.Fabric] = 0.6, [M.Carpet] = 0.6, [M.Leather] = 0.7, [M.Foil] = 0.6,
+	[M.Wood] = 1, [M.WoodPlanks] = 1, [M.RoofShingles] = 1, [M.Plastic] = 1, [M.SmoothPlastic] = 1, [M.Rubber] = 0.9,
+	[M.Plaster] = 1.1, [M.CeramicTiles] = 1.2, [M.ClayRoofTiles] = 1.2, [M.Salt] = 1.6,
+	[M.Brick] = 2,
+	[M.Sandstone] = 2.2, [M.Pebble] = 2.2, [M.Limestone] = 2.4, [M.Asphalt] = 2.4, [M.CrackedLava] = 2.4,
+	[M.Marble] = 2.6, [M.Slate] = 2.6, [M.Cobblestone] = 2.6, [M.Pavement] = 2.6,
+	[M.Concrete] = 2.8, [M.Rock] = 2.8, [M.Granite] = 3, [M.Basalt] = 3,
+	[M.CorrodedMetal] = 3, [M.Metal] = 3.4, [M.DiamondPlate] = 4,
+	[M.Grass] = 0.55, [M.LeafyGrass] = 0.55, [M.Ground] = 0.7, [M.Mud] = 0.6, [M.Sand] = 0.6, [M.Snow] = 0.5,
+}
+DestructibleService.StructureToughness = STRUCTURE_TOUGHNESS
+-- (One table, not three locals: this module's main chunk sits near Luau's 200-local limit.)
+local STRUCTURE = { wall = 150, scale = 1.5, blast = 2 }
+DestructibleService.WallHealth, DestructibleService.StructureScale = STRUCTURE.wall, STRUCTURE.scale
+-- Explosives stay decisive against structure: a blast's wallDamage counts this many times over on
+-- the map's own untagged parts and named walls (one rocket holes brick, two take concrete or metal).
+DestructibleService.StructureBlast = STRUCTURE.blast
+
+local function structureToughness(material)
+	return STRUCTURE_TOUGHNESS[material] or CLASS_TOUGHNESS[classOf(material)]
+end
+DestructibleService.StructureToughnessOf = structureToughness
+
+-- A building's named piece: its HEALTH, and for a Wall, STRUCTURE.wall by its material.
+local function namedHealth(part)
+	if part.Name == "Wall" then
+		return math.clamp(math.floor(STRUCTURE.wall * structureToughness(part.Material) + 0.5), MIN_HEALTH, MAX_HEALTH)
+	end
+	return HEALTH[part.Name]
+end
+DestructibleService.NamedHealth = namedHealth
+
 -- WHAT NEVER BREAKS (Oliver 2026-09-24: "make EVERYTHING breakable other than spawns, the lobby,
 -- storm zone, and map edges"). By the part's own name or any ancestor's inside the match root:
 --   spawns      SpawnLocation, a "Spawn" model (a team base's bunker), SpawnPad...
@@ -553,7 +595,7 @@ local function keyOf(part)
 		-- A lone part with its own health number, or a building's own named piece.
 		local own = positiveNumber(part:GetAttribute("DestructibleHealth"))
 		if own or HEALTH[part.Name] then
-			return part, nil, nil, own or HEALTH[part.Name]
+			return part, nil, nil, own or namedHealth(part)
 		end
 	end
 	-- Everything else that collides or can be shot: the compact thing round it, or itself. (Trim
@@ -608,7 +650,7 @@ end
 
 -- A tagged pool's health from what it is: the cube root of its solid volume (a tree's trunk, not
 -- its leaves) in the material of its biggest solid piece, times its kind.
-local function poolHealth(kind, members)
+local function poolHealth(kind, members, structure)
 	local solid, all = 0, 0
 	local biggest, biggestVolume = members[1], -1
 	for _, member in ipairs(members) do
@@ -623,7 +665,9 @@ local function poolHealth(kind, members)
 		end
 	end
 	local scale = math.min((solid > 0 and solid or all) ^ (1 / 3), SIZE_CAP)
-	local health = CLASS_TOUGHNESS[classOf(biggest.Material)] * (HEALTH_BASE + HEALTH_PER_STUD * scale) * (KINDS[kind] or 1)
+	-- The map's own untagged structure by its material (STRUCTURE_TOUGHNESS); a tagged prop by family.
+	local toughness = structure and structureToughness(biggest.Material) * STRUCTURE.scale or CLASS_TOUGHNESS[classOf(biggest.Material)]
+	local health = toughness * (HEALTH_BASE + HEALTH_PER_STUD * scale) * (KINDS[kind] or 1)
 	return math.clamp(math.floor(health + 0.5), MIN_HEALTH, MAX_HEALTH)
 end
 DestructibleService.PoolHealth = poolHealth
@@ -662,7 +706,7 @@ local function resolvePool(part)
 			key, owner, members, explicit = part, nil, { part }, nil
 			max = nil
 		end
-		max = max or poolHealth(kind, members)
+		max = max or poolHealth(kind, members, auto == true)
 	end
 	if type(max) ~= "number" or max <= 0 then
 		return nil, "no health"
@@ -706,6 +750,16 @@ local function entryFor(part)
 		end
 	end)
 	return entry, key
+end
+
+-- (health, max) of the pool a part is in, once it has been hit; nil before. For probes and checks.
+function DestructibleService.HealthOf(part)
+	local key = keyOf(part)
+	local entry = key ~= nil and damaged[key] or nil
+	if entry then
+		return entry.health, entry.max
+	end
+	return nil
 end
 
 -- Answers without looking anything up beyond the part and its parents (and, for a big flat part,
@@ -1088,6 +1142,161 @@ tellBroken = function(cframe, size)
 	if DestructibleService.SupportEnabled then
 		queueSupport(cframe, size)
 	end
+	if DestructibleService.ClearCoverAround then
+		DestructibleService.ClearCoverAround(cframe, size)
+	end
+end
+
+--------------------------------------------------------------------------------
+-- LOOSE COVER (Oliver 2026-09-24: "some parts on the map are still indestructible")
+--------------------------------------------------------------------------------
+-- Trim neither collides nor takes a ray, so nothing can hit it; it goes with the part it hangs on
+-- (dropDressing, which walks that part's siblings). Trim that hangs on nothing -- the grass, flowers,
+-- ferns and shrubs the wilds scatter over the terrain, a road's markings in a folder too big to walk,
+-- a light's glow -- used to go with nothing, ever: a crater opened under a meadow left the meadow
+-- hanging over it. COVER is that trim: anchored, visible, not collide, not query, not in a tagged
+-- pool. It is kept in a coarse grid (built once per Map, the first time it is needed, and fed by
+-- DescendantAdded after), and it goes when
+--   a blast reaches it and nothing solid holds it (a flower box's flowers stay while the box does)
+--   the part it lay on breaks and nothing else solid holds it (the road markings on a road tile)
+-- tools/destruct_coverage_probe.lua counts what is left that nothing can take down ("orphan trim").
+-- (One local table for all of it: this module's main chunk sits near Luau's 200-local limit.)
+local cover = { cell = 16, grid = nil, root = nil, connection = nil, params = nil }
+DestructibleService.CoverCleared = 0
+
+function cover.is(part)
+	return part:IsA("BasePart") and part.Anchored and not part.CanCollide and not part.CanQuery and part.Transparency < 1
+		and part.Name ~= "Rubble" and type(part:GetAttribute("Destructible")) ~= "string" and taggedModel(part) == nil
+end
+DestructibleService.IsCover = cover.is
+
+function cover.add(part)
+	local p = part.Position
+	local key = math.floor(p.X / cover.cell) * 65536 + math.floor(p.Z / cover.cell)
+	local list = cover.grid[key]
+	if not list then
+		list = {}
+		cover.grid[key] = list
+	end
+	table.insert(list, part)
+end
+
+function cover.gridFor()
+	local root = workspace:FindFirstChild("Map")
+	if not root then
+		return nil
+	end
+	if cover.root ~= root then
+		if cover.connection then
+			cover.connection:Disconnect()
+		end
+		cover.root, cover.grid = root, {}
+		for _, part in ipairs(root:GetDescendants()) do
+			if part:IsA("BasePart") and cover.is(part) then
+				cover.add(part)
+			end
+		end
+		-- (A check's stand-in Instance may have no DescendantAdded: then the grid is only rebuilt.)
+		local okSignal, added = pcall(function()
+			return root.DescendantAdded
+		end)
+		cover.connection = okSignal and added and added:Connect(function(part)
+			if cover.grid and part:IsA("BasePart") and cover.is(part) then
+				cover.add(part)
+			end
+		end) or nil
+	end
+	return cover.grid
+end
+
+-- Whether something solid holds a piece of cover up.
+function cover.held(part)
+	if not cover.params then
+		cover.params = OverlapParams.new()
+		cover.params.FilterType = Enum.RaycastFilterType.Include
+	end
+	cover.params.FilterDescendantsInstances = { cover.root }
+	local reach = Vector3.new(ATTACH_MARGIN, ATTACH_MARGIN, ATTACH_MARGIN) * 2
+	for _, other in ipairs(workspace:GetPartBoundsInBox(part.CFrame, part.Size + reach, cover.params)) do
+		if other ~= part and other.CanCollide and other.Parent and other.Name ~= DestructibleService.GlassName then
+			return true
+		end
+	end
+	return false
+end
+
+-- Every live piece of cover whose centre lies in the box lo..hi, pruning the gone.
+function cover.within(lo, hi)
+	local grid = cover.gridFor()
+	local found = {}
+	if not grid then
+		return found
+	end
+	for cx = math.floor(lo.X / cover.cell), math.floor(hi.X / cover.cell) do
+		for cz = math.floor(lo.Z / cover.cell), math.floor(hi.Z / cover.cell) do
+			local list = grid[cx * 65536 + cz]
+			if list then
+				for index = #list, 1, -1 do
+					local part = list[index]
+					if not part.Parent then
+						list[index] = list[#list]
+						list[#list] = nil
+					else
+						local p = part.Position
+						if p.X >= lo.X and p.X <= hi.X and p.Z >= lo.Z and p.Z <= hi.Z and p.Y >= lo.Y and p.Y <= hi.Y then
+							table.insert(found, part)
+						end
+					end
+				end
+			end
+		end
+	end
+	return found
+end
+
+function cover.drop(parts)
+	for _, part in ipairs(parts) do
+		part:Destroy()
+		DestructibleService.CoverCleared += 1
+	end
+end
+
+-- A blast at `position`: the cover within `radius` that nothing solid holds goes.
+function DestructibleService.ClearCoverInRadius(position, radius)
+	local reach = Vector3.new(radius, radius, radius)
+	local gone = {}
+	for _, part in ipairs(cover.within(position - reach, position + reach)) do
+		local half = part.Size.Magnitude / 2
+		if (part.Position - position).Magnitude <= radius + half and not cover.held(part) then
+			table.insert(gone, part)
+		end
+	end
+	cover.drop(gone)
+	return #gone
+end
+
+-- A part broke (its box): the cover it held that nothing else holds goes, the frame after (when the
+-- part itself is gone).
+function DestructibleService.ClearCoverAround(cframe, size)
+	if not cover.gridFor() then
+		return
+	end
+	task.defer(function()
+		local box = { CFrame = cframe, Size = size }
+		local half = (math.abs(cframe.RightVector.X) * size.X + math.abs(cframe.UpVector.X) * size.Y + math.abs(cframe.LookVector.X) * size.Z) / 2
+		local halfY = (math.abs(cframe.RightVector.Y) * size.X + math.abs(cframe.UpVector.Y) * size.Y + math.abs(cframe.LookVector.Y) * size.Z) / 2
+		local halfZ = (math.abs(cframe.RightVector.Z) * size.X + math.abs(cframe.UpVector.Z) * size.Y + math.abs(cframe.LookVector.Z) * size.Z) / 2
+		local pad = 2
+		local lo = cframe.Position - Vector3.new(half + pad, halfY + pad, halfZ + pad)
+		local hi = cframe.Position + Vector3.new(half + pad, halfY + pad, halfZ + pad)
+		local gone = {}
+		for _, part in ipairs(cover.within(lo, hi)) do
+			if attached(box, part, ATTACH_MARGIN) and not cover.held(part) then
+				table.insert(gone, part)
+			end
+		end
+		cover.drop(gone)
+	end)
 end
 
 -- Switched off only by a check's planted round (tools/destruct_map_check.py), to show that its
@@ -2317,9 +2526,14 @@ function DestructibleService.DamageInRadius(position, radius, amount, attackerTo
 		local key = part.Parent and keyOf(part)
 		if key and not seen[key] then
 			seen[key] = true
-			DestructibleService.Damage(part, amount, attackerToken, position)
+			-- The map's structure (not a tagged prop) takes a blast STRUCTURE.blast times over.
+			local entry = entryFor(part)
+			local scaled = (entry and not entry.tagged) and amount * STRUCTURE.blast or amount
+			DestructibleService.Damage(part, scaled, attackerToken, position)
 		end
 	end
+	-- The loose cover it reaches (grass, flowers, markings nothing solid holds) goes with it.
+	DestructibleService.ClearCoverInRadius(position, radius)
 	local map = workspace:FindFirstChild("Map")
 	if map then
 		craterAt(position, radius, amount, map)
