@@ -124,7 +124,7 @@ MatchConfig.CoinsPerKill = 75
 --   performance     kills at the battle royale's own rate, assists, multi-kills, revenge, and in Objective
 --                   Capture captures, time on the objective and kills made defending it. Each is capped per
 --                   match, so a bot lobby cannot be farmed past a sensible match's worth.
---   time played     coins and XP per minute ACTIVELY played (the PlaytimeService movement rule).
+--   time played     coins and XP per minute ACTIVELY played (the match AFK movement rule, MoveStuds).
 --   TEAM BONUS      what the battle royale has no equivalent for, highlighted and totalled on the card:
 --                   the team MVP, the first team win of the day (an Epic Crate), a win streak across
 --                   consecutive team matches, and four team-only cosmetics for lifetime team wins.
