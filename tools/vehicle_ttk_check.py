@@ -6,13 +6,15 @@ every gun in WeaponData and its add-on packs with weapon_stats.py's brace-matche
 specs out of Ballistics.lua (lupa again, with a Vector3 stub), and MatchConfig.CombatDamageScale, then
 works out what each vehicle faces and holds the bands VehicleArmor's header sets:
 
+  EVERY TIME-TO-KILL BAND BELOW IS x1.25 of the 09-24 one (Oliver, 2026-09-25: "increase ttk of players and
+  vehicles 25%", done as MatchConfig.CombatDamageScale 0.92 -> 0.736; hit counts rounded outward)
   CAR     one Rare rifle (Bananini Burst) at mid range, every shot landing, reloads counted, kills
-          it in 8-12 s; a rocket (the Cappuccina's, a direct hit) kills it in 2-3
-  BIKE    dies quicker than any car to the same rifle (under 6 s), and to 1-2 rockets
-  ARMOUR  2-2.5x the average car's health; 40-50% off bullets; nothing off explosives; 5-6 rockets;
+          it in 10-15 s; a rocket (the Cappuccina's, a direct hit) kills it in 3-4
+  BIKE    dies quicker than any car to the same rifle (under 7.5 s), and to 1-3 rockets
+  ARMOUR  2-2.5x the average car's health; 40-50% off bullets; nothing off explosives; 6-8 rockets;
           its cabin protects the driver and passengers, never the gunner
   GUNS    very powerful (Oliver, 2026-09-25: "make sure the mounted guns on the ground and the cars are
-          very powerful"): every turret kills a car inside 8 s of its own fire, a driver's gun inside 12 s
+          very powerful"): every turret kills a car inside 10 s of its own fire, a driver's gun inside 15 s
   CRASH   a crash takes the same share of health it always did (armour takes less)
 
 Planted faults travel the same pipeline: VehicleArmor's SOURCE is edited and everything recomputed.
@@ -123,19 +125,19 @@ def measure(repo, armour_src=None, verbose=True):
     # CAR
     for model, h, seconds, mags, n in rows:
         if model in CARS:
-            if not 8 <= seconds <= 12:
-                problems.append(f"CAR {model}: {seconds:.1f} s of the Rare rifle, not 8-12")
-            if not 2 <= n <= 3:
-                problems.append(f"CAR {model}: {n} rockets, not 2-3")
+            if not 10 <= seconds <= 15:
+                problems.append(f"CAR {model}: {seconds:.1f} s of the Rare rifle, not 10-15")
+            if not 3 <= n <= 4:
+                problems.append(f"CAR {model}: {n} rockets, not 3-4")
             if armour.Protects(model, "DriverSeat"):
                 problems.append(f"CAR {model}: its driver is behind armour (a car's glass lets shots through)")
     fastest_car = min(r[2] for r in rows if r[0] in CARS)
     for model, h, seconds, mags, n in rows:
         if model in BIKES:
-            if not (seconds < fastest_car and seconds < 6):
-                problems.append(f"BIKE {model}: {seconds:.1f} s of the rifle (a bike must go quicker than any car, and inside 6)")
-            if not 1 <= n <= 2:
-                problems.append(f"BIKE {model}: {n} rockets, not 1-2")
+            if not (seconds < fastest_car and seconds < 7.5):
+                problems.append(f"BIKE {model}: {seconds:.1f} s of the rifle (a bike must go quicker than any car, and inside 7.5)")
+            if not 1 <= n <= 3:
+                problems.append(f"BIKE {model}: {n} rockets, not 1-3")
     for model, h, seconds, mags, n in rows:
         if model in ARMOURED:
             ratio = h / car_mean
@@ -146,8 +148,8 @@ def measure(repo, armour_src=None, verbose=True):
                 problems.append(f"ARMOUR {model}: {resist:.0%} off bullets, not 40-50%")
             if abs(armour.Scale(model, "explosive") - armour.Classes.explosive) > 1e-9:
                 problems.append(f"ARMOUR {model}: armour takes something off explosives (they are the counter)")
-            if not 5 <= n <= 6:
-                problems.append(f"ARMOUR {model}: {n} rockets, not 5-6")
+            if not 6 <= n <= 8:
+                problems.append(f"ARMOUR {model}: {n} rockets, not 6-8")
             if not armour.Protects(model, "DriverSeat") or not armour.Protects(model, "PassengerSeat1"):
                 problems.append(f"ARMOUR {model}: its cabin does not protect the driver and passengers")
             if armour.Protects(model, "GunnerSeat"):
@@ -184,10 +186,10 @@ def measure(repo, armour_src=None, verbose=True):
             seconds += spec.rechargeDelay + left / min(spec.recharge, spec.fireRate)
         if verbose:
             print(f"  {model:16} {mount:6} {spec.id:26} {per:6.1f} a hit, {shots:3d} hits, {seconds:5.1f} s")
-        if mount == "turret" and seconds > 8:
-            problems.append(f"GUNS {model} turret: {seconds:.1f} s to kill a car on its own (band: under 8, very powerful)")
-        if mount == "driver" and seconds > 12:
-            problems.append(f"GUNS {model} driver's gun: {seconds:.1f} s to kill a car (band: under 12, very powerful)")
+        if mount == "turret" and seconds > 10:
+            problems.append(f"GUNS {model} turret: {seconds:.1f} s to kill a car on its own (band: under 10, very powerful)")
+        if mount == "driver" and seconds > 15:
+            problems.append(f"GUNS {model} driver's gun: {seconds:.1f} s to kill a car (band: under 15, very powerful)")
     if verbose:
         print("hand guns by class and tier (not staged), per second firing / with reloads, after the damage scale:")
         table = {}

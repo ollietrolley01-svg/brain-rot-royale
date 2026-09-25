@@ -21,10 +21,11 @@ PURE lifecycle and MountedGunPlacement's PURE scorer -- and holds:
   BALANCE (MountedGunData, VehicleArmor, WeaponData via vehicle_ttk_check's own loader)
     B1  TTK against a player (100, and 200 with a full shield), every round landing, belt heat counted
     B2  TTK against the average car, a bike and each armoured car
-    B3  bands, very powerful (Oliver, 2026-09-25): the HMG out-damages a Rare rifle by at least 30% at close
-        range and kills a car inside 8 s; the cannon kills a car inside 5 s; either gun kills a shielded
-        player inside one second; the gun itself breaks to 4-7 rockets and to 3-8 s of a rifle from the
-        side, and the shield multiplies that at least 3x (the counterplay: flank it and break it)
+    B3  bands, very powerful (Oliver, 2026-09-25), times x1.25 for his TTK +25% the same day: the HMG
+        out-damages a Rare rifle by at least 30% at close range and kills a car inside 10 s; the cannon
+        kills a car inside 6.5 s; either gun kills a shielded player inside 1.5 s (the cannon needs a
+        third grenade at the new scale: 1.43 s); the gun itself breaks to 5-9 rockets and to 4-10 s of
+        a rifle from the side, and the shield multiplies that at least 3x (the counterplay: flank it)
     B4  the arcs are limited (never all the way round) and the traverse slower than a player's run seen from
         close in, so a flanker can get round it
     B5  effective range (where one round in three lands on a body) and time to overheat, reported
@@ -458,15 +459,15 @@ def balance_checks(repo, data_source=None, verbose=True):
         # B3 bands
         if not is_round and dps < 1.3 * rifle_dps:
             fail(problems, f"B3 {kind}: {dps:.0f} damage a second at close range is under 1.3x a Rare rifle's ({rifle_dps:.0f})")
-        if out["shielded"][1] > 1.0:
-            fail(problems, f"B3 {kind}: takes {out['shielded'][1]:.2f} s to kill a shielded player (band: inside 1 s)")
-        limit = 5 if is_round else 8
+        if out["shielded"][1] > 1.5:
+            fail(problems, f"B3 {kind}: takes {out['shielded'][1]:.2f} s to kill a shielded player (band: inside 1.5 s)")
+        limit = 6.5 if is_round else 10
         if out["car"][1] > limit:
             fail(problems, f"B3 {kind}: takes {out['car'][1]:.1f} s to kill the average car (band: under {limit})")
-        if not (4 <= rockets <= 7):
-            fail(problems, f"B3 {kind}: breaks to {rockets} rockets (band 4-7)")
-        if not (3 <= rifle_side <= 8):
-            fail(problems, f"B3 {kind}: breaks to {rifle_side:.1f} s of a Rare rifle from the side (band 3-8)")
+        if not (5 <= rockets <= 9):
+            fail(problems, f"B3 {kind}: breaks to {rockets} rockets (band 5-9)")
+        if not (4 <= rifle_side <= 10):
+            fail(problems, f"B3 {kind}: breaks to {rifle_side:.1f} s of a Rare rifle from the side (band 4-10)")
         if rifle_shield < 3 * rifle_side:
             fail(problems, f"B3 {kind}: the shield only makes it {rifle_shield / rifle_side:.1f}x as hard to break")
         # B4 arcs and traverse
