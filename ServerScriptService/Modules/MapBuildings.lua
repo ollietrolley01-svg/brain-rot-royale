@@ -99,6 +99,22 @@ local function trim(parent, size, cframe, color, material)
 	return part
 end
 
+-- Where buildWall puts the windows in a wall `length` long and `height` tall: each one's centre, as
+-- an offset from the wall's middle. The furniture layout reads the same list, so it always knows
+-- where the openings are.
+local function windowOffsets(length, height)
+	local windows = {}
+	if height <= WINDOW_TOP + 1 then
+		return windows
+	end
+	local bays = math.max(1, math.floor(length / 13))
+	local pierWidth = (length - bays * WINDOW_WIDTH) / (bays + 1)
+	for index = 1, bays do
+		table.insert(windows, -length / 2 + index * pierWidth + (index - 1) * WINDOW_WIDTH + WINDOW_WIDTH / 2)
+	end
+	return windows
+end
+
 --------------------------------------------------------------------------------
 -- Doorway and rooftop decor
 --------------------------------------------------------------------------------
@@ -288,12 +304,9 @@ local function buildWall(parent, axis, cx, cz, length, baseY, height, mat, color
 		local cursor = -half
 		for index = 1, bays + 1 do
 			slab(cursor + pierWidth / 2, pierWidth, baseY + SILL_HEIGHT, lintelY - SILL_HEIGHT)
-			cursor += pierWidth
-			if index <= bays then
-				table.insert(windows, cursor + WINDOW_WIDTH / 2)
-				cursor += WINDOW_WIDTH
-			end
+			cursor += pierWidth + WINDOW_WIDTH
 		end
+		windows = windowOffsets(length, height)
 	else
 		slab(0, length, baseY, lintelY)
 	end
@@ -522,11 +535,9 @@ end
 -- Interior cover
 --------------------------------------------------------------------------------
 
--- How much floor each kind of furniture needs, as a radius.
+-- How much floor each stockroom piece (towers and warehouses) needs, as a radius.
 local FURNITURE_RADIUS = {
-	crates = 5.3, barrel = 2.6, table = 6.4, shelf = 4.8,
-	sofa = 5.6, bed = 5.8, counter = 5.4, stove = 3.2, wardrobe = 3.6, nightstand = 1.8,
-	sink = 2.2, toilet = 1.8,
+	crates = 5.3, barrel = 3.7, table = 6.4, shelf = 4.8,
 }
 local RUG_COLORS = {
 	Color3.fromRGB(150, 50, 60), Color3.fromRGB(50, 80, 140), Color3.fromRGB(190, 150, 70), Color3.fromRGB(70, 120, 90),
@@ -534,23 +545,24 @@ local RUG_COLORS = {
 -- The clear space a crate stack leaves under the ceiling.
 local CRATE_HEADROOM = 1.5
 
--- Weighted pools of what a floor gets, keyed by the room's purpose. A tower or warehouse floor
--- (purpose nil) keeps the plain stockroom set it always had.
-local ROOM_KINDS = {
-	kitchen = { { "counter", 0.35 }, { "stove", 0.18 }, { "table", 0.22 }, { "shelf", 0.25 } },
-	living = { { "sofa", 0.38 }, { "table", 0.2 }, { "shelf", 0.27 }, { "crates", 0.15 } },
-	bedroom = { { "bed", 0.4 }, { "wardrobe", 0.22 }, { "nightstand", 0.23 }, { "shelf", 0.15 } },
-	bathroom = { { "sink", 0.5 }, { "toilet", 0.35 }, { "shelf", 0.15 } },
-}
+-- A tower or warehouse floor keeps the plain stockroom set it always had.
 local GENERIC_KINDS = { { "crates", 0.4 }, { "barrel", 0.22 }, { "table", 0.2 }, { "shelf", 0.18 } }
-local FURNITURE_NAME = {
-	crates = "Crate", barrel = "Barrel", table = "Table", shelf = "Shelf",
-	sofa = "Sofa", bed = "Bed", counter = "Counter", stove = "Stove", wardrobe = "Wardrobe",
-	nightstand = "Nightstand", sink = "Sink", toilet = "Toilet",
-}
 local ART_COLORS = {
 	Color3.fromRGB(210, 190, 150), Color3.fromRGB(90, 120, 150), Color3.fromRGB(150, 90, 90), Color3.fromRGB(120, 140, 110),
 }
+
+-- The floor kept clear inside every opening. In front of each window: its width plus VAULT_MARGIN
+-- either side, VAULT_DEPTH into the room -- a vault lands there, and nothing standing in it hides the
+-- window (Oliver, 2026-09-24: "walls being placed in front of windows"). Inside the entry: the door's
+-- width plus DOOR_MARGIN either side (past the door-frame jambs), DOOR_LANE deep.
+local VAULT_MARGIN = 0.6
+local VAULT_DEPTH = 4.5
+local DOOR_MARGIN = 1.2
+local DOOR_LANE = 7
+-- The gap between a wall-standing piece's back and the wall's face, clear of the skirting.
+local WALL_GAP = 0.35
+-- Freestanding pieces keep this much floor round them, so there is always a way past.
+local WALKWAY = 1.2
 
 -- Cumulative pick from a { {kind, weight}, ... } pool.
 local function rollKind(pool)
@@ -590,19 +602,529 @@ local function freeSpot(room, origin, reachX, reachZ, radius, fixedZ)
 	return nil
 end
 
--- Rooms need something to fight around. `room` already holds the stairwell, the partition wall,
--- the doorway and the loot on this floor; every piece checks it and stays inside the walls.
--- `archetype` and `floor` pick a lived-in purpose for a house floor (kitchen, living room,
--- bedroom, bathroom); other archetypes keep the plain crates-and-barrels stockroom set.
-local function buildInterior(parent, origin, width, depth, baseY, floorHeight, room, archetype, floor)
-	local inset = WALL_THICKNESS / 2 + 0.5
-	local purpose = roomPurpose(archetype, floor)
-	local pool = ROOM_KINDS[purpose] or GENERIC_KINDS
-	local count = purpose == "bathroom" and random(2, 4) or random(3, 6)
-	local mainX, mainZ, mainRadius = nil, nil, nil
+-- Whether an axis-aligned footprint is clear in the floor's MapSpace, which only answers circles:
+-- a grid of small circles covering it, none reaching more than a fifth of a stud past its edge.
+local function rectFree(room, x, z, halfX, halfZ)
+	local nx, nz = math.max(1, math.ceil(halfX * 2 / 0.8)), math.max(1, math.ceil(halfZ * 2 / 0.8))
+	local cellX, cellZ = halfX * 2 / nx, halfZ * 2 / nz
+	local radius = math.sqrt(cellX * cellX + cellZ * cellZ) / 2
+	for i = 1, nx do
+		for k = 1, nz do
+			if not room:IsFree(x - halfX + (i - 0.5) * cellX, z - halfZ + (k - 0.5) * cellZ, radius) then
+				return false
+			end
+		end
+	end
+	return true
+end
 
-	for _ = 1, count do
-		local kind = rollKind(pool)
+-- The four walls' inner faces, in buildBuilding's order: front (the door), back, left, right.
+-- `at(along, out)` is the floor point `out` studs into the room from the face and `along` studs
+-- along it -- the same offsets buildWall gives its windows. `yaw` turns a piece built facing +Z so
+-- its back is to the wall; `reach` is how far the face runs either side of its middle.
+local function wallFaces(origin, halfW, halfD)
+	local face = WALL_THICKNESS / 2
+	return {
+		{ yaw = 0, reach = halfW - face, alongX = true,
+			at = function(a, d) return origin.X + a, origin.Z - halfD + face + d end },
+		{ yaw = math.pi, reach = halfW - face, alongX = true,
+			at = function(a, d) return origin.X + a, origin.Z + halfD - face - d end },
+		{ yaw = math.pi / 2, reach = halfD - face, alongX = false,
+			at = function(a, d) return origin.X - halfW + face + d, origin.Z + a end },
+		{ yaw = -math.pi / 2, reach = halfD - face, alongX = false,
+			at = function(a, d) return origin.X + halfW - face - d, origin.Z + a end },
+	}
+end
+
+-- Claims the floor a player needs inside every opening, before anything else on the floor is placed:
+-- each window's vault lane (`wallWindows[i]` is buildWall's list for wall i), and on the ground floor
+-- the lane inside the door. Loot, partitions and furniture all fit round these.
+local function claimOpenings(room, origin, halfW, halfD, wallWindows, isGround)
+	local faces = wallFaces(origin, halfW, halfD)
+	local halfAlong = WINDOW_WIDTH / 2 + VAULT_MARGIN
+	for index, face in ipairs(faces) do
+		for _, offset in ipairs(wallWindows[index] or {}) do
+			local x, z = face.at(offset, VAULT_DEPTH / 2)
+			if face.alongX then
+				room:AddRect(x, z, halfAlong, VAULT_DEPTH / 2)
+			else
+				room:AddRect(x, z, VAULT_DEPTH / 2, halfAlong)
+			end
+		end
+	end
+	if isGround then
+		local x, z = faces[1].at(0, DOOR_LANE / 2)
+		room:AddRect(x, z, DOOR_WIDTH / 2 + DOOR_MARGIN, DOOR_LANE / 2)
+	end
+end
+
+-- Where an interior partition meets the side walls, as studs behind the building's middle: the roll,
+-- or the nearest whole stud to it (within 2..limit) where the partition butts onto solid wall between
+-- two windows instead of standing across one. nil when no such spot exists.
+local function partitionZ(rolled, limit, sideWindows)
+	local clear = WINDOW_WIDTH / 2 + WALL_THICKNESS / 2 + 0.4
+	for step = 0, limit do
+		for _, candidate in ipairs({ rolled + step, rolled - step }) do
+			if candidate >= 2 and candidate <= limit then
+				local fits = true
+				for _, offset in ipairs(sideWindows) do
+					if math.abs(candidate - offset) < clear then
+						fits = false
+						break
+					end
+				end
+				if fits then
+					return candidate
+				end
+			end
+		end
+	end
+	return nil
+end
+
+--------------------------------------------------------------------------------
+-- House furnishing
+--------------------------------------------------------------------------------
+
+local function rgb(r, g, b)
+	return Color3.fromRGB(r, g, b)
+end
+
+-- Interior styles: one per house, so the rooms of a house belong together and the houses of a town
+-- differ. `wood` is the joinery, `dark` its trim, `fabric` the soft furnishings, `top` worktops and
+-- tops, `white` the appliances and bathroom ware, `metal` the hobs and handles.
+local INTERIOR_STYLES = {
+	cosy = { wood = rgb(158, 112, 72), dark = rgb(104, 74, 50), woodMat = Enum.Material.Wood, top = rgb(232, 222, 200),
+		white = rgb(238, 234, 226), metal = rgb(66, 66, 70), accent = rgb(226, 170, 80),
+		fabric = { rgb(190, 104, 80), rgb(222, 196, 150), rgb(116, 140, 96) } },
+	modern = { wood = rgb(216, 216, 220), dark = rgb(56, 58, 64), woodMat = Enum.Material.SmoothPlastic, top = rgb(40, 42, 48),
+		white = rgb(246, 246, 248), metal = rgb(28, 28, 32), accent = rgb(36, 168, 178),
+		fabric = { rgb(84, 92, 108), rgb(196, 200, 208), rgb(36, 116, 128) } },
+	pastel = { wood = rgb(238, 226, 214), dark = rgb(196, 160, 186), woodMat = Enum.Material.SmoothPlastic, top = rgb(250, 246, 240),
+		white = rgb(250, 250, 250), metal = rgb(150, 186, 210), accent = rgb(255, 206, 110),
+		fabric = { rgb(248, 170, 196), rgb(160, 222, 204), rgb(196, 176, 240) } },
+	rustic = { wood = rgb(124, 84, 52), dark = rgb(78, 52, 34), woodMat = Enum.Material.WoodPlanks, top = rgb(176, 156, 128),
+		white = rgb(226, 220, 204), metal = rgb(48, 44, 40), accent = rgb(186, 116, 48),
+		fabric = { rgb(150, 50, 44), rgb(68, 96, 60), rgb(202, 172, 120) } },
+	retro = { wood = rgb(176, 114, 62), dark = rgb(104, 66, 38), woodMat = Enum.Material.Wood, top = rgb(240, 218, 166),
+		white = rgb(244, 236, 214), metal = rgb(176, 178, 168), accent = rgb(56, 150, 140),
+		fabric = { rgb(232, 128, 40), rgb(218, 178, 46), rgb(120, 78, 48) } },
+	grunge = { wood = rgb(112, 102, 90), dark = rgb(68, 62, 56), woodMat = Enum.Material.WoodPlanks, top = rgb(150, 146, 136),
+		white = rgb(200, 196, 184), metal = rgb(80, 76, 70), accent = rgb(168, 138, 58),
+		fabric = { rgb(100, 110, 88), rgb(128, 98, 78), rgb(88, 90, 100) } },
+}
+local STYLE_ORDER = { "cosy", "modern", "pastel", "rustic", "retro", "grunge" }
+-- Which styles a town's palette (TownKinds.Palettes, by name) leans to. Towns without a palette
+-- take DEFAULT_STYLE_WEIGHTS.
+local STYLE_WEIGHTS = {
+	pastel = { pastel = 3, retro = 1 }, candy = { pastel = 2, retro = 2 },
+	upscale = { modern = 3, cosy = 1 }, corporate = { modern = 1 }, civic = { modern = 2, cosy = 1 },
+	farm = { rustic = 3, cosy = 1 }, village = { rustic = 2, cosy = 2 }, oasis = { cosy = 2, retro = 1 },
+	ruin = { grunge = 1 }, industrial = { grunge = 2, rustic = 1 }, rail = { rustic = 2, grunge = 1 },
+	construction = { grunge = 2, modern = 1 }, oldTown = { cosy = 2, rustic = 1, retro = 1 },
+	harbour = { cosy = 2, rustic = 2 }, sport = { modern = 2, retro = 1 }, uniform = { modern = 1, cosy = 1 },
+	plain = { cosy = 1, modern = 1 },
+}
+local DEFAULT_STYLE_WEIGHTS = { cosy = 2, modern = 2, pastel = 1, rustic = 1, retro = 1 }
+
+-- One roll: this house's interior style, leaning to its town's palette.
+local function interiorStyle(palette)
+	local weights = (palette and STYLE_WEIGHTS[palette.name]) or DEFAULT_STYLE_WEIGHTS
+	local total = 0
+	for _, name in ipairs(STYLE_ORDER) do
+		total += weights[name] or 0
+	end
+	local roll, seen = random() * total, 0
+	for _, name in ipairs(STYLE_ORDER) do
+		seen += weights[name] or 0
+		if roll < seen then
+			return INTERIOR_STYLES[name]
+		end
+	end
+	return INTERIOR_STYLES.cosy
+end
+
+-- The furniture. Each piece is built facing +Z with its back at -depth/2 and its footprint centred on
+-- the origin, standing on y = 0 (the floor's top face): `len` along the wall, `depth` out from it.
+-- `k.solid` parts collide and stop shots -- cover, and what DestructibleService breaks; `k.deco`
+-- parts are trim that goes with them. `k.wall` is the wall's face, for things hung on it. A piece
+-- with `wall = false` stands free in the room. `beside` names pieces tried next to it, on its wall.
+-- A bed `width` wide (3.3 studs of it are the pillow's).
+local function buildBed(k, s, width)
+	k.solid(Vector3.new(width, 1.1, 7.8), 0, 0.55, 0.2, s.wood, s.woodMat)
+	k.solid(Vector3.new(width - 0.4, 0.8, 7.4), 0, 1.5, 0.3, s.white, Enum.Material.Fabric)
+	k.solid(Vector3.new(width, 3.6, 0.4), 0, 1.8, -3.9, s.dark, s.woodMat)
+	k.deco(Vector3.new(width - 0.3, 0.2, 4.6), 0, 2.0, 1.75, k.fabric, Enum.Material.Fabric)
+	k.deco(Vector3.new(width - 1.4, 0.5, 1.4), 0, 2.15, -2.8, s.white:Lerp(s.accent, 0.25), Enum.Material.Fabric)
+end
+
+local PIECES = {
+	counter = { len = 5.6, depth = 2.6, beside = { "stove" }, build = function(k, s)
+		k.solid(Vector3.new(5.6, 3.1, 2.6), 0, 1.55, 0, s.wood, s.woodMat)
+		k.deco(Vector3.new(5.8, 0.25, 2.75), 0, 3.225, 0.075, s.top, Enum.Material.Marble)
+		k.deco(Vector3.new(1.9, 0.1, 1.4), 1.4, 3.4, 0.15, s.metal, Enum.Material.Metal)
+		k.deco(Vector3.new(5.2, 2.2, 1.2), 0, 6.9, k.wall + 0.62, s.wood, s.woodMat)
+	end },
+	stove = { len = 3, depth = 2.6, build = function(k, s)
+		k.solid(Vector3.new(3, 3.1, 2.6), 0, 1.55, 0, s.white, Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(2.6, 0.12, 2.2), 0, 3.16, 0, rgb(28, 28, 30), Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(2.3, 1.5, 0.1), 0, 1.5, 1.35, rgb(40, 42, 46), Enum.Material.Glass)
+		k.deco(Vector3.new(2.8, 1, 1.6), 0, 7, k.wall + 0.82, s.metal, Enum.Material.Metal)
+	end },
+	fridge = { len = 3.2, depth = 2.8, build = function(k, s)
+		k.solid(Vector3.new(3.2, 7.2, 2.8), 0, 3.6, 0, s.white, Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(0.2, 2.2, 0.2), 1.2, 4.6, 1.5, s.metal, Enum.Material.Metal)
+		k.deco(Vector3.new(3.1, 0.08, 0.06), 0, 4.9, 1.43, s.metal, Enum.Material.Metal)
+	end },
+	pantry = { len = 3.6, depth = 2.2, build = function(k, s)
+		k.solid(Vector3.new(3.6, 7.8, 2.2), 0, 3.9, 0, s.wood, s.woodMat)
+		k.deco(Vector3.new(0.08, 7.2, 0.06), 0, 3.9, 1.13, s.dark, Enum.Material.Wood)
+	end },
+	diningTable = { len = 6, depth = 7.4, wall = false, build = function(k, s)
+		k.solid(Vector3.new(6, 0.35, 3.8), 0, 3.025, 0, s.wood, s.woodMat)
+		for _, x in ipairs({ -2.3, 2.3 }) do
+			k.solid(Vector3.new(0.5, 2.85, 3), x, 1.425, 0, s.dark, s.woodMat)
+		end
+		for _, side in ipairs({ -1, 1 }) do
+			k.deco(Vector3.new(1.8, 0.3, 1.6), side * 1.2, 1.85, side * 2.8, s.dark, s.woodMat)
+			k.deco(Vector3.new(1.8, 2.2, 0.25), side * 1.2, 3.1, side * 3.55, s.dark, s.woodMat)
+		end
+	end },
+	sofa = { len = 6, depth = 3, build = function(k, s)
+		local cover = k.fabric
+		k.solid(Vector3.new(5.2, 1.5, 2.6), 0, 0.75, 0.2, cover, Enum.Material.Fabric)
+		k.solid(Vector3.new(6, 3.2, 0.8), 0, 1.6, -1.1, cover, Enum.Material.Fabric)
+		for _, x in ipairs({ -2.8, 2.8 }) do
+			k.solid(Vector3.new(0.4, 2.2, 2.1), x, 1.1, 0.4, cover, Enum.Material.Fabric)
+		end
+		k.deco(Vector3.new(5, 0.4, 2.1), 0, 1.7, 0.35, cover:Lerp(rgb(255, 255, 255), 0.18), Enum.Material.Fabric)
+		k.deco(Vector3.new(3.6, 2.2, 0.12), 0, 5.8, k.wall + 0.07, s.accent, Enum.Material.SmoothPlastic)
+	end },
+	tvUnit = { len = 5.4, depth = 1.8, build = function(k, s)
+		k.solid(Vector3.new(5.4, 1.8, 1.8), 0, 0.9, 0, s.dark, s.woodMat)
+		k.deco(Vector3.new(4.4, 2.6, 0.25), 0, 3.1, -0.4, rgb(22, 22, 26), Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(4.1, 2.3, 0.05), 0, 3.1, -0.25, rgb(40, 60, 90), Enum.Material.Glass)
+	end },
+	bookcase = { len = 4.6, depth = 1.6, build = function(k, s)
+		k.solid(Vector3.new(4.6, 8, 1.6), 0, 4, 0, s.wood, s.woodMat)
+		for index, y in ipairs({ 1.9, 4.3, 6.7 }) do
+			k.deco(Vector3.new(4.1, 1.3, 0.1), 0, y, 0.84, s.fabric[(index - 1) % #s.fabric + 1], Enum.Material.SmoothPlastic)
+		end
+	end },
+	armchair = { len = 3.4, depth = 3.1, build = function(k, s)
+		k.solid(Vector3.new(3.4, 1.5, 2.5), 0, 0.75, 0.3, k.fabric, Enum.Material.Fabric)
+		k.solid(Vector3.new(3.4, 3, 0.6), 0, 1.5, -1.25, k.fabric, Enum.Material.Fabric)
+	end },
+	coffeeTable = { len = 4, depth = 2.4, wall = false, build = function(k, s)
+		k.solid(Vector3.new(4, 0.3, 2.4), 0, 1.5, 0, s.wood, s.woodMat)
+		k.solid(Vector3.new(3.4, 1.35, 1.8), 0, 0.675, 0, s.dark, s.woodMat)
+	end },
+	bed = { len = 5.6, depth = 8.2, beside = { "nightstand", "nightstand" }, fallback = "singleBed", build = function(k, s)
+		buildBed(k, s, 5.6)
+	end },
+	-- Where no pier between two windows is wide enough for a double.
+	singleBed = { len = 3.8, depth = 8.2, beside = { "nightstand" }, build = function(k, s)
+		buildBed(k, s, 3.8)
+	end },
+	nightstand = { len = 1.6, depth = 1.8, build = function(k, s)
+		k.solid(Vector3.new(1.6, 2.2, 1.8), 0, 1.1, 0, s.wood, s.woodMat)
+		k.deco(Vector3.new(0.5, 1, 0.5), 0, 2.7, 0, s.metal, Enum.Material.Metal)
+		k.lamp(k.deco(Vector3.new(1.2, 0.9, 1.2), 0, 3.65, 0, rgb(255, 236, 196), Enum.Material.Neon))
+	end },
+	floorLamp = { len = 1.4, depth = 1.4, build = function(k, s)
+		k.solid(Vector3.new(1.2, 0.2, 1.2), 0, 0.1, 0, s.metal, Enum.Material.Metal)
+		k.solid(Vector3.new(0.25, 5, 0.25), 0, 2.7, 0, s.metal, Enum.Material.Metal)
+		k.lamp(k.deco(Vector3.new(1.4, 1.2, 1.4), 0, 5.8, 0, rgb(255, 232, 186), Enum.Material.Neon))
+	end },
+	plant = { len = 1.8, depth = 1.8, build = function(k, s)
+		k.solid(Vector3.new(1.4, 1.6, 1.4), 0, 0.8, 0, rgb(176, 96, 64), Enum.Material.Slate)
+		k.deco(Vector3.new(1.8, 2.2, 1.8), 0, 2.7, 0, rgb(62, 128, 60), Enum.Material.Grass)
+	end },
+	wardrobe = { len = 4.4, depth = 2.4, build = function(k, s)
+		k.solid(Vector3.new(4.4, 8.2, 2.4), 0, 4.1, 0, s.wood, s.woodMat)
+		k.deco(Vector3.new(0.08, 7.6, 0.06), 0, 4.1, 1.23, s.dark, Enum.Material.Wood)
+		k.deco(Vector3.new(1, 0.15, 0.12), 0, 4.4, 1.26, s.metal, Enum.Material.Metal)
+	end },
+	desk = { len = 4.6, depth = 3.6, build = function(k, s)
+		k.solid(Vector3.new(4.6, 0.3, 2.2), 0, 2.85, -0.7, s.wood, s.woodMat)
+		for _, x in ipairs({ -2.1, 2.1 }) do
+			k.solid(Vector3.new(0.3, 2.7, 2), x, 1.35, -0.7, s.dark, s.woodMat)
+		end
+		k.deco(Vector3.new(1.7, 0.3, 1.6), 0, 1.8, 0.9, k.fabric, Enum.Material.Fabric)
+		k.deco(Vector3.new(1.7, 2, 0.25), 0, 2.9, 1.65, k.fabric, Enum.Material.Fabric)
+	end },
+	dresser = { len = 3.8, depth = 1.8, build = function(k, s)
+		k.solid(Vector3.new(3.8, 3, 1.8), 0, 1.5, 0, s.wood, s.woodMat)
+		k.deco(Vector3.new(3.5, 0.08, 0.06), 0, 1.5, 0.93, s.dark, Enum.Material.Wood)
+		k.deco(Vector3.new(2.6, 2.8, 0.12), 0, 5, k.wall + 0.07, rgb(196, 216, 226), Enum.Material.Glass)
+	end },
+	toilet = { len = 2, depth = 2.9, build = function(k, s)
+		k.solid(Vector3.new(1.8, 3, 0.8), 0, 1.5, -1.05, s.white, Enum.Material.SmoothPlastic)
+		k.solid(Vector3.new(1.5, 1.4, 2), 0, 0.7, 0.35, s.white, Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(1.6, 0.12, 1.9), 0, 1.46, 0.4, s.accent, Enum.Material.SmoothPlastic)
+	end },
+	vanity = { len = 3.2, depth = 1.9, build = function(k, s)
+		k.solid(Vector3.new(3.2, 2.8, 1.9), 0, 1.4, 0, s.wood, s.woodMat)
+		k.deco(Vector3.new(1.8, 0.15, 1.2), 0, 2.875, 0.1, s.white, Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(2.4, 2.6, 0.1), 0, 5.2, k.wall + 0.06, rgb(196, 216, 226), Enum.Material.Glass)
+	end },
+	bathtub = { len = 5.6, depth = 3, build = function(k, s)
+		k.solid(Vector3.new(5.6, 2, 3), 0, 1, 0, s.white, Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(5, 0.08, 2.4), 0, 2.04, 0, rgb(150, 200, 230), Enum.Material.Glass)
+	end },
+	washer = { len = 2.8, depth = 2.6, build = function(k, s)
+		k.solid(Vector3.new(2.8, 3, 2.6), 0, 1.5, 0, s.white, Enum.Material.SmoothPlastic)
+		k.deco(Vector3.new(1.7, 1.7, 0.08), 0, 1.4, 1.34, rgb(60, 70, 84), Enum.Material.Glass)
+	end },
+}
+-- What each purpose's room holds: every `core` piece it can fit, a shuffled handful of `extra`
+-- ones, and one `centre` piece standing free in the middle.
+local ROOM_SETS = {
+	kitchen = { core = { "counter", "fridge" }, extra = { "counter", "pantry", "plant", "bookcase" }, centre = "diningTable" },
+	living = { core = { "sofa", "tvUnit" }, extra = { "armchair", "bookcase", "armchair", "plant", "floorLamp", "dresser" },
+		centre = "coffeeTable" },
+	bedroom = { core = { "bed" }, extra = { "wardrobe", "desk", "dresser", "bookcase", "plant", "nightstand" } },
+	bathroom = { core = { "toilet", "vanity" }, extra = { "bathtub", "washer", "plant" } },
+}
+-- Signature pieces, by the Name they build under (interior_check and the interior gallery read it).
+local FURNITURE_NAME = {
+	crates = "Crate", barrel = "Barrel", table = "Table", shelf = "Shelf",
+	counter = "Counter", stove = "Stove", fridge = "Fridge", pantry = "Pantry", diningTable = "DiningTable",
+	sofa = "Sofa", tvUnit = "TvUnit", bookcase = "Bookcase", armchair = "Armchair", coffeeTable = "CoffeeTable",
+	bed = "Bed", singleBed = "Bed", nightstand = "Nightstand", floorLamp = "FloorLamp", plant = "Plant", wardrobe = "Wardrobe", desk = "Desk", dresser = "Dresser",
+	toilet = "Toilet", vanity = "Vanity", bathtub = "Bathtub", washer = "Washer",
+}
+
+-- Builds one piece whose footprint is centred on (x, z), turned by `yaw`, as its own breakable
+-- pool: every part carries `Destructible = "Furniture:<tag>"`, so DestructibleService breaks the
+-- piece as one thing, and its trim goes with it.
+local function buildPiece(parent, name, x, floorY, z, yaw, style, tag, lights)
+	local spec = PIECES[name]
+	local frame = CFrame.new(x, floorY, z) * CFrame.Angles(0, yaw, 0)
+	local group = "Furniture:" .. tag
+	local kit = { wall = -spec.depth / 2 - WALL_GAP, fabric = pick(style.fabric) }
+	currentName = FURNITURE_NAME[name]
+	function kit.solid(size, px, py, pz, color, material)
+		local part = makePart(parent, size, frame * CFrame.new(px, py, pz), color, material)
+		part:SetAttribute("Destructible", group)
+		return part
+	end
+	function kit.deco(size, px, py, pz, color, material)
+		local part = trim(parent, size, frame * CFrame.new(px, py, pz), color, material)
+		part:SetAttribute("Destructible", group)
+		return part
+	end
+	-- One lit lamp per floor at most: lights are the costly part of a lamp.
+	function kit.lamp(part)
+		if lights.count < 1 then
+			lights.count += 1
+			local light = Instance.new("PointLight")
+			light.Color = rgb(255, 224, 170)
+			light.Brightness = 1.2
+			light.Range = 14
+			light.Parent = part
+		end
+		return part
+	end
+	spec.build(kit, style)
+	currentName = "Part"
+end
+
+-- The footprint of `name` against wall `face` at `along`: centre and world half-extents.
+local function wallFootprint(face, name, along)
+	local spec = PIECES[name]
+	local x, z = face.at(along, WALL_GAP + spec.depth / 2)
+	if face.alongX then
+		return x, z, spec.len / 2, spec.depth / 2
+	end
+	return x, z, spec.depth / 2, spec.len / 2
+end
+
+-- Stands `name` against wall `face` at `along` if its footprint is clear; claims it and returns true.
+local function tryWallPiece(ctx, name, face, along)
+	local spec = PIECES[name]
+	if math.abs(along) + spec.len / 2 > face.reach - WALL_GAP then
+		return false
+	end
+	local x, z, hx, hz = wallFootprint(face, name, along)
+	if not rectFree(ctx.room, x, z, hx, hz) then
+		return false
+	end
+	ctx.room:AddRect(x, z, hx, hz)
+	ctx.serial += 1
+	buildPiece(ctx.parent, name, x, ctx.floorY, z, face.yaw, ctx.style, ctx.tag .. "_" .. ctx.serial, ctx.lights)
+	return true
+end
+
+-- Every stretch of wall `spec` fits along between the openings (window and door lanes, from
+-- buildWall's own window list), as candidate spots: snug to each end of the stretch and one between,
+-- shuffled. The room's claims (stairs, partition, loot, other pieces) are checked when one is tried.
+local function wallSpots(ctx, spec)
+	local spots = {}
+	for index, face in ipairs(ctx.faces) do
+		local blocked = {}
+		for _, offset in ipairs(ctx.windows[index] or {}) do
+			table.insert(blocked, { offset - WINDOW_WIDTH / 2 - VAULT_MARGIN, offset + WINDOW_WIDTH / 2 + VAULT_MARGIN })
+		end
+		if index == 1 and ctx.ground then
+			table.insert(blocked, { -DOOR_WIDTH / 2 - DOOR_MARGIN, DOOR_WIDTH / 2 + DOOR_MARGIN })
+		end
+		table.sort(blocked, function(a, b)
+			return a[1] < b[1]
+		end)
+		local low = -face.reach + WALL_GAP
+		local function stretch(high)
+			-- 0.2 spare at each end: rectFree's circles reach a little past the footprint.
+			local first, last = low + 0.2 + spec.len / 2, high - 0.2 - spec.len / 2
+			if last >= first then
+				table.insert(spots, { face, first })
+				if last - first > 0.1 then
+					table.insert(spots, { face, last })
+					table.insert(spots, { face, first + random() * (last - first) })
+				end
+			end
+		end
+		for _, span in ipairs(blocked) do
+			stretch(span[1])
+			low = math.max(low, span[2])
+		end
+		stretch(face.reach - WALL_GAP)
+	end
+	for index = #spots, 2, -1 do
+		local other = random(1, index)
+		spots[index], spots[other] = spots[other], spots[index]
+	end
+	return spots
+end
+
+-- A wall spot for `name` (and then its `beside` pieces next to it), or its `fallback` piece if it
+-- fits nowhere.
+local function placeOnWall(ctx, name)
+	local spec = PIECES[name]
+	for _, spot in ipairs(wallSpots(ctx, spec)) do
+		local face, along = spot[1], spot[2]
+		if tryWallPiece(ctx, name, face, along) then
+			for index, other in ipairs(spec.beside or {}) do
+				local side = index % 2 == 1 and 1 or -1
+				local gap = spec.len / 2 + PIECES[other].len / 2 + 0.2
+				local _ = tryWallPiece(ctx, other, face, along + side * gap) or tryWallPiece(ctx, other, face, along - side * gap)
+			end
+			return true
+		end
+	end
+	if spec.fallback then
+		return placeOnWall(ctx, spec.fallback)
+	end
+	return false
+end
+
+-- A freestanding spot for `name`, well clear of the walls (so the vault lanes and the wall pieces keep
+-- their floor) with WALKWAY round it. Returns its centre and half-extents, claimed.
+local function placeFree(ctx, name, halfW, halfD)
+	local spec = PIECES[name]
+	for _ = 1, 14 do
+		local turned = random() < 0.5
+		local hx, hz = spec.len / 2, spec.depth / 2
+		if turned then
+			hx, hz = hz, hx
+		end
+		local keepX = halfW - WALL_THICKNESS / 2 - VAULT_DEPTH - hx
+		local keepZ = halfD - WALL_THICKNESS / 2 - VAULT_DEPTH - hz
+		if keepX > 0 and keepZ > 0 then
+			local x = ctx.origin.X + (random() * 2 - 1) * keepX
+			local z = ctx.origin.Z + (random() * 2 - 1) * keepZ
+			if rectFree(ctx.room, x, z, hx + WALKWAY, hz + WALKWAY) then
+				ctx.room:AddRect(x, z, hx, hz)
+				ctx.serial += 1
+				buildPiece(ctx.parent, name, x, ctx.floorY, z, turned and math.pi / 2 or 0, ctx.style,
+					ctx.tag .. "_" .. ctx.serial, ctx.lights)
+				return x, z, hx, hz
+			end
+		end
+	end
+	return nil
+end
+
+-- A lived-in room: the purpose's pieces against the walls between the windows, one piece standing
+-- free in the middle, a rug, and skirting and door frames as trim.
+local function furnishRoom(parent, origin, width, depth, baseY, room, purpose, floor, style, stairClear, wallWindows)
+	local halfW, halfD = width / 2, depth / 2
+	local set = ROOM_SETS[purpose]
+	local ctx = {
+		parent = parent, origin = origin, room = room, style = style, floorY = baseY + 0.5,
+		faces = wallFaces(origin, halfW, halfD), serial = 0, tag = "F" .. floor, lights = { count = 0 },
+		windows = wallWindows or {}, ground = floor == 0,
+	}
+	for _, name in ipairs(set.core) do
+		placeOnWall(ctx, name)
+	end
+	local rugX, rugZ, rugHX, rugHZ = nil, nil, nil, nil
+	if set.centre then
+		rugX, rugZ, rugHX, rugHZ = placeFree(ctx, set.centre, halfW, halfD)
+	end
+	local extra = table.clone(set.extra)
+	for index = #extra, 2, -1 do
+		local other = random(1, index)
+		extra[index], extra[other] = extra[other], extra[index]
+	end
+	for index = 1, random(math.ceil(#extra / 2) + 1, #extra) do
+		placeOnWall(ctx, extra[index])
+	end
+
+	-- A rug under the centre piece, or in the middle of the room when there is none. Trim: it never
+	-- collides, so it can't be what blocks a door, a stair or a vault.
+	currentName = "Rug"
+	if rugX then
+		trim(parent, Vector3.new(rugHX * 2 + 2.4, 0.12, rugHZ * 2 + 2.4), CFrame.new(rugX, baseY + 0.56, rugZ),
+			pick(style.fabric):Lerp(style.accent, 0.3), Enum.Material.Fabric)
+	elseif rectFree(room, origin.X, origin.Z + 2, 3.5, 2.5) then
+		trim(parent, Vector3.new(7, 0.12, 5), CFrame.new(origin.X, baseY + 0.56, origin.Z + 2),
+			pick(style.fabric):Lerp(style.accent, 0.3), Enum.Material.Fabric)
+	end
+
+	-- Skirting along the back and side walls, below every sill; the side runs stop at the back one,
+	-- and the left one starts past the stairs' strip (`stairClear` deep, when the house has stairs)
+	-- rather than running over the flight or the well.
+	local face = WALL_THICKNESS / 2
+	currentName = "Skirting"
+	local backZ = origin.Z + halfD - face - 0.34
+	trim(parent, Vector3.new(width - 2 * face, 0.6, 0.3), CFrame.new(origin.X, baseY + 0.8, backZ + 0.17),
+		style.dark, Enum.Material.Wood)
+	for _, side in ipairs({ -1, 1 }) do
+		local frontZ = origin.Z - halfD + (side < 0 and stairClear or face)
+		if backZ - frontZ > 1 then
+			trim(parent, Vector3.new(0.3, 0.6, backZ - frontZ),
+				CFrame.new(origin.X + side * (halfW - face - 0.17), baseY + 0.8, (frontZ + backZ) / 2), style.dark, Enum.Material.Wood)
+		end
+	end
+	if floor == 0 then
+		-- Door-frame jambs either side of the entry, on the inside face (the front wall of the ground
+		-- floor has the door and no windows).
+		currentName = "DoorFrame"
+		for _, side in ipairs({ -1, 1 }) do
+			trim(parent, Vector3.new(0.8, 8.5, 0.3), CFrame.new(origin.X + side * (DOOR_WIDTH / 2 + 0.42), baseY + 4.75,
+				origin.Z - halfD + face + 0.17), style.dark, Enum.Material.Wood)
+		end
+	end
+	currentName = "Part"
+end
+
+-- Rooms need something to fight around. `room` already holds the stairwell, the partition wall, the
+-- lanes inside every door and window, and the loot on this floor; every piece checks it and stays
+-- inside the walls. A house floor gets a lived-in purpose (kitchen, living room, bedroom, bathroom)
+-- furnished in the house's `style`; other archetypes keep the plain crates-and-barrels stockroom.
+local function buildInterior(parent, origin, width, depth, baseY, floorHeight, room, archetype, floor, style, stairClear,
+	wallWindows)
+	local purpose = roomPurpose(archetype, floor)
+	if purpose then
+		furnishRoom(parent, origin, width, depth, baseY, room, purpose, floor, style or INTERIOR_STYLES.cosy,
+			stairClear or WALL_THICKNESS / 2, wallWindows)
+		return
+	end
+
+	local inset = WALL_THICKNESS / 2 + 0.5
+	for _ = 1, random(3, 6) do
+		local kind = rollKind(GENERIC_KINDS)
 		local radius = FURNITURE_RADIUS[kind]
 		local reachX, reachZ = width / 2 - inset - radius, depth / 2 - inset - radius
 		local x, z = nil, nil
@@ -612,9 +1134,6 @@ local function buildInterior(parent, origin, width, depth, baseY, floorHeight, r
 
 		if not x then
 			continue
-		end
-		if not mainX then
-			mainX, mainZ, mainRadius = x, z, radius
 		end
 		currentName = FURNITURE_NAME[kind]
 		if kind == "crates" then
@@ -647,10 +1166,10 @@ local function buildInterior(parent, origin, width, depth, baseY, floorHeight, r
 		elseif kind == "table" then
 			makePart(parent, Vector3.new(11, 0.8, 6), CFrame.new(x, baseY + 5, z), Color3.fromRGB(122, 88, 58), Enum.Material.Wood)
 			for _, corner in ipairs({ Vector3.new(-5, 0, -2.4), Vector3.new(5, 0, -2.4), Vector3.new(-5, 0, 2.4), Vector3.new(5, 0, 2.4) }) do
-				makePart(parent, Vector3.new(0.8, 4.6, 0.8), CFrame.new(Vector3.new(x, baseY + 2.5, z) + corner),
+				makePart(parent, Vector3.new(0.8, 4.1, 0.8), CFrame.new(Vector3.new(x, baseY + 2.55, z) + corner),
 					Color3.fromRGB(98, 70, 46), Enum.Material.Wood)
 			end
-		elseif kind == "shelf" then
+		else
 			-- Shelving unit, tall enough to break sightlines, with a little clutter on top that never
 			-- collides so it can't snag a jump or eat a bullet meant for the shelf itself.
 			local yaw = random() * 3
@@ -661,83 +1180,9 @@ local function buildInterior(parent, origin, width, depth, baseY, floorHeight, r
 				clutter(decorPart(parent, Vector3.new(random(6, 12) / 10, random(6, 12) / 10, random(6, 12) / 10),
 					face * CFrame.new(along, 0.4, 0), pick(ART_COLORS), Enum.Material.SmoothPlastic))
 			end
-		elseif kind == "sofa" then
-			local yaw = random() * 3
-			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
-			makePart(parent, Vector3.new(9, 2.6, 4.2), face * CFrame.new(0, 1.8, 0), pick(RUG_COLORS), Enum.Material.Fabric)
-			makePart(parent, Vector3.new(9, 2.6, 1), face * CFrame.new(0, 3.2, -1.6), pick(RUG_COLORS), Enum.Material.Fabric)
-		elseif kind == "bed" then
-			local yaw = random() * 3
-			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
-			makePart(parent, Vector3.new(7.5, 2, 9.5), face * CFrame.new(0, 1.6, 0), Color3.fromRGB(235, 235, 240), Enum.Material.Fabric)
-			makePart(parent, Vector3.new(7.5, 3.4, 0.6), face * CFrame.new(0, 3, -4.6), Color3.fromRGB(150, 110, 70), Enum.Material.Wood)
-			clutter(decorPart(parent, Vector3.new(2.4, 1.1, 1.8), face * CFrame.new(2, 3.1, -3.2), Color3.fromRGB(220, 90, 100), Enum.Material.Fabric))
-		elseif kind == "counter" then
-			local yaw = random() * 3
-			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
-			makePart(parent, Vector3.new(9, 3.4, 3.4), face * CFrame.new(0, 1.7, 0), Color3.fromRGB(210, 205, 195), Enum.Material.SmoothPlastic)
-			clutter(decorPart(parent, Vector3.new(3.2, 0.3, 2.6), face * CFrame.new(-1.5, 3.55, 0), Color3.fromRGB(150, 180, 190), Enum.Material.Metal))
-		elseif kind == "stove" then
-			local yaw = random() * 3
-			makePart(parent, Vector3.new(3.2, 3.6, 3.2), CFrame.new(x, baseY + 1.8, z) * CFrame.Angles(0, yaw, 0),
-				Color3.fromRGB(60, 62, 66), Enum.Material.Metal)
-			clutter(decorPart(parent, Vector3.new(2.6, 0.15, 2.6), CFrame.new(x, baseY + 3.65, z) * CFrame.Angles(0, yaw, 0),
-				Color3.fromRGB(30, 30, 32), Enum.Material.SmoothPlastic))
-		elseif kind == "wardrobe" then
-			makePart(parent, Vector3.new(6, 10.5, 2.6), CFrame.new(x, baseY + 5.25, z) * CFrame.Angles(0, random() * 3, 0),
-				Color3.fromRGB(96, 76, 58), Enum.Material.Wood)
-		elseif kind == "nightstand" then
-			makePart(parent, Vector3.new(2.6, 2.6, 2.6), CFrame.new(x, baseY + 1.3, z), Color3.fromRGB(120, 96, 70), Enum.Material.Wood)
-			local lamp = clutter(decorPart(parent, Vector3.new(0.8, 1.8, 0.8), CFrame.new(x, baseY + 3.5, z),
-				Color3.fromRGB(255, 236, 190), Enum.Material.Neon))
-			local light = Instance.new("PointLight")
-			light.Color = Color3.fromRGB(255, 224, 170)
-			light.Brightness = 1.4
-			light.Range = 14
-			light.Parent = lamp
-		elseif kind == "sink" then
-			makePart(parent, Vector3.new(3.4, 3, 2.6), CFrame.new(x, baseY + 1.5, z) * CFrame.Angles(0, random() * 3, 0),
-				Color3.fromRGB(225, 228, 230), Enum.Material.SmoothPlastic)
-		else -- toilet
-			local yaw = random() * 3
-			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
-			makePart(parent, Vector3.new(2, 3.4, 2.6), face * CFrame.new(0, 1.7, -0.8), Color3.fromRGB(235, 235, 235), Enum.Material.SmoothPlastic)
-			makePart(parent, Vector3.new(1.6, 1.6, 1.8), face * CFrame.new(0, 1.4, 0.9), Color3.fromRGB(235, 235, 235), Enum.Material.SmoothPlastic)
 		end
 	end
 	currentName = "Part"
-
-	if purpose then
-		-- A rug under whatever landed first: cosmetic only (CanCollide false), so it can never be
-		-- what blocks a door, a stair or a window vault.
-		if mainX then
-			trim(parent, Vector3.new(mainRadius * 1.5, 0.15, mainRadius * 1.1),
-				CFrame.new(mainX, baseY + 0.58, mainZ), pick(RUG_COLORS), Enum.Material.Fabric)
-		end
-		-- Wall art on the wall facing the door, low enough to sit under every window's sill so it can
-		-- never stand in a vault's way, and skirting along both side walls.
-		currentName = "WallArt"
-		for _, side in ipairs({ -1, 1 }) do
-			trim(parent, Vector3.new(2.4, 1.7, 0.15),
-				CFrame.new(origin.X + side * width * 0.22, baseY + 2.6, origin.Z + depth / 2 - inset),
-				pick(ART_COLORS), Enum.Material.Fabric)
-		end
-		currentName = "Skirting"
-		for _, side in ipairs({ -1, 1 }) do
-			trim(parent, Vector3.new(0.3, 0.6, depth - inset * 2),
-				CFrame.new(origin.X + side * (width / 2 - inset), baseY + 0.3, origin.Z),
-				Color3.fromRGB(70, 60, 50), Enum.Material.Wood)
-		end
-		if floor == 0 then
-			-- Door-frame jambs either side of the entry, on the inside face.
-			currentName = "DoorFrame"
-			for _, side in ipairs({ -1, 1 }) do
-				trim(parent, Vector3.new(0.8, 9, 0.4), CFrame.new(origin.X + side * (DOOR_WIDTH / 2 + 0.5), baseY + 4.5, origin.Z - depth / 2 + inset),
-					Color3.fromRGB(70, 60, 50), Enum.Material.Wood)
-			end
-		end
-		currentName = "Part"
-	end
 end
 
 --------------------------------------------------------------------------------
@@ -1109,6 +1554,8 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 	local facade = { archetype = archetype, trim = trimFor(wallColor), shutter = pick(SHUTTER_COLORS), floors = floors,
 		sign = plan.sign }
 	local frontWindows = {}
+	-- One interior style for the whole house, leaning to its town's palette.
+	local style = archetype == "house" and interiorStyle(palette) or nil
 	local localChests = {}
 	local localLoot = { weapon = {}, heal = {}, item = {} }
 
@@ -1132,6 +1579,7 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 			{ "z", origin.X - halfW, origin.Z, depth - WALL_THICKNESS, Vector3.new(-1, 0, 0), false },
 			{ "z", origin.X + halfW, origin.Z, depth - WALL_THICKNESS, Vector3.new(1, 0, 0), false },
 		}
+		local wallWindows = {}
 		for index, wall in ipairs(walls) do
 			-- A terrace's SIDE walls (3 and 4) are party walls: no windows, and a flatter colour, so a
 			-- row reads as one continuous frontage from the street. They are still this building's own
@@ -1147,7 +1595,10 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 			if index == 1 then
 				frontWindows[floor] = windows
 			end
+			wallWindows[index] = windows
 		end
+		-- The lanes inside the door and every window, before anything else claims this floor.
+		claimOpenings(room, origin, halfW, halfD, wallWindows, isGround)
 
 		-- A light panel on the ceiling. A house's top floor has no ceiling, only the roof, so its light is
 		-- fixed flat against the underside of the roof slope instead of hanging in mid-air.
@@ -1181,8 +1632,16 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 		-- pass has no contact between the two to act on. Where it would cross the stairs' strip it
 		-- starts beside the strip instead, a solid wall with the way round it by the stairs; it used
 		-- to cut straight through a flight or stand across the top of one.
-		if width > 30 and random() < 0.6 then
-			local wallZ = origin.Z + random(2, math.max(3, math.floor(halfD - 4)))
+		-- It meets the side walls between their windows, never across one (partitionZ).
+		local sideWindows = table.clone(wallWindows[3])
+		for _, offset in ipairs(wallWindows[4]) do
+			table.insert(sideWindows, offset)
+		end
+		local partitionLimit = math.max(3, math.floor(halfD - 4))
+		local partitionAt = width > 30 and random() < 0.6
+			and partitionZ(random(2, partitionLimit), partitionLimit, sideWindows) or nil
+		if partitionAt then
+			local wallZ = origin.Z + partitionAt
 			local right = origin.X + halfW - WALL_THICKNESS / 2 - PARTITION_WALL_GAP
 			local left = origin.X - halfW + WALL_THICKNESS / 2 + PARTITION_WALL_GAP
 			local besideStairs = canClimb and wallZ - WALL_THICKNESS / 2 < origin.Z - halfD + stairClear
@@ -1216,7 +1675,8 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 			end
 		end
 
-		buildInterior(model, origin, width, depth, baseY, floorHeight, room, archetype, floor)
+		buildInterior(model, origin, width, depth, baseY, floorHeight, room, archetype, floor, style,
+			canClimb and stairClear or nil, wallWindows)
 	end
 
 	local topY = origin.Y + floors * floorHeight
