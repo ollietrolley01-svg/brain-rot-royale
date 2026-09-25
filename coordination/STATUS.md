@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 03:15 (EDT).
+Last updated: 2026-09-25 05:00 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -60,6 +60,21 @@ report it in the mailbox and don't edit.
 before/after numbers and a check; nothing lands until Oliver merges). Bugs go in the mailbox with the
 file and line. The build machine owns the fix.
 
+## Lag work: two sides, keep each other updated (Oliver, 03:40: "make them update eachother when theyre done")
+
+- Jacob: `task/prove-bot-lag` (PR #43), tick cost for #113/#126/#131.
+- The build machine: `pc/lag-bug-sweep` (lag and bug sweep, local, not pushed yet) and
+  `pc/bot-movement-smooth` (#99: animation and waypoints).
+- When either side finishes a lag change, it posts a `lag-update` mailbox message with the files and
+  functions it touched and the numbers before and after. Read the other side's latest lag-update
+  before you start an optimization.
+
+## Build-machine fixes from Jacob's reports: all on main (443304b)
+
+explosive-followups, drop-picker-reset, roadkill-rules, clock-deadlines, range-reload-fix and
+bot-movement-smooth (#99) are merged, with Jacob's PRs #35-#43. Known red on main that isn't from
+these fixes: `bot_driving_sim` (the CrocodiloRanger lap).
+
 ## What to work on (Oliver, 2026-09-25 03:00 and 03:15)
 
 03:00: "just have jacob run bug tests and optimizations for lag". 03:15, on proving the unproven
@@ -67,10 +82,9 @@ rows: "continue doing these". So there are three kinds of work:
 
 1. **Lag optimizations**: #113/#126/#131 bot lag and #99 movement, claimed by Jacob. Do this first.
 2. **Proving "in tree, unproven" rows**: a report and a check, no game files, one PR per row. Queue:
-   1. #117 lobby trial guns change every pickup (e666c61), claimed, Jacob
-   2. #85 chests and supply drops spill loot on the ground (3441c0f, d508889)
-   3. #51 old road cars can't be destroyed (21c6199, 81c1263, d2be199)
-   4. #114 popup barricade in the team kit, two KOTH objectives (7baed01)
+   1. #85 chests and supply drops spill loot on the ground (3441c0f, d508889)
+   2. #51 old road cars can't be destroyed (21c6199, 81c1263, d2be199)
+   3. #114 popup barricade in the team kit, two KOTH objectives (7baed01)
 3. **Bug tests on current main**: run the checks and harnesses and report new bugs. Start with what
    landed tonight: silly explosions, all-wheel drive, the +25% time-to-kill (0.736), and the build
    machine's explosive, drop-picker and roadkill fixes when they land.

@@ -48,7 +48,7 @@ CLOCK_BASELINE = {
     "ServerScriptService/Modules/MapWilds.lua": 0,
     "ServerScriptService/Modules/MatchService.lua": 13,
     "ServerScriptService/Modules/MovementSanity.lua": 6,
-    "ServerScriptService/Modules/MovementService.lua": 6,
+    "ServerScriptService/Modules/MovementService.lua": 4,
     # The one remaining site is `tostring(os.clock())` building a Studio JobId. Nothing waits on
     # it; the six deadlines this file used to carry are converted (see its `wallNow`).
     "ServerScriptService/Modules/PlayerData.lua": 1,
@@ -59,12 +59,15 @@ CLOCK_BASELINE = {
     "ServerScriptService/Modules/TradeService.lua": 0,
     "ServerScriptService/Modules/WeaponService.lua": 4,
     "StarterPlayerScripts/AmbientClient.client.lua": 1,
-    "StarterPlayerScripts/CombatClient.client.lua": 8,
+    "StarterPlayerScripts/CombatClient.client.lua": 7,
     "StarterPlayerScripts/CompanionFxClient.client.lua": 0,
     "StarterPlayerScripts/DefensePreview.lua": 1,
     "StarterPlayerScripts/GlassFxClient.client.lua": 0,
     "StarterPlayerScripts/HudClient.client.lua": 6,
     "StarterPlayerScripts/MenuClient.client.lua": 8,
+    # Not deadlines: the reload marker's bob and the not-ready shake, `math.sin(os.clock() * k)`. A
+    # phase that drifts under load is harmless, so they are carried here rather than converted.
+    "StarterPlayerScripts/MountedGunClient.client.lua": 2,
     "StarterPlayerScripts/MovementClient.client.lua": 19,
     "StarterPlayerScripts/ProgressionPanel.lua": 6,
     "StarterPlayerScripts/ProjectileClient.client.lua": 12,

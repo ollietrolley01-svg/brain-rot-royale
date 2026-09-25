@@ -63,7 +63,8 @@ PLANTS = [
      "SahurSprings", 202, "floating", "zipline:"),
     ("a shelter's opening looks out on open ground: the door rule off",
      [("MapWilds", "local DOOR_RISE, DOOR_DROP, DOOR_REACH = 1.5, 2.5, 5", "local DOOR_RISE, DOOR_DROP, DOOR_REACH = 99, 99, 5")],
-     "RotRidge", 202, "door", "wilds:"),
+     # (RotRidge 202 stopped biting when the layouts moved, 09-25; RotRidge 2 bites 0 -> 5.)
+     "RotRidge", 2, "door", "wilds:"),
     ("trees and shelters keep off what is built: the wilds ignore every claim",
      [("MapWilds", "\t\treturn space:IsFree(x, z, reach, ignore)\n", "\t\treturn true\n")],
      "SahurSprings", 101, "tree", ""),
@@ -72,8 +73,9 @@ PLANTS = [
      # Seed 6: which seed has a set-piece candidate whose entrance meets street furniture moves whenever
      # the town layout draws differently (seed 2 stopped at 38f0551; seed 1 when the car parks moved into
      # the street lots, 09-24). Searched BombardiroBay, TralalaTown, SahurSprings, RotRidge and
-     # PatapimPlains seeds 1-6 then: BombardiroBay 6 and TralalaTown 6 bite, 0 -> 1.
-     "BombardiroBay", 6, "door", "theme:setpiece"),
+     # PatapimPlains seeds 1-6 then: BombardiroBay 6 and TralalaTown 6 bite, 0 -> 1. Moved again 09-25:
+     # BombardiroBay 1 and 4 and TralalaTown 1 bite (seeds 1-8 of those two, 1-6 of the other three).
+     "BombardiroBay", 4, "door", "theme:setpiece"),
     ("a shed's doorway faces downhill and clears the ground at it (critic C9): facing ignored",
      [("MapDecor", "\t\t\tif y and y < lowest then\n", "\t\t\tif false then\n")],
      "PatapimPlains", 303, "door", "decor:hut"),

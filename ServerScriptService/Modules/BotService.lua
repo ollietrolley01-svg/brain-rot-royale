@@ -537,28 +537,9 @@ local function setupAnimations(bot, humanoid)
 	bot.currentTrack = nil
 end
 
--- Called every think tick: match the playing track to what the humanoid is actually doing.
-local function updateAnimation(bot, humanoid)
+-- The walk/run/idle/fall/jump track for a state and a speed, played if it isn't already.
+local function setMovementTrack(bot, state, speed)
 	local tracks = bot.tracks
-	if not tracks then
-		return
-	end
-
-	-- The gun pose runs over the top of the movement track rather than instead of it, so a bot
-	-- walks and holds its weapon at the same time instead of choosing between them.
-	local hold = tracks.hold
-	if hold then
-		local character = bot.character
-		local wantHold = humanoid.Health > 0 and character ~= nil and character:FindFirstChild("HeldGun") ~= nil
-		if wantHold and not hold.IsPlaying then
-			hold:Play(0.2)
-		elseif not wantHold and hold.IsPlaying then
-			hold:Stop(0.2)
-		end
-	end
-
-	local speed = humanoid.MoveDirection.Magnitude * humanoid.WalkSpeed
-	local state = humanoid:GetState()
 	local wanted
 	if state == Enum.HumanoidStateType.Freefall then
 		wanted = "fall"
@@ -586,6 +567,49 @@ local function updateAnimation(bot, humanoid)
 		track:Play(0.15)
 	end
 	bot.currentTrack = wanted
+end
+
+-- #99 "movement looks clippy, like low fps": the track used to be picked once a think, at the top
+-- of it, from MoveDirection before that think's MoveTo, so a bot sent on again played idle while it
+-- walked and one that had arrived walked on the spot until its next think (Jacob's harness: walk on
+-- 25-42% of standing frames near a player, idle on 89% of moving frames under LOD). The Humanoid's
+-- own Running and StateChanged events, the ones a player's Animate script uses, now pick it the
+-- moment the speed or state changes. They fire only on a change, not every frame, and each call is
+-- a handful of comparisons; the think no longer picks the track once they're connected.
+local function watchMovement(bot, humanoid)
+	bot.movementWatched = humanoid
+	humanoid.Running:Connect(function(speed)
+		setMovementTrack(bot, Enum.HumanoidStateType.Running, speed)
+	end)
+	humanoid.StateChanged:Connect(function(_, state)
+		setMovementTrack(bot, state, humanoid.MoveDirection.Magnitude * humanoid.WalkSpeed)
+	end)
+end
+
+-- Called every think tick: the gun pose, and the movement events hooked up on the first one.
+local function updateAnimation(bot, humanoid)
+	local tracks = bot.tracks
+	if not tracks then
+		return
+	end
+
+	-- The gun pose runs over the top of the movement track rather than instead of it, so a bot
+	-- walks and holds its weapon at the same time instead of choosing between them.
+	local hold = tracks.hold
+	if hold then
+		local character = bot.character
+		local wantHold = humanoid.Health > 0 and character ~= nil and character:FindFirstChild("HeldGun") ~= nil
+		if wantHold and not hold.IsPlaying then
+			hold:Play(0.2)
+		elseif not wantHold and hold.IsPlaying then
+			hold:Stop(0.2)
+		end
+	end
+
+	if bot.movementWatched ~= humanoid then
+		watchMovement(bot, humanoid)
+		setMovementTrack(bot, humanoid:GetState(), humanoid.MoveDirection.Magnitude * humanoid.WalkSpeed)
+	end
 end
 
 local bots = {}
@@ -948,7 +972,7 @@ do
 		return workspace:Raycast(origin, direction, params), true
 	end
 	-- A spatial query that is not a ray (a driving bot's block sweeps, BotNav.DriveSense), counted
-	-- against the same cap and share. True if granted.
+	-- against the same cap and share (and FindCover's room check). True if granted.
 	function budget.Spend(priority)
 		priority = priority or "navigation"
 		if spent >= budget.FrameCap * (budget.Share[priority] or budget.Share.navigation) then
@@ -957,7 +981,14 @@ do
 		end
 		spent += 1
 		STATS.rays += 1
-		STATS.raysNavigation += priority == "navigation" and 1 or 0
+		-- By class, as Cast counts them (FindCover spends at "combat" too, not only "navigation").
+		if priority == "combat" then
+			STATS.raysCombat += 1
+		elseif priority == "idle" then
+			STATS.raysIdle += 1
+		else
+			STATS.raysNavigation += 1
+		end
 		return true
 	end
 	castRay = budget.Cast
@@ -1934,6 +1965,14 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	if structure then
 		CombatService.BroadcastShot(bot, head.Position, { hitPoint or targetRoot.Position }, def.rarity)
 		CombatService.DamageStructure(bot, structure, def.damage * MatchConfig.BotDamageScale)
+		-- Explosive ammo goes off on the cover, as a player's shot into a barricade does.
+		if hitPoint and CombatService.BulletBlastAt and CombatService.BulletBlast(def) then
+			local back = head.Position - hitPoint
+			local normal = back.Magnitude > 1e-3 and back.Unit or Vector3.new(0, 1, 0)
+			for _ = 1, def.pellets or 1 do
+				CombatService.BulletBlastAt(bot, def, hitPoint, normal)
+			end
+		end
 		STATS.coverShots += 1
 		return
 	end
@@ -1978,6 +2017,18 @@ local function shootAt(bot, target, targetRoot, distance, head)
 			end
 		end
 		CombatService.DealDamage(bot, target, damage, def.id, headshot)
+		-- Explosive ammo (the Golden Sahur Cannon) goes off on the target the way a player's does, one
+		-- blast a pellet (#122; Oliver, 2026-09-25), with the bot as its owner so the team veto and the
+		-- owner's half apply. The shot isn't traced, so the hit point is the body's face toward the bot:
+		-- the root, half a stud back along the shot. A miss blows up nothing, like a player's shot
+		-- into the open.
+		if CombatService.BulletBlastAt and CombatService.BulletBlast(def) then
+			local back = head.Position - targetRoot.Position
+			local normal = back.Magnitude > 1e-3 and back.Unit or Vector3.new(0, 1, 0)
+			for _ = 1, def.pellets or 1 do
+				CombatService.BulletBlastAt(bot, def, targetRoot.Position + normal * 0.5, normal)
+			end
+		end
 	end
 end
 

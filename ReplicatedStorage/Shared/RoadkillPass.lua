@@ -130,6 +130,18 @@ function RoadkillPass:isRider(humanoid)
 	return false
 end
 
+-- Whether `humanoid` sits inside an armoured cabin (VehicleArmor.Protects; a wreck covers nobody, as
+-- VehicleCover.SeatOf says): Oliver 09-25, a car that rams one meets the hull, never its riders, so the
+-- sweep neither lets them through nor reports them. VehicleService's roadkill refuses them by the same rule.
+function RoadkillPass.Sheltered(humanoid)
+	local seat = humanoid and humanoid.SeatPart
+	local model = seat and seat.Parent
+	if not model or model:GetAttribute("Wrecked") then
+		return false
+	end
+	return VehicleArmor.Protects(model:GetAttribute("VehicleModel"), seat.Name)
+end
+
 -- Lets `character` through this vehicle (both ways: every limb against every collider and every
 -- rider's solid part). Returns true the first time; again while it is through, only the time is extended.
 function RoadkillPass:Pass(character, now)
@@ -212,7 +224,8 @@ function RoadkillPass:bodiesAhead(velocity, dt)
 				math.abs(localLead.Z) + margin)
 			for _, part in ipairs(workspace:GetPartBoundsInBox(frame + lead / 2, size, self.params)) do
 				local character, humanoid = RoadkillPass.BodyOf(part)
-				if character and not found[character] and not self:isRider(humanoid) then
+				if character and not found[character] and not self:isRider(humanoid)
+					and not RoadkillPass.Sheltered(humanoid) then
 					found[character] = humanoid
 				end
 			end

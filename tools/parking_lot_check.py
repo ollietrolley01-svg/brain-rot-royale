@@ -714,6 +714,8 @@ PLANTS = [
             "\tfor _ = 1, 100 do box(lot, \"Clutter\", 0, 0.2, 0, 0.2, 0, 0.2, WHITE) end\n")]}),
     ("parked", "parked cars a stud off the middle of their stall",
      {"MapDecor": [("\tlocal at = frame * CFrame.new(-centre.X, 0, -centre.Z)\n", "\tlocal at = frame * CFrame.new(-centre.X + 1.2, 0, -centre.Z)\n")]}),
+    ("parked", "drivable cars parked up to 1.5 along off their stall's middle (VehicleService BAY_JITTER)",
+     {"VehicleService": [("local BAY_JITTER = 0.3\n", "local BAY_JITTER = 1.5\n")]}),
     ("occupancy", "every car park filled as full as it may be",
      {"MapDecor": [("\tlocal share = fill or tonumber(town:GetAttribute(\"ParkingFill\")) or LOT_FILL_DEFAULT\n", "\tlocal share = 0.95\n")]}),
     ("occupancy", "every car park dealt the same fill",

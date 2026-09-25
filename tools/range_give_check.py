@@ -1,7 +1,7 @@
 """#117: the lobby range podiums. Runs the REAL RangeService.lua (lupa) against a stand-in
 WeaponService that keeps loadouts the way the real one does (Reset installs a new table,
 GiveWeapon fills the first empty slot and only selects it when the hands were empty, Equip
-selects a filled slot).
+selects a filled slot, CancelReload ends a reload).
 
 Invariants checked:
   1. Taking each of the three podium guns in turn leaves all three in the hotbar, the last one
@@ -64,6 +64,10 @@ end
 function WS.Equip(p, i)
   local l = loadouts[p]
   if l and l.slots[i] then l.equipped = i end
+end
+function WS.CancelReload(p)
+  local l = loadouts[p]
+  if l then l.reloading = false end
 end
 
 local function event() return { FireClient = function() end, OnServerEvent = { Connect = function() end } } end
