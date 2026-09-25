@@ -161,7 +161,7 @@ do
 	-- which a probe has none of, so the shape is built the way GrantLoadout builds it.
 	local expected = ModeTeams.ExpectedLoadout()
 	local good = { { kind = "weapon", id = poolIds[1] } }
-	for _, entry in ipairs(GameModes.Loadout.items) do
+	for _, entry in ipairs(GameModes.RollLoadout()) do
 		local item = ItemData.Get(entry.id)
 		table.insert(good, { kind = "item", id = entry.id, count = math.min(entry.count, item.stack) })
 	end
