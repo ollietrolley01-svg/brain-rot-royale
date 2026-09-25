@@ -16,3 +16,4 @@ Cut from main `d1e4f73`. Mailbox only.
 - `coordination/messages/2026-09-25-0735-bimjom-bugs-from-awd-bugtest.md`: all-wheel drive bug test (PR #49): the red bot_driving_sim comes from the AWD split, plus 4 more.
 - `coordination/messages/2026-09-25-0759-bimjom-bugs-from-ttk-bugtest.md`: +25% time-to-kill bug test (PR #50): 6 bugs and the per-gun spread for Oliver.
 - `coordination/messages/2026-09-25-0800-bimjom-claim-51-road-cars.md`: claims #51 (road cars), proof only.
+- `coordination/messages/2026-09-25-0838-bimjom-bugs-from-road-cars-and-night-summary.md`: bug reports from #51 (PR #51), and a summary of tonight's PRs.
