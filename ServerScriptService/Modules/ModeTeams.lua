@@ -455,9 +455,18 @@ function ModeTeams.RankBaseAxes(axis, mapInfo)
 		end
 		return best
 	end
+	-- Up to RUIN_AXES x #RUIN_FRACTIONS pairs of SiteCost (each ~1000 terrain samples and two box
+	-- queries) took seconds in one piece, freezing the whole server at match start. Nothing is built
+	-- here, so hand the frame back whenever a slice has run SLICE_BUDGET seconds.
+	local SLICE_BUDGET = 1 / 30
+	local sliceStart = os.clock()
 	for step = 0, RUIN_AXES - 1 do
 		local candidate = axis + step * math.pi / RUIN_AXES
 		for index, fraction in ipairs(RUIN_FRACTIONS) do
+			if os.clock() - sliceStart > SLICE_BUDGET then
+				task.wait()
+				sliceStart = os.clock()
+			end
 			local total = step * 0.01 + (index - 1) * 0.5
 			local keep = (ModeTeams.ArenaReach or 0) + (TeamBaseRuins.Footprint and TeamBaseRuins.Footprint.Z / 2 or 55) + 12 + ARENA_BUFFER
 			if arenaRadius * fraction < keep then
@@ -619,7 +628,10 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 	end
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = { map }
+	-- World loot too: it is seeded before Setup, and pickups left on the route would end up buried by the
+	-- ground shaping or inside the asphalt (TeamBaseRuins.ClearSite clears it for the same reason).
+	local lootFolder = workspace:FindFirstChild("Loot")
+	params.FilterDescendantsInstances = lootFolder and { map, lootFolder } or { map }
 	local function groundAt(x, z)
 		return terrainAt(x, z)
 	end
@@ -635,10 +647,26 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 			local ground = terrainAt(mid.X, mid.Z) or ruin.height
 			local frame = CFrame.lookAt(Vector3.new(mid.X, ground + 7, mid.Z), Vector3.new(b.X, ground + 7, b.Z))
 			for _, part in ipairs(workspace:GetPartBoundsInBox(frame, Vector3.new(ACCESS_CLEAR * 2, 16, length), params)) do
+				if lootFolder and part:IsDescendantOf(lootFolder) then
+					-- A pickup is always cleared, never a blocker: its whole entry under the Loot folder goes.
+					local pickup = part
+					while pickup.Parent ~= lootFolder do
+						pickup = pickup.Parent
+					end
+					if clear then
+						clear[pickup] = true
+					end
+					continue
+				end
 				local item = mapItemOf(part, map)
 				local top = item and item.Parent
 				if item and not (top and keep[top.Name]) and item ~= ruin.model and not item:IsDescendantOf(ruin.model) then
-					if string.sub(item.Name, 1, 8) == "TeamBase" or item.Name == "TeamBattleground" or itemSpan(item) > TeamBaseRuins.ClearableSpan then
+					-- mapItemOf returns the map's grandchild, so a compound or the battleground is its container
+					-- (`top`), not the item itself: refuse by either name, or a piece of them would be cleared.
+					local topName = top and top.Name or ""
+					if string.sub(item.Name, 1, 8) == "TeamBase" or item.Name == "TeamBattleground"
+						or string.sub(topName, 1, 8) == "TeamBase" or topName == "TeamBattleground"
+						or itemSpan(item) > TeamBaseRuins.ClearableSpan then
 						return item.Name
 					end
 					if clear then

@@ -1361,19 +1361,67 @@ function BotNav.DriveRoute(roads, from, goal, bounds, preferRoads)
 		end
 	else
 		local dist, prev, done = {}, {}, {}
+		-- A binary heap of { d, node } (stale entries skipped on pop): the old linear scan over every
+		-- reached node made each replan O(V^2), and team modes add hundreds of access-road nodes.
+		-- Ties go to the lower node index, as the scan's did.
+		local heap = {}
+		local function before(x, y)
+			if x[1] ~= y[1] then
+				return x[1] < y[1]
+			end
+			return (x[2].index or math.huge) < (y[2].index or math.huge)
+		end
+		local function push(entryItem)
+			table.insert(heap, entryItem)
+			local i = #heap
+			while i > 1 do
+				local parent = math.floor(i / 2)
+				if not before(heap[i], heap[parent]) then
+					break
+				end
+				heap[i], heap[parent] = heap[parent], heap[i]
+				i = parent
+			end
+		end
+		local function pop()
+			local top = heap[1]
+			local last = table.remove(heap)
+			if #heap > 0 then
+				heap[1] = last
+				local i, n = 1, #heap
+				while true do
+					local l, r, m = i * 2, i * 2 + 1, i
+					if l <= n and before(heap[l], heap[m]) then
+						m = l
+					end
+					if r <= n and before(heap[r], heap[m]) then
+						m = r
+					end
+					if m == i then
+						break
+					end
+					heap[i], heap[m] = heap[m], heap[i]
+					i = m
+				end
+			end
+			return top
+		end
 		local function relax(node, d, via)
 			if inside(node.position) and d < (dist[node] or math.huge) then
 				dist[node] = d
 				prev[node] = via
+				push({ d, node })
 			end
 		end
 		relax(entryEdge.a, flatDistance(entry, entryEdge.a.position), false)
 		relax(entryEdge.b, flatDistance(entry, entryEdge.b.position), false)
 		while true do
 			local node, best = nil, math.huge
-			for candidate, d in pairs(dist) do
-				if not done[candidate] and (d < best or (d == best and node and candidate.index and node.index and candidate.index < node.index)) then
-					node, best = candidate, d
+			while #heap > 0 do
+				local item = pop()
+				if not done[item[2]] and item[1] == dist[item[2]] then
+					node, best = item[2], item[1]
+					break
 				end
 			end
 			if not node then
