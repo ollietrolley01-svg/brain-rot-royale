@@ -245,10 +245,20 @@ local owner = { name = "owner" }
 local Ballistics = assert(load("local Ballistics = {}\n" .. ballistics .. "\nreturn Ballistics", "Ballistics", "t", _G))()
 local DestructibleService = { GlassName = "WindowGlass" }
 DestructibleService.Damage = function(part, amount) poolHits[part.pool] = (poolHits[part.pool] or 0) + 1 end
+DestructibleService.ClearCoverInRadius = function() end
 local denv = setmetatable({
     DestructibleService = DestructibleService,
     keyOf = function(part) return part.pool end,
     craterAt = function() end,
+    -- DestructibleService.lua's upvalues since 3b9067f (wall health by material; loose cover breaks):
+    -- the match roots it searches, big parts cut into tiles (these 1-stud bricks never are), the
+    -- registered-structure lookup (none: pools take the blast as dealt) and the loose-cover sweep.
+    ROOTS = { Map = true },
+    STRUCTURE = { blast = 2 },
+    subdividable = function() return false end,
+    subdivide = function() return nil end,
+    tileAt = function() return nil, math.huge end,
+    entryFor = function() return nil end,
     OverlapParams = { new = function() return {} end },
     Enum = M.Enum, workspace = M.workspace,
 }, { __index = _G })
