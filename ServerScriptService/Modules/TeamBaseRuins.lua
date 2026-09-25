@@ -2124,8 +2124,11 @@ function TeamBaseRuins.SiteCost(site, mapInfo)
 	local frame = flatFrame(site)
 	local roads = mapInfo and mapInfo.roads
 	local river = mapInfo and mapInfo.river
-	local halfX = TeamBaseRuins.Footprint.X / 2 + TeamBaseRuins.Margin
-	local halfZ = TeamBaseRuins.Footprint.Z / 2 + TeamBaseRuins.Margin
+	-- Out to the pad's flat edge and a cell more, the ground FlattenPad writes (it refuses a road or a
+	-- pad anywhere in it): sampling only the footprint and margin let sites through that it then refused,
+	-- all RUIN_TRIES of them on PatapimPlains seed 7 once the compound grew.
+	local halfX = FLAT_X + CELL
+	local halfZ = FLAT_Z + CELL
 	for x = -halfX, halfX, 8 do
 		for z = -halfZ, halfZ, 8 do
 			local p = frame * Vector3.new(x, 0, z)

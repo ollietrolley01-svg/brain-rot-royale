@@ -390,8 +390,8 @@ end
 -- the middle. The rolled axis wins any tie, so the base still moves about from match to match. The
 -- compounds are built flush with the ground (TeamBaseRuins.Build), so a sloping site costs banks and
 -- gate ramps rather than a plinth: more candidates find ground that needs less of either.
-local RUIN_AXES = 16
-local RUIN_FRACTIONS = { BASE_FRACTION, 0.66, 0.6, 0.8 }
+local RUIN_AXES = 24
+local RUIN_FRACTIONS = { BASE_FRACTION, 0.66, 0.6, 0.8, 0.86, 0.54 }
 -- The clear ground kept between a compound's levelled pad and the battleground's apron (the arena is
 -- growing toward the bases, pc/battleground-v2): a site nearer the middle than the battleground's reach
 -- (ModeTeams.ArenaReach, set where the battleground is required), the compound's flat half-depth and
@@ -417,8 +417,44 @@ end
 -- The pairs of sites (an axis, and a distance from the centre as a fraction of the arena's radius) that
 -- suit the compounds, best first, starting from the rolled `axis`: { { axis, fraction, cost }... }.
 -- The search stops once RUIN_TRIES pairs cost under RUIN_GOOD. Empty when no pair is usable at all.
+-- Where the battleground will end the map's roads (its gateways, before it is built): every road edge's
+-- crossing of the circle ModeTeams.ArenaReach round the middle.
+local function gatewayGuesses(mapInfo)
+	local out = {}
+	local roads = mapInfo and mapInfo.roads
+	local r = ModeTeams.ArenaReach or 200
+	local c = Vector3.new(arenaCentre.X, 0, arenaCentre.Z)
+	for _, e in ipairs(roads and roads.edges or {}) do
+		local a = Vector3.new(e.a.position.X, 0, e.a.position.Z)
+		local d = Vector3.new(e.b.position.X, 0, e.b.position.Z) - a
+		local A, B, C = d:Dot(d), 2 * (a - c):Dot(d), (a - c):Dot(a - c) - r * r
+		local disc = B * B - 4 * A * C
+		if A > 0 and disc > 0 then
+			for _, t in ipairs({ (-B - math.sqrt(disc)) / (2 * A), (-B + math.sqrt(disc)) / (2 * A) }) do
+				if t > 0 and t < 1 then
+					table.insert(out, a + d * t)
+				end
+			end
+		end
+	end
+	return out
+end
+-- How much an unfair pair of sites costs, per unit of the share their gates' distances to the nearest
+-- gateway differ by (Oliver: both teams equal road distance to the arena).
+local FAIR_WEIGHT = 25
+
 function ModeTeams.RankBaseAxes(axis, mapInfo)
 	local ranked, good = {}, 0
+	local guesses = gatewayGuesses(mapInfo)
+	local function toGateway(base)
+		local toward = Vector3.new(arenaCentre.X - base.X, 0, arenaCentre.Z - base.Z)
+		local gate = Vector3.new(base.X, 0, base.Z) + (toward.Magnitude > 1 and toward.Unit or Vector3.zero) * 58
+		local best = math.huge
+		for _, g in ipairs(guesses) do
+			best = math.min(best, (g - gate).Magnitude)
+		end
+		return best
+	end
 	for step = 0, RUIN_AXES - 1 do
 		local candidate = axis + step * math.pi / RUIN_AXES
 		for index, fraction in ipairs(RUIN_FRACTIONS) do
@@ -426,6 +462,17 @@ function ModeTeams.RankBaseAxes(axis, mapInfo)
 			local keep = (ModeTeams.ArenaReach or 0) + (TeamBaseRuins.Footprint and TeamBaseRuins.Footprint.Z / 2 or 55) + 12 + ARENA_BUFFER
 			if arenaRadius * fraction < keep then
 				total = math.huge
+			end
+			-- Fair roads to the arena: the two sites' distances to their nearest gateways alike.
+			if total < math.huge and #guesses > 0 then
+				local d = {}
+				for team = 1, GameModes.TeamCount do
+					local heading = candidate + (team - 1) * math.pi
+					d[team] = toGateway(arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction))
+				end
+				if d[1] < math.huge and d[2] < math.huge then
+					total += FAIR_WEIGHT * math.abs(d[1] - d[2]) / math.max(d[1], d[2], 1)
+				end
 			end
 			for team = 1, GameModes.TeamCount do
 				local heading = candidate + (team - 1) * math.pi
@@ -635,10 +682,16 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 						end
 					end
 					if #mine > 0 then
+						-- Several acceptable routes to each gateway (the junction nearer or further out along its
+						-- road), so the fairest pair can be found among them.
 						base.targets = mine
-						local plan, why = TeamBaseRoads.Plan(gates, nil, roads, base)
-						if plan then
-							table.insert(options[team], plan)
+						base.collect = 6
+						local plans, why = TeamBaseRoads.Plan(gates, nil, roads, base)
+						base.collect = nil
+						if plans then
+							for _, plan in ipairs(plans) do
+								table.insert(options[team], plan)
+							end
 						else
 							ruin.accessWhy = why
 						end
@@ -648,16 +701,22 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 			if #options[team] == 0 then
 				-- No gateway reachable: at least onto the map's roads, which run on to the arena.
 				base.targets = nil
-				local plan, why = TeamBaseRoads.Plan(gates, nil, roads, base)
-				if plan then
-					-- On along the map's roads to the nearest gateway, for the fairness sum.
+				base.collect = 6
+				local plans, why = TeamBaseRoads.Plan(gates, nil, roads, base)
+				base.collect = nil
+				for _, plan in ipairs(plans or {}) do
+					-- On along the map's roads to the nearest gateway, for the fairness sum; a road that never
+					-- reaches one is no way to the arena (unless there are no gateways at all).
 					local on, gi = nil, nil
 					if #gateways > 0 then
 						on, gi = TeamBaseRoads.DistanceToGateway(roads, plan, gateways)
 					end
-					plan.total, plan.gateway = plan.length + (on or 0), gi
-					table.insert(options[team], plan)
-				else
+					if on or #gateways == 0 then
+						plan.total, plan.gateway = plan.length + (on or 0), gi
+						table.insert(options[team], plan)
+					end
+				end
+				if #options[team] == 0 then
 					ruin.accessWhy = why
 					warn("ModeTeams: team " .. team .. "'s base has no access road: " .. tostring(why))
 				end

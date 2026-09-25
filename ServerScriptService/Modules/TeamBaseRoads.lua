@@ -57,6 +57,9 @@ TeamBaseRoads.MaxPitch, TeamBaseRoads.MaxEarth = MAX_PITCH, MAX_EARTH
 local END_CLEAR = 36
 -- Straight on out of the gate before any turn.
 local LEAD = 24
+-- How far off a road edge an arena gateway may stand and still be on it (one on a bend's arc stands
+-- off the straight edges meeting at the bend).
+local GATEWAY_SNAP = 40
 -- Straight in, square to the road, for the last stretch before the junction.
 local APPROACH = 14
 -- The ground work: flat shoulders each side, the ground this far under the road's own ground, banks
@@ -111,7 +114,7 @@ end
 -- The rules every route is held to, whichever planner drew it: no longer than MAX_LENGTH, no bend
 -- tighter than MIN_RADIUS, clear of the `avoid` discs, across no other road, out of the compounds once
 -- past the gate's lead. Returns the route, or nil and why.
-local function checkRoute(path, start, edge, t, join, centre, normal, roads, options, target)
+local function checkRoute(path, start, edge, t, join, centre, normal, roads, options, target, radius)
 	local total = 0
 	for i = 2, #path do
 		total += (path[i] - path[i - 1]).Magnitude
@@ -124,7 +127,7 @@ local function checkRoute(path, start, edge, t, join, centre, normal, roads, opt
 		local chord = (u.Magnitude + v.Magnitude) / 2
 		local cosine = math.clamp(u.Unit:Dot(v.Unit), -1, 1)
 		local turn = math.acos(cosine)
-		if turn > 1e-6 and chord / turn < MIN_RADIUS then
+		if turn > 1e-6 and chord / turn < (radius or MIN_RADIUS) then
 			return nil, "bends too tight"
 		end
 	end
@@ -247,6 +250,9 @@ end
 local GRID = 8
 local GRID_MARGIN = 160
 local GRID_TRIES = 4
+-- A grid route through a tight place may bend to this radius (the road is 18 wide: still a gentle
+-- curve at driving speed); the curves hold MIN_RADIUS.
+local GRID_RADIUS = 32
 
 local function heapPush(heap, item)
 	table.insert(heap, item)
@@ -288,7 +294,7 @@ end
 -- Ends held, the middle relaxed toward its neighbours until no bend is tighter than MIN_RADIUS.
 local function smoothPath(path, holdStart, holdEnd)
 	local n = #path
-	for pass = 1, 400 do
+	for pass = 1, 1200 do
 		local worst = math.huge
 		for i = 2, n - 1 do
 			local u, v = path[i] - path[i - 1], path[i + 1] - path[i]
@@ -299,7 +305,7 @@ local function smoothPath(path, holdStart, holdEnd)
 				end
 			end
 		end
-		if worst >= MIN_RADIUS * 1.05 and pass > 20 then
+		if worst >= GRID_RADIUS * 1.1 and pass > 20 then
 			break
 		end
 		local copy = table.clone(path)
@@ -355,8 +361,9 @@ local function gridRoutes(start, dir, targets, roads, options)
 					normal = -normal
 				end
 				local join = centre + normal * HALF
+				-- The search ends well out, square off the road, so smoothing has room to bring it round.
 				table.insert(goals, { edge = edge, target = target, t = t, centre = centre, normal = normal, join = join,
-					approach = join + normal * (APPROACH + GRID), extra = target and math.abs(t - target.at) or 0 })
+					approach = join + normal * (APPROACH + 60), extra = target and math.abs(t - target.at) or 0 })
 				t += 16
 			end
 		end
@@ -510,10 +517,10 @@ local function gridRoutes(start, dir, targets, roads, options)
 		local path = resample(chain)
 		-- Held: the straight lead (LEAD / STEP samples) and the straight run in (APPROACH + GRID).
 		local holdStart = math.floor(LEAD / STEP) + 1
-		local holdEnd = math.floor((APPROACH + GRID) / STEP) + 1
+		local holdEnd = math.floor(APPROACH / STEP) + 1
 		smoothPath(path, holdStart, holdEnd)
 		path = resample(path)
-		local route, why = checkRoute(path, start, found.edge, found.t, found.join, found.centre, found.normal, roads, options, found.target)
+		local route, why = checkRoute(path, start, found.edge, found.t, found.join, found.centre, found.normal, roads, options, found.target, GRID_RADIUS)
 		if route then
 			local blockedAt = nil
 			if options.blocked then
@@ -560,11 +567,20 @@ function TeamBaseRoads.GatewayTargets(roads, gateways, centre)
 	local c = flat(centre)
 	for gi, gateway in ipairs(gateways) do
 		local g = flat(gateway)
+		-- The edge(s) the gateway is on: the nearest, within GATEWAY_SNAP (a gateway on a bend's arc stands
+		-- off the straight edges that meet at the bend's node).
+		local nearest = math.huge
+		for _, edge in ipairs(roads.edges) do
+			if not edge.access and not edge.blocked then
+				nearest = math.min(nearest, distanceToSegment(g, flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)))
+			end
+		end
 		for _, edge in ipairs(roads.edges) do
 			if not edge.access and not edge.blocked then
 				local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
 				local length = (b - a).Magnitude
-				if length > 1 and distanceToSegment(g, a, b) < HALF + 3 then
+				local d = distanceToSegment(g, a, b)
+				if length > 1 and d < GATEWAY_SNAP and d < nearest + 2 then
 					local at = (g - a):Dot((b - a) / length)
 					-- The end further from the middle is outward.
 					if (b - c).Magnitude >= (a - c).Magnitude then
@@ -697,7 +713,7 @@ function TeamBaseRoads.DistanceToGateway(roads, plan, gateways)
 		local a, b = flat(e.from or e.a.position), flat(e.to or e.b.position)
 		local out = {}
 		for gi, g in ipairs(gateways) do
-			if distanceToSegment(flat(g), a, b) < HALF + 3 then
+			if distanceToSegment(flat(g), a, b) < GATEWAY_SNAP then
 				table.insert(out, { gi = gi, along = (flat(g) - a):Dot((b - a).Unit) })
 			end
 		end
@@ -835,6 +851,7 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 			end
 		end
 	end
+	local collected = nil
 	-- The shortest first; only those are asked about what stands in the way (a query per stretch).
 	table.sort(found, function(p, q)
 		return p.total < q.total
@@ -854,9 +871,21 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 			end
 		end
 		if not why then
-			return route
+			if not options.collect then
+				return route
+			end
+			-- Collecting: every acceptable route, up to options.collect (for ChooseFair to pick among).
+			collected = collected or {}
+			table.insert(collected, route)
+			if #collected >= options.collect then
+				return collected
+			end
+		else
+			reasons[why] = (reasons[why] or 0) + 1
 		end
-		reasons[why] = (reasons[why] or 0) + 1
+	end
+	if collected and #collected > 0 then
+		return collected
 	end
 	local summary = {}
 	for reason, count in pairs(reasons) do

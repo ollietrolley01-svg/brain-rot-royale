@@ -63,6 +63,7 @@ for _, id in ipairs({ "SahurSprings", "TralalaTown", "BombardiroBay", "RotRidge"
 			local apron = TB.RoadEnd
 			local gateways = ModeTeams.ArenaGateways and ModeTeams.ArenaGateways() or {}
 			local totals = {}
+			out("%s/%d: %d arena gateways", id, seed, #gateways)
 			for team = 1, 2 do
 				local ruin = ModeTeams.BaseRuin(team)
 				local plan = ruin and ruin.accessPlan
@@ -87,7 +88,7 @@ for _, id in ipairs({ "SahurSprings", "TralalaTown", "BombardiroBay", "RotRidge"
 						local n = table.remove(queue)
 						for _, e in ipairs(adjacency[n] or {}) do
 							for _, g in ipairs(gateways) do
-								if segDist(g, flat(e.a.position), flat(e.b.position)) < 12 then
+								if segDist(g, flat(e.a.position), flat(e.b.position)) < 40 then
 									reached = true
 								end
 							end
