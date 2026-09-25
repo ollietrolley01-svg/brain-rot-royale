@@ -92,6 +92,10 @@ local FIXED = {
 	wood = Color3.fromRGB(160, 112, 66),
 	banana = Color3.fromRGB(250, 214, 60),
 	stalk = Color3.fromRGB(96, 70, 40),
+	-- A gun sight's lit reticle and its window (the reflex sights on the vehicle guns).
+	reticle = Color3.fromRGB(255, 52, 40),
+	ticks = Color3.fromRGB(255, 70, 50),
+	sightglass = Color3.fromRGB(190, 226, 220),
 }
 
 local ROLE_LOOK = {
@@ -126,6 +130,10 @@ local ROLE_LOOK = {
 	wood = { Enum.Material.WoodPlanks, 0, 0 },
 	banana = { Enum.Material.SmoothPlastic, 0.04, 0 },
 	stalk = { Enum.Material.SmoothPlastic, 0, 0 },
+	reticle = { Enum.Material.Neon, 0, 0 },
+	-- Unlit: a row of lit ticks right by the eye blooms into one red smear.
+	ticks = { Enum.Material.SmoothPlastic, 0, 0 },
+	sightglass = { Enum.Material.SmoothPlastic, 0.2, 0.88 },
 }
 
 --------------------------------------------------------------------------------
@@ -2622,6 +2630,49 @@ local function palm(position, fingers, back)
 	return CFrame.fromMatrix(position, x, z:Cross(x).Unit, z)
 end
 
+-- A reflex sight, in a weapon's own frame through P (P(x, y, z) is a point on the weapon, already
+-- scaled): an open window of w x h centred on (cx, cy, cz), which is on the line from the GunnerSight
+-- marker straight down the bore's way, so the lit dot in the middle of the glass sits on the middle of the
+-- view and on the impact ring GunnerView draws (the bore runs parallel, a hand's width below: the two
+-- meet on the screen at range). A base clamped to the gun, a post either side, a hood over the top with
+-- a sunshade lip, the glass leaning back a touch, the dot, and `ticks` ranging marks under it for a gun
+-- whose round drops. For such a gun `drop` makes the window that much deeper below the dot, where
+-- GunnerView's view goes down to the landing point, with the ticks spread down it (the dot is point
+-- blank, each tick further out). `fine` draws a thin frame, a pin-prick dot and hairline ticks on the
+-- glass itself (a sight set close to the eye, where the ordinary ones fill the view). Every piece
+-- starts with `name`.
+local function reflexSight(b, name, P, s, cx, cy, cz, w, h, ticks, drop, fine)
+	drop = drop or 0
+	cy = cy - drop / 2
+	h = h + drop
+	local dotY = cy + drop / 2
+	local t = fine and 0.025 or 0.05
+	b:box(name .. "SightBase", V(w + 2 * t + 0.04, 0.06, 0.34) * s, P(cx, cy - h / 2 - t - 0.03, cz + 0.02), "trim")
+	b:box(name .. "SightClamp", V(0.14, 0.08, 0.2) * s, P(cx, cy - h / 2 - t - 0.1, cz + 0.02), "mesh")
+	b:box(name .. "SightKnob", V(0.06, 0.06, 0.06) * s, P(cx + w / 2 + t + 0.03, cy - h / 2 - t - 0.03, cz + 0.1), "chrome")
+	for _, x in ipairs({ -1, 1 }) do
+		b:box(name .. (x < 0 and "SightPostL" or "SightPostR"), V(t, h + t, 0.26) * s, P(cx + x * (w / 2 + t / 2), cy - t / 2, cz), "trim")
+	end
+	b:box(name .. "SightHood", V(w + 2 * t, t, 0.34) * s, P(cx, cy + h / 2 + t / 2, cz - 0.02), "engine")
+	b:box(name .. "SightLip", V(w + 2 * t, 0.04, 0.12) * s, P(cx, cy + h / 2 + 0.02, cz - 0.22), "trim")
+	b:box(name .. "SightGlass", V(w, h, 0.02) * s, CF(P(cx, cy, cz - 0.08)) * A(-6, 0, 0), "sightglass")
+	local onGlass = fine and cz - 0.09 or cz - 0.1
+	b:ball(name .. "SightDot", (fine and 0.014 or 0.036) * s, P(cx, dotY, onGlass), "reticle")
+	local step = drop > 0 and drop / ((ticks or 0) + 1) or 0.045
+	for index = 1, ticks or 0 do
+		local size = fine and V(0.036 - index * 0.006, 0.005, 0.005) or V(0.08 - index * 0.012, 0.014, 0.014)
+		b:box(name .. "SightTick" .. index, size * s, P(cx, dotY - step * index, onGlass), "ticks")
+	end
+end
+
+-- Brass rounds lying across a belt, `count` of them from `a` to `c` (points already through P).
+local function beltRounds(b, name, a, c, count, s)
+	for index = 1, count do
+		local at = a + (c - a) * ((index - 0.5) / count)
+		b:cyl(name .. index, 0.22 * s, 0.07 * s, CF(at) * A(0, 90, 0), "gold")
+	end
+end
+
 -- A belt-fed machine gun round `at`, the trunnion it tips on, at scale `s`. What one is made of, from
 -- the back: spade grips with the butterfly trigger between them on the backplate; the receiver and
 -- its hinged top cover, with the belt running into the feed tray from the ammo box on the left and the
@@ -2647,12 +2698,21 @@ local function machineGun(b, name, at, s, opts)
 	b:tube(name .. "Barrel", P(0, bore, -1.8), P(0, bore, -2.7), 0.15 * s, "mesh")
 	b:tube(name .. "FlashHider", P(0, bore, -2.62), P(0, bore, -2.96), 0.24 * s, "trim")
 	b:tube(name .. "FlashBore", P(0, bore, -2.9), P(0, bore, -3.02), 0.14 * s, "mesh")
-	-- Sights: the post's tip and the middle of the leaf's window both 0.55 up, the bore 0.12.
-	b:box(name .. "FrontSightBase", V(0.16, 0.08, 0.14) * s, P(0, 0.29, -1.78), "trim")
-	b:box(name .. "FrontSight", V(0.05, 0.22, 0.05) * s, P(0, 0.44, -1.78), "mesh")
-	b:box(name .. "RearSightFoot", V(0.24, 0.05, 0.12) * s, P(0, 0.435, 0.36), "mesh")
+	-- The sight: a reflex sight on the top cover, its dot 0.55 up (the bore is at 0.12), on the line
+	-- from the GunnerSight marker. A slotted heat shield over the jacket, below that line.
+	reflexSight(b, name, P, s, 0, 0.55, -0.3, 0.3, 0.22)
+	b:box(name .. "HeatShield", V(0.3, 0.03, 0.86) * s, P(0, 0.3, -1.35), "engine")
+	for index = 1, 4 do
+		b:box(name .. "HeatShieldSlot" .. index, V(0.18, 0.035, 0.08) * s, P(0, 0.3, -1.05 - index * 0.13), "mesh")
+	end
+	b:box(name .. "HeatShieldFoot", V(0.12, 0.08, 0.1) * s, P(0, 0.25, -0.98), "trim")
+	-- A carrying handle on the jacket's right, for the barrel change; rivets on the receiver's sides.
+	b:box(name .. "CarryBracket", V(0.1, 0.08, 0.14) * s, P(0.2, 0.16, -1.2), "trim")
+	b:tube(name .. "CarryHandle", P(0.3, 0.02, -1.2), P(0.3, 0.34, -1.2), 0.08 * s, "rubber")
 	for _, x in ipairs({ -1, 1 }) do
-		b:box(string.format("%sRearSight%s", name, x < 0 and "L" or "R"), V(0.04, 0.2, 0.05) * s, P(x * 0.085, 0.56, 0.36), "mesh")
+		for index, z in ipairs({ -0.35, 0.05, 0.45 }) do
+			b:cyl(string.format("%sRivet%s%d", name, x < 0 and "L" or "R", index), 0.03 * s, 0.07 * s, CF(P(x * 0.205, 0.24, z)), "chrome")
+		end
 	end
 	-- The cradle under the receiver, with the pin through its cheeks.
 	b:box(name .. "Cradle", V(0.42, 0.07, 0.6) * s, P(0, -0.135, 0.02), "mesh")
@@ -2682,6 +2742,9 @@ local function machineGun(b, name, at, s, opts)
 		b:box(name .. "AmmoLid", V(0.4, 0.06, 0.66) * s, P(-0.51, 0.24, 0.1), "trim")
 		b:box(name .. "AmmoHandle", V(0.06, 0.06, 0.3) * s, P(-0.51, 0.3, 0.1), "rubber")
 		b:beam(name .. "Belt", P(-0.44, 0.27, 0.1), P(-0.19, 0.33, 0.1), 0.16 * s, 0.05 * s, "gold")
+		beltRounds(b, name .. "BeltRound", P(-0.44, 0.3, 0.1), P(-0.2, 0.36, 0.1), 3, s)
+		b:box(name .. "AmmoLatch", V(0.04, 0.12, 0.1) * s, P(-0.71, 0.18, 0.1), "chrome")
+		b:box(name .. "AmmoStencil", V(0.37, 0.08, 0.5) * s, P(-0.51, -0.08, 0.1), "stripe")
 		frames.ReloadHand = palm(P(-0.3, 0.44, 0.08), V(0.2, -0.3, -1), V(0.1, 1, 0))
 	end
 	frames.Sight = CF(P(0, 0.55, 1.05))
@@ -2735,6 +2798,14 @@ function MountStyles.ring(b, mount, names)
 		for _, x in ipairs({ -1, 1 }) do
 			b:box(x < 0 and "TurretForkL" or "TurretForkR", V(0.06, 0.44, 0.3), pitchAt + V(x * 0.3, -0.14, 0), "trim")
 		end
+		-- The pintle post the fork turns on, its spring collar, and the ring's rollers and lock lever.
+		b:cyl("TurretPintlePost", 0.16, 0.22, CF(yawAt + V(0, 0.3, -reach + 0.05)) * A(0, 0, 90), "chrome")
+		b:cyl("TurretPintleCollar", 0.06, 0.3, CF(yawAt + V(0, 0.25, -reach + 0.05)) * A(0, 0, 90), "trim")
+		for index = 1, 6 do
+			local a = rad(30 + (index - 1) * 60)
+			b:cyl("TurretRoller" .. index, 0.1, 0.14, CF(yawAt + V(math.sin(a) * 1.38, 0.2, math.cos(a) * 1.38)) * A(0, 0, 90), "chrome")
+		end
+		b:box("TurretLockLever", V(0.08, 0.06, 0.34), yawAt + V(0.9, 0.2, 0.9), "rubber")
 	end)
 	local muzzleZ, frames
 	b:with(pitch, function()
@@ -2850,9 +2921,9 @@ function MountStyles.pedestal(b, mount, names)
 		-- The sight on the left side, forward of the bosses: a bracket, the body, the objective at the
 		-- front and the eyepiece's rubber cup at the back.
 		b:box("PodSightBracket", V(0.1, 0.12, 0.3), P(-0.65, 0.28, -0.8), "mesh")
-		b:box("PodSight", V(0.16, 0.22, 0.6), P(-0.78, 0.3, -0.8), "trim")
-		b:cylZ("PodSightLens", 0.3, 0.14, P(-0.78, 0.32, -1.17), "glass")
-		b:cylZ("PodSightCup", 0.3, 0.18, P(-0.78, 0.32, -0.42), "rubber")
+		reflexSight(b, "Pod", P, 1, -0.78, 0.32, -0.8, 0.26, 0.22, 2)
+		b:box("PodFuzeBox", V(0.3, 0.16, 0.3), P(0.3, 0.61, 0.05), "mesh")
+		b:beam("PodFuzeCable", P(0.3, 0.6, 0.2), P(0.3, 0.6, 0.39), 0.05, 0.05, "rubber")
 		frames.GripR = palm(P(0.74, 0.28, 0.1), V(-0.35, -0.05, -1), V(1, 0.1, 0.35))
 		frames.GripL = palm(P(-0.74, 0.28, 0.1), V(0.35, -0.05, -1), V(-1, 0.1, 0.35))
 		frames.Sight = CF(P(-0.78, 0.32, -0.1))
@@ -2881,6 +2952,10 @@ function MountStyles.mortar(b, mount, names)
 	end
 	local top = base + V(0, column, 0)
 	b:cyl("TurretRing", 0.24, 1.6, CF(top + V(0, 0.12 + 0.02, 0)) * A(0, 0, 90), "trim")
+	for index = 1, 8 do
+		local a = rad((index - 0.5) * 45)
+		b:cyl("TurretRingBolt" .. index, 0.05, 0.1, CF(top + V(math.cos(a) * 0.74, 0.285, math.sin(a) * 0.74)) * A(0, 0, 90), "chrome")
+	end
 	local yawAt = top + V(0, 0.28, 0)
 	local pitchAt = yawAt + V(0, 0.85, 0)
 	local yaw = b:pivot(names.yaw, CF(yawAt), "TurretYaw")
@@ -2905,17 +2980,39 @@ function MountStyles.mortar(b, mount, names)
 		b:tube("MortarTube", at + V(0, 0, 0.3), at + V(0, 0, -2.0), 0.7, "trim")
 		b:tube("MortarLip", at + V(0, 0, -1.8), at + V(0, 0, -2.1), 0.84, "stripe")
 		b:tube("MortarBore", at + V(0, 0, -1.9), at + V(0, 0, -2.16), 0.5, "mesh")
-		for index, z in ipairs({ -0.55, -1.25 }) do
-			b:tube("MortarBand" .. index, at + V(0, 0, z - 0.05), at + V(0, 0, z + 0.05), 0.78, "mesh")
+		-- The receiver round the breech (between the cheeks), a slotted shroud over the tube, a bomb
+		-- magazine on top with a feed chute, spade handles behind, bolts along the receiver.
+		b:box("MortarReceiver", V(0.76, 0.72, 0.62), at + V(0, 0, 0.05), "accent")
+		b:box("MortarReceiverCap", V(0.8, 0.08, 0.66), at + V(0, 0.38, 0.05), "trim")
+		b:tube("MortarShroud", at + V(0, 0, -0.3), at + V(0, 0, -1.2), 0.82, "accent")
+		for index, z in ipairs({ -0.3, -1.2 }) do
+			b:tube("MortarBand" .. index, at + V(0, 0, z - 0.05), at + V(0, 0, z + 0.05), 0.88, "mesh")
 		end
-		-- The sight on its bracket off the left of the tube, and the traversing handwheel under it.
+		for index = 1, 4 do
+			local z = -0.42 - index * 0.15
+			b:box("MortarShroudSlotL" .. index, V(0.05, 0.3, 0.08), at + V(-0.405, 0, z), "mesh")
+			b:box("MortarShroudSlotR" .. index, V(0.05, 0.3, 0.08), at + V(0.405, 0, z), "mesh")
+		end
+		b:box("MortarMagazine", V(0.36, 0.3, 0.5), at + V(0.12, 0.57, 0.02), "stripe")
+		b:box("MortarMagazineLid", V(0.4, 0.05, 0.54), at + V(0.12, 0.74, 0.02), "trim")
+		b:box("MortarMagazineHandle", V(0.06, 0.05, 0.26), at + V(0.12, 0.79, 0.02), "rubber")
+		b:box("MortarFeedChute", V(0.2, 0.1, 0.2), at + V(0.12, 0.44, -0.18), "mesh")
+		for _, x in ipairs({ -1, 1 }) do
+			local n = x < 0 and "L" or "R"
+			b:box("MortarHandleArm" .. n, V(0.08, 0.08, 0.3), at + V(x * 0.3, 0.2, 0.52), "trim")
+			b:tube("MortarHandle" .. n, at + V(x * 0.3, -0.04, 0.68), at + V(x * 0.3, 0.26, 0.68), 0.13, "rubber")
+			for index, z in ipairs({ -0.12, 0.22 }) do
+				b:cyl(string.format("MortarBolt%s%d", n, index), 0.04, 0.09, CF(at + V(x * 0.39, 0.22, z)), "chrome")
+			end
+		end
 		b:box("MortarSightArm", V(0.3, 0.1, 0.12), at + V(-0.45, 0.12, -0.45), "mesh")
-		b:box("MortarSight", V(0.16, 0.22, 0.36), at + V(-0.62, 0.2, -0.45), "trim")
-		b:cylZ("MortarSightEye", 0.3, 0.12, at + V(-0.62, 0.24, -0.2), "rubber")
+		reflexSight(b, "Mortar", function(x, y, z)
+			return at + V(x, y, z)
+		end, 1, -0.62, 0.24, -0.45, 0.24, 0.2, 3)
 		b:cyl("MortarWheel", 0.08, 0.36, CF(at + V(0.46, -0.08, 0.02)), "chrome")
 		b:box("MortarWheelKnob", V(0.12, 0.06, 0.06), at + V(0.52, -0.08, -0.12), "rubber")
 		frames.GripR = palm(at + V(0.54, -0.08, -0.1), V(-0.4, -0.2, -1), V(1, 0.3, 0))
-		frames.GripL = palm(at + V(-0.36, 0.0, 0.28), V(0.6, -0.1, -1), V(-0.6, 0.8, 0))
+		frames.GripL = palm(at + V(-0.3, 0.11, 0.68), V(0.35, 0, -1), V(-1, 0.15, 0.3))
 		frames.Sight = CF(at + V(-0.62, 0.24, 0.12))
 	end)
 	return yaw, pitch, pitchAt + V(0, 0, -2.2), {
@@ -3035,10 +3132,18 @@ function MountStyles.agl(b, mount, names)
 		b:tube("GunBarrel", P(0, 0.12, -1.55), P(0, 0.12, -2.1), 0.3 * s, "mesh")
 		b:tube("GunMuzzleRing", P(0, 0.12, -2.02), P(0, 0.12, -2.26), 0.38 * s, "trim")
 		b:tube("GunMuzzleBore", P(0, 0.12, -2.2), P(0, 0.12, -2.32), 0.24 * s, "mesh")
-		b:box("GunSightPost", V(0.05, 0.2, 0.05) * s, P(0, 0.54, -0.3), "mesh")
-		b:box("GunRearSightFoot", V(0.24, 0.05, 0.12) * s, P(0, 0.465, 0.5), "mesh")
+		-- A reflex sight with range ticks under the dot (the grenades drop), on the sight line.
+		reflexSight(b, "Gun", P, s, 0, 0.72, -0.45, 0.32, 0.2, 3, 0.15, true)
+		beltRounds(b, "GunBeltRound", P(-0.6, 0.37, 0.0), P(-0.38, 0.33, 0.0), 3, s * 1.5)
+		b:box("GunCanLatch", V(0.04, 0.14, 0.12) * s, P(-0.95, 0.18, 0.05), "chrome")
+		b:box("GunCanStencil", V(0.45, 0.1, 0.56) * s, P(-0.72, -0.1, 0.05), "trim")
 		for _, x in ipairs({ -1, 1 }) do
-			b:box(string.format("GunRearSight%s", x < 0 and "L" or "R"), V(0.04, 0.2, 0.05) * s, P(x * 0.085, 0.59, 0.5), "mesh")
+			for index, z in ipairs({ -0.3, 0.1, 0.5 }) do
+				b:cyl(string.format("GunRivet%s%d", x < 0 and "L" or "R", index), 0.03 * s, 0.08 * s, CF(P(x * 0.285, 0.24, z)), "chrome")
+			end
+		end
+		for index = 1, 3 do
+			b:box("GunJacketVent" .. index, V(0.12, 0.04, 0.1) * s, P(0, 0.35, -0.85 - index * 0.2), "mesh")
 		end
 		b:box("GunBackplate", V(0.7, 0.38, 0.1) * s, P(0, 0.12, 0.74), "trim")
 		for _, x in ipairs({ -1, 1 }) do
@@ -3051,7 +3156,7 @@ function MountStyles.agl(b, mount, names)
 		frames = {
 			GripR = palm(P(0.24, 0.15, 1.02), V(-0.35, 0, -1), V(1, 0.15, 0.3)),
 			GripL = palm(P(-0.24, 0.15, 1.02), V(0.35, 0, -1), V(-1, 0.15, 0.3)),
-			Sight = CF(P(0, 0.57, 1.1)),
+			Sight = CF(P(0, 0.72, 1.1)),
 			ReloadHand = palm(P(-0.6, 0.5, 0.1), V(0.3, -0.3, -1), V(0, 1, 0)),
 		}
 	end)

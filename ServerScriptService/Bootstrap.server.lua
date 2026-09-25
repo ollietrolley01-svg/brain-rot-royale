@@ -46,6 +46,7 @@ local PlaytimeService = require(Modules:WaitForChild("PlaytimeService"))
 local ProgressionService = require(Modules:WaitForChild("ProgressionService"))
 local QuestService = require(Modules:WaitForChild("QuestService"))
 local RateLimit = require(Modules:WaitForChild("RateLimit"))
+local TeamPicker = require(Modules:WaitForChild("TeamPicker"))
 local RewardService = require(Modules:WaitForChild("RewardService"))
 local ShowcaseService = require(Modules:WaitForChild("ShowcaseService"))
 local StateSync = require(Modules:WaitForChild("StateSync"))
@@ -483,6 +484,12 @@ CompanionService.Start()
 VehicleService.Start()
 -- Mounted vehicle weapons: the drivers' fire and aim remotes, and rounds that leave their own vehicle alone.
 require(Modules:WaitForChild("VehicleWeapons")).Start()
+-- Mountable guns: after VehicleService, whose bullet hooks it chains. They go up when a match's map is
+-- built (the arena's GunEmplacements in a team match, strategic spots in the battle royale) and down at
+-- round end.
+local MountedGuns = require(Modules:WaitForChild("MountedGuns"))
+MountedGuns.Start()
+MatchService.OnMapBuilt = MountedGuns.OnMapBuilt
 MatchService.Start()
 
 for _, player in ipairs(Players:GetPlayers()) do
@@ -617,6 +624,14 @@ end)
 Remotes.Event("ChooseDrop").OnServerEvent:Connect(function(player, x, z)
 	RateLimit.Latest(player, "ChooseDrop", { x = x, z = z }, function(latest)
 		MatchService.ChooseDrop(player, latest.x, latest.z)
+	end)
+end)
+
+-- Picking a side in the team picker. TeamPicker validates the side, the balance cap and the timing
+-- (a pick after the window has closed is refused as stale, so a queued Latest cannot land late).
+Remotes.Event("PickTeam").OnServerEvent:Connect(function(player, team)
+	RateLimit.Latest(player, "PickTeam", team, function(latest)
+		TeamPicker.Pick(player, latest)
 	end)
 end)
 
@@ -1151,6 +1166,8 @@ MatchService.OnMatchStart = function()
 end
 
 MatchService.OnMatchEnd = function()
+	-- Every mounted gun down and its gunner off first, so nothing of this match reaches the next.
+	MountedGuns.OnMatchEnd()
 	ShowcaseService.Refresh()
 	MovementService.Clear()
 	DefenseService.Clear()

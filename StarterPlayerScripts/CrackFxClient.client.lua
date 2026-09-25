@@ -164,6 +164,21 @@ local function familyOf(part)
 	return FAMILY[part.Material] or "plastic"
 end
 
+-- NO GHOSTING (Oliver 2026-09-24: "make walls not slowly turn clear before they break"). The part is
+-- never touched (above), and a mark drawn over an opaque part is opaque too: a crack line, soot, a
+-- dead neon patch at a see-through level let the face show through it wherever it lay, and with a
+-- stage-3 wall carrying a couple of hundred of them (soot over a sixth of a metal face, dead patches
+-- over a third of a neon one, blinking to 0.85) the wall read as going clear. Only a part that is
+-- itself see-through (glass, ice, glacier, a force field) gets see-through marks. tools/crack_check.py
+-- (F, "no overlay opacity loss") holds this, with the old translucent marks planted.
+local SEE_THROUGH_HOST = { [M.Glass] = true, [M.Ice] = true, [M.Glacier] = true, [M.ForceField] = true }
+local function markTransparency(part, spec)
+	if SEE_THROUGH_HOST[part.Material] or part.Transparency > 0 then
+		return spec.transparency or 0
+	end
+	return 0
+end
+
 -- Each face's own axes in the part's space: u and v along it (v up the face on a side face), n out
 -- of it, with u x v = n. Keyed by the Enum.NormalId value the server sends.
 local FACES = {
@@ -712,6 +727,9 @@ function LOOKS.Brick(rng, specs, s, g, c)
 	local reach = reachOf({ 0.4, 1.4, 2.8, 4.6 }, g.scale)
 	local mortar = c:Lerp(BLACK, 0.7)
 	addChip(specs, 0, g, rng, s.u, s.v, 0.2, c)
+	-- The chip opens wider at 75%, whatever the courses do (a short first course can leave stage 1
+	-- with no crack run of its own, and every stage must deepen).
+	addBox(specs, 1, g, s.u, s.v, Vector3.new(0.34, 0.26, 0.03), 0.3, LIFT, c:Lerp(BLACK, 0.6), SMOOTH, nil, { name = "CrackChip" })
 	-- Loose bricks first (so the per-site cap only ever trims crack ends).
 	local row = math.floor(s.v / BRICK_H)
 	local offset = (row % 2) * BRICK_W / 2
@@ -2299,7 +2317,7 @@ local function realize(part, faceFrame, spec, stage, lod)
 	piece.CFrame = part.CFrame * faceFrame * spec.frame
 	piece.Color = spec.lava and LAVA[math.clamp(stage, 0, 3)] or spec.color
 	piece.Material = spec.material or SMOOTH
-	piece.Transparency = spec.transparency or 0
+	piece.Transparency = markTransparency(part, spec)
 	if spec.reflect then
 		piece.Reflectance = spec.reflect
 	end
@@ -2324,7 +2342,7 @@ local function animate(record, piece, spec, faceFrame, stage, delay, duration, w
 	piece.Size = startSize
 	piece.Transparency = 1
 	table.insert(anims, { piece = piece, spec = spec, face = faceFrame, record = record, size = size, start = now() + delay,
-		duration = duration, transparency = spec.transparency or 0, world = world, normal = normal, style = style })
+		duration = duration, transparency = markTransparency(record.part, spec), world = world, normal = normal, style = style })
 	return true
 end
 
@@ -2365,12 +2383,17 @@ local function stepAnims()
 			local t = math.clamp((clock - a.start) / a.duration, 0, 1)
 			local frame, size = poseAt(a.spec, t, a.size, a.style)
 			if a.style == "flicker" and t < 1 then
-				-- Neon and force fields blink as they crack.
-				piece.Transparency = rng:NextNumber() < 0.45 and 1 or a.transparency
+				-- Neon and force fields blink as they crack: in colour, lit and dead, never in
+				-- opacity (NO GHOSTING, above).
+				a.color = a.color or piece.Color
+				piece.Color = rng:NextNumber() < 0.45 and a.record.part.Color or a.color
 			end
 			if t >= 1 then
 				frame, size = a.spec.frame, a.size
 				piece.Transparency = a.transparency
+				if a.color then
+					piece.Color = a.color
+				end
 				table.remove(anims, index)
 				counts.animating -= 1
 				if a.trail then
@@ -2403,8 +2426,9 @@ local function stepFlicker(dt)
 			table.remove(flickers, index)
 			counts.flickering -= 1
 		else
-			-- Mostly dark, now and then lit through for a frame or two: a dying tube.
-			f.piece.Transparency = rng:NextNumber() < 0.22 and 0.85 or f.base
+			-- Mostly dark, now and then lit for a frame or two: a dying tube. The patch changes colour,
+			-- never opacity (NO GHOSTING, above): lit is the tube's own colour, dark its dead one.
+			f.piece.Color = rng:NextNumber() < 0.22 and f.lit or f.dead
 		end
 	end
 end
@@ -2626,7 +2650,7 @@ local function build(part, record, play)
 			end
 			if spec.flicker and counts.flickering < MAX_FLICKER then
 				counts.flickering += 1
-				table.insert(flickers, { piece = piece, base = spec.transparency or 0 })
+				table.insert(flickers, { piece = piece, dead = piece.Color, lit = part.Color })
 			end
 		end
 		if animated and #fresh > 0 and profile.style == "web" then

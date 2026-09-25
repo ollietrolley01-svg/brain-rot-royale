@@ -2155,7 +2155,8 @@ end
 -- Every surface a road or street is made of, by part name. The curves' pieces are RoadCurve: left off
 -- this list, every stud round every curve read as a hole (2040 on one TralalaTown build under
 -- tools/roads_check.py's harness), which the gallery then printed as the roads' own number.
-local SURFACES = { RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true, RoadCurve = true }
+-- RingAsphalt is a town roundabout's carriageway (MapDecor.Roundabout), which its streets run on from.
+local SURFACES = { RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true, RoadCurve = true, RingAsphalt = true }
 -- Everything that makes up a road, a street or a square: surfaces, markings, kerbs and paving.
 local ROAD_PARTS = {
 	RoadSurface = true, BridgeRoad = true, JunctionAsphalt = true, Asphalt = true, RoadEdge = true, RoadDash = true,

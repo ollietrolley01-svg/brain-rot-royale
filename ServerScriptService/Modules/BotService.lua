@@ -4393,6 +4393,19 @@ function Vehicles.preference(bot)
 	return 1
 end
 
+-- The seat of a free mountable gun this bot on foot should take, or nil (see pickSeat).
+function Vehicles.mountedGunSeat(bot, root, fighting)
+	local MountedGuns = lazy("MountedGuns")
+	if not MountedGuns or not MountedGuns.FreeNear then
+		return nil
+	end
+	local chance = (fighting and VEHICLE.FIGHT_CHANCE or VEHICLE.ROAM_GUN_CHANCE) * Vehicles.preference(bot)
+	if math.random() > chance then
+		return nil
+	end
+	return (MountedGuns.FreeNear(root.Position, VEHICLE.FIGHT_SEEK))
+end
+
 function Vehicles.pickSeat(bot, root, now)
 	local VehicleService = lazy("VehicleService")
 	if not VehicleService or not VehicleService.VehiclesNear then
@@ -4400,6 +4413,12 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 	local team = Vehicles.teamOf(bot)
 	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	-- A mountable gun (MountedGuns) close by is manned like a vehicle's turret: in a fight, or now and then
+	-- roaming past one. The gunner branch (gunnerThink, vehicleTrigger) then works it through VehicleWeapons.
+	local gunSeat = Vehicles.mountedGunSeat(bot, root, fighting)
+	if gunSeat then
+		return gunSeat, "gunner", "fight"
+	end
 	local reach = math.max(MatchConfig.BotBoardReach or 60, VEHICLE.FIGHT_SEEK, VEHICLE.RIDE_REACH)
 	local near = VehicleService.VehiclesNear(root.Position, reach)
 	if #near == 0 then
@@ -4500,7 +4519,9 @@ function Vehicles.considerVehicle(bot, humanoid, root, now)
 			return false
 		end
 		local VehicleService = lazy("VehicleService")
-		if VehicleService and VehicleService.BotSit(humanoid, seat) then
+		local MountedGuns = lazy("MountedGuns")
+		local onGun = MountedGuns and MountedGuns.IsGunSeat and MountedGuns.IsGunSeat(seat)
+		if (onGun and MountedGuns.BotSit(humanoid, seat)) or (not onGun and VehicleService and VehicleService.BotSit(humanoid, seat)) then
 			if Vehicles.startRide(bot, boarding.role, seat, boarding.purpose, now) then
 				return true
 			end

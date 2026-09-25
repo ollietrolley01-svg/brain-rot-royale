@@ -4015,13 +4015,16 @@ do
 	-- two together they occupy the same pixels. Driven off `panel.Visible` rather than from
 	-- toggleMenu, because the trade-invite path and openTab open the panel directly and would
 	-- otherwise be missed -- the same reason the MenuOpen attribute is driven off it.
+	-- The team picker (TeamPickerClient) tucks it away too while it is up: on a phone the stack hangs
+	-- down the right-hand side, across the middle of the screen the picker needs.
 	local function followMenu()
 		if stackToggle.SetHidden then
-			stackToggle:SetHidden(panel.Visible)
+			stackToggle:SetHidden(panel.Visible or player:GetAttribute("TeamPickerOpen") == true)
 		end
 	end
 	followMenu()
 	panel:GetPropertyChangedSignal("Visible"):Connect(followMenu)
+	player:GetAttributeChangedSignal("TeamPickerOpen"):Connect(followMenu)
 
 	local seen = nil
 	local function watch(state)
