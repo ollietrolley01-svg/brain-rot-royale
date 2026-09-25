@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 01:2x (EDT).
+Last updated: 2026-09-25 01:05 EDT (earlier stamps in this file and the mailbox ran about 35 min fast).
 
 ## What changed since 2026-09-22
 
@@ -24,8 +24,9 @@ Last updated: 2026-09-25 01:2x (EDT).
 | Who | What | Branch | State |
 |---|---|---|---|
 | Jacob (bimjom) | #84/#109 car-bounce proof | `task/prove-car-bounce` (PR #31) | **Merged to main 09-25 (36aa63a).** #84/#109 stays unproven until a playtest `[VehicleJolt]` count |
-| Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` | Claimed 09-25 00:40, not pushed yet |
-| Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` | Claimed 09-25 00:40, not pushed yet |
+| Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` (PR #33) | **Done**, awaiting Oliver's merge. Both fire-rate faults fixed on main (1e964ca); new bugs F3 (phantom end-of-mag shots) and F4 (vehicle guns still quantised) reported |
+| Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` (PR #34) | **Done**, awaiting Oliver's merge. Payouts hold; spectators barely paid since a2ba3b4 (design question for Oliver) |
+| Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` | Claimed 09-25 01:01 (PR #32) |
 | Dalton | Brainrot Battles icon: a 4x4 grid of candidates | `art/icon/` or mailbox | Asked 09-22 20:46, no reply yet |
 
 ## Recently changed on main: expect these to move under you
@@ -51,11 +52,9 @@ work is proving rows marked "in tree, unproven" and reporting bugs nobody has fo
 claiming, check STATUS, `git log origin/main --grep`, and the row itself (see
 `messages/2026-09-25-0120-oliver-jacob-only-new-useful-work.md`). Priority order:
 
-1. #97 hit registration (claimed, Jacob)
-2. #122 explosive ammo (6ef6a52)
-3. #107 game-choosing menu mid-match (81c1263, fefa725)
-4. #57/#110 roadkill (32de759, 41631ba)
-5. #113/#126 bot lag, #99 movement looks low-fps
-6. #76/#77 playtime and streak awards (claimed, Jacob; after the above)
+1. #122 explosive ammo (6ef6a52), claimed, Jacob
+2. #107 game-choosing menu mid-match (81c1263, fefa725)
+3. #57/#110 roadkill (32de759, 41631ba)
+4. #113/#126 bot lag, #99 movement looks low-fps
 
 Claim a row with a one-line mailbox message before you start, as before.
