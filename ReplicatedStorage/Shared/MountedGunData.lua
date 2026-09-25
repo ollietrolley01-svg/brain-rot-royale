@@ -16,22 +16,19 @@
 -- own changing. What is particular to an emplacement -- the prompt, mounting and dismounting, its health,
 -- breaking and rebuilding, where they stand -- is ServerScriptService/Modules/MountedGuns.
 --
--- BALANCE (tools/mounted_guns_check.py holds every band; the numbers below are what it measured):
---   HMG     area denial at range. 15 a round (heavy: 1.6x on vehicles), 8 a second, a 60-round belt that
---           overheats if run dry. Against a player in the open: 100 health in 8 rounds (0.9 s of every
---           round landing), 200 with a full shield in 15 (1.8 s) -- a Rare rifle does that in under a
---           second, so a rifleman who closes the distance wins. Against the average car: about 13 s,
---           belt heat included; an armoured car about 25 s. Its spread (0.9 deg) puts 1 round in 3 on a
---           body at 200 studs, so at range it pins people down rather than deleting them.
---   CANNON  a slow grenade cannon. 52 a grenade (splash 9), under one a second, six to a load and a long
---           reload. Two direct hits kill a player without a shield. Against a car 5 hits (about 5 s),
---           which is the point of it: the anti-vehicle emplacement. The arc (+-50) and the slew (80 deg/s)
---           make it the easier of the two to flank.
---   BOTH    the arc is limited (the HMG +-60, the cannon +-50), the gun turns slower than a player can
---           strafe round it at close range, the gunner is a whole body in the open from the sides and
---           back (the shield covers the front only), and the gun itself breaks: 4 rockets or about 4 s of
---           a rifle from the side (the shield takes a quarter of a bullet). A broken gun throws its gunner
---           off and is rebuilt where it stood after RebuildDelay.
+-- BALANCE: VERY POWERFUL (Oliver, 2026-09-25: "make sure the mounted guns on the ground and the cars are
+-- very powerful"). tools/mounted_guns_check.py holds every band; the numbers below are what it measured.
+--   HMG     34 a round (heavy: 1.6x on vehicles), 10 a second, a 100-round belt that overheats if run dry:
+--           313 damage a second after the damage scale, half again a Rare rifle's 214. 100 health in 4
+--           rounds (0.3 s), 200 with a full shield in 7 (0.6 s). The average car in about 3 s, an armoured
+--           car in 8-10 s. Spread 0.6 deg: effective out to about 290 studs.
+--   CANNON  110 a grenade (splash 13), 1.4 a second, ten to a load. One direct hit kills a player without
+--           a shield; two with one. The average car in 3 hits (about 1.4 s).
+--   THE COUNTERPLAY is unchanged, and it is the whole answer to them: the arc is limited (the HMG +-60, the
+--           cannon +-50), the gun turns slower than a player can strafe round it at close range, the gunner
+--           is a whole body in the open from the sides and back (the shield covers the front only), and the
+--           gun breaks: 6 rockets, or 6-7 s of a Rare rifle from the side (the shield takes a quarter of a
+--           bullet). A broken gun throws its gunner off and is rebuilt where it stood after RebuildDelay.
 
 local MountedGunData = {}
 
@@ -46,15 +43,15 @@ MountedGunData.Weapons = {
 		hud = "RATTLEFANG",
 		kind = "hitscan",
 		damageClass = "heavy",
-		damage = 15,
+		damage = 34,
 		headshotMultiplier = 1.5,
 		range = 450,
-		spread = 0.9,
-		fireRate = 8,
-		magazine = 60,
-		recharge = 10,
-		rechargeDelay = 1.6,
-		overheat = 0.6,
+		spread = 0.6,
+		fireRate = 10,
+		magazine = 100,
+		recharge = 16,
+		rechargeDelay = 1.2,
+		overheat = 0.5,
 		yawLimit = 60,
 		pitchMin = -15,
 		pitchMax = 25,
@@ -69,14 +66,14 @@ MountedGunData.Weapons = {
 		hud = "BOOMBA",
 		kind = "round",
 		projectile = "grenade",
-		damage = 52,
-		splashRadius = 9,
+		damage = 110,
+		splashRadius = 13,
 		headshotMultiplier = 1,
 		spread = 0.5,
-		fireRate = 0.9,
-		magazine = 6,
-		recharge = 1.2,
-		rechargeDelay = 1.2,
+		fireRate = 1.4,
+		magazine = 10,
+		recharge = 2,
+		rechargeDelay = 1.0,
 		yawLimit = 50,
 		pitchMin = -10,
 		pitchMax = 35,
@@ -93,13 +90,13 @@ MountedGunData.Kinds = {
 		modelId = "MountedHMG",
 		weapon = "EmplacementHMG",
 		displayName = "Rattlefang HMG",
-		health = 900,
+		health = 1300,
 	},
 	cannon = {
 		modelId = "MountedCannon",
 		weapon = "EmplacementCannon",
 		displayName = "Boomba Grenade Cannon",
-		health = 1100,
+		health = 1500,
 	},
 }
 MountedGunData.KindOrder = { "hmg", "cannon" }

@@ -1934,6 +1934,14 @@ local function shootAt(bot, target, targetRoot, distance, head)
 	if structure then
 		CombatService.BroadcastShot(bot, head.Position, { hitPoint or targetRoot.Position }, def.rarity)
 		CombatService.DamageStructure(bot, structure, def.damage * MatchConfig.BotDamageScale)
+		-- Explosive ammo goes off on the cover, as a player's shot into a barricade does.
+		if hitPoint and CombatService.BulletBlastAt and CombatService.BulletBlast(def) then
+			local back = head.Position - hitPoint
+			local normal = back.Magnitude > 1e-3 and back.Unit or Vector3.new(0, 1, 0)
+			for _ = 1, def.pellets or 1 do
+				CombatService.BulletBlastAt(bot, def, hitPoint, normal)
+			end
+		end
 		STATS.coverShots += 1
 		return
 	end
@@ -1978,6 +1986,18 @@ local function shootAt(bot, target, targetRoot, distance, head)
 			end
 		end
 		CombatService.DealDamage(bot, target, damage, def.id, headshot)
+		-- Explosive ammo (the Golden Sahur Cannon) goes off on the target the way a player's does, one
+		-- blast a pellet (#122; Oliver, 2026-09-25), with the bot as its owner so the team veto and the
+		-- owner's half apply. The shot isn't traced, so the hit point is the body's face toward the bot:
+		-- the root, half a stud back along the shot. A miss blows up nothing, like a player's shot
+		-- into the open.
+		if CombatService.BulletBlastAt and CombatService.BulletBlast(def) then
+			local back = head.Position - targetRoot.Position
+			local normal = back.Magnitude > 1e-3 and back.Unit or Vector3.new(0, 1, 0)
+			for _ = 1, def.pellets or 1 do
+				CombatService.BulletBlastAt(bot, def, targetRoot.Position + normal * 0.5, normal)
+			end
+		end
 	end
 end
 
@@ -6288,7 +6308,8 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 								giveBotHeal(bot, id, count)
 							elseif WeaponService.Shields[id] then
 								giveBotShield(bot, id, count)
-							elseif id == "RotBarricade" then
+							elseif id == "RotBarricade" or id == "PopupBunker" or id == "BrainrotFortress" then
+								-- A bot's defense is one generic pop-up; the team kit's other structures count toward it.
 								giveBotDefense(bot, count)
 							elseif id == "RotRocket" then
 								giveBotRocket(bot, count)

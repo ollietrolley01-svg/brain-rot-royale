@@ -73,7 +73,7 @@ local clamp = math.clamp
 VehicleDynamics.Handling = {
 	Rotster = {
 		topSpeed = 84, reverseSpeed = 26, accel = 40, brake = 100, coast = 13,
-		grip = 1.6, traction = 1.45, offroad = 0.35, driven = "front",
+		grip = 1.6, traction = 1.45, offroad = 0.35, driven = "all",
 		steerLow = 36, steerHigh = 11, steerRate = 180,
 		travelUp = 0.7, travelDown = 0.95, springHz = 2.0, dampingRatio = 0.6, antiRoll = 0.8, rideLift = 0.5,
 		yawDamping = 0.4, downforce = 0,
@@ -87,7 +87,7 @@ VehicleDynamics.Handling = {
 	},
 	TralalaGT = {
 		topSpeed = 106, reverseSpeed = 28, accel = 46, brake = 118, coast = 11,
-		grip = 1.9, traction = 1.45, offroad = 0, driven = "rear",
+		grip = 1.9, traction = 1.45, offroad = 0, driven = "all",
 		steerLow = 32, steerHigh = 8, steerRate = 200,
 		-- Rough ground (09-25): the lowest car, so the most lift and the most droop.
 		travelUp = 0.6, travelDown = 1.0, springHz = 2.2, dampingRatio = 0.65, antiRoll = 1.1, rideLift = 0.7,
@@ -95,7 +95,7 @@ VehicleDynamics.Handling = {
 	},
 	SahurVan = {
 		topSpeed = 72, reverseSpeed = 24, accel = 30, brake = 86, coast = 14,
-		grip = 1.4, traction = 1.3, offroad = 0.3, driven = "rear",
+		grip = 1.4, traction = 1.3, offroad = 0.3, driven = "all",
 		steerLow = 34, steerHigh = 10, steerRate = 150,
 		travelUp = 0.8, travelDown = 1.15, springHz = 1.6, dampingRatio = 0.6, antiRoll = 1.3, rideLift = 0.7,
 		yawDamping = 0.5, downforce = 0,
@@ -147,6 +147,8 @@ local SWEEP = 0.62               -- tyre samples ahead of and behind the axle, a
 local SAMPLES = { 0, SWEEP, -SWEEP }
 local BUMP_EXTRA = 0.45          -- how far past full travel a step can push before the body takes it
 local PRELOAD_RAMP = 0.12        -- the weight share fades in over this much compression
+local FRONT_SPLIT = 0.4           -- share of the drive to the front axle, both axles down (AWD)
+local MAX_WHEEL_SHARE = 0.5       -- most of the drive any one wheel of a car takes
 local MAX_LOAD_G = 2.5           -- one wheel never pushes harder than this many of its weight share
 local MIN_HOLD = 1 / 60          -- s: a force set in Step is held at least one 60 Hz physics step
 local WALL_DOT = 0.5             -- a hit whose face leans more than 60 degrees off the strut is a side, not ground
@@ -542,6 +544,30 @@ local function engine(accel, speed, top)
 	return accel * math.max(0, top - speed) / (top * 0.4)
 end
 
+-- All-wheel drive (Oliver 09-25): the front axle's share of the drive, from the load on each axle's
+-- grounded driven wheels. Weight even on both (or the front up to half light): FRONT_SPLIT, the rest
+-- to the rear. The front lighter than that (up a climb, over a crest): its share falls with its load,
+-- the way a torque-sensing centre differential sends drive to the axle that can use it -- a fixed
+-- 40/60 lost the Ranger 5 degrees of climb, its front tyres spinning. The rear lighter (hung on a lip,
+-- cresting a bump): the front's share rises as the rear's load falls. One axle down: all of it there.
+-- Within an axle Step splits by the load on each wheel (limited slip), and no wheel of a car takes
+-- more than MAX_WHEEL_SHARE of the whole however few are down -- the full drive is never put through
+-- one tyre (the fling guard). A bike's one driven wheel takes it all.
+function VehicleDynamics.DriveSplit(frontLoad, rearLoad)
+	if rearLoad <= 0 then
+		return frontLoad > 0 and 1 or 0
+	elseif frontLoad <= 0 then
+		return 0
+	end
+	local front = frontLoad / (frontLoad + rearLoad)
+	if front <= FRONT_SPLIT then
+		return front
+	elseif front <= 0.5 then
+		return FRONT_SPLIT
+	end
+	return front - (0.5 - FRONT_SPLIT)
+end
+
 function VehicleDynamics.Step(rig, input, dt)
 	-- The real frame time, however long: the forces set now act until the next step, so a slow
 	-- frame must be answered with forces sized for it. Every term below stays stable at any dt.
@@ -702,13 +728,20 @@ function VehicleDynamics.Step(rig, input, dt)
 	local overspeed = math.max(0, math.abs(forwardSpeed) - (forwardSpeed >= 0 and h.topSpeed or h.reverseSpeed) * GOVERNOR)
 	local governorAccel = overspeed * OVERSPEED_RESPONSE * 3
 
-	local drivenGrounded, drivenLoad = 0, 0
+	local drivenGrounded, drivenCount, frontLoad, rearLoad = 0, 0, 0, 0
 	for _, wheel in ipairs(wheels) do
+		drivenCount += wheel.drive and 1 or 0
 		if wheel.drive and wheel.grounded then
 			drivenGrounded += 1
-			drivenLoad += wheel.load
+			if wheel.front then
+				frontLoad += wheel.load
+			else
+				rearLoad += wheel.load
+			end
 		end
 	end
+	local frontShare = VehicleDynamics.DriveSplit(frontLoad, rearLoad)
+	local wheelCap = drivenCount > 1 and MAX_WHEEL_SHARE or 1
 
 	-- Pass 2: grip, drive and brakes at each wheel.
 	local steerFrame = frame * CFrame.Angles(0, -rad(rig.steerAngle), 0)
@@ -750,12 +783,9 @@ function VehicleDynamics.Step(rig, input, dt)
 			-- Along the heading.
 			local long = 0
 			if wheel.drive and driveAccel ~= 0 and drivenGrounded > 0 then
-				-- Limited slip (rough ground, 09-25): the drive goes to the driven wheels by the load on
-				-- each, not in equal shares. Crossed up on rocks, a wheel barely touching was handed half
-				-- the drive, spun it away against its own tiny grip, and the loaded wheel that could have
-				-- pushed got only its half: the car sat there.
-				local share = drivenLoad > 0 and wheel.load / drivenLoad or 1 / drivenGrounded
-				long += mass * driveAccel * share
+				local axleLoad = wheel.front and frontLoad or rearLoad
+				local share = axleLoad > 0 and (wheel.front and frontShare or 1 - frontShare) * wheel.load / axleLoad or 0
+				long += mass * driveAccel * math.min(share, wheelCap)
 			end
 			local stopCap = math.abs(longSpeed) * wheelMass / (2 * heldFor)
 			local resist = brakeAccel + coastAccel + governorAccel

@@ -1985,8 +1985,10 @@ local function startMatch()
 			Combatants.Register(character, player)
 			applyBoosts(player, humanoid)
 			WeaponService.Reset(player)
+			-- Never LOWER a shield the spawn kit already filled (the team kit spawns everyone full).
 			if currentEvent and currentEvent.startShield then
-				WeaponService.SetShield(player, currentEvent.startShield)
+				local now = (WeaponService.Get(player) or {}).shield or 0
+				WeaponService.SetShield(player, math.max(now, currentEvent.startShield))
 			end
 			-- Drop in from high above the spawn under a canopy, steering on the way down. Over
 			-- wherever you picked on the drop map, or over the spiral's spot if you picked nothing.
@@ -2116,8 +2118,10 @@ function MatchService.OnCharacterAdded(player, character)
 			-- GrantLoadout's Reset has just zeroed - re-applied from the record, not re-spent
 			-- (logic review #23).
 			reapplyBoosts(player, humanoid)
+			-- Never LOWER a shield the spawn kit already filled (the team kit spawns everyone full).
 			if currentEvent and currentEvent.startShield then
-				WeaponService.SetShield(player, currentEvent.startShield)
+				local now = (WeaponService.Get(player) or {}).shield or 0
+				WeaponService.SetShield(player, math.max(now, currentEvent.startShield))
 			end
 		end
 		-- Handled by startMatch, which pivots to the spawn point itself.
@@ -2284,6 +2288,16 @@ function MatchService.Start()
 							aliveCount = 0
 							table.clear(leftSpectate)
 							state = "Waiting"
+							-- A throw inside the drop window unwinds past its `dropSelect = false`, and left set it
+							-- rode every later broadcast: the picker opened over the lobby and over every team match
+							-- until the next battle royale cleared it (reports/vote-menu-proof.md, section 4). The
+							-- team picker's flag and the window's countdown are the same kind of leftover.
+							dropSelect = false
+							teamSelect = false
+							countdown = 0
+							-- The state goes out before the close, so no client draws the close's winner reveal
+							-- (or keeps a picker up) against a Countdown/Loading it still believes in.
+							broadcast()
 							-- A throw before VoteService.Close() leaves the vote open with no countdown; close it here. #107
 							VoteService.Close()
 							for _, player in ipairs(Players:GetPlayers()) do

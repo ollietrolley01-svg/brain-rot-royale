@@ -123,26 +123,49 @@ end
 -- and the arsenal tabs are still landing packs. GameMode builds the pool and prints its size.
 --
 -- Heals: Bandages, not Med Kits. A Med Kit takes 5 seconds to use (ItemData), which is most of a
--- respawn timer; a Bandage takes 2.5. Mini Shields are in on Oliver's call — without any shield the
--- time-to-kill between two Uncommon guns is short enough that whoever shoots first simply wins.
+-- respawn timer; a Bandage takes 2.5.
 --
--- Five of the eight slots, so three stay free for what you pick up off the map. Looting still
--- means something in a mode that hands you a kit.
+-- Oliver, 2026-09-25: "everyone spawn with 2 of each of 2 random kinds of explosive, and 2 smoke
+-- bombs, and ... they spawn with full shield", then "make it only 2 of one random type of portable
+-- defense". The random picks are rolled per life from `pools` (two different explosives, one
+-- defense, 2 of each, capped by the item's stack -- the Brainrot Fortress stacks to 1). Full shield replaces the Mini Shields that used
+-- to be here: a Mini Shield only fills to 50, so at a full 100 it was a slot doing nothing, and
+-- dropping it keeps two of the eight slots free for what you pick up off the map.
 GameModes.Loadout = {
 	items = {
 		{ id = "Bandage", count = 3 },
-		{ id = "MiniShield", count = 2 },
-		{ id = "CookedCoconut", count = 2 },
-		{ id = "LowkeyLatte", count = 1 },
-		-- #114: the popup barricade in the team kit. The Rot Barricade IS the popup barricade (thrown,
-		-- rises out of the ground where it lands, 250 HP); one per life, so cover is a decision rather
-		-- than a spam.
-		{ id = "RotBarricade", count = 1 },
+		{ id = "LowkeyLatte", count = 2 },
 	},
+	pools = {
+		{ ids = { "CookedCoconut", "ClingyCrumpet", "RotMine" }, kinds = 2, count = 2 },
+		{ ids = { "RotBarricade", "PopupBunker", "BrainrotFortress" }, kinds = 1, count = 2 },
+	},
+	fullShield = true,
 	-- Checked by the loadout probe so a silent drift in ItemData's stack sizes shows up as a
-	-- failure rather than as a quietly truncated kit.
+	-- failure rather than as a quietly truncated kit: the gun, 2 fixed items and 2 + 1 rolled.
 	slotsUsed = 6,
 }
+
+-- One life's kit: the fixed items plus `kinds` different ids drawn from each pool. `random(n)`
+-- returns 1..n; the default is a module Random so two players spawning together differ.
+local kitRandom = Random and Random.new()
+function GameModes.RollLoadout(random)
+	random = random or function(n)
+		return kitRandom and kitRandom:NextInteger(1, n) or math.random(n)
+	end
+	local list = {}
+	for _, entry in ipairs(GameModes.Loadout.items) do
+		table.insert(list, { id = entry.id, count = entry.count })
+	end
+	for _, pool in ipairs(GameModes.Loadout.pools) do
+		local left = table.clone and table.clone(pool.ids) or { table.unpack(pool.ids) }
+		for _ = 1, math.min(pool.kinds, #left) do
+			local id = table.remove(left, random(#left))
+			table.insert(list, { id = id, count = pool.count })
+		end
+	end
+	return list
+end
 
 --------------------------------------------------------------------------------
 -- Modes
@@ -194,7 +217,8 @@ GameModes.Modes = {
 		loadout = true,
 
 		respawnDelay = 5,
-		spawnProtection = 3,
+		-- Oliver 09-25: "get rid of spawn prot". 0 grants none (ModeTeams.grantProtection).
+		spawnProtection = 0,
 		scoreTarget = 100,  -- Oliver, 2026-09-18: first to 100 team kills (was 50)
 		timeLimit = 480,
 		scoreLabel = "eliminations",
@@ -219,7 +243,7 @@ GameModes.Modes = {
 		-- A second longer than TDM: losing the hill should cost the side that lost it more than
 		-- losing a duel in the open costs.
 		respawnDelay = 6,
-		spawnProtection = 3,
+		spawnProtection = 0, -- none (Oliver 09-25, as TDM)
 		scoreTarget = 250,
 		timeLimit = 480,
 		scoreLabel = "seconds held",

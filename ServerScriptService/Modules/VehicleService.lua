@@ -120,9 +120,10 @@ local BLAST_HOLD = 0.6
 -- claude-43 2026-09-21, with two conditions folded in below: the roadkill debounce never fires at
 -- all below the floor (so a car resting or parked on someone can never tick, whatever its state),
 -- and the roadkill rate was checked against a full-health, full-shield player (MatchConfig
--- StartHealth 100 + MaxShield 100 = 200 effective HP): at BaseWalkSpeed (18 studs/s) a graze deals
--- (18-12)*1.8 = 10.8, nowhere near lethal; at the fastest bike's top speed (114) a single hit deals
--- (114-12)*1.8 = 183.6, short of 200 -- a fully-armoured player can survive even the worst hit.
+-- StartHealth + MaxShield): at BaseWalkSpeed a graze is nowhere near lethal, and even the fastest
+-- bike at its top speed deals less than that total -- a fully-armoured player can survive the worst
+-- hit. (The hit is (speed - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER, then MatchConfig.CombatDamageScale;
+-- tools/roadkill_proof_check.py measures the worst one against the full total.)
 -- (Health itself is VehicleArmor's now: a car 1,400-1,650, a bike 600-660, the armoured cars 3,100 and
 -- 3,330, set against what shoots at them. Crash damage below keeps the share of health it was set
 -- against at 300 / 150: VehicleArmor.CollisionScale.)
@@ -961,7 +962,8 @@ end
 -- ModeTeams.DamageVeto waves every attacker-less hit through, a bot could run over its own team in a
 -- team mode. Combatants.FromCharacter answers for players and bots alike; driverPlayer is the
 -- fallback for a character that has already gone from the seat. A car nobody is driving (a bail at
--- speed, a wreck still rolling) still hurts, credited to no one, as before.
+-- speed, a wreck still rolling) still hurts, credited to no one, as before -- at the same
+-- CombatDamageScale as a driven one (roadkill() below).
 local function roadkillDriverToken(entry)
 	local driver = entry.seat.Occupant
 	local character = driver and driver.Parent
@@ -1028,6 +1030,13 @@ local function roadkill(entry, character, speed, velocity)
 	if driverToken == victimToken then
 		return
 	end
+	-- Oliver 09-25: inside an armoured cabin a rider is behind the armour, as they are from bullets and
+	-- blasts (ShieldingVehicle, VehicleArmor.Protects): a car that rams it meets the hull, never them.
+	-- Riders of an open car, a bike or a gunner's hatch can still be run down. RoadkillPass leaves the
+	-- same riders out of its sweep, so the driver's client never reports them either.
+	if VehicleService.ShieldingVehicle(victimToken) then
+		return
+	end
 	-- (VehicleService.RoadkillPass = false is tools/roadkill_momentum_probe.lua's "before" switch: the
 	-- old behaviour, with no pass, no throw and no grace. Nothing in the game sets it.)
 	local momentum = VehicleService.RoadkillPass ~= false
@@ -1041,8 +1050,20 @@ local function roadkill(entry, character, speed, velocity)
 		throw = RoadkillPass.Throw(velocity, root and (root.Position - entry.rig.chassis.Position) or nil)
 		character:SetAttribute("RoadkillThrow", throw)
 	end
-	CombatService.DealDamage(driverToken, victimToken, (flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER, "Roadkill", false)
-	if throw and humanoid.Health > 0 then
+	local amount = (flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER
+	-- DealDamage scales only a hit with an attacker (the storm, hazards and falls stay whole), so a car
+	-- nobody drives would hit harder than a driven one. Oliver 09-25: it takes the same time-to-kill
+	-- scale here, and is still credited to no one.
+	if driverToken == nil then
+		amount *= MatchConfig.CombatDamageScale or 1
+	end
+	local dealt = CombatService.DealDamage(driverToken, victimToken, amount, "Roadkill", false)
+	-- Oliver 09-25: a hit the mode refused (a team-mate: DealDamage's veto answers 0) does nothing to the
+	-- body -- no throw, no knock-down, no ragdoll push -- as ProjectileService's vetoed frag shoves no one.
+	-- The car still goes through them (the pass below).
+	if throw and dealt <= 0 then
+		character:SetAttribute("RoadkillThrow", nil)
+	elseif throw and humanoid.Health > 0 then
 		character:SetAttribute("RoadkillThrow", nil)
 		launch(character, throw)
 	elseif throw then

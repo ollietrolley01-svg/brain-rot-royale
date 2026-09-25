@@ -291,7 +291,10 @@ local function openPicker()
 end
 
 local function updateDrop()
-	local active = matchState.dropSelect == true and isReady()
+	-- The server only ever sets dropSelect inside Loading (MatchService.startMatch's drop window), so
+	-- the state is required too: a flag a failed start left set can't put the picker over the lobby
+	-- or a live match on its own (reports/vote-menu-proof.md, section 4).
+	local active = matchState.dropSelect == true and matchState.state == "Loading" and isReady()
 	if active and not picker.visible then
 		openPicker()
 	elseif not active and picker.visible then

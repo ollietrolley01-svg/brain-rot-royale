@@ -434,7 +434,8 @@ end
 -- the player spends looking at the lobby. That wait WAS the bug, and it measured 3075 ms.
 --
 -- Three answers, in order:
---   1. the best pad -- or, when every pad is refused, the least bad one, under spawn protection;
+--   1. the best pad -- or, when every pad is refused, the least bad one (with whatever spawn protection
+--      the mode grants: none since Oliver 09-25);
 --   2. no pads at all: the nearest real ground to the arena centre (ModeTeams.PlaceWithoutPad);
 --   3. nothing anywhere: say so loudly and leave the body alone rather than drop it into the void.
 local place
@@ -742,8 +743,13 @@ local function startWorld(mapInfo)
 	-- BotService's contract: return a WeaponData def, a weapon id string, or nil. The second
 	-- return is the kit (heals, shields, throwables) and is ignored until BotService consumes it;
 	-- extra returns are discarded in Lua, so this is correct against the call site as it stands.
-	BotService.SpawnLoadout = function()
-		return ModeTeams.RollGreenWeapon(), GameModes.Loadout.items
+	-- The same per-life roll players get (GameModes.RollLoadout), and the same full shield. BotService
+	-- zeroes a new bot's Shield before calling this, so setting it here is what sticks.
+	BotService.SpawnLoadout = function(_, humanoid)
+		if GameModes.Loadout.fullShield and humanoid then
+			humanoid:SetAttribute("Shield", MatchConfig.MaxShield)
+		end
+		return ModeTeams.RollGreenWeapon(), GameModes.RollLoadout()
 	end
 
 	local myGeneration = generation

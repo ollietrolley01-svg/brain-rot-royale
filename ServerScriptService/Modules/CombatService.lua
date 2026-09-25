@@ -372,12 +372,18 @@ end
 -- and vehicle mounts alike, so spawn protection ends the moment its holder opens fire.
 CombatService.OnShot = nil
 
-function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity)
+-- `source`, optional: "mount" for a vehicle's or a mounted gun's shot (VehicleWeapons), so clients
+-- give it a mount's report. A bot's shot sends the bot's character in that place instead, so a client
+-- finds the gun it is holding rather than guessing from whatever head is nearest the muzzle.
+function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity, source)
 	if CombatService.OnShot then
 		pcall(CombatService.OnShot, shooterToken)
 	end
 	local shooterPlayer = Combatants.IsPlayer(shooterToken) and shooterToken or nil
-	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity)
+	if source == nil and Combatants.IsBot(shooterToken) then
+		source = shooterToken.character
+	end
+	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity, false, source)
 end
 
 -- The rest of a shot that did not come out of the muzzle: a ricochet leaving a wall. Clients draw its tracer
@@ -762,14 +768,31 @@ end
 -- where a hitscan bullet stops. A hitscan gun with the old `ability = "explosive"` gets one too, sized
 -- the way that ability always was (60% of the bullet over splashRadius), so no gun can fall back to a
 -- second, different blast.
+-- A gun with several pellets a shot (a shotgun) gets one blast a pellet, but each is TINY (Oliver,
+-- 2026-09-25): the damage and wall damage are split between the pellets, so a full hit is one
+-- ammo's worth in all, and the radius is halved (never under 2 studs) so the pellets' blasts stay
+-- a cluster of pops on what the pellets struck instead of stacking into one big one. A one-pellet
+-- gun (the Golden Sahur Cannon) is untouched.
+local PELLET_BLAST_RADIUS_SCALE = 0.5
+local PELLET_BLAST_MIN_RADIUS = 2
 function CombatService.BulletBlast(def)
+	local ammo = nil
 	if def.explosiveAmmo then
-		return def.explosiveAmmo
+		ammo = def.explosiveAmmo
+	elseif def.ability == "explosive" and not def.projectile then
+		ammo = { damage = def.damage * 0.6, radius = def.splashRadius or 12, wallDamage = 0 }
+	else
+		return nil
 	end
-	if def.ability == "explosive" and not def.projectile then
-		return { damage = def.damage * 0.6, radius = def.splashRadius or 12, wallDamage = 0 }
+	local pellets = def.pellets or 1
+	if pellets > 1 then
+		return {
+			damage = ammo.damage / pellets,
+			radius = math.max(PELLET_BLAST_MIN_RADIUS, ammo.radius * PELLET_BLAST_RADIUS_SCALE),
+			wallDamage = (ammo.wallDamage or 0) / pellets,
+		}
 	end
-	return nil
+	return ammo
 end
 
 -- One bullet's blast, through ProjectileService's (CombatService.Explode). The victim the bullet struck
@@ -792,6 +815,9 @@ local function bulletBlast(shooterToken, def, position, normal)
 		wallDamage = ammo.wallDamage or 0,
 	})
 end
+-- For a shot that isn't traced here: a bot's hitscan hit (BotService shootAt), so a bot's explosive
+-- ammo goes off like a player's. Nothing for a gun without explosive ammo.
+CombatService.BulletBlastAt = bulletBlast
 
 -- `rewindTo`: the server time the victims are put back to (LagCompensation), or nil for the present.
 -- The shot being fired right now collects its ricochets here, { from, to } each, for Fire to broadcast once
@@ -821,6 +847,16 @@ local function riderBehind(shooterToken, vehicle, from, direction, params, rewin
 		return nil
 	end
 	return victimCharacter, victimToken, result
+end
+
+-- Whether the line from -> to crosses any part of `vehicle` (a present-time test, for a rewound rider:
+-- see the rider cover in firePellet). Not a shot ray: it only ever looks at that one vehicle.
+local function bodyBetween(vehicle, from, to, params)
+	local only = RaycastParams.new()
+	only.FilterType = Enum.RaycastFilterType.Include
+	only.FilterDescendantsInstances = { vehicle }
+	only.CollisionGroup = params.CollisionGroup -- the same parts the shot's own world ray could stop on
+	return workspace:Raycast(from, to - from, only) ~= nil
 end
 
 local function firePellet(shooterToken, character, origin, direction, def, rewindTo, segments, bounced)
@@ -972,7 +1008,29 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		-- share, to the vehicle), or in the open (a bike, a truck bed, a gunner's chest), which takes none.
 		local coverModel, coverSeat, coverId = VehicleCover.SeatOf(victimCharacter)
 		if coverModel and CombatService.DamageVehicle then
-			local via = VehicleCover.CrossesGlass(coverModel, currentOrigin, result.Position) and "glass" or "open"
+			-- A REWOUND rider was struck where they sat a ping ago, but the car around them is tested where
+			-- it is now: at 62-106 studs/s that is most of a car length away, so every such hit used to
+			-- read as "open" and the rider took full damage (#97 F2). A seated rider moves rigidly with
+			-- the car, so the rewind's own carry, inverted, takes the shot into the car's PRESENT frame,
+			-- where its glass and body really are.
+			local from, to = currentOrigin, result.Position
+			if result.Rewound and result.Carry then
+				local back = result.Carry:Inverse()
+				from, to = back * from, back * to
+			end
+			-- Body before glass on a rewound shot: that is what the world ray meets in present time (glass is
+			-- CanQuery=false, and Hull_Upper encloses the ArmorGlass/ArmorSlit on the TartarugaScout and
+			-- CameloCarrier). Glass first read a shot through a sealed screen as "glass" (20%) rewound but
+			-- "body" (8%) in present time: 2.5x the damage from lag compensation alone.
+			local via
+			if result.Rewound and result.Carry and bodyBetween(coverModel, from, to, params) then
+				-- The world ray never met this car's body (it was somewhere else by now), so it's asked here.
+				via = "body"
+			elseif VehicleCover.CrossesGlass(coverModel, from, to) then
+				via = "glass"
+			else
+				via = "open"
+			end
 			local share = VehicleCover.Share(coverId, coverSeat.Name, via)
 			if share < 1 then
 				CombatService.DamageVehicle(shooterToken, coverModel, def.damage * through * (1 - share), "bullet", def.id, result.Position)

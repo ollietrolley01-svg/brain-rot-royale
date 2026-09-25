@@ -416,13 +416,13 @@ function VehicleWeapons.Fire(token, aimPoint)
 	-- client, the firer's included, draws it from the mount's muzzle and hears it from there.
 	if spec.kind == "round" then
 		launchRound(token, vehicle, origin, spread(direction, spec.spread), spec)
-		CombatService.BroadcastShot(nil, origin, {}, spec.rarity)
+		CombatService.BroadcastShot(nil, origin, {}, spec.rarity, "mount")
 	else
 		local endPoints = {}
 		for _ = 1, spec.pellets or 1 do
 			table.insert(endPoints, traceBullet(token, vehicle, origin, spread(direction, spec.spread), spec))
 		end
-		CombatService.BroadcastShot(nil, origin, endPoints, spec.rarity)
+		CombatService.BroadcastShot(nil, origin, endPoints, spec.rarity, "mount")
 	end
 	return true
 end

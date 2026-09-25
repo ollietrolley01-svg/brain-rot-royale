@@ -51,10 +51,8 @@ from lupa import LuaRuntime
 
 MOCK = r"""
 table.create = table.create or function() return {} end
-table.find = table.find or function(t, value, init)
-    for i = init or 1, #t do if t[i] == value then return i end end
-    return nil
-end
+table.find = table.find or function(t, value, init) for i = init or 1, #t do if t[i] == value then return i end end return nil end
+table.clone = table.clone or function(t) local c = {} for k, v in pairs(t) do c[k] = v end return c end
 local function vec(x, y, z) return setmetatable({ X = x, Y = y, Z = z }, V3) end
 V3 = {}
 V3.__index = function(v, k)

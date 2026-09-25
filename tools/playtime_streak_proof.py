@@ -8,9 +8,13 @@ Runs the REAL code in a Lua interpreter (lupa), with only what it calls out to m
   - Monetization.EarnCoins and RewardService.AddCoins / AwardBonusCoins, cut verbatim from their files
   - StateSync's three nextDailyIndex lines, cut verbatim, so the day the menu promises is the real one
 
-It is a second, separate check next to tools/playtime_check.py, not a replacement. The difference that
-matters: playtime_check's #77 check recomputes the day formula in Python and never runs ClaimDaily,
-so it cannot fail when ClaimDaily changes. Every #77 check here runs ClaimDaily.
+It is a second, separate check next to tools/playtime_check.py, not a replacement, and it checks only
+what playtime_check does not:
+  - #77: playtime_check recomputes the day formula in Python and never runs ClaimDaily, so it cannot
+    fail when ClaimDaily changes. Every #77 check here runs ClaimDaily.
+  - #76: a player who leaves is dropped, and a rejoin starts the ladder over. playtime_check never
+    removes a player. Its ladder amounts and "all time counts" checks (Oliver, 2026-09-25) are not
+    repeated here.
 
     python tools/playtime_streak_proof.py .           checks, then measured facts
     python tools/playtime_streak_proof.py . --plant   every planted fault must be caught
@@ -84,10 +88,6 @@ local function load_src(name) return assert(load(SRC[name], "=" .. name))() end
 -- Roblox stand-ins -------------------------------------------------------------------------------
 math.clamp = function(x, lo, hi) return math.max(lo, math.min(hi, x)) end
 Color3 = { fromRGB = function(r, g, b) return { r, g, b } end }
-local Vec = {}
-Vec.__index = Vec
-local function vec(x, y, z) return setmetatable({ X = x, Y = y, Z = z, Magnitude = math.sqrt(x * x + y * y + z * z) }, Vec) end
-Vec.__sub = function(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
 
 local added, removing, playerList, loops = {}, {}, {}, {}
 local function signal(list) return { Connect = function(_, fn) table.insert(list, fn) end } end
@@ -160,10 +160,9 @@ function api.cfg() return ProgressionData.Playtime end
 function api.rewards() return BattlePassData.DailyRewards end
 
 -- #76 --------------------------------------------------------------------------------------------
--- A player's `path(step)` gives their root position at each check (a {x,y,z} list), or nil for no
--- living character. `loaded == false` means no profile yet.
-function api.join(name, path, loaded)
-    local p = { Name = name, Parent = true, step = 0, path = path, paid = {} }
+-- `loaded == false` means no profile yet. What the character does no longer matters: all time pays.
+function api.join(name, loaded)
+    local p = { Name = name, Parent = true, paid = {} }
     if loaded ~= false then W.profiles[p] = profile() end
     table.insert(playerList, p)
     for _, fn in ipairs(added) do fn(p) end
@@ -181,18 +180,6 @@ end
 function api.run(samples)
     for _ = 1, samples do
         for _, p in ipairs(playerList) do
-            p.step = p.step + 1
-            local at = p.path(p.step)
-            if at == nil then
-                p.Character = nil
-            else
-                local root = { Position = vec(at[0], at[1], at[2]) }  -- a Python list, indexed from 0
-                local hum = { Health = 100 }
-                p.Character = {
-                    FindFirstChildOfClass = function(_, c) if c == "Humanoid" then return hum end end,
-                    FindFirstChild = function(_, c) if c == "HumanoidRootPart" then return root end end,
-                }
-            end
             p.before = W.profiles[p] and W.profiles[p].SahurCoins or 0
         end
         for _, co in ipairs(loops) do
@@ -266,63 +253,27 @@ def build(src):
     return lua.execute(HARNESS, lua.table_from(src))
 
 
-def walk(stride=10.0):
-    """A root that moves `stride` studs every check."""
-    return lambda step: [stride * step, 0, 0]
-
-
-def pattern(active_every, of, skip_first=False):
-    """Moves 10 studs on `active_every` of every `of` checks, stands still otherwise. With skip_first,
-    the first check of each block stands still, so every block counts exactly `active_every` moves
-    (a stretch's first check compares with the previous stretch's last, or with nothing)."""
-    lo = 1 if skip_first else 0
-    def path(step):
-        moves = sum(1 for s in range(1, step + 1) if lo <= (s - 1) % of < lo + active_every)
-        return [10.0 * moves, 0, 0]
-    return path
-
-
 def playtime_checks(src):
-    """#76 invariants and measured facts. Returns (checks, facts); each is (name, ok|None, detail)."""
+    """#76 checks playtime_check.py does not make. Returns (checks, facts); each is (name, ok|None, detail)."""
     api = build(src)
     cfg = api.cfg()
     per = cfg.IntervalSeconds // cfg.SampleSeconds
     checks, facts = [], []
 
-    # Boundary: exactly MinActiveSamples-1 moving checks in each stretch never pays; exactly Min does.
-    # Pattern repeats every stretch; +1 because the first check of a visit has nothing to compare to.
-    under = api.join("under", pattern(cfg.MinActiveSamples - 1, per, skip_first=True))
-    at_min = api.join("atmin", pattern(cfg.MinActiveSamples, per, skip_first=True))
-    runner = api.join("runner", walk())
-    macro = api.join("macro", lambda s: [cfg.MoveStuds * (s % 2), 0, 0])        # 4 studs back and forth
-    shy = api.join("shy", lambda s: [(cfg.MoveStuds - 0.1) * (s % 2), 0, 0])    # 3.9 studs back and forth
-    rider = api.join("rider", lambda s: [0, 0, 60.0 * s])                          # seated, carried 60 studs
-    third = api.join("third", pattern(1, 3))                                        # 1 check in 3 moves
-    halfway = api.join("half", pattern(1, 2))                                       # 1 check in 2 moves
-    diver = api.join("diver", lambda s: [10.0 * s, 0, 0] if (s - 1) // per != 3 else None)  # dead for stretch 4
-    nosave = api.join("nosave", walk(), False)
+    nosave = api.join("nosave", False)
     api.start()
     api.run(per * 2)
     api.load(nosave)   # the profile arrives at 20 minutes
     api.run(per * 10)  # two hours in all
-
-    paid = {p.Name: list(api.paid(p).values()) for p in (under, at_min, runner, macro, shy, rider, third, halfway, diver, nosave)}
-    checks.append(("a stretch one check short of MinActiveSamples pays nothing",
-                   paid["under"] == [],
-                   f"{cfg.MinActiveSamples - 1} of {per} every stretch -> {len(paid['under'])} awards in 12 stretches"))
-    checks.append(("a stretch with exactly MinActiveSamples pays",
-                   len(paid["atmin"]) == 12 and paid["atmin"][0] == 50,
-                   f"{cfg.MinActiveSamples} of {per} -> {len(paid['atmin'])} awards in 12 stretches"))
-    capped = paid["runner"]
-    checks.append(("never more than one award per IntervalSeconds, never above CapCoins",
-                   len(capped) == 12 and max(capped) == cfg.CapCoins and sum(capped) == 675 + 1200,
-                   f"{len(capped)} awards in 2 h: {capped}, total {sum(capped)}"))
-    checks.append(("a player moving in 1 check of 3 is never paid", paid["third"] == [], f"{paid['third']}"))
+    paid = list(api.paid(nosave).values())
+    facts.append(("no profile for the first 20 minutes", None,
+                  f"{paid}: the first coins landed are {paid[0] if paid else None}, "
+                  f"not 50; the ladder climbed while nothing could be paid"))
 
     # Leaks: 300 visits that join and leave mid-stretch leave nothing behind.
     held_before = api.held()
     for i in range(300):
-        p = api.join(f"visitor{i}", walk())
+        p = api.join(f"visitor{i}")
         api.run(1 + i % per)
         api.leave(p)
     checks.append(("a player who leaves is dropped", api.held() == held_before,
@@ -331,25 +282,19 @@ def playtime_checks(src):
     # Rejoin: the ladder and the part-done stretch both start over.
     api2 = build(src)
     api2.start()
-    first = api2.join("hopper", walk())
-    api2.run(per * 7 + per - 1)     # 7 awards, then 19 of 20 checks of the 8th stretch
+    first = api2.join("hopper")
+    api2.run(per * 7 + per - 1)     # 7 awards, then all but 1 check of the 8th stretch
     before_leave = list(api2.paid(first).values())
     api2.leave(first)
-    again = api2.join("hopper", walk())  # Roblox hands a rejoining player a new Player object
-    api2.run(per)
-    facts.append(("a rejoin restarts the ladder and loses the part-done stretch", None,
-                  f"visit 1 paid {before_leave} then left 1 check before its 8th award (200); "
-                  f"visit 2's first award after {per} checks: {list(api2.paid(again).values())}"))
-    facts.append(("walking into a wall / standing still", None, "position does not change, so 0 (playtime_check 'statue')"))
-    facts.append(("a macro moving exactly MoveStuds back and forth", None, f"{sum(paid['macro'])} coins in 2 h"))
-    facts.append(("the same macro at MoveStuds - 0.1", None, f"{sum(paid['shy'])} coins in 2 h"))
-    facts.append(("seated, carried 60 studs a check (vehicle, moving platform)", None, f"{sum(paid['rider'])} coins in 2 h"))
-    facts.append(("moving in 1 check of 2", None, f"{sum(paid['half'])} coins in 2 h"))
-    facts.append(("dead for the whole 4th stretch, then playing again", None,
-                  f"{paid['diver']} (the dead stretch pays nothing; the ladder does not reset)"))
-    facts.append(("no profile for the first 20 minutes", None,
-                  f"{paid['nosave']}: the first coins landed are {paid['nosave'][0] if paid['nosave'] else None}, "
-                  f"not 50; the ladder climbed while nothing could be paid"))
+    again = api2.join("hopper")     # Roblox hands a rejoining player a new Player object
+    api2.run(per - 1)
+    early = list(api2.paid(again).values())
+    api2.run(1)
+    after = list(api2.paid(again).values())
+    checks.append(("a rejoin restarts the ladder at the first award and loses the part-done stretch",
+                   len(before_leave) == 7 and early == [] and after == [api2.cfg().FirstCoins],
+                   f"visit 1 paid {before_leave} then left 1 check before its 8th award; "
+                   f"visit 2 paid {early} in {per - 1} checks, {after} after {per}"))
     return checks, facts
 
 
@@ -427,14 +372,13 @@ PLANTS = [
     ("#77 a streak crate names no crate", "BattlePassData",
      '\t{ kind = "Crate", crate = "Uncommon" },\n\t{ kind = "Coins", amount = 1500 },',
      '\t{ kind = "Crate", crate = "Uncomon" },\n\t{ kind = "Coins", amount = 1500 },'),
-    ("#76 an award one check short of the threshold", "PlaytimeService",
-     "local earned = session.active >= CONFIG.MinActiveSamples",
-     "local earned = session.active + 1 >= CONFIG.MinActiveSamples"),
-    ("#76 awards twice as often", "PlaytimeService",
-     "math.floor(CONFIG.IntervalSeconds / CONFIG.SampleSeconds)",
-     "math.floor(CONFIG.IntervalSeconds / CONFIG.SampleSeconds / 2)"),
     ("#76 a player who leaves is kept", "PlaytimeService",
      "\t\tsessions[player] = nil\n", "\n"),
+    ("#76 the ladder carried across a rejoin by name", "PlaytimeService",
+     "\t\tsessions[player] = { samples = 0, awards = 0 }\n",
+     "\t\tPlaytimeService.byName = PlaytimeService.byName or {}\n"
+     "\t\tsessions[player] = PlaytimeService.byName[player.Name] or { samples = 0, awards = 0 }\n"
+     "\t\tPlaytimeService.byName[player.Name] = sessions[player]\n"),
 ]
 
 
