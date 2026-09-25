@@ -2526,6 +2526,12 @@ local ROAD_MARKS = { Dash = true, RoadDash = true, Crossing = true, StopLine = t
 -- Lines along the carriageway, stopped short of the give-way line.
 local ROAD_LINES = { RoadEdge = true, RoadCentreLine = true }
 local CARRIAGEWAY = { Asphalt = true, RoadSurface = true, BridgeRoad = true }
+-- RoadNetwork's slabs: always laid along their LookVector (their Size.Z), however short.
+local ROAD_SLABS = { RoadSurface = true, BridgeRoad = true }
+-- How far short of the apron's edge a road heading at the arena may stop and still be drawn on to it.
+local ROAD_STUB = 16
+-- A road's width (RoadNetwork.Width, MapDecor's streets).
+local ROAD_WIDE = 18
 TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 6
 TeamBattleground.RoadEnd = TeamBattleground.Radius + TeamBattleground.Margin + TeamBattleground.Apron
 -- MapDecor's road heights: the asphalt's top over the ground, a kerb's top, a marking's thickness.
@@ -2558,10 +2564,17 @@ local function stretchOf(part)
 		return nil
 	end
 	local cf, size = part.CFrame, part.Size
-	if math.abs(cf.UpVector.Y) < 0.95 or math.abs(size.X - size.Z) < 0.5 then
+	-- RoadNetwork lays its slabs along their LookVector (CFrame.lookAt from one end to the other), and
+	-- one near a bend or a grade change is often shorter than the road is wide: taking its longer side
+	-- for its length turned such a slab across its road, so each became a "road" of its own a few
+	-- studs long, cleared or kept one by one, and a road that met the apron's edge on a run of short
+	-- slabs was never ended (RotRidge: 0 ends). Everything else lies along its longer side.
+	-- A town street's asphalt (MapDecor lays it the same way) is read so when it is a road's width across.
+	local lengthwise = ROAD_SLABS[part.Name] or (part.Name == "Asphalt" and math.abs(size.X - ROAD_WIDE) < 0.6 and size.Z < size.X)
+	if math.abs(cf.UpVector.Y) < 0.95 or (not lengthwise and math.abs(size.X - size.Z) < 0.5) then
 		return nil
 	end
-	local useX = size.X > size.Z
+	local useX = not lengthwise and size.X > size.Z
 	local dir = useX and cf.RightVector or cf.LookVector
 	local flat = Vector3.new(dir.X, 0, dir.Z)
 	if flat.Magnitude < 0.5 then
@@ -2642,6 +2655,34 @@ local function roadsOf(stretches)
 		road.a0, road.a1 = math.min(road.a0, stretch.a0), math.max(road.a1, stretch.a1)
 	end
 	return list
+end
+
+-- The give-way line and the gateway over a finished end: built into `model` in B's frame (the end's
+-- own: origin on the carriageway's centre line at the cut, +Z out along the road), the carriageway
+-- spanning cx0..cx1 across.
+local function gateway(model, cx0, cx1)
+	-- The give-way line, across the carriageway a little in from its end.
+	box(model, "StopLine", cx0 + 0.35, cx1 - 0.35, ROAD_LIFT, ROAD_LIFT + MARK, 1.1, 1.7, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
+	-- The gateway: a pillar on each verge, clear of the carriageway by 1.1, a beam across.
+	local pillarZ0, pillarZ1 = 2.4, 5.0
+	for _, side in ipairs({ -1, 1 }) do
+		local inner = side < 0 and cx0 - 1.1 or cx1 + 1.1
+		local x0, x1 = side < 0 and inner - 2.6 or inner, side < 0 and inner or inner + 2.6
+		box(model, "GatewayPillar", x0, x1, -1, GATEWAY_CLEAR + 1.5, pillarZ0, pillarZ1, CONCRETE_DARK, MAT.Concrete, NEVER)
+		box(model, "GatewayCap", x0 - 0.25, x1 + 0.25, GATEWAY_CLEAR + 1.5, GATEWAY_CLEAR + 2.1, pillarZ0 - 0.25, pillarZ1 + 0.25, CONCRETE, MAT.Concrete, NEVER)
+		box(model, "GatewayPlinth", x0 - 0.3, x1 + 0.3, -0.5, 1.2, pillarZ0 - 0.3, pillarZ1 + 0.3, CONCRETE, MAT.Concrete, NEVER)
+		-- Hazard bands on the face toward the traffic: a yellow board with two black stripes on it.
+		facePlate(model, "HazardBoard", "x", inner, 0.12, pillarZ0 + 0.3, pillarZ1 - 0.3, 1.8, 5.4, HAZARD, MAT.SmoothPlastic)
+		for _, y in ipairs({ 2.6, 4.0 }) do
+			facePlate(model, "HazardStripe", "x", inner, 0.2, pillarZ0 + 0.45, pillarZ1 - 0.45, y, y + 0.6, SOOT, MAT.SmoothPlastic)
+		end
+		-- A lamp on the outer face, lighting the way in.
+		wallLamp(model, Vector3.new((x0 + x1) / 2, 9.4, pillarZ1), Vector3.new(0, 0, 1), 26)
+	end
+	box(model, "GatewayBeam", cx0 - 2.5, cx1 + 2.5, GATEWAY_CLEAR, GATEWAY_CLEAR + 1.2, pillarZ0 + 0.5, pillarZ1 - 0.5, STEEL_DARK, MAT.Metal, NEVER)
+	local board = box(model, "GatewaySign", (cx0 + cx1) / 2 - 7, (cx0 + cx1) / 2 + 7, GATEWAY_CLEAR - 0.1, GATEWAY_CLEAR + 2.3,
+		pillarZ1 - 0.5, pillarZ1 - 0.25, PURPLE_DARK, MAT.Metal, NEVER)
+	signText(board, "ROT ARENA", WHITE_PAINT)
 end
 
 -- One finished road end (the pieces are the road's own, already cut to `cut`): see the note at the
@@ -2728,30 +2769,144 @@ local function roadEnd(parent, road, cut, outward, centre)
 			end
 		end
 	end
-	-- The give-way line, across the carriageway a little in from its end.
-	box(model, "StopLine", cx0 + 0.35, cx1 - 0.35, ROAD_LIFT, ROAD_LIFT + MARK, 1.1, 1.7, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
-	-- The gateway: a pillar on each verge, clear of the carriageway by 1.1, a beam across.
-	local pillarZ0, pillarZ1 = 2.4, 5.0
-	for _, side in ipairs({ -1, 1 }) do
-		local inner = side < 0 and cx0 - 1.1 or cx1 + 1.1
-		local x0, x1 = side < 0 and inner - 2.6 or inner, side < 0 and inner or inner + 2.6
-		box(model, "GatewayPillar", x0, x1, -1, GATEWAY_CLEAR + 1.5, pillarZ0, pillarZ1, CONCRETE_DARK, MAT.Concrete, NEVER)
-		box(model, "GatewayCap", x0 - 0.25, x1 + 0.25, GATEWAY_CLEAR + 1.5, GATEWAY_CLEAR + 2.1, pillarZ0 - 0.25, pillarZ1 + 0.25, CONCRETE, MAT.Concrete, NEVER)
-		box(model, "GatewayPlinth", x0 - 0.3, x1 + 0.3, -0.5, 1.2, pillarZ0 - 0.3, pillarZ1 + 0.3, CONCRETE, MAT.Concrete, NEVER)
-		-- Hazard bands on the face toward the traffic: a yellow board with two black stripes on it.
-		facePlate(model, "HazardBoard", "x", inner, 0.12, pillarZ0 + 0.3, pillarZ1 - 0.3, 1.8, 5.4, HAZARD, MAT.SmoothPlastic)
-		for _, y in ipairs({ 2.6, 4.0 }) do
-			facePlate(model, "HazardStripe", "x", inner, 0.2, pillarZ0 + 0.45, pillarZ1 - 0.45, y, y + 0.6, SOOT, MAT.SmoothPlastic)
-		end
-		-- A lamp on the outer face, lighting the way in.
-		wallLamp(model, Vector3.new((x0 + x1) / 2, 9.4, pillarZ1), Vector3.new(0, 0, 1), 26)
-	end
-	box(model, "GatewayBeam", cx0 - 2.5, cx1 + 2.5, GATEWAY_CLEAR, GATEWAY_CLEAR + 1.2, pillarZ0 + 0.5, pillarZ1 - 0.5, STEEL_DARK, MAT.Metal, NEVER)
-	local board = box(model, "GatewaySign", (cx0 + cx1) / 2 - 7, (cx0 + cx1) / 2 + 7, GATEWAY_CLEAR - 0.1, GATEWAY_CLEAR + 2.3,
-		pillarZ1 - 0.5, pillarZ1 - 0.25, PURPLE_DARK, MAT.Metal, NEVER)
-	signText(board, "ROT ARENA", WHITE_PAINT)
+	gateway(model, cx0, cx1)
 	B = nil
 	return model
+end
+
+-- A road that turns on a bend inside the apron is cut at one of its curve's joints (a straight line
+-- square across the carriageway, where two of RoadNetwork's pieces meet) and finished there the same
+-- way: the give-way line and the gateway, facing along the curve at that joint. `spec`: origin (the
+-- carriageway's centre line at the joint, on its top), out (the way the road goes on), half (half its
+-- width).
+local function curveEnd(parent, spec)
+	local origin = spec.origin - Vector3.new(0, ROAD_LIFT, 0)
+	B = { frame = CFrame.lookAt(origin, origin - spec.out), mirror = false, cover = {}, pools = 0 }
+	local model = folder(parent, "RoadEnd", true)
+	gateway(model, -spec.half, spec.half)
+	B = nil
+	return model
+end
+
+-- The curves of the roads (RoadNetwork's Curve models: a ring of pieces, each a block and two wedges,
+-- with edge chords and dashes) near the site. Every piece any of whose band lies within `outer` of
+-- the middle goes with all that lies on it; where a kept piece meets a gone one, the road is ended at
+-- their joint (the edge chords and dashes on that first kept piece go too: the give-way line lies
+-- there). Returns the ends to finish (for curveEnd), and adds what is kept to keptBoxes. nil for a
+-- curve it cannot read (fewer than two blocks, or no bend): those are left to the odd pieces' rule.
+local function cutCurve(parts, centre, outer, keptBoxes)
+	local blocks = {}
+	for _, part in ipairs(parts) do
+		if part.Name == "RoadCurve" and part:IsA("Part") and part.Shape == Enum.PartType.Block then
+			table.insert(blocks, part)
+		end
+	end
+	if #blocks < 2 then
+		return nil
+	end
+	-- The arc's centre: where two blocks' radial lines (their LookVectors) cross, the pair furthest apart.
+	local p1, d1 = blocks[1].Position, blocks[1].CFrame.LookVector
+	local best, bestCross = nil, 0
+	for index = 2, #blocks do
+		local d = blocks[index].CFrame.LookVector
+		local cross = d1.X * d.Z - d1.Z * d.X
+		if math.abs(cross) > math.abs(bestCross) then
+			best, bestCross = blocks[index], cross
+		end
+	end
+	if not best or math.abs(bestCross) < 0.05 then
+		return nil
+	end
+	local p2, d2 = best.Position, best.CFrame.LookVector
+	local t = ((p2.X - p1.X) * d2.Z - (p2.Z - p1.Z) * d2.X) / bestCross
+	local cx, cz = p1.X + d1.X * t, p1.Z + d1.Z * t
+	local base = math.atan2(p1.Z - cz, p1.X - cx)
+	local function angle(pos)
+		local a = math.atan2(pos.Z - cz, pos.X - cx) - base
+		return (a + math.pi) % (2 * math.pi) - math.pi
+	end
+	local ring = {}
+	for _, block in ipairs(blocks) do
+		table.insert(ring, { part = block, a = angle(block.Position), members = { block } })
+	end
+	table.sort(ring, function(a, b)
+		return a.a < b.a
+	end)
+	local gap = math.huge
+	for index = 2, #ring do
+		gap = math.min(gap, ring[index].a - ring[index - 1].a)
+	end
+	local delta = gap / 2
+	if delta <= 0 or delta > 0.5 then
+		return nil
+	end
+	local block = ring[1].part
+	local mid = Vector3.new(block.Position.X - cx, 0, block.Position.Z - cz).Magnitude / math.cos(delta)
+	local half = block.Size.Z / 2 / math.cos(delta)
+	-- Everything else on the curve belongs to the piece at its angle.
+	for _, part in ipairs(parts) do
+		if part ~= block and not (part.Name == "RoadCurve" and part:IsA("Part") and part.Shape == Enum.PartType.Block) then
+			local a, near, nearGap = angle(part.Position), nil, math.huge
+			for _, piece in ipairs(ring) do
+				if math.abs(piece.a - a) < nearGap then
+					near, nearGap = piece, math.abs(piece.a - a)
+				end
+			end
+			table.insert(near.members, part)
+		elseif part ~= block then
+			-- a block: already its own piece's
+		end
+	end
+	local function at(a, r)
+		local w = base + a
+		return Vector3.new(cx + math.cos(w) * r, 0, cz + math.sin(w) * r)
+	end
+	for _, piece in ipairs(ring) do
+		piece.gone = false
+		for _, fa in ipairs({ -1, -0.5, 0, 0.5, 1 }) do
+			for _, fr in ipairs({ -1, 0, 1 }) do
+				local q = at(piece.a + fa * delta, mid + fr * half)
+				if (q - Vector3.new(centre.X, 0, centre.Z)).Magnitude < outer then
+					piece.gone = true
+				end
+			end
+		end
+	end
+	local ends = {}
+	for index, piece in ipairs(ring) do
+		if not piece.gone then
+			for _, step in ipairs({ -1, 1 }) do
+				local other = ring[index + step]
+				if other and other.gone and math.abs(other.a - piece.a) < 3 * delta then
+					local joint = piece.a - step * delta
+					local w = base + joint
+					local tangent = Vector3.new(-math.sin(w), 0, math.cos(w)) * (step * (bestCross > 0 and 1 or 1))
+					local where = at(joint, mid)
+					local top = piece.part.Position.Y + piece.part.Size.Y / 2
+					-- `out` points along the kept road: toward the kept piece from the joint.
+					local toward = at(piece.a, mid) - where
+					if tangent:Dot(toward) < 0 then
+						tangent = -tangent
+					end
+					table.insert(ends, { origin = Vector3.new(where.X, top, where.Z), out = tangent.Unit, half = half })
+					piece.marksGo = true
+				end
+			end
+		end
+	end
+	for _, piece in ipairs(ring) do
+		for _, member in ipairs(piece.members) do
+			if member.Parent then
+				if piece.gone or (piece.marksGo and (member.Name == "RoadEdge" or member.Name == "RoadDash")) then
+					member:Destroy()
+				else
+					local x0, x1, z0, z1 = footprintOf(member)
+					table.insert(keptBoxes, { x0, x1, z0, z1 })
+				end
+			end
+		end
+	end
+	return ends
 end
 
 -- The terrain paint the town leaves under what was cleared (MapGenerator paints Pavement under every
@@ -2850,6 +3005,7 @@ function TeamBattleground.ClearSite(site, map)
 	local cut = TeamBattleground.Radius + TeamBattleground.Margin + 2
 	local cleared, trimmed, kept = 0, 0, 0
 	local stretches, odd, furniture = {}, {}, {}
+	local curves, curveOrder = {}, {}
 	local items, itemOrder = {}, {}
 	for _, part in ipairs(map:GetDescendants()) do
 		if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") and not part:GetAttribute("TeamBattleground") then
@@ -2860,6 +3016,13 @@ function TeamBattleground.ClearSite(site, map)
 				local placeName = place and place.Name
 				if placeName and KEEP[placeName] and placeName ~= "Roads" then
 					-- The river, the ziplines, the bases and their vehicles: never touched.
+				elseif ROAD_PIECES[part.Name] and placeName == "Roads" and part.Parent.Name == "Curve" then
+					local curve = part.Parent
+					if not curves[curve] then
+						curves[curve] = {}
+						table.insert(curveOrder, curve)
+					end
+					table.insert(curves[curve], part)
 				elseif ROAD_PIECES[part.Name] and (placeName == "Roads" or town) then
 					local stretch = stretchOf(part)
 					if stretch then
@@ -2896,7 +3059,19 @@ function TeamBattleground.ClearSite(site, map)
 				stopsInside = true
 			end
 		end
-		if math.sqrt(along * along + lateral * lateral) <= TeamBattleground.RoadReach or stopsInside then
+		-- Or one heading straight at the arena that stops short of the apron's edge, within ROAD_STUB of
+		-- it: whatever it ran on into (a junction box, a bend) went with the site, so it is drawn on to
+		-- the edge and ended there rather than left stopping on open ground.
+		local stub = nil
+		if not stopsInside and lateral < outer - 9 then
+			local u = math.sqrt(outer * outer - lateral * lateral)
+			if road.a0 > ca and road.a0 - ca < u + ROAD_STUB then
+				stub = -1
+			elseif road.a1 < ca and ca - road.a1 < u + ROAD_STUB then
+				stub = 1
+			end
+		end
+		if math.sqrt(along * along + lateral * lateral) <= TeamBattleground.RoadReach or stopsInside or stub then
 			local u = lateral < outer and math.sqrt(outer * outer - lateral * lateral) or 0
 			local low = math.floor((ca - u) / VOXEL) * VOXEL
 			local high = math.ceil((ca + u) / VOXEL) * VOXEL
@@ -2938,10 +3113,40 @@ function TeamBattleground.ClearSite(site, map)
 				end
 			end
 			road.stretches = survivors
-			if road.a0 < low - 2 then
+			-- A stub drawn on to the cut: every piece of it at its inner end lengthened to reach the cut.
+			if stub then
+				local cut, inner = stub < 0 and high or low, stub < 0 and road.a0 or road.a1
+				for _, stretch in ipairs(road.stretches) do
+					local a = stub < 0 and stretch.a0 or stretch.a1
+					if math.abs(a - inner) < 0.6 and not ROAD_MARKS[stretch.part.Name] then
+						local part = stretch.part
+						local cf, size = part.CFrame, part.Size
+						local dir = stretch.useX and cf.RightVector or cf.LookVector
+						local comp = road.axis == "x" and dir.X or dir.Z
+						local grow = math.abs(a - cut) / math.abs(comp)
+						local sign = ((cut - a) * comp > 0) and 1 or -1
+						part.Size = stretch.useX and Vector3.new(size.X + grow, size.Y, size.Z) or Vector3.new(size.X, size.Y, size.Z + grow)
+						part.CFrame = cf + dir * (sign * grow / 2)
+						if stub < 0 then
+							stretch.a0 = cut
+						else
+							stretch.a1 = cut
+						end
+						trimmed += 1
+					end
+				end
+				if stub < 0 then
+					road.a0 = math.min(road.a0, cut)
+				else
+					road.a1 = math.max(road.a1, cut)
+				end
+			end
+			-- Anything left beyond the cut is ended there: a road cut a stud or two short of a bend (the
+			-- bend, not a straight, carrying it on) still needs its gateway (TralalaTown: 2 studs, left open).
+			if road.a0 < low - 0.5 then
 				table.insert(ends, { road = road, cut = low, outward = -1 })
 			end
-			if road.a1 > high + 2 then
+			if road.a1 > high + 0.5 then
 				table.insert(ends, { road = road, cut = high, outward = 1 })
 			end
 		end
@@ -2959,6 +3164,23 @@ function TeamBattleground.ClearSite(site, map)
 			end
 		end
 		return false
+	end
+	-- The curves: cut at a joint, where they cross the apron's edge, and ended there. One this cannot read
+	-- is left to the odd pieces' rule below.
+	local curveEnds = {}
+	for _, curve in ipairs(curveOrder) do
+		local found = cutCurve(curves[curve], centre, outer, keptBoxes)
+		if found then
+			for _, spec in ipairs(found) do
+				table.insert(curveEnds, spec)
+			end
+			trimmed += 1
+		else
+			for _, part in ipairs(curves[curve]) do
+				local x0, x1, z0, z1 = footprintOf(part)
+				table.insert(odd, { part = part, near = nearestTo(x0, x1, z0, z1, centre), box = { x0, x1, z0, z1 } })
+			end
+		end
 	end
 	-- Road pieces with no line (junction squares, curve wedges, tapers) and the roads' furniture (lamps,
 	-- fingerposts, signals): gone when in the disc or on a stretch of road that went.
@@ -3036,6 +3258,9 @@ function TeamBattleground.ClearSite(site, map)
 		if built then
 			built:SetAttribute("RoadAxis", spec.road.axis)
 		end
+	end
+	for _, spec in ipairs(curveEnds) do
+		curveEnd(model, spec):SetAttribute("RoadAxis", "curve")
 	end
 	pcall(repaint, centre, site.Position.Y, clearedBoxes, keptBoxes)
 	return cleared, trimmed, kept, model
