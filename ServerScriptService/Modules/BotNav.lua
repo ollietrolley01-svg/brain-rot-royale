@@ -2116,7 +2116,9 @@ function BotNav.DriveControl(drive, dt, now)
 	local h = drive.handling
 	local decel = h.brake * DRIVE_DECEL_SHARE
 
-	if drive.hold then
+	-- Held, or boarded and not yet given a route (the servo runs every frame from the moment a bot
+	-- sits; its first think, which plans the route, can be a think interval later).
+	if drive.hold or #drive.route == 0 then
 		drive.wantedSpeed = 0
 		if speed > 1.5 then
 			return -1, 0, false

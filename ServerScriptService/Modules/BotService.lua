@@ -4048,11 +4048,10 @@ function Vehicles.noteFight(bot, ride, candidate, now)
 	reportSighting(bot, candidate.root.Position, now)
 end
 
--- Manned guns hostile to this bot within VEHICLE.THREAT_RANGE: other vehicles' gun seats (from the
--- list driverThink already read) and GunEmplacement-tagged emplacements (their seat's occupant; the
--- facing is the model's, "ArcDegrees" a half arc and "Range" if the model sets them). The tagged list
--- is re-read every 2 s for everyone, not per think.
-function Vehicles.hostileGuns(bot, position, nearVehicles)
+-- Manned guns hostile to this bot within VEHICLE.THREAT_RANGE: other vehicles' gun seats, from the
+-- list driverThink already read (a turret: all round). Mounted gun emplacements (pc/mounted-guns) join
+-- this list once they land, with their facing and arc: BotDriveTactics already takes { facing, cosArc }.
+function Vehicles.hostileGuns(bot, _position, nearVehicles)
 	local guns = {}
 	local VehicleService = lazy("VehicleService")
 	local VehicleWeapons = lazy("VehicleWeapons")
@@ -4068,28 +4067,6 @@ function Vehicles.hostileGuns(bot, position, nearVehicles)
 			end
 			table.insert(guns, { pos = flat(near.model:GetPivot().Position), cosArc = -1,
 				range = math.min(VEHICLE.GUN_DANGER, spec and spec.range or VEHICLE.GUN_DANGER) })
-		end
-	end
-	local now = tick()
-	if now > (Vehicles.emplacementsAt or 0) then
-		Vehicles.emplacementsAt = now + 2
-		Vehicles.emplacements = game:GetService("CollectionService"):GetTagged("GunEmplacement")
-	end
-	for _, model in ipairs(Vehicles.emplacements or {}) do
-		if model:IsA("Model") and model.Parent then
-			local pivot = model:GetPivot()
-			if flatDistance(pivot.Position, position) < VEHICLE.THREAT_RANGE + VEHICLE.GUN_DANGER then
-				local seat = model:FindFirstChildWhichIsA("Seat", true) or model:FindFirstChildWhichIsA("VehicleSeat", true)
-				local occupant = seat and seat.Occupant
-				local token = occupant and occupant.Parent and Combatants.FromCharacter(occupant.Parent)
-				if token and token ~= bot and hostile(bot, token) then
-					local arc = model:GetAttribute("ArcDegrees")
-					local facing = flat(pivot.LookVector)
-					table.insert(guns, { pos = flat(pivot.Position), facing = facing.Magnitude > 0.05 and facing.Unit or nil,
-						cosArc = arc and math.cos(math.rad(arc)) or -1,
-						range = math.min(VEHICLE.GUN_DANGER, model:GetAttribute("Range") or VEHICLE.GUN_DANGER) })
-				end
-			end
 		end
 	end
 	return guns
