@@ -45,8 +45,10 @@ THROW SWEEP. Every stubbed call and every remote send made inside startMatch is 
 scenario is re-run once per point with that one call throwing, which is how a failed start happens.
 
 PLANTED FAULTS (permanent, aimed at the invariants, applied to the real source in memory): each must
-produce at least one V or S violation or the run fails. FINDING lines (the throw sweep, the stuck-flag probe)
-report what the real code does; they do not fail the run. `--trace N` prints the timeline of throw point N.
+produce at least one V or S violation or the run fails. The throw sweep and the stuck-dropSelect probe
+(an InProgress MatchChanged replayed with dropSelect set) are pass/fail too: on fafed9c they were FINDINGs
+(the failed-start fallback left dropSelect set and the picker had no match-state gate); both are fixed on
+pc/drop-picker-reset and asserted here. `--trace N` prints the timeline of throw point N.
 """
 import os
 import re
@@ -118,7 +120,7 @@ def pieces(files):
 # The engine, the auto-stubs, the real server modules and the scenario. Returns W (the wire and the log).
 SERVER = r"""
 local S, P, opts = ...
-local W = { now = 0, seq = 0, wire = {}, actions = {}, nAction = 0, points = {}, pointCount = 0,
+local W = { now = 0, seq = 0, wire = {}, actions = {}, nAction = 0, points = {}, pointDrop = {}, pointCount = 0,
 	inStart = false, sviol = {}, snCount = 0, warnings = {}, attempts = 0, completed = 0, loopTicks = 0,
 	failedStarts = 0, events = {} }
 local function note(s) table.insert(W.events, string.format("%7.2f %s", W.now, s)) end
@@ -152,6 +154,8 @@ local function point(label)
 	if not W.inStart then return end
 	W.pointCount = W.pointCount + 1
 	table.insert(W.points, label)
+	-- Whether the drop window was up at this point: the fallback-reset plant throws inside it.
+	table.insert(W.pointDrop, W.dropNow ~= nil and W.dropNow() or false)
 	if opts.throwAt == W.pointCount then
 		W.thrown = label
 		note("PLANTED THROW at point " .. W.pointCount .. ": " .. label)
@@ -178,6 +182,7 @@ local function signal()
 end
 
 local M -- the MatchService environment, filled below
+W.dropNow = function() return M ~= nil and M.dropSelect == true end
 local Vote, Picker
 
 local MATCH_STATES = { InProgress = true, Results = true }
@@ -804,12 +809,14 @@ for i, entry in ipairs(stream) do
 		end
 	end
 	if opt.stuckDrop and truth.state == "InProgress" and entry.remote == "MatchChanged" then
-		-- FINDING PROBE, not an invariant row: the real payload with dropSelect left set.
+		-- The real payload with dropSelect left set (what a failed start did before the fallback reset
+		-- it): the picker's own match-state gate has to keep it shut. A V2 row, not just a count.
 		local p = S.deepcopy(entry.payload)
 		p.dropSelect = true
 		remote("MatchChanged").OnClientEvent:Fire(p)
 		runDue(C.now)
 		if DP.visible then C.finding = C.finding + 1 end
+		observe("stuck: a MatchChanged with dropSelect left set")
 		remote("MatchChanged").OnClientEvent:Fire(S.deepcopy(entry.payload))
 		runDue(C.now)
 	end
@@ -981,14 +988,26 @@ PLANTS = [
      "\tlocal sides = Rules.Resolve(order, picks, firstTie)\n"),
 ]
 
+# The drop picker's two guards (pc/drop-picker-reset), planted separately from PLANTS because each
+# needs its own run shape: the client gate against the stuck-dropSelect replay, the server reset
+# against a throw inside the drop window.
+PICKER_GATE_PLANT = (
+    "client: the drop picker's match-state gate removed (VoteDropClient.updateDrop)", CLIENT + "VoteDropClient.client.lua",
+    'local active = matchState.dropSelect == true and matchState.state == "Loading" and isReady()',
+    "local active = matchState.dropSelect == true and isReady()")
+FALLBACK_RESET_PLANT = (
+    "server: the failed-start fallback no longer resets dropSelect", MATCH,
+    "\t\t\t\t\t\t\tdropSelect = false\n\t\t\t\t\t\t\tteamSelect = false\n",
+    "\t\t\t\t\t\t\tteamSelect = false\n")
 
-def plant_caught(files, label, rel, old, new, throw_at=None, hostile=True):
+
+def plant_caught(files, label, rel, old, new, throw_at=None, hostile=True, stuck=False):
     if files[rel].count(old) != 1:
         return None, "plant did not apply (source changed)"
     planted = dict(files)
     planted[rel] = files[rel].replace(old, new)
     try:
-        r = run_world(planted, throw_at=throw_at, hostile=hostile)
+        r = run_world(planted, throw_at=throw_at, hostile=hostile, stuck=stuck)
     except Exception as exc:  # a crash is not a catch
         return False, "harness crashed: " + str(exc).splitlines()[0]
     hits = r["sviol"] + r["cviol"]
@@ -1048,9 +1067,12 @@ def main():
         ok = False
 
     stuck = run_world(files, stuck=True)
-    print(f"FINDING PROBE (not pass/fail): a MatchChanged with dropSelect still set, replayed at each InProgress "
-          f"broadcast, opened the drop picker at {stuck['finding']} moments (the picker has no match-state gate "
-          f"of its own)")
+    print(f"stuck dropSelect: a MatchChanged with dropSelect still set, replayed at each InProgress broadcast, "
+          f"opened the drop picker at {stuck['finding']} moments; {stuck['cn']} V violations")
+    for v in stuck["cviol"][:4]:
+        print("  " + v)
+    if stuck["finding"] or stuck["cn"] or stuck["errors"]:
+        ok = False
 
     # 2. Reorders and late joins.
     if not quick:
@@ -1099,12 +1121,16 @@ def main():
             ks = [m[0] for m in members]
             labels = sorted(set(m[1] for m in members))
             by = members[0][5]
-            print(f"  FINDING points {ks[0]}-{ks[-1]} ({len(ks)} points: {', '.join(labels)}): "
+            print(f"  FAIL points {ks[0]}-{ks[-1]} ({len(ks)} points: {', '.join(labels)}): "
                   f"{members[0][2]} S + {members[0][3]} V violations each; first: {members[0][4][0] if members[0][4] else ''}")
             print("    V violations by kind/client/server state: "
                   + ", ".join(f"{k} x{v}" for k, v in sorted(by.items())))
         for k, label, *_ in died[:3]:
-            print(f"  FINDING point {k} ({label}): the loop thread died")
+            print(f"  FAIL point {k} ({label}): the loop thread died")
+        # Was FINDING-only on fafed9c (points 24-74: the drop window's broadcast throwing); since the
+        # fallback resets dropSelect and broadcasts the state before the close, any row here is a regression.
+        if viol or died:
+            ok = False
 
     # 4. Planted faults.
     caught = 0
@@ -1130,6 +1156,34 @@ def main():
         print(f"planted fault 'the Close broadcast lost (point {close_at}) AND View ungated, real server only': "
               f"{'CAUGHT' if hit else 'MISSED'} ({detail})")
         ok = ok and bool(hit)
+    # The drop picker's two guards, one at a time. The client gate, against the stuck-dropSelect replay.
+    label, rel, old, new = PICKER_GATE_PLANT
+    hit, detail = plant_caught(files, label, rel, old, new, hostile=False, stuck=True)
+    total += 1
+    if hit is None:
+        print(f"FAIL planted fault '{label}': {detail}")
+        ok = False
+    else:
+        caught += bool(hit)
+        print(f"planted fault '{label}': {'CAUGHT' if hit else 'MISSED'} ({detail})")
+        ok = ok and bool(hit)
+    # The server reset, with a throw at the first point inside the drop window (a failed start there).
+    drops = lua_list(w.W.pointDrop)
+    drop_at = drops.index(True) + 1 if True in drops else None
+    label, rel, old, new = FALLBACK_RESET_PLANT
+    total += 1
+    if drop_at is None:
+        print(f"FAIL planted fault '{label}': no injection point inside the drop window")
+        ok = False
+    else:
+        hit, detail = plant_caught(files, label, rel, old, new, throw_at=drop_at, hostile=False)
+        if hit is None:
+            print(f"FAIL planted fault '{label}': {detail}")
+            ok = False
+        else:
+            caught += bool(hit)
+            print(f"planted fault '{label}' (throw at point {drop_at}): {'CAUGHT' if hit else 'MISSED'} ({detail})")
+            ok = ok and bool(hit)
     print(f"planted faults: {caught}/{total} caught")
     print("vote_menu_proof: " + ("OK" if ok else "FAILED"))
     return 0 if ok else 1
