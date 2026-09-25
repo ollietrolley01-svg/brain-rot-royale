@@ -99,9 +99,11 @@ The pre-fix damper differenced ray length between frames, so on those frames it 
 a double step.
 
 What Roblox does, from the researcher's sources:
-- A Roblox staff member (DevForum, "Introducing the Maximum Framerate Setting", 2024-05-30):
-  *"Physics also runs at your framerate, but it will rerun to hit 240Hz."* In that model every
-  rendered frame gets a physics step.
+- A Roblox staff member (DevForum, "Introducing the Maximum Framerate Setting", 2024-05-30, post #34
+  by Dogekidd2012, https://devforum.roblox.com/t/introducing-the-maximum-framerate-setting/2995965/34):
+  *"Physics also runs at your framerate, but it will rerun to hit 240Hz. That is, if you run at a
+  consistent 60Hz, then physics also runs at 60Hz, but every time it does, it will run 4 times."* In
+  that model every rendered frame gets a physics step.
 - Adaptive timestepping has been the default since July 2023 (the default setting "resolves to the
   same behavior as Adaptive"). It steps each assembly at 240, 120 or **60 Hz**, so an assembly dropped
   to 60 Hz inside a 144 fps client could plausibly miss frames. No source confirms this. One non-staff
