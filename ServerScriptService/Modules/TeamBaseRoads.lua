@@ -5,7 +5,8 @@
 --
 --   TeamBaseRoads.Plan(start, heading, roads, options)  -> plan | nil, why     pure: no instances
 --   TeamBaseRoads.Profile(plan, groundAt, startY)        -> heights            pure
---   TeamBaseRoads.Build(plan, heights, parent, terrain)  -> model              the road and its ground
+--   TeamBaseRoads.ShapeGround(terrain, plan, heights)    -> columns changed    cut and fill to the road
+--   TeamBaseRoads.Build(plan, heights, parent)           -> model              the road
 --   TeamBaseRoads.Register(roads, plan, heights)         -> undo               a road bots can route on
 --
 -- THE ROUTE. From the end of the gate's ramp, straight on out of the gate, then a smooth curve (a
@@ -16,14 +17,16 @@
 -- MAX_LENGTH, comes within `avoid` discs (the battleground), crosses another road, or (options.blocked)
 -- runs into something that cannot be cleared. The best of what is left is the shortest.
 --
--- THE HEIGHTS. The ground along the route, smoothed, held to MAX_GRADE, pinned to the gate's ramp at
--- one end and to the road's own surface at the other, and never under the ground across its width: the
--- road is laid ON the terrain, thick slabs reaching down into it. (Carving the ground with FillBlock was
--- tried: the voxels round a partly filled cell up and buried the asphalt, measured in Studio.)
+-- THE HEIGHTS (Oliver: "make the roads to the bases smoother on the hills"). A graded vertical curve,
+-- not the terrain's bumps: the centre-line ground smoothed hard, pinned to the gate and to the joined
+-- road's surface, held to MAX_GRADE (12%) and to MAX_PITCH of pitch change between stretches (gentle
+-- crests and sags). A route the hill is too steep for, or that would need more than MAX_EARTH of cut
+-- or fill, is passed over for one round the hill. ShapeGround then cuts and fills the terrain to the
+-- road on the voxels, with banks at 35 degrees back to the natural ground (no cliffs beside it).
 --
--- THE SURFACE. A run of asphalt slabs whose TOP edges meet at every sample (a change of grade is a
--- crease, as RoadNetwork builds its roads), a joint disc under each crease a hair lower filling the
--- outside of a bend, white edge lines, the dashed centre line, and a stop line at the junction.
+-- THE SURFACE. Asphalt slabs whose top centre lines meet at every sample, each run past its ends by the
+-- bend's overhang so the outside of a bend is covered (the step where two tops cross stays under 0.05
+-- with the pitch held); edge lines, the dashed centre line, and a stop line at the junction.
 --
 -- FOR BOTS. Register splits the target edge at the junction and chains nodes up the access road to the
 -- gate, in the shape BotNav reads (edges with a, b, from, to, length; nodes with position, arms), and
@@ -40,19 +43,27 @@ local HALF = TeamBaseRoads.Width / 2
 local STEP = 6
 local MIN_RADIUS = 45
 local MAX_LENGTH = 900
-local MAX_GRADE = 1 / 8
+local MAX_GRADE = 0.12
+-- The most the pitch may change from one stretch to the next (degrees), the deepest cut or fill a
+-- route may need (more, and the planner goes round the hill), the running-average passes.
+local MAX_PITCH = 2.8
+local MAX_EARTH = 12
+local SMOOTH_PASSES = 30
 TeamBaseRoads.MinRadius, TeamBaseRoads.MaxGrade, TeamBaseRoads.Step = MIN_RADIUS, MAX_GRADE, STEP
+TeamBaseRoads.MaxPitch, TeamBaseRoads.MaxEarth = MAX_PITCH, MAX_EARTH
 -- The junction keeps this far from either end of the edge it joins (the boxes and bends there).
 local END_CLEAR = 36
 -- Straight on out of the gate before any turn.
 local LEAD = 24
 -- Straight in, square to the road, for the last stretch before the junction.
 local APPROACH = 14
--- The ground work each side of the carriageway, and how far up a cutting is cleared.
-local SHOULDER = 4
-local CUT_HEIGHT = 40
-local FILL_DEPTH = 30
-local GROUND_DROP = 1.2
+-- The ground work: flat shoulders each side, the ground this far under the road's own ground, banks
+-- back to the natural ground at 35 degrees reaching out at most BANK_REACH, on MapTerrain's 4-stud voxels.
+local SHOULDER = 3
+local GROUND_UNDER = 0.25
+local BANK_SLOPE = math.tan(math.rad(35))
+local BANK_REACH = 18
+local CELL = 4
 
 local ASPHALT = Color3.fromRGB(62, 62, 66)
 local LINE = Color3.fromRGB(236, 232, 220)
@@ -255,13 +266,12 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 		-- cannot keep to the grade over it (the ground climbs too hard at an end) is passed over too.
 		if not why and options.groundAt then
 			local startY = type(options.startY) == "table" and options.startY[route.gate] or options.startY
-			route.heights = TeamBaseRoads.Profile(route, options.groundAt, startY or 0)
-			for i = 2, #route.points do
-				local d = (route.points[i] - route.points[i - 1]).Magnitude
-				if math.abs(route.heights[i] - route.heights[i - 1]) > d * MAX_GRADE + 0.05 then
-					why = "too steep for the ground"
-					break
-				end
+			local heights, stats = TeamBaseRoads.Profile(route, options.groundAt, startY or 0)
+			route.heights, route.stats = heights, stats
+			if stats.grade > MAX_GRADE + 0.005 or stats.pitch > MAX_PITCH + 0.3 then
+				why = "too steep for the ground"
+			elseif stats.earthwork > MAX_EARTH then
+				why = "too much cutting (round the hill)"
 			end
 		end
 		if not why then
@@ -277,8 +287,13 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 	return nil, #summary > 0 and table.concat(summary, ", ") or "no edge"
 end
 
--- The road's height at each point: the ground, smoothed, held to MAX_GRADE, from `startY` at the gate
--- to the target road's own surface height at the junction.
+-- THE VERTICAL CURVE (Oliver, 2026-09-24: "make the roads to the bases smoother on the hills"). The
+-- road's own profile, graded, not the terrain's bumps: the ground along the centre line smoothed hard,
+-- pinned to the gate's height and the joined road's surface, then held to MAX_GRADE and to at most
+-- MAX_PITCH of change in pitch between one stretch and the next (gentle crests and sags); the ground
+-- is then cut and filled to it (ShapeGround). Returns the heights (the road's ground; its top is Lift
+-- over) and { grade, pitch, earthwork } -- the steepest grade, the biggest pitch change in degrees,
+-- the deepest cut or fill -- for the planner to refuse a route the hill is too steep for.
 function TeamBaseRoads.Profile(plan, groundAt, startY)
 	local points = plan.points
 	local n = #points
@@ -294,62 +309,159 @@ function TeamBaseRoads.Profile(plan, groundAt, startY)
 	elseif groundAt then
 		endY = groundAt(plan.join.X, plan.join.Z) or startY
 	end
-	local heights = {}
+	local ground, heights = {}, {}
 	for i, p in ipairs(points) do
-		heights[i] = (groundAt and groundAt(p.X, p.Z)) or startY
+		ground[i] = (groundAt and groundAt(p.X, p.Z)) or startY
+		heights[i] = ground[i]
 	end
-	-- Smooth: a few passes of a 5-point average, ends pinned.
-	for _ = 1, 4 do
+	local function pin()
+		heights[1], heights[n] = startY, endY
+	end
+	-- A running average over the samples, many passes: the long shape of the hill, not its bumps.
+	for _ = 1, SMOOTH_PASSES do
 		local copy = table.clone(heights)
-		for i = 3, n - 2 do
-			heights[i] = (copy[i - 2] + copy[i - 1] + copy[i] + copy[i + 1] + copy[i + 2]) / 5
+		for i = 2, n - 1 do
+			heights[i] = (copy[i - 1] + copy[i] + copy[i + 1]) / 3
 		end
-		heights[1], heights[n] = startY, endY
-		heights[2] = (startY + heights[3]) / 2
-		heights[n - 1] = (endY + heights[n - 2]) / 2
+		pin()
 	end
-	-- Held to the grade from both ends.
-	for _ = 1, 8 do
-		heights[1], heights[n] = startY, endY
+	-- The grade and the pitch change, relaxed in turn until both hold.
+	local bend = math.tan(math.rad(MAX_PITCH))
+	for _ = 1, 300 do
 		for i = 2, n do
 			local d = (points[i] - points[i - 1]).Magnitude * MAX_GRADE
 			heights[i] = math.clamp(heights[i], heights[i - 1] - d, heights[i - 1] + d)
 		end
-		heights[1], heights[n] = startY, endY
+		pin()
 		for i = n - 1, 1, -1 do
 			local d = (points[i + 1] - points[i]).Magnitude * MAX_GRADE
 			heights[i] = math.clamp(heights[i], heights[i + 1] - d, heights[i + 1] + d)
 		end
-	end
-	heights[1], heights[n] = startY, endY
-	-- Never under the ground: the surface over the highest ground across the carriageway (the road is
-	-- laid ON the terrain, its thick slabs reaching down into it; nothing is carved). Raised only, and
-	-- the grade kept by raising the low side, so it still climbs no steeper than MAX_GRADE.
-	if groundAt then
-		local floor = {}
+		pin()
 		for i = 2, n - 1 do
-			local along = (points[i + 1] - points[i - 1]).Unit
-			local right = Vector3.new(-along.Z, 0, along.X)
-			local top = -math.huge
-			for _, s in ipairs({ -(HALF - 0.5), 0, HALF - 0.5 }) do
-				local q = points[i] + right * s
-				top = math.max(top, groundAt(q.X, q.Z) or -math.huge)
+			local d0 = (points[i] - points[i - 1]).Magnitude
+			local d1 = (points[i + 1] - points[i]).Magnitude
+			local g0 = (heights[i] - heights[i - 1]) / d0
+			local g1 = (heights[i + 1] - heights[i]) / d1
+			local excess = math.abs(g1 - g0) - bend
+			if excess > 0 then
+				-- Move this sample toward the line through its neighbours by as much as the excess asks.
+				local shift = math.sign(g1 - g0) * excess * (d0 * d1) / (d0 + d1)
+				heights[i] += shift
 			end
-			floor[i] = top - TeamBaseRoads.Lift + 0.1
-			heights[i] = math.max(heights[i], floor[i])
 		end
-		for _ = 1, 4 do
-			for i = 2, n - 1 do
-				local d = (points[i] - points[i - 1]).Magnitude * MAX_GRADE
-				heights[i] = math.max(heights[i], heights[i - 1] - d)
+		pin()
+	end
+	local stats = { grade = 0, pitch = 0, earthwork = 0 }
+	for i = 2, n do
+		local d = (points[i] - points[i - 1]).Magnitude
+		stats.grade = math.max(stats.grade, math.abs(heights[i] - heights[i - 1]) / d)
+		if i < n then
+			local g0 = (heights[i] - heights[i - 1]) / d
+			local g1 = (heights[i + 1] - heights[i]) / (points[i + 1] - points[i]).Magnitude
+			stats.pitch = math.max(stats.pitch, math.deg(math.abs(math.atan(g1) - math.atan(g0))))
+		end
+	end
+	for i = 1, n do
+		stats.earthwork = math.max(stats.earthwork, math.abs(heights[i] - ground[i]))
+	end
+	return heights, stats
+end
+
+-- THE GROUND TO THE ROAD. Where the ground should stand at flat point (x, z), given the ground there
+-- now (`natural`): under the carriageway and its shoulders, just under the road's own ground (the
+-- slabs lie on it); beyond, a bank at BANK_SLOPE (35 degrees) back to the natural ground, cut or fill;
+-- nil when the road does not reach (x, z).
+local function nearestOnRoad(points, heights, x, z)
+	local best, bestH = math.huge, nil
+	local p = Vector3.new(x, 0, z)
+	for i = 2, #points do
+		local a, b = points[i - 1], points[i]
+		local ab = b - a
+		local t = math.clamp((p - a):Dot(ab) / math.max(ab:Dot(ab), 1e-9), 0, 1)
+		local d = (p - (a + ab * t)).Magnitude
+		if d < best then
+			best, bestH = d, heights[i - 1] + (heights[i] - heights[i - 1]) * t
+		end
+	end
+	return best, bestH
+end
+
+function TeamBaseRoads.GroundTarget(points, heights, x, z, natural)
+	local d, h = nearestOnRoad(points, heights, x, z)
+	if not h then
+		return nil
+	end
+	local bed = h - GROUND_UNDER
+	local flatHalf = HALF + SHOULDER
+	if d <= flatHalf then
+		return bed
+	end
+	local e = d - flatHalf
+	if e > BANK_REACH then
+		return nil
+	end
+	return math.clamp(natural, bed - e * BANK_SLOPE, bed + e * BANK_SLOPE)
+end
+TeamBaseRoads.BankSlope, TeamBaseRoads.BankReach, TeamBaseRoads.Shoulder = BANK_SLOPE, BANK_REACH, SHOULDER
+
+-- Cuts and fills the terrain to the road (GroundTarget), column by column on the 4-stud voxel grid,
+-- with the top cell's occupancy set to the fraction under the target (so the surface stands where it
+-- is meant to, not rounded up to a whole cell -- what FillBlock did, burying the asphalt).
+function TeamBaseRoads.ShapeGround(terrain, plan, heights)
+	local points = plan.points
+	local reach = HALF + SHOULDER + BANK_REACH + CELL
+	local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
+	local y0, y1 = math.huge, -math.huge
+	for i, p in ipairs(points) do
+		x0, x1 = math.min(x0, p.X - reach), math.max(x1, p.X + reach)
+		z0, z1 = math.min(z0, p.Z - reach), math.max(z1, p.Z + reach)
+		y0, y1 = math.min(y0, heights[i]), math.max(y1, heights[i])
+	end
+	local function snap(v, up)
+		return (up and math.ceil(v / CELL) or math.floor(v / CELL)) * CELL
+	end
+	x0, z0, x1, z1 = snap(x0), snap(z0), snap(x1, true), snap(z1, true)
+	y0, y1 = snap(y0 - BANK_REACH * BANK_SLOPE - 2 * CELL), snap(y1 + BANK_REACH * BANK_SLOPE + 2 * CELL, true)
+	local region = Region3.new(Vector3.new(x0, y0, z0), Vector3.new(x1, y1, z1))
+	local materials, occupancy = terrain:ReadVoxels(region, CELL)
+	local size = materials.Size
+	local changed = 0
+	for ix = 1, size.X do
+		local x = x0 + (ix - 0.5) * CELL
+		for iz = 1, size.Z do
+			local z = z0 + (iz - 0.5) * CELL
+			-- The natural surface: the top of the highest solid cell, by its occupancy.
+			local natural = nil
+			local solid = Enum.Material.Ground
+			for iy = size.Y, 1, -1 do
+				local m = materials[ix][iy][iz]
+				if m ~= Enum.Material.Air and m ~= Enum.Material.Water and occupancy[ix][iy][iz] > 0 then
+					natural = y0 + (iy - 1) * CELL + occupancy[ix][iy][iz] * CELL
+					solid = m
+					break
+				end
 			end
-			for i = n - 1, 2, -1 do
-				local d = (points[i + 1] - points[i]).Magnitude * MAX_GRADE
-				heights[i] = math.max(heights[i], heights[i + 1] - d)
+			local target = natural and TeamBaseRoads.GroundTarget(points, heights, x, z, natural)
+			if target and math.abs(target - natural) > 0.05 then
+				changed += 1
+				for iy = 1, size.Y do
+					local bottom = y0 + (iy - 1) * CELL
+					local fill = math.clamp((target - bottom) / CELL, 0, 1)
+					if materials[ix][iy][iz] ~= Enum.Material.Water then
+						occupancy[ix][iy][iz] = fill
+						if fill > 0 and materials[ix][iy][iz] == Enum.Material.Air then
+							materials[ix][iy][iz] = solid
+						elseif fill == 0 then
+							materials[ix][iy][iz] = Enum.Material.Air
+						end
+					end
+				end
 			end
 		end
 	end
-	return heights
+	terrain:WriteVoxels(region, CELL, materials, occupancy)
+	return changed
 end
 
 -- A frame on the carriageway's centre line from `p` to `q` (3D, on the road's top), its look along it.
@@ -360,13 +472,25 @@ local function along(p, q)
 	return CFrame.fromMatrix((p + q) / 2, right, up, -forward), up, right
 end
 
--- The road: slabs, joints, lines, the stop line; and the ground under it written flat.
-function TeamBaseRoads.Build(plan, heights, parent, terrain)
+-- How far each slab runs past its samples at each end, so the outside of a bend is covered and the
+-- next slab's top meets it with a step of no more than JOIN_STEP (the overlap times the pitch change).
+local function overhang(points, i)
+	if i <= 1 or i >= #points then
+		return 0
+	end
+	local u, v = (points[i] - points[i - 1]).Unit, (points[i + 1] - points[i]).Unit
+	local turn = math.acos(math.clamp(u:Dot(v), -1, 1))
+	return HALF * math.tan(turn / 2) + 0.05
+end
+TeamBaseRoads.Overhang = overhang
+
+-- The road: slabs, lines, the stop line.
+function TeamBaseRoads.Build(plan, heights, parent)
 	local model = Instance.new("Model")
 	model.Name = "AccessRoad"
 	local lift = TeamBaseRoads.Lift
-	-- Thick enough that where the road rides over a dip its sides reach down into the ground.
-	local thick = 3.2
+	-- Thick enough that the ground written under it (GROUND_UNDER down) is hidden however the voxels round.
+	local thick = 2.4
 	local points = plan.points
 	local tops = {}
 	for i, p in ipairs(points) do
@@ -393,9 +517,13 @@ function TeamBaseRoads.Build(plan, heights, parent, terrain)
 	local dashRun = 0
 	for i = 2, #tops do
 		local p, q = tops[i - 1], tops[i]
-		local frame, up = along(p, q)
+		local frame = along(p, q)
 		local length = (q - p).Magnitude
-		part("RoadSurface", Vector3.new(TeamBaseRoads.Width, thick, length), frame * CFrame.new(0, -thick / 2, 0), ASPHALT, Enum.Material.Asphalt, true)
+		-- Past each end by the bend's overhang: the tops cross at the sample, the step between them
+		-- the overhang times the pitch change (under JOIN_STEP with MAX_PITCH).
+		local back, ahead = overhang(points, i - 1), overhang(points, i)
+		local slab = frame * CFrame.new(0, -thick / 2, (back - ahead) / 2)
+		part("RoadSurface", Vector3.new(TeamBaseRoads.Width, thick, length + back + ahead), slab, ASPHALT, Enum.Material.Asphalt, true)
 		for _, side in ipairs({ -1, 1 }) do
 			part("RoadEdge", Vector3.new(0.4, 0.07, length), frame * CFrame.new(side * (HALF - 0.9), 0.035, 0), LINE, Enum.Material.SmoothPlastic)
 		end
@@ -410,27 +538,6 @@ function TeamBaseRoads.Build(plan, heights, parent, terrain)
 			s += run
 		end
 		dashRun += length
-		local _ = up
-		-- The ground under it: dead flat to the road's ground across the carriageway and shoulders.
-		if terrain and TeamBaseRoads.Carve then
-			local mid = (points[i - 1] + points[i]) / 2
-			local h = (heights[i - 1] + heights[i]) / 2
-			local flatFrame = CFrame.lookAt(Vector3.new(mid.X, h, mid.Z), Vector3.new(points[i].X, h, points[i].Z))
-			local width = TeamBaseRoads.Width + 2 * SHOULDER
-			local long = length + 2
-			pcall(function()
-				-- The ground left 1.2 under the road's own ground, the slabs reaching down to it: whatever
-				-- the voxels round the surface to, it never comes up through the asphalt.
-				terrain:FillBlock(flatFrame * CFrame.new(0, CUT_HEIGHT / 2 - GROUND_DROP, 0), Vector3.new(width, CUT_HEIGHT, long), Enum.Material.Air)
-				terrain:FillBlock(flatFrame * CFrame.new(0, -FILL_DEPTH / 2 - GROUND_DROP, 0), Vector3.new(width, FILL_DEPTH, long), Enum.Material.Ground)
-			end)
-		end
-	end
-	-- A joint under each crease, a hair under the slabs' tops, filling the outside of the bend.
-	for i = 2, #tops - 1 do
-		local p = tops[i]
-		part("RoadJoint", Vector3.new(thick, TeamBaseRoads.Width, TeamBaseRoads.Width), CFrame.new(p.X, p.Y - 0.08 - thick / 2, p.Z) * CFrame.Angles(0, 0, math.pi / 2),
-			ASPHALT, Enum.Material.Asphalt, true).Shape = Enum.PartType.Cylinder
 	end
 	-- The stop line across the access road, just short of the junction.
 	local n = #tops

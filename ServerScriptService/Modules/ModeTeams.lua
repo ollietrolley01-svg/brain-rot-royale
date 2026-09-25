@@ -593,7 +593,8 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 					item:Destroy()
 				end
 				local heights = plan.heights or TeamBaseRoads.Profile(plan, groundAt, ruin.height)
-				ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model, workspace.Terrain)
+				pcall(TeamBaseRoads.ShapeGround, workspace.Terrain, plan, heights)
+				ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model)
 				ruin.accessPlan = plan
 				table.insert(accessUndo, (TeamBaseRoads.Register(roads, plan, heights)))
 			end

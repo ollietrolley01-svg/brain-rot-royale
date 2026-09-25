@@ -36,6 +36,7 @@ SETUP = r"""
 table.find = table.find or function(t, v) for i, x in ipairs(t) do if x == v then return i end end return nil end
 table.clone = table.clone or function(t) local c = {} for k, v in pairs(t) do c[k] = v end return c end
 math.clamp = math.clamp or function(x, a, b) return math.max(a, math.min(b, x)) end
+math.sign = math.sign or function(x) return x > 0 and 1 or (x < 0 and -1 or 0) end
 
 -- A network of roads on the world's axes: a ring round the middle at 520 and two long roads crossing
 -- it, each edge with a height profile (every 8 studs) like RoadNetwork's.
@@ -114,7 +115,13 @@ end
 BASES = [(420 * math.cos(math.radians(a)), 420 * math.sin(math.radians(a)), a + 180) for a in range(0, 360, 30)]
 ARENA = 230.0
 # Gentle grades (Oliver): the steepest an access road may climb, whatever the module says.
-GRADE = 1 / 8
+GRADE = 0.12
+# Oliver: gentle crests and sags -- no pitch change over about 3 degrees between stretches, no step over
+# 0.05 where two slabs meet; the biggest vehicle at SPEED neither leaves the road over a crest nor
+# grounds its belly (CLEARANCE between its axles, WHEELBASE of its length).
+PITCH = 3.0
+JOIN_STEP = 0.05
+SPEED, GRAVITY, CLEARANCE, WHEELBASE = 90.0, 196.2, 0.9, 0.62
 
 MAY_FAIL = 2
 
@@ -134,6 +141,8 @@ def run(root, edits=None, log=print):
     from team_base_ruins_modeteams_check import vehicle_extents
     sizes = vehicle_extents(root)
     vw = max(v[0] for v in sizes.values()) / 2 + 1.0
+    vlen = max(v[1] for v in sizes.values())
+    stats = []
     vh = max(v[2] for v in sizes.values())
     half = mod.Width / 2
     problems = []
@@ -197,24 +206,80 @@ def run(root, edits=None, log=print):
                 break
         # The gate stands on its graded ramp: the ground there is the compound's height.
         gate_y = g.hills(pts[0][0], pts[0][1])
-        heights = mod.Profile(plan, g.hills, gate_y)
+        got = mod.Profile(plan, g.hills, gate_y)
+        heights = got[0] if isinstance(got, tuple) else got
         hs = [heights[i] for i in range(1, len(pts) + 1)]
-        for i in range(1, len(pts)):
-            grade = abs(hs[i] - hs[i - 1]) / math.dist(pts[i], pts[i - 1])
-            if grade > GRADE + 0.02:
-                problems.append("%s: a grade of %.3f" % (name, grade))
-                break
+        dist = [math.dist(pts[i], pts[i - 1]) for i in range(1, len(pts))]
+        grades = [(hs[i] - hs[i - 1]) / dist[i - 1] for i in range(1, len(pts))]
+        worst_grade = max(abs(x) for x in grades)
+        if worst_grade > GRADE + 0.005:
+            problems.append("%s: a grade of %.3f" % (name, worst_grade))
+        pitches = [math.degrees(abs(math.atan(grades[i]) - math.atan(grades[i - 1]))) for i in range(1, len(grades))]
+        worst_pitch = max(pitches) if pitches else 0
+        if worst_pitch > PITCH:
+            problems.append("%s: the pitch changes %.1f degrees between two stretches" % (name, worst_pitch))
+        # Where two slabs' tops cross: the overhang past the sample times the change in grade.
+        worst_step = 0.0
+        for i in range(1, len(grades)):
+            worst_step = max(worst_step, mod.Overhang(plan.points, i + 1) * abs(grades[i] - grades[i - 1]))
+        if worst_step > JOIN_STEP:
+            problems.append("%s: a step of %.3f where two slabs meet" % (name, worst_step))
+        # The biggest vehicle driven down the whole road at SPEED: its belly over each crest, and whether
+        # a crest throws it off the road (v^2 * curvature over gravity).
+        cum = [0.0]
+        for d in dist:
+            cum.append(cum[-1] + d)
+
+        def top_at(s):
+            s = max(0.0, min(cum[-1], s))
+            j = max(1, next((k for k in range(1, len(cum)) if cum[k] >= s), len(cum) - 1))
+            f = (s - cum[j - 1]) / max(cum[j] - cum[j - 1], 1e-9)
+            return hs[j - 1] + (hs[j] - hs[j - 1]) * f
+        wb = WHEELBASE * vlen
+        belly, lift = 0.0, 0.0
+        s = wb / 2
+        while s < cum[-1] - wb / 2:
+            belly = max(belly, top_at(s) - (top_at(s - wb / 2) + top_at(s + wb / 2)) / 2)
+            s += 1.0
+        for i in range(1, len(grades)):
+            crest = math.atan(grades[i - 1]) - math.atan(grades[i])
+            if crest > 0:
+                lift = max(lift, SPEED * SPEED * crest / ((dist[i - 1] + dist[i]) / 2) / GRAVITY)
+        if belly > CLEARANCE:
+            problems.append("%s: the biggest vehicle grounds its belly on a crest (%.2f over %.2f)" % (name, belly, CLEARANCE))
+        if lift > 1.0:
+            problems.append("%s: a crest throws the biggest vehicle off the road at %d studs/s (%.2f g)" % (name, SPEED, lift))
+        stats.append((worst_grade, worst_pitch, worst_step, belly, lift))
         if abs(hs[0] - gate_y) > 1e-6:
             problems.append("%s: not level with the gate" % name)
         t = plan.along / e.step
         k = int(t)
         eh = [e.heights[i] for i in range(1, len(e.heights) + 1)]
         want = eh[k] + (eh[min(k + 1, len(eh) - 1)] - eh[k]) * (t - k)
-        # Never under the ground (the terrain would come up through the asphalt), away from the pinned ends.
-        for i in range(3, len(pts) - 3):
-            if hs[i] + mod.Lift < g.hills(pts[i][0], pts[i][1]) - 0.01:
-                problems.append("%s: the road runs under the ground at stretch %d" % (name, i))
-                break
+        # The ground cut and filled to it (the real GroundTarget): under the road just below its surface,
+        # the banks either side no steeper than 40 degrees out to the natural ground (no cliffs).
+        steepest_bank = 0.0
+        for i in range(2, len(pts) - 2, 3):
+            px, pz = pts[i]
+            fx, fz = (pts[i + 1][0] - pts[i - 1][0]), (pts[i + 1][1] - pts[i - 1][1])
+            fl = math.hypot(fx, fz)
+            rx, rz = -fz / fl, fx / fl
+            for side in (-1, 1):
+                last = None
+                for k in range(0, 80):
+                    off = k * 0.5
+                    x, z = px + rx * side * off, pz + rz * side * off
+                    t = mod.GroundTarget(plan.points, heights, x, z, g.hills(x, z))
+                    if t is None:
+                        t = g.hills(x, z)
+                    if off <= half and t > hs[i] + mod.Lift + 0.05:
+                        problems.append("%s: the ground comes up through the road at stretch %d" % (name, i))
+                        break
+                    if last is not None:
+                        steepest_bank = max(steepest_bank, abs(t - last) / 0.5)
+                    last = t
+        if steepest_bank > math.tan(math.radians(40)) + 0.05:
+            problems.append("%s: a bank beside the road at %.0f degrees (a cliff)" % (name, math.degrees(math.atan(steepest_bank))))
         if abs(hs[-1] - want) > 0.05:
             problems.append("%s: the junction is %.2f off the road's surface" % (name, hs[-1] - want))
         # keep out
@@ -229,7 +294,7 @@ def run(root, edits=None, log=print):
                 problems.append("%s: the road runs through a building" % name)
                 break
         # surface
-        model = mod.Build(plan, heights, None, None)
+        model = mod.Build(plan, heights, None)
         built += 1
         parts = build.dump(model)
         for p in parts:
@@ -267,6 +332,9 @@ def run(root, edits=None, log=print):
         log("  note " + line)
     if len(unlinked) > MAY_FAIL:
         problems += unlinked
+    if stats:
+        log("  worst over all roads: grade %.3f, pitch change %.2f deg, join step %.3f, belly %.2f of %.2f, crest %.2f g"
+            % (tuple(max(x[k] for x in stats) for k in range(3)) + (max(x[3] for x in stats), CLEARANCE, max(x[4] for x in stats))))
     log("team_base_road_check: %d bases, %d access roads built, %d problems" % (len(BASES), built, len(problems)))
     return problems
 
@@ -276,8 +344,10 @@ PLANTS = [
                          "\t\tnewEdge(chain, node, \"up\" .. i, \"down\" .. i)")]),
     ("through the battleground", [("for _, disc in ipairs(options.avoid or {}) do", "for _, disc in ipairs({}) do")]),
     ("joins the road at an angle", [("local approach = join + normal * APPROACH", "local approach = join + dir * 20")]),
-    ("no grade held", [("local MAX_GRADE = 1 / 8", "local MAX_GRADE = 1 / 1")]),
-    ("laid under the ground", [("			heights[i] = math.max(heights[i], floor[i])", "			heights[i] = heights[i] - 3")]),
+    ("no grade held", [("local MAX_GRADE = 0.12", "local MAX_GRADE = 1")]),
+    ("a raw terrain-following profile", [("\tfor _ = 1, SMOOTH_PASSES do", "\tfor _ = 1, 0 do"),
+                                         ("\tfor _ = 1, 300 do", "\tfor _ = 1, 0 do")]),
+    ("cliffs beside the road", [("local BANK_SLOPE = math.tan(math.rad(35))", "local BANK_SLOPE = 20")]),
     ("a bollard on the road", [("\tmodel.Parent = parent\n\treturn model",
                                 "\tpart(\"Bollard\", Vector3.new(0.8, 3, 0.8), CFrame.new(tops[3] + Vector3.new(0, 1.5, 0)), LINE, Enum.Material.Metal, true)\n"
                                 "\tmodel.Parent = parent\n\treturn model")]),

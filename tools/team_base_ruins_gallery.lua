@@ -573,4 +573,41 @@ for team = 1, 2 do
 	})
 end
 
+-- Down the access road that climbs most, from a driver's height, a quarter of the way along.
+table.insert(views, {
+	name = "20_access_road_on_the_hill",
+	settle = 3,
+	setup = function(_, camera)
+		setup()
+		local best, rise = nil, -1
+		for team = 1, 2 do
+			local ruin = state.ruins[team]
+			local plan = ruin and ruin.accessPlan
+			local heights = plan and plan.heights
+			if heights then
+				local lo, hi = math.huge, -math.huge
+				for _, h in ipairs(heights) do
+					lo, hi = math.min(lo, h), math.max(hi, h)
+				end
+				if hi - lo > rise then
+					best, rise = { plan = plan, heights = heights, team = team }, hi - lo
+				end
+			end
+		end
+		if not best then
+			note("no access road to look down")
+			look(camera, at(1, 0, 60, -160), at(1, 0, 0, 0), 60)
+			return
+		end
+		local n = #best.plan.points
+		local i = math.max(1, math.floor(n * 0.2))
+		local j = math.min(n, i + 10)
+		local p, q = best.plan.points[i], best.plan.points[j]
+		note(string.format("team %d's road rises %.1f; stats: grade %.3f, pitch %.2f deg, earthwork %.1f", best.team, rise,
+			best.plan.stats and best.plan.stats.grade or -1, best.plan.stats and best.plan.stats.pitch or -1,
+			best.plan.stats and best.plan.stats.earthwork or -1))
+		look(camera, Vector3.new(p.X, best.heights[i] + 5.5, p.Z), Vector3.new(q.X, best.heights[j] + 3, q.Z), 70)
+	end,
+})
+
 return views
