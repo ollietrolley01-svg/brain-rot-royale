@@ -45,10 +45,13 @@ TeamBaseRoads.MinRadius, TeamBaseRoads.MaxGrade, TeamBaseRoads.Step = MIN_RADIUS
 local END_CLEAR = 36
 -- Straight on out of the gate before any turn.
 local LEAD = 24
+-- Straight in, square to the road, for the last stretch before the junction.
+local APPROACH = 14
 -- The ground work each side of the carriageway, and how far up a cutting is cleared.
 local SHOULDER = 4
 local CUT_HEIGHT = 40
 local FILL_DEPTH = 30
+local GROUND_DROP = 1.2
 
 local ASPHALT = Color3.fromRGB(62, 62, 66)
 local LINE = Color3.fromRGB(236, 232, 220)
@@ -89,7 +92,7 @@ local function inBox(p, boxes)
 end
 
 -- One candidate route to `edge` from `start` heading `heading` (flat unit vectors), or nil and why.
-local function routeTo(start, heading, edge, roads, options)
+local function routeTo(start, heading, edge, roads, options, shift, tension)
 	local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
 	local along = b - a
 	local length = along.Magnitude
@@ -98,7 +101,7 @@ local function routeTo(start, heading, edge, roads, options)
 	end
 	local dir = along / length
 	local lead = start + heading * LEAD
-	local t = math.clamp((lead - a):Dot(dir), END_CLEAR + HALF, length - END_CLEAR - HALF)
+	local t = math.clamp((lead - a):Dot(dir) + (shift or 0), END_CLEAR + HALF, length - END_CLEAR - HALF)
 	local centre = a + dir * t
 	local normal = Vector3.new(-dir.Z, 0, dir.X)
 	if (lead - centre):Dot(normal) < 0 then
@@ -109,13 +112,16 @@ local function routeTo(start, heading, edge, roads, options)
 	if span < 20 then
 		return nil, "too close"
 	end
-	local k = math.clamp(span * 0.42, 18, 160)
+	local k = math.clamp(span * (tension or 0.42), 18, 160)
 	local points = { start }
 	local samples = math.max(8, math.ceil(span / 2))
 	local raw = {}
+	-- The curve ends APPROACH short of the road, square to it; the last stretch is straight in.
+	local approach = join + normal * APPROACH
 	for i = 0, samples do
-		table.insert(raw, bezier(lead, lead + heading * k, join + normal * k, join, i / samples))
+		table.insert(raw, bezier(lead, lead + heading * k, approach + normal * k, approach, i / samples))
 	end
+	table.insert(raw, join)
 	-- Resample the straight lead and the curve at STEP.
 	local path = { start }
 	local carry, last = 0, start
@@ -181,16 +187,26 @@ local function routeTo(start, heading, edge, roads, options)
 			return nil, "through a compound"
 		end
 	end
+	return { points = path, edge = edge, along = t, join = join, centre = centre, normal = normal, length = total }
+end
+
+-- What options.blocked says about a whole route: nil when every stretch is clear.
+local function blockedRoute(route, options)
 	if options.blocked then
-		for i = 2, #path do
-			local why = options.blocked(path[i - 1], path[i])
+		for i = 2, #route.points do
+			local why = options.blocked(route.points[i - 1], route.points[i])
 			if why then
-				return nil, "blocked by " .. tostring(why)
+				return "blocked by " .. tostring(why)
 			end
 		end
 	end
-	return { points = path, edge = edge, along = t, join = join, centre = centre, normal = normal, length = total }
+	return nil
 end
+
+-- Where along an edge the junction may go (from the lead's own square-on point) and how hard the
+-- curve pulls: more than one of each is tried, so a road the plain curve cannot reach is still found.
+local SHIFTS = { 0, -45, 45, -100, 100 }
+local TENSIONS = { 0.42, 0.28, 0.6 }
 
 -- The shortest acceptable route from `start` (the end of the gate's ramp) out along `heading` to any
 -- road edge. options: avoid = { { centre, radius, name } }, blocked(a, b) -> why | nil.
@@ -201,7 +217,7 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 		return nil, "no roads"
 	end
 	local starts = heading and { { position = start, heading = heading } } or start
-	local best, why = nil, "no edge"
+	local found, reasons = {}, {}
 	for gateIndex, gate in ipairs(starts) do
 		local from, dir = flat(gate.position), flat(gate.heading).Unit
 		local ranked = {}
@@ -215,20 +231,36 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 			return p.d < q.d
 		end)
 		for index = 1, math.min(#ranked, 24) do
-			local route, reason = routeTo(from, dir, ranked[index].edge, roads, options)
-			if route and (not best or route.length < best.length) then
-				best = route
-				best.gate = gateIndex
-				best.heading = dir
-			elseif not route then
-				why = reason
+			for _, shift in ipairs(SHIFTS) do
+				for _, tension in ipairs(TENSIONS) do
+					local route, reason = routeTo(from, dir, ranked[index].edge, roads, options, shift, tension)
+					if route then
+						route.gate, route.heading = gateIndex, dir
+						table.insert(found, route)
+					else
+						reasons[reason] = (reasons[reason] or 0) + 1
+					end
+				end
 			end
 		end
 	end
-	if not best then
-		return nil, why
+	-- The shortest first; only those are asked about what stands in the way (a query per stretch).
+	table.sort(found, function(p, q)
+		return p.length < q.length
+	end)
+	for _, route in ipairs(found) do
+		local why = blockedRoute(route, options)
+		if not why then
+			return route
+		end
+		reasons[why] = (reasons[why] or 0) + 1
 	end
-	return best
+	local summary = {}
+	for reason, count in pairs(reasons) do
+		table.insert(summary, reason .. " x" .. count)
+	end
+	table.sort(summary)
+	return nil, #summary > 0 and table.concat(summary, ", ") or "no edge"
 end
 
 -- The road's height at each point: the ground, smoothed, held to MAX_GRADE, from `startY` at the gate
@@ -292,7 +324,8 @@ function TeamBaseRoads.Build(plan, heights, parent, terrain)
 	local model = Instance.new("Model")
 	model.Name = "AccessRoad"
 	local lift = TeamBaseRoads.Lift
-	local thick = 1.2
+	-- Thick enough to reach down past the ground written under it (voxels round the surface a little).
+	local thick = 2.2
 	local points = plan.points
 	local tops = {}
 	for i, p in ipairs(points) do
@@ -345,8 +378,10 @@ function TeamBaseRoads.Build(plan, heights, parent, terrain)
 			local width = TeamBaseRoads.Width + 2 * SHOULDER
 			local long = length + 2
 			pcall(function()
-				terrain:FillBlock(flatFrame * CFrame.new(0, CUT_HEIGHT / 2 + 0.05, 0), Vector3.new(width, CUT_HEIGHT, long), Enum.Material.Air)
-				terrain:FillBlock(flatFrame * CFrame.new(0, -FILL_DEPTH / 2 - 0.05, 0), Vector3.new(width, FILL_DEPTH, long), Enum.Material.Ground)
+				-- The ground left 1.2 under the road's own ground, the slabs reaching down to it: whatever
+				-- the voxels round the surface to, it never comes up through the asphalt.
+				terrain:FillBlock(flatFrame * CFrame.new(0, CUT_HEIGHT / 2 - GROUND_DROP, 0), Vector3.new(width, CUT_HEIGHT, long), Enum.Material.Air)
+				terrain:FillBlock(flatFrame * CFrame.new(0, -FILL_DEPTH / 2 - GROUND_DROP, 0), Vector3.new(width, FILL_DEPTH, long), Enum.Material.Ground)
 			end)
 		end
 	end

@@ -544,7 +544,7 @@ for team = 1, 2 do
 			local ruin = state.ruins[team]
 			local plan = ruin and ruin.accessPlan
 			if not plan then
-				note(string.format("team %d: NO ACCESS ROAD", team))
+				note(string.format("team %d: NO ACCESS ROAD (%s)", team, tostring(ruin and ruin.accessWhy)))
 				look(camera, at(team, 0, 160, 120), at(team, 0, 0, -60), 60)
 				return
 			end
@@ -552,6 +552,17 @@ for team = 1, 2 do
 			local mid = (first + last) / 2
 			local span = (last - first).Magnitude
 			note(string.format("team %d: access road %.0f studs, %d stretches, gate %d", team, plan.length, #plan.points - 1, plan.gate or 1))
+			local road = ruin.accessRoad
+			local slabs, first = 0, nil
+			for _, p in ipairs(road and road:GetDescendants() or {}) do
+				if p.Name == "RoadSurface" then
+					slabs += 1
+					first = first or p
+				end
+			end
+			note(string.format("team %d: road model %s parent %s, %d slabs%s", team, tostring(road), tostring(road and road.Parent),
+				slabs, first and string.format(", first top %.1f at (%.0f, %.0f), ground ray %s", first.Position.Y + first.Size.Y / 2,
+				first.Position.X, first.Position.Z, tostring(groundAt(first.Position.X, first.Position.Z))) or ""))
 			local base = ruin.frame.Position
 			local away = Vector3.new(mid.X - base.X, 0, mid.Z - base.Z)
 			away = away.Magnitude > 1 and away.Unit or Vector3.new(0, 0, 1)

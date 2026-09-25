@@ -69,6 +69,9 @@ function makeNetwork(groundAt)
     edge(-R, 0, -900, 0); edge(R, 0, 900, 0); edge(0, -R, 0, -900); edge(0, R, 0, 900)
     -- The roads out of the middle town, ended at the battleground's apron.
     edge(-250, 0, -R, 0); edge(250, 0, R, 0); edge(0, -250, 0, -R); edge(0, 250, 0, R)
+    -- A street across the middle town, inside the battleground's disc: the nearest road to some bases,
+    -- and never to be joined through the arena.
+    edge(-160, 120, 160, 120)
     return { edges = edges, nodes = nodes }
 end
 function mul(cf, v) return cf * v end
@@ -255,7 +258,7 @@ PLANTS = [
     ("a missing link", [("\t\ttable.insert(added, newEdge(chain, node, \"up\" .. i, \"down\" .. i))",
                          "\t\tnewEdge(chain, node, \"up\" .. i, \"down\" .. i)")]),
     ("through the battleground", [("for _, disc in ipairs(options.avoid or {}) do", "for _, disc in ipairs({}) do")]),
-    ("joins the road at an angle", [("join + normal * k, join", "join + heading * k, join")]),
+    ("joins the road at an angle", [("local approach = join + normal * APPROACH", "local approach = join + dir * 20")]),
     ("no grade held", [("local MAX_GRADE = 1 / 8", "local MAX_GRADE = 1 / 1")]),
     ("a bollard on the road", [("\tmodel.Parent = parent\n\treturn model",
                                 "\tpart(\"Bollard\", Vector3.new(0.8, 3, 0.8), CFrame.new(tops[3] + Vector3.new(0, 1.5, 0)), LINE, Enum.Material.Metal, true)\n"

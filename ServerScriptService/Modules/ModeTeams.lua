@@ -577,6 +577,7 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 			}
 			local plan, why = TeamBaseRoads.Plan(gates, nil, roads, { avoid = avoid, boxes = boxes, blocked = blocked })
 			if not plan then
+				ruin.accessWhy = why
 				warn("ModeTeams: team " .. team .. "'s base has no access road: " .. tostring(why))
 			else
 				-- Only what is in the chosen way goes.
