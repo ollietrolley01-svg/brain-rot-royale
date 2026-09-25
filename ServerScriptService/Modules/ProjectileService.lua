@@ -374,7 +374,9 @@ local function forgottenMate(round, attacker, victimToken)
 end
 
 -- The blast itself. `blast` = { id, kind, owner, weaponId, position, normal, damage, radius,
--- innerRadius, wallDamage, direct = { token, bonus, headshot, multiplier }? }. Returns a list of
+-- innerRadius, wallDamage, direct = { token, bonus, headshot, multiplier }?, spare = fn(character)? }.
+-- `spare`, when set, keeps the blast's damage (and so its shove) off any victim it returns true for:
+-- a companion blast passes CompanionService's underCanopy, so it never hurts a parachuter. Returns a list of
 -- { token, amount, scale, reach, headshot } for everyone it hurt, for the probe.
 local function explode(blast)
 	local owner = creditable(blast.owner)
@@ -417,7 +419,7 @@ local function explode(blast)
 			local taken = 0
 			-- A thrower who has left, or a bot retired on death, is forgotten by ModeTeams, but the team
 			-- stamped on the round at launch still keeps friendly fire off their teammates.
-			if not forgottenMate(blast, owner, victim.token) then
+			if not forgottenMate(blast, owner, victim.token) and not (blast.spare and blast.spare(victim.root.Parent)) then
 				taken = CombatService.DealDamage(owner, victim.token, amount, blast.weaponId, headshot)
 			end
 			table.insert(dealt, { token = victim.token, amount = taken, scale = scale, reach = reach, headshot = headshot })
