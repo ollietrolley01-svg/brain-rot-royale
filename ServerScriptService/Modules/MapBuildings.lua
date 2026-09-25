@@ -523,9 +523,59 @@ end
 --------------------------------------------------------------------------------
 
 -- How much floor each kind of furniture needs, as a radius.
-local FURNITURE_RADIUS = { crates = 5.3, barrel = 2.6, table = 6.4, shelf = 4.8 }
+local FURNITURE_RADIUS = {
+	crates = 5.3, barrel = 2.6, table = 6.4, shelf = 4.8,
+	sofa = 5.6, bed = 5.8, counter = 5.4, stove = 3.2, wardrobe = 3.6, nightstand = 1.8,
+	sink = 2.2, toilet = 1.8,
+}
+local RUG_COLORS = {
+	Color3.fromRGB(150, 50, 60), Color3.fromRGB(50, 80, 140), Color3.fromRGB(190, 150, 70), Color3.fromRGB(70, 120, 90),
+}
 -- The clear space a crate stack leaves under the ceiling.
 local CRATE_HEADROOM = 1.5
+
+-- Weighted pools of what a floor gets, keyed by the room's purpose. A tower or warehouse floor
+-- (purpose nil) keeps the plain stockroom set it always had.
+local ROOM_KINDS = {
+	kitchen = { { "counter", 0.35 }, { "stove", 0.18 }, { "table", 0.22 }, { "shelf", 0.25 } },
+	living = { { "sofa", 0.38 }, { "table", 0.2 }, { "shelf", 0.27 }, { "crates", 0.15 } },
+	bedroom = { { "bed", 0.4 }, { "wardrobe", 0.22 }, { "nightstand", 0.23 }, { "shelf", 0.15 } },
+	bathroom = { { "sink", 0.5 }, { "toilet", 0.35 }, { "shelf", 0.15 } },
+}
+local GENERIC_KINDS = { { "crates", 0.4 }, { "barrel", 0.22 }, { "table", 0.2 }, { "shelf", 0.18 } }
+local FURNITURE_NAME = {
+	crates = "Crate", barrel = "Barrel", table = "Table", shelf = "Shelf",
+	sofa = "Sofa", bed = "Bed", counter = "Counter", stove = "Stove", wardrobe = "Wardrobe",
+	nightstand = "Nightstand", sink = "Sink", toilet = "Toilet",
+}
+local ART_COLORS = {
+	Color3.fromRGB(210, 190, 150), Color3.fromRGB(90, 120, 150), Color3.fromRGB(150, 90, 90), Color3.fromRGB(120, 140, 110),
+}
+
+-- Cumulative pick from a { {kind, weight}, ... } pool.
+local function rollKind(pool)
+	local roll, total = random(), 0
+	for _, entry in ipairs(pool) do
+		total += entry[2]
+		if roll < total then
+			return entry[1]
+		end
+	end
+	return pool[#pool][1]
+end
+
+-- Which of the four lived-in purposes (or nil, for a tower/warehouse floor) this floor of a house
+-- gets. Ground floor is the sociable half of the house; upper floors sleep and wash.
+local function roomPurpose(archetype, floor)
+	if archetype ~= "house" then
+		return nil
+	end
+	if floor == 0 then
+		local roll = random()
+		return (roll < 0.42 and "kitchen") or (roll < 0.8 and "living") or "bathroom"
+	end
+	return random() < 0.85 and "bedroom" or "bathroom"
+end
 
 -- A clear spot on this floor, claimed. `fixedZ` pins it to one row (against the back wall).
 local function freeSpot(room, origin, reachX, reachZ, radius, fixedZ)
@@ -542,12 +592,17 @@ end
 
 -- Rooms need something to fight around. `room` already holds the stairwell, the partition wall,
 -- the doorway and the loot on this floor; every piece checks it and stays inside the walls.
-local function buildInterior(parent, origin, width, depth, baseY, floorHeight, room)
+-- `archetype` and `floor` pick a lived-in purpose for a house floor (kitchen, living room,
+-- bedroom, bathroom); other archetypes keep the plain crates-and-barrels stockroom set.
+local function buildInterior(parent, origin, width, depth, baseY, floorHeight, room, archetype, floor)
 	local inset = WALL_THICKNESS / 2 + 0.5
+	local purpose = roomPurpose(archetype, floor)
+	local pool = ROOM_KINDS[purpose] or GENERIC_KINDS
+	local count = purpose == "bathroom" and random(2, 4) or random(3, 6)
+	local mainX, mainZ, mainRadius = nil, nil, nil
 
-	for _ = 1, random(3, 6) do
-		local roll = random()
-		local kind = (roll < 0.4 and "crates") or (roll < 0.62 and "barrel") or (roll < 0.82 and "table") or "shelf"
+	for _ = 1, count do
+		local kind = rollKind(pool)
 		local radius = FURNITURE_RADIUS[kind]
 		local reachX, reachZ = width / 2 - inset - radius, depth / 2 - inset - radius
 		local x, z = nil, nil
@@ -558,7 +613,10 @@ local function buildInterior(parent, origin, width, depth, baseY, floorHeight, r
 		if not x then
 			continue
 		end
-		currentName = ({ crates = "Crate", barrel = "Barrel", table = "Table", shelf = "Shelf" })[kind]
+		if not mainX then
+			mainX, mainZ, mainRadius = x, z, radius
+		end
+		currentName = FURNITURE_NAME[kind]
 		if kind == "crates" then
 			-- A stack: each crate rests on the one below, a little askew, and the stack stops short of
 			-- CRATE_HEADROOM under the ceiling. (Each level used to be placed by its own size alone, so
@@ -592,13 +650,94 @@ local function buildInterior(parent, origin, width, depth, baseY, floorHeight, r
 				makePart(parent, Vector3.new(0.8, 4.6, 0.8), CFrame.new(Vector3.new(x, baseY + 2.5, z) + corner),
 					Color3.fromRGB(98, 70, 46), Enum.Material.Wood)
 			end
-		else
-			-- Shelving unit, tall enough to break sightlines.
-			makePart(parent, Vector3.new(9, 10, 2.5), CFrame.new(x, baseY + 5.5, z) * CFrame.Angles(0, random() * 3, 0),
+		elseif kind == "shelf" then
+			-- Shelving unit, tall enough to break sightlines, with a little clutter on top that never
+			-- collides so it can't snag a jump or eat a bullet meant for the shelf itself.
+			local yaw = random() * 3
+			makePart(parent, Vector3.new(9, 10, 2.5), CFrame.new(x, baseY + 5.5, z) * CFrame.Angles(0, yaw, 0),
 				Color3.fromRGB(108, 96, 84), Enum.Material.Wood)
+			local face = CFrame.new(x, baseY + 10.3, z) * CFrame.Angles(0, yaw, 0)
+			for _, along in ipairs({ -3, -0.5, 2 }) do
+				clutter(decorPart(parent, Vector3.new(random(6, 12) / 10, random(6, 12) / 10, random(6, 12) / 10),
+					face * CFrame.new(along, 0.4, 0), pick(ART_COLORS), Enum.Material.SmoothPlastic))
+			end
+		elseif kind == "sofa" then
+			local yaw = random() * 3
+			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
+			makePart(parent, Vector3.new(9, 2.6, 4.2), face * CFrame.new(0, 1.8, 0), pick(RUG_COLORS), Enum.Material.Fabric)
+			makePart(parent, Vector3.new(9, 2.6, 1), face * CFrame.new(0, 3.2, -1.6), pick(RUG_COLORS), Enum.Material.Fabric)
+		elseif kind == "bed" then
+			local yaw = random() * 3
+			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
+			makePart(parent, Vector3.new(7.5, 2, 9.5), face * CFrame.new(0, 1.6, 0), Color3.fromRGB(235, 235, 240), Enum.Material.Fabric)
+			makePart(parent, Vector3.new(7.5, 3.4, 0.6), face * CFrame.new(0, 3, -4.6), Color3.fromRGB(150, 110, 70), Enum.Material.Wood)
+			clutter(decorPart(parent, Vector3.new(2.4, 1.1, 1.8), face * CFrame.new(2, 3.1, -3.2), Color3.fromRGB(220, 90, 100), Enum.Material.Fabric))
+		elseif kind == "counter" then
+			local yaw = random() * 3
+			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
+			makePart(parent, Vector3.new(9, 3.4, 3.4), face * CFrame.new(0, 1.7, 0), Color3.fromRGB(210, 205, 195), Enum.Material.SmoothPlastic)
+			clutter(decorPart(parent, Vector3.new(3.2, 0.3, 2.6), face * CFrame.new(-1.5, 3.55, 0), Color3.fromRGB(150, 180, 190), Enum.Material.Metal))
+		elseif kind == "stove" then
+			local yaw = random() * 3
+			makePart(parent, Vector3.new(3.2, 3.6, 3.2), CFrame.new(x, baseY + 1.8, z) * CFrame.Angles(0, yaw, 0),
+				Color3.fromRGB(60, 62, 66), Enum.Material.Metal)
+			clutter(decorPart(parent, Vector3.new(2.6, 0.15, 2.6), CFrame.new(x, baseY + 3.65, z) * CFrame.Angles(0, yaw, 0),
+				Color3.fromRGB(30, 30, 32), Enum.Material.SmoothPlastic))
+		elseif kind == "wardrobe" then
+			makePart(parent, Vector3.new(6, 10.5, 2.6), CFrame.new(x, baseY + 5.25, z) * CFrame.Angles(0, random() * 3, 0),
+				Color3.fromRGB(96, 76, 58), Enum.Material.Wood)
+		elseif kind == "nightstand" then
+			makePart(parent, Vector3.new(2.6, 2.6, 2.6), CFrame.new(x, baseY + 1.3, z), Color3.fromRGB(120, 96, 70), Enum.Material.Wood)
+			local lamp = clutter(decorPart(parent, Vector3.new(0.8, 1.8, 0.8), CFrame.new(x, baseY + 3.5, z),
+				Color3.fromRGB(255, 236, 190), Enum.Material.Neon))
+			local light = Instance.new("PointLight")
+			light.Color = Color3.fromRGB(255, 224, 170)
+			light.Brightness = 1.4
+			light.Range = 14
+			light.Parent = lamp
+		elseif kind == "sink" then
+			makePart(parent, Vector3.new(3.4, 3, 2.6), CFrame.new(x, baseY + 1.5, z) * CFrame.Angles(0, random() * 3, 0),
+				Color3.fromRGB(225, 228, 230), Enum.Material.SmoothPlastic)
+		else -- toilet
+			local yaw = random() * 3
+			local face = CFrame.new(x, baseY, z) * CFrame.Angles(0, yaw, 0)
+			makePart(parent, Vector3.new(2, 3.4, 2.6), face * CFrame.new(0, 1.7, -0.8), Color3.fromRGB(235, 235, 235), Enum.Material.SmoothPlastic)
+			makePart(parent, Vector3.new(1.6, 1.6, 1.8), face * CFrame.new(0, 1.4, 0.9), Color3.fromRGB(235, 235, 235), Enum.Material.SmoothPlastic)
 		end
 	end
 	currentName = "Part"
+
+	if purpose then
+		-- A rug under whatever landed first: cosmetic only (CanCollide false), so it can never be
+		-- what blocks a door, a stair or a window vault.
+		if mainX then
+			trim(parent, Vector3.new(mainRadius * 1.5, 0.15, mainRadius * 1.1),
+				CFrame.new(mainX, baseY + 0.58, mainZ), pick(RUG_COLORS), Enum.Material.Fabric)
+		end
+		-- Wall art on the wall facing the door, low enough to sit under every window's sill so it can
+		-- never stand in a vault's way, and skirting along both side walls.
+		currentName = "WallArt"
+		for _, side in ipairs({ -1, 1 }) do
+			trim(parent, Vector3.new(2.4, 1.7, 0.15),
+				CFrame.new(origin.X + side * width * 0.22, baseY + 2.6, origin.Z + depth / 2 - inset),
+				pick(ART_COLORS), Enum.Material.Fabric)
+		end
+		currentName = "Skirting"
+		for _, side in ipairs({ -1, 1 }) do
+			trim(parent, Vector3.new(0.3, 0.6, depth - inset * 2),
+				CFrame.new(origin.X + side * (width / 2 - inset), baseY + 0.3, origin.Z),
+				Color3.fromRGB(70, 60, 50), Enum.Material.Wood)
+		end
+		if floor == 0 then
+			-- Door-frame jambs either side of the entry, on the inside face.
+			currentName = "DoorFrame"
+			for _, side in ipairs({ -1, 1 }) do
+				trim(parent, Vector3.new(0.8, 9, 0.4), CFrame.new(origin.X + side * (DOOR_WIDTH / 2 + 0.5), baseY + 4.5, origin.Z - depth / 2 + inset),
+					Color3.fromRGB(70, 60, 50), Enum.Material.Wood)
+			end
+		end
+		currentName = "Part"
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -613,9 +752,6 @@ local SHUTTER_COLORS = {
 }
 local FLOWER_COLORS = {
 	Color3.fromRGB(255, 96, 140), Color3.fromRGB(255, 214, 70), Color3.fromRGB(170, 120, 255), Color3.fromRGB(255, 255, 255),
-}
-local RUG_COLORS = {
-	Color3.fromRGB(150, 50, 60), Color3.fromRGB(50, 80, 140), Color3.fromRGB(190, 150, 70), Color3.fromRGB(70, 120, 90),
 }
 local SIGN_COLORS = {
 	Color3.fromRGB(255, 214, 90), Color3.fromRGB(120, 230, 255), Color3.fromRGB(255, 130, 190), Color3.fromRGB(140, 255, 150),
@@ -1080,7 +1216,7 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 			end
 		end
 
-		buildInterior(model, origin, width, depth, baseY, floorHeight, room)
+		buildInterior(model, origin, width, depth, baseY, floorHeight, room, archetype, floor)
 	end
 
 	local topY = origin.Y + floors * floorHeight
