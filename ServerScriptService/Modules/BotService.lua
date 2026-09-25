@@ -55,6 +55,7 @@ local BrainrotData = require(Shared:WaitForChild("BrainrotData"))
 local CosmeticData = require(Shared:WaitForChild("CosmeticData"))
 local AchievementData = require(Shared:WaitForChild("AchievementData"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+local VehicleCover = require(Shared:WaitForChild("VehicleCover"))
 
 local AccessoryService = require(script.Parent:WaitForChild("AccessoryService"))
 local BotNav = require(script.Parent:WaitForChild("BotNav"))
@@ -1964,15 +1965,19 @@ local function shootAt(bot, target, targetRoot, distance, head)
 		if headshot then
 			damage *= (def.headshotMultiplier or 1) * CombatService.HeadshotScale
 		end
-		-- Someone behind an armoured car's armour (its driver, its passengers) is shot through the car,
-		-- as a player's traced bullet is: the car takes it (VehicleService.ShieldingVehicle, VehicleArmor).
-		local coverCar = lazy("VehicleService") and lazy("VehicleService").ShieldingVehicle
-			and lazy("VehicleService").ShieldingVehicle(target)
-		if coverCar and CombatService.DamageVehicle then
-			CombatService.DamageVehicle(bot, coverCar, damage, "bullet", def.id, targetRoot.Position)
-		else
-			CombatService.DealDamage(bot, target, damage, def.id, headshot)
+		-- Someone riding a vehicle: a bot's shot isn't traced, so it rolls what it met from where it
+		-- fired from (VehicleCover: body, glass or open, at the odds a player's traced shot has). The
+		-- vehicle takes its share, the rider the rest.
+		local coverModel, coverSeat, coverId = VehicleCover.SeatOf(targetRoot.Parent)
+		if coverModel and CombatService.DamageVehicle then
+			local dir = VehicleCover.Direction(coverModel, head.Position, targetRoot.Position)
+			local share = VehicleCover.Share(coverId, coverSeat.Name, VehicleCover.Roll(coverId, coverSeat.Name, dir, math.random()))
+			if share < 1 then
+				CombatService.DamageVehicle(bot, coverModel, damage * (1 - share), "bullet", def.id, targetRoot.Position)
+				damage *= share
+			end
 		end
+		CombatService.DealDamage(bot, target, damage, def.id, headshot)
 	end
 end
 

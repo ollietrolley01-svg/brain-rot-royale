@@ -15,6 +15,7 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local ItemData = require(Shared:WaitForChild("ItemData"))
+local VehicleCover = require(Shared:WaitForChild("VehicleCover"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local LagCompensation = require(script.Parent:WaitForChild("LagCompensation"))
@@ -799,6 +800,29 @@ local shotSegments = nil
 
 -- `segments` (default: the shot's own list above): where this bullet's ricochets go; `bounced`: how many
 -- times it has already glanced off something.
+-- Cover (VehicleCover): a shot that meets a vehicle's body is carried on through it; if the next thing
+-- it reaches is someone riding that vehicle, the body takes its share (to the vehicle's health) and the
+-- rider the rest. Returns the rider's character and token, or nil (the body took the whole shot).
+local COVER_REACH = 14
+local function riderBehind(shooterToken, vehicle, from, direction, params, rewindTo)
+	local through = RaycastParams.new()
+	through.FilterType = Enum.RaycastFilterType.Exclude
+	through.IgnoreWater = true
+	local filter = params.FilterDescendantsInstances
+	table.insert(filter, vehicle)
+	through.FilterDescendantsInstances = filter
+	local result = LagCompensation.Raycast(from + direction * 0.05, direction * COVER_REACH, through, rewindTo)
+	local victimCharacter = result and result.Instance:FindFirstAncestorOfClass("Model")
+	local victimToken = victimCharacter and Combatants.FromCharacter(victimCharacter)
+	if not victimToken or not Combatants.IsAlive(victimToken) or VehicleCover.SeatOf(victimCharacter) ~= vehicle then
+		return nil
+	end
+	if CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, victimToken, nil) then
+		return nil
+	end
+	return victimCharacter, victimToken, result
+end
+
 local function firePellet(shooterToken, character, origin, direction, def, rewindTo, segments, bounced)
 	segments = segments or shotSegments
 	local params = buildRaycastParams(character, shooterToken)
@@ -894,7 +918,18 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		-- unless the glass is armour). A heavier round than a bullet is not a hand gun's.
 		local vehicle = CombatService.VehicleFromPart and CombatService.VehicleFromPart(result.Instance)
 		if vehicle then
-			CombatService.DamageVehicle(shooterToken, vehicle, def.damage * through, "bullet", def.id, result.Position)
+			local amount = def.damage * through
+			local riderCharacter, riderToken, riderHit = riderBehind(shooterToken, vehicle, result.Position, direction, params, rewindTo)
+			if riderToken then
+				local _, seat, modelId = VehicleCover.SeatOf(riderCharacter)
+				local share = VehicleCover.Share(modelId, seat.Name, "body")
+				local headshot = riderHit.Instance.Name == "Head"
+				local riderDamage = amount * share * (headshot and (def.headshotMultiplier or 1) * CombatService.HeadshotScale or 1)
+				CombatService.DamageVehicle(shooterToken, vehicle, amount * (1 - share), "bullet", def.id, result.Position)
+				CombatService.DealDamage(shooterToken, riderToken, riderDamage, def.id, headshot)
+			else
+				CombatService.DamageVehicle(shooterToken, vehicle, amount, "bullet", def.id, result.Position)
+			end
 			break
 		end
 
@@ -931,6 +966,18 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		local headshot = result.Instance.Name == "Head"
 		if headshot then
 			damage *= (def.headshotMultiplier or 1) * CombatService.HeadshotScale
+		end
+
+		-- Someone riding a vehicle, hit without its body in the way: through its glass (which takes its
+		-- share, to the vehicle), or in the open (a bike, a truck bed, a gunner's chest), which takes none.
+		local coverModel, coverSeat, coverId = VehicleCover.SeatOf(victimCharacter)
+		if coverModel and CombatService.DamageVehicle then
+			local via = VehicleCover.CrossesGlass(coverModel, currentOrigin, result.Position) and "glass" or "open"
+			local share = VehicleCover.Share(coverId, coverSeat.Name, via)
+			if share < 1 then
+				CombatService.DamageVehicle(shooterToken, coverModel, def.damage * through * (1 - share), "bullet", def.id, result.Position)
+				damage *= share
+			end
 		end
 
 		CombatService.DealDamage(shooterToken, victimToken, damage, def.id, headshot)
