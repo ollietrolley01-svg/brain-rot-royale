@@ -43,7 +43,7 @@ REPO_CHECKS = ["balance.py", "lua_static_check.py", "verify.py"]
 
 # Harnesses whose names don't follow the *_check.py / *_sim.py convention but that are checks all the same
 # (they exit non-zero on a failure and run their own plants). Found by name they would never run.
-EXTRA_CHECKS = ["bot_driving_combat.py"]
+EXTRA_CHECKS = ["bot_driving_combat.py", "bot_driving_takeover.py"]
 
 # Checks the gate knows about but does not run. Keep each reason honest: "slow" is not a reason,
 # raise its timeout instead.

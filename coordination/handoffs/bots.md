@@ -85,3 +85,6 @@ One launch per tab per hour. Closing a Studio job is allowed now (lesson 4).
 4. (Lifted 2026-09-24 by Oliver.) A killed Studio job used to leave an Auto-Recovery modal that silently broke the NEXT
    run. The harness now moves stale `BRR_*` autosaves out of `%LOCALAPPDATA%\Roblox\RobloxStudio\AutoSaves` (the real
    path) before every launch, so closing a job is fine. Stop its script too so the lock frees.
+5. BotNav's DRIVING section and BotDriveTactics.lua run in stock Lua (lupa) under tools/bot_driving_sim.py,
+   _takeover.py and _tactics_check.py: no `continue`, no type annotations there. A `continue` in
+   nearestOnNetwork (d370e62) broke all three on main until pc/bot-driving (2026-09-24).
