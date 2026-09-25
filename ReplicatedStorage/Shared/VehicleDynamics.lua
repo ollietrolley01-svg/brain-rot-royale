@@ -61,6 +61,10 @@ local clamp = math.clamp
 -- steerRate                 degrees/s toward the input (back toward centre is quicker)
 -- travelUp, travelDown      suspension room above and below where the model was built
 -- springHz, dampingRatio
+-- bumpDamping, reboundDamping  optional: shares of that damping while a wheel is pushed up / extends
+--                           again (defaults BUMP_DAMPING, REBOUND_DAMPING)
+-- rideLift                  optional: studs the springs hold the body above where the model was built
+--                           (ground clearance on rough ground; wheels are drawn down to meet the ground)
 -- antiRoll                  0..~1.5, share of an axle's compression difference pushed back
 -- yawDamping                0..1
 -- downforce                 per stud/s squared, as a share of weight
@@ -71,7 +75,7 @@ VehicleDynamics.Handling = {
 		topSpeed = 84, reverseSpeed = 26, accel = 40, brake = 100, coast = 13,
 		grip = 1.6, traction = 1.45, offroad = 0.35, driven = "front",
 		steerLow = 36, steerHigh = 11, steerRate = 180,
-		travelUp = 0.7, travelDown = 0.45, springHz = 2.0, dampingRatio = 0.6, antiRoll = 0.8,
+		travelUp = 0.7, travelDown = 0.95, springHz = 2.0, dampingRatio = 0.6, antiRoll = 0.8, rideLift = 0.5,
 		yawDamping = 0.4, downforce = 0,
 	},
 	CrocodiloRanger = {
@@ -85,14 +89,15 @@ VehicleDynamics.Handling = {
 		topSpeed = 106, reverseSpeed = 28, accel = 46, brake = 118, coast = 11,
 		grip = 1.9, traction = 1.45, offroad = 0, driven = "rear",
 		steerLow = 32, steerHigh = 8, steerRate = 200,
-		travelUp = 0.45, travelDown = 0.3, springHz = 2.6, dampingRatio = 0.65, antiRoll = 1.1,
+		-- Rough ground (09-25): the lowest car, so the most lift and the most droop.
+		travelUp = 0.6, travelDown = 1.0, springHz = 2.2, dampingRatio = 0.65, antiRoll = 1.1, rideLift = 0.7,
 		yawDamping = 0.45, downforce = 0.00004,
 	},
 	SahurVan = {
 		topSpeed = 72, reverseSpeed = 24, accel = 30, brake = 86, coast = 14,
 		grip = 1.4, traction = 1.3, offroad = 0.3, driven = "rear",
 		steerLow = 34, steerHigh = 10, steerRate = 150,
-		travelUp = 0.65, travelDown = 0.45, springHz = 1.8, dampingRatio = 0.6, antiRoll = 1.3,
+		travelUp = 0.8, travelDown = 1.15, springHz = 1.6, dampingRatio = 0.6, antiRoll = 1.3, rideLift = 0.7,
 		yawDamping = 0.5, downforce = 0,
 	},
 	-- The armoured cars (Oliver 09-24: "we need armored vehicles too"): heavy, so everything about
@@ -104,7 +109,7 @@ VehicleDynamics.Handling = {
 		topSpeed = 70, reverseSpeed = 22, accel = 30, brake = 84, coast = 15,
 		grip = 1.5, traction = 1.5, offroad = 0.75, driven = "all",
 		steerLow = 32, steerHigh = 8, steerRate = 140,
-		travelUp = 0.9, travelDown = 0.65, springHz = 1.6, dampingRatio = 0.6, antiRoll = 1.1,
+		travelUp = 1.0, travelDown = 1.35, springHz = 1.5, dampingRatio = 0.6, antiRoll = 1.1, rideLift = 0.7,
 		yawDamping = 0.5, downforce = 0,
 	},
 	CameloCarrier = {
@@ -151,6 +156,9 @@ local HOLD_RESPONSE = 8          -- 1/s
 local PARKED_STILL = 4           -- studs/s: an empty vehicle moving slower than this is parked, not sliding
 local PARKED_HOLD = 9            -- 1/s, how fast a parked vehicle's drift is taken out
 local GRAVITY_ASSIST = 0.85      -- share of a hill's pull the drive pushes back against
+local BUMP_DAMPING = 0.7         -- share of the damping while a wheel is being pushed up (rough ground)
+local REBOUND_DAMPING = 1.4      -- share of it while the wheel extends again (no pogo)
+local BUMP_STOP_DAMPING = 1.0    -- extra damping, on the way in, once a wheel is at its bump stop
 local GOVERNOR = 1.06            -- past this share of top speed, drag grows until it holds
 local OVERSPEED_RESPONSE = 6     -- 1/s
 local HANDBRAKE_GRIP = 0.42      -- rear lateral grip while the handbrake is on
@@ -300,7 +308,7 @@ function VehicleDynamics.Rig(model, findOnly)
 				front = front,
 				side = mount.X < -0.05 and -1 or (mount.X > 0.05 and 1 or 0),
 				drive = driven == "all" or (driven == "front" and front) or (driven == "rear" and not front),
-				compression = handling.travelDown,
+				compression = handling.travelDown - (handling.rideLift or 0),
 				grounded = false,
 				load = 0,
 				visualOffset = 0,
@@ -507,7 +515,8 @@ local function contact(rig, wheel, frame, castUp, castForward, travel)
 	local radius = wheel.radius
 	local base = frame:PointToWorldSpace(wheel.mount) + castUp * rig.handling.travelUp
 	local bestExtension, bestHit = nil, nil
-	for _, share in ipairs(SAMPLES) do
+	-- `rig.samples` stands in for SAMPLES on one rig only (a test plants a single ray per wheel with it).
+	for _, share in ipairs(rig.samples or SAMPLES) do
 		local offset = share * radius
 		local depth = math.sqrt(radius * radius - offset * offset)
 		local hit = cast(rig, base + castForward * offset, -castUp * (travel + depth))
@@ -584,6 +593,14 @@ function VehicleDynamics.Step(rig, input, dt)
 	-- A spring or damper held for a long frame overshoots; past these limits they're softened.
 	local k = wheelMass * math.min(omega * omega, 2.5 / (heldFor * heldFor))
 	local damper = wheelMass * math.min(2 * h.dampingRatio * omega, 1.5 / heldFor)
+	-- Rough ground (Oliver 09-24): softer on the way in, firmer on the way out, the way a real damper is
+	-- valved. A rock or a rubble block is soaked up instead of kicked back through the body, and the
+	-- spring can't fling the body up off the far side of it (the pogo). The way-out figure stays under
+	-- the limit that keeps a held damper force from overshooting within one step.
+	local damperBump = damper * (h.bumpDamping or BUMP_DAMPING)
+	local damperRebound = math.min(damper * (h.reboundDamping or REBOUND_DAMPING), wheelMass * 1.5 / heldFor)
+	-- Where the springs hold each wheel at rest: its built place, less any ride lift.
+	local neutral = h.travelDown - (h.rideLift or 0)
 	local maxLoad = wheelMass * gravity * MAX_LOAD_G
 	local groundedCount = 0
 	local normalSum = Vector3.zero
@@ -624,7 +641,8 @@ function VehicleDynamics.Step(rig, input, dt)
 			end
 			local compressionSpeed = clamp(-closing:Dot(normal) / math.max(normal:Dot(castUp), WALL_DOT), -16, 16)
 			local preload = wheelMass * gravity * clamp(wheel.compression / PRELOAD_RAMP, 0, 1)
-			local load = preload + k * (wheel.compression - h.travelDown) + damper * compressionSpeed
+			local load = preload + k * (wheel.compression - neutral)
+				+ (compressionSpeed > 0 and damperBump or damperRebound) * compressionSpeed
 			if wheel.compression > travel - 0.05 then
 				-- Bump stop: bottoming out is hard, and a step past full travel lifts the body. It is
 				-- rubber, not a second spring, so most of it is there on the way in and little of it
@@ -633,6 +651,9 @@ function VehicleDynamics.Step(rig, input, dt)
 				-- stick, not a motorbike.
 				local over = wheel.compression - (travel - 0.05)
 				load += k * 4 * over * (compressionSpeed > 0 and 1 or 0.2)
+				-- And it takes the speed out of a wheel that arrives at it fast, rather than stopping it dead
+				-- on the stop's spring alone (the jolt through the body on a kerb or crater lip).
+				load += damper * BUMP_STOP_DAMPING * math.max(compressionSpeed, 0)
 			end
 			wheel.load = clamp(load, 0, maxLoad)
 		else
@@ -681,10 +702,11 @@ function VehicleDynamics.Step(rig, input, dt)
 	local overspeed = math.max(0, math.abs(forwardSpeed) - (forwardSpeed >= 0 and h.topSpeed or h.reverseSpeed) * GOVERNOR)
 	local governorAccel = overspeed * OVERSPEED_RESPONSE * 3
 
-	local drivenGrounded = 0
+	local drivenGrounded, drivenLoad = 0, 0
 	for _, wheel in ipairs(wheels) do
 		if wheel.drive and wheel.grounded then
 			drivenGrounded += 1
+			drivenLoad += wheel.load
 		end
 	end
 
@@ -728,7 +750,12 @@ function VehicleDynamics.Step(rig, input, dt)
 			-- Along the heading.
 			local long = 0
 			if wheel.drive and driveAccel ~= 0 and drivenGrounded > 0 then
-				long += mass * driveAccel / drivenGrounded
+				-- Limited slip (rough ground, 09-25): the drive goes to the driven wheels by the load on
+				-- each, not in equal shares. Crossed up on rocks, a wheel barely touching was handed half
+				-- the drive, spun it away against its own tiny grip, and the loaded wheel that could have
+				-- pushed got only its half: the car sat there.
+				local share = drivenLoad > 0 and wheel.load / drivenLoad or 1 / drivenGrounded
+				long += mass * driveAccel * share
 			end
 			local stopCap = math.abs(longSpeed) * wheelMass / (2 * heldFor)
 			local resist = brakeAccel + coastAccel + governorAccel

@@ -346,7 +346,8 @@ local function holdRest(entry)
 	local sink, up, reached = 0, Vector3.zero, 0
 	for _, wheel in ipairs(rig.wheels) do
 		if wheel.grounded then
-			sink += (wheel.compression or rig.handling.travelDown) - rig.handling.travelDown
+			local neutral = rig.handling.travelDown - (rig.handling.rideLift or 0)
+			sink += (wheel.compression or neutral) - neutral
 			up += wheel.normal or Vector3.yAxis
 			reached += 1
 		end
