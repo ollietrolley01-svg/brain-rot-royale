@@ -1810,6 +1810,34 @@ SoundConfig.Sounds = {
 		},
 	},
 
+	-- The Cloud Climb obby (LobbyService fires PlaygroundFx; CompanionFxClient plays these). They were
+	-- Sounds the server made, which no volume slider reached; same files, levels and speeds as before.
+	-- The creak before deadwood snaps: `switch3` (a heavy latch) at half speed is a 0.74 s wooden crick,
+	-- about the `hold` before the snap. (#120: it was `collide`, the brick-collision crash, 2.4 s at
+	-- half speed for a branch that breaks 0.7-1.1 s after you land on it.)
+	ObbyCreak = {
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 100,
+		category = "Effects",
+		layers = { { id = SWITCH3, volume = 1, pitch = 0.5 } },
+	},
+	ObbySnap = {
+		volume = 0.9,
+		pitch = 1,
+		maxDistance = 100,
+		category = "Effects",
+		layers = { { id = SNAP, volume = 1, pitch = 0.72 } },
+	},
+	-- A Sap Lantern taking your checkpoint.
+	ObbyCheckpoint = {
+		volume = 0.6,
+		pitch = 1,
+		maxDistance = 100,
+		category = "Effects",
+		layers = { { id = PING, volume = 1, pitch = 0.8 } },
+	},
+
 	-- Grabbing and riding a zipline: metal running on a wire.
 	Zipline = {
 		volume = 0.5,

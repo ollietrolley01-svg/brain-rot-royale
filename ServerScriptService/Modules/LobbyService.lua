@@ -2642,13 +2642,6 @@ local SNAP_HOLD = { fork = 1.1, stub = 0.7 }
 local SNAP_REGROW = 3.2
 -- The Sap Lantern only answers someone this close to the tree, so nobody in a match is pulled back.
 local LANTERN_RANGE = 300
--- From the Roblox client's own sounds, which tools/sound_probe.lua measured as present.
-local SNAP_SOUND = "rbxasset://sounds/snap.mp3"
--- The creak before deadwood snaps: `switch3` (a heavy latch) at half speed is a 0.74 s wooden crick,
--- about the `hold` before the snap. (#120: it was `collide`, the brick-collision crash, 2.4 s at
--- half speed for a branch that breaks 0.7-1.1 s after you land on it.)
-local CREAK_SOUND = "rbxasset://sounds/switch3.wav"
-local CHECKPOINT_SOUND = "rbxasset://sounds/electronicpingshort.wav"
 
 local function renderObbyBest()
 	if obbyBestLabel then
@@ -2664,14 +2657,11 @@ local function trunkRadiusAt(y)
 	return trunk.bottomRadius + (trunk.topRadius - trunk.bottomRadius) * index / (trunk.lengths - 1)
 end
 
-local function climbSound(parent, id, volume, speed)
-	local sound = Instance.new("Sound")
-	sound.SoundId = id
-	sound.Volume = volume
-	sound.PlaybackSpeed = speed
-	sound.RollOffMaxDistance = 100
-	sound.Parent = parent
-	return sound
+-- Plays an obby sound ("creak", "snap" or "checkpoint") at a part. Each client plays it through Sfx
+-- (CompanionFxClient's PlaygroundFx handler, the Obby* cues in SoundConfig), so it follows that
+-- player's volume sliders; a Sound made here on the server would reach nobody's slider.
+local function climbSound(kind, at)
+	playgroundFx:FireAllClients({ kind = kind, position = at.Position })
 end
 
 -- Where a limb's visible part runs, as world points with the diameter there: the solid segments.
@@ -2903,8 +2893,6 @@ local function deadwood(model, hold)
 	if #parts == 0 then
 		return
 	end
-	local creak = climbSound(parts[1].part, CREAK_SOUND, 0.45, 0.5)
-	local snap = climbSound(parts[1].part, SNAP_SOUND, 0.9, 0.72)
 	local busy = false
 
 	local function regrow()
@@ -2928,7 +2916,7 @@ local function deadwood(model, hold)
 		if not model.Parent then
 			return
 		end
-		snap:Play()
+		climbSound("snap", parts[1].part)
 		local falling = Instance.new("Model")
 		falling.Name = "SnappedDeadwood"
 		local root = nil
@@ -2962,7 +2950,7 @@ local function deadwood(model, hold)
 			return
 		end
 		busy = true
-		creak:Play()
+		climbSound("creak", parts[1].part)
 		for _, entry in ipairs(parts) do
 			if entry.collide then
 				entry.part.Color = entry.color:Lerp(CRACKING, 0.6)
@@ -3202,7 +3190,6 @@ local function buildCloudClimb(lobby, base)
 				end
 			end
 			local sap, sparks = sapKnot(model, sapAt, number)
-			local ping = climbSound(sap, CHECKPOINT_SOUND, 0.6, 0.8)
 			for _, piece in ipairs(solids) do
 				piece.Touched:Connect(function(hit)
 					local player = livingPlayerFromHit(hit)
@@ -3212,7 +3199,7 @@ local function buildCloudClimb(lobby, base)
 					end
 					run.checkpoint, run.spot = number, spot
 					sparks:Emit(28)
-					ping:Play()
+					climbSound("checkpoint", sap)
 					StateSync.Notify(player, string.format("Checkpoint %d of %d: %s. If you fall, the Sap Lantern at the foot of the tree brings you back here.",
 						number, checkpoints, element.name))
 				end)
