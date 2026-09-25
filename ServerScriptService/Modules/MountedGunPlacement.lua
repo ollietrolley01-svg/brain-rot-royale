@@ -39,7 +39,7 @@ local MountedGunPlacement = {}
 local Pure = {}
 
 Pure.Params = {
-	Count = { min = 12, max = 18 },
+	Count = { min = 12, target = 16, max = 18 },
 	Spacing = 150,
 	FloorNormal = 0.85,
 	Flatness = 0.8,
@@ -62,6 +62,12 @@ Pure.Params = {
 	FireMinClear = 60,
 	CoverReach = 15,
 	CoverMin = 1,
+	-- A spot with no cover of its own but a good field of fire gets a sandbag wall either side of the
+	-- gunner (MountedGunModels FlankBags) -- only when it overlooks at least SandbagMinCoverage points of
+	-- interest, only after every naturally covered spot is placed, and only up to Count.target guns.
+	Sandbags = true,
+	SandbagMinCoverage = 2,
+	SandbagPenalty = 6,
 	FlankDistance = 40,
 	FlankStepLength = 4,
 	FlankStep = 3.2,
@@ -258,8 +264,12 @@ function Pure.Score(world, survey, facing, P)
 			covered += 1
 		end
 	end
+	local sandbag = false
 	if covered < P.CoverMin then
-		return false, 0, "no cover"
+		if not P.Sandbags then
+			return false, 0, "no cover"
+		end
+		sandbag = true
 	end
 	-- A way round: from either side outside the arc, or from behind.
 	local routes = 0
@@ -283,10 +293,16 @@ function Pure.Score(world, survey, facing, P)
 			covers[s.poi.kind or "poi"] = (covers[s.poi.kind or "poi"] or 0) + 1
 		end
 	end
+	if sandbag and coverage < P.SandbagMinCoverage then
+		return false, 0, "no cover"
+	end
 	local score = math.clamp and math.clamp(survey.rise, 0, P.HighGroundCap) * 2 or math.max(0, math.min(survey.rise, P.HighGroundCap)) * 2
 	score += mean / P.Range * 30 + coverage * 4 + covered * 2 + routes
+	if sandbag then
+		score -= P.SandbagPenalty
+	end
 	return true, score, nil, { coverage = coverage, vehicles = vehicles, covers = covers, median = median, rise = survey.rise,
-		covered = covered, routes = routes }
+		covered = covered, routes = routes, sandbag = sandbag }
 end
 
 -- The best facing for a surveyed spot: ok, score, facing, details or why (the commonest rejection).
@@ -402,20 +418,26 @@ function Pure.Choose(world, ctx, seed, P, yieldFn)
 		end
 		return a.index < b.index
 	end)
+	-- Naturally covered spots first; sandbagged ones only fill up to Count.target.
 	local chosen = {}
-	for _, p in ipairs(passed) do
-		if #chosen >= P.Count.max then
-			break
-		end
-		local apart = true
-		for _, c in ipairs(chosen) do
-			if flatDist(p, c) < P.Spacing then
-				apart = false
+	for pass = 1, 2 do
+		local cap = pass == 1 and P.Count.max or math.min(P.Count.max, P.Count.target or P.Count.max)
+		for _, p in ipairs(passed) do
+			if #chosen >= cap then
 				break
 			end
-		end
-		if apart then
-			table.insert(chosen, p)
+			if (p.details.sandbag == true) == (pass == 2) then
+				local apart = true
+				for _, c in ipairs(chosen) do
+					if flatDist(p, c) < P.Spacing then
+						apart = false
+						break
+					end
+				end
+				if apart then
+					table.insert(chosen, p)
+				end
+			end
 		end
 	end
 	-- A third are cannons: the ones covering the most road and bridge.
