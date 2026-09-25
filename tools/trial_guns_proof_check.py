@@ -14,7 +14,7 @@ The invariants (each has a planted fault aimed at it, see PLANTS):
   I1  a take adds the podium's gun to the next free slot and never removes or changes a different gun
       while a slot is free; the gun just taken is in hand;
   I2  a take of a gun already held never adds a second copy (in hand or not, twice in one frame, after a
-      slot swap); it is put in hand and topped up;
+      slot swap); it is put in hand and topped up, and a retake mid-reload ends the reload;
   I3  range guns never reach a match: a match loadout holds none, the range never clears or writes into
       it, the range closes on everyone when a match starts, and a take is refused while one runs;
   I4  walking off the terrace, or dying and respawning in the lobby, hands every range gun back;
@@ -267,6 +267,8 @@ PLANTS = [
     ("I2: no look for a gun already held (a repeat take adds a copy)", "RangeService",
      "if slot and slot.kind == \"weapon\" and slot.id == weaponId then\n\t\t\t\t-- The same gun again",
      "if false then\n\t\t\t\t-- The same gun again"),
+    ("I2: a retake of the gun in hand leaves its reload running (the S8 finding before pc/range-reload-fix)", "RangeService",
+     "\t\t\t\tWeaponService.CancelReload(player)\n", ""),
     ("I3/I4: the range writes into a loadout it did not make (identity check gone)", "RangeService",
      "if ours and WeaponService.Get(player) == ours then", "if ours then"),
     ("I3: the poll ignores a match starting", "RangeService",

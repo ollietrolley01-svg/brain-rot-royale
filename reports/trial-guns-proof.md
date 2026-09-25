@@ -38,6 +38,8 @@ the bug Oliver saw.
    magazine they can't fire for up to one reload. Before e666c61 a retake started a fresh loadout, which
    ended the reload. (The build machine owns the fix. One way: in the repeat path, when the gun is
    already in hand, clear `reloading` and bump `reloadToken` the way `selectSlot` does.)
+   **Fixed on `pc/range-reload-fix`:** the retake calls `WeaponService.CancelReload`, the cancel
+   `selectSlot` makes. S8 is now a passing row, and a 16th plant (the call removed) is caught.
 2. **The Studio range regression should now fail on its first gun.** (On main,
    `tools/range_probe.server.lua:85-92`, built by `tools/build_range_test.py`.) Line 85 says "Cancel
    this test reload with a fresh rack loadout". It retakes the same gun mid-reload, waits 0.6 s and
@@ -47,6 +49,8 @@ the bug Oliver saw.
    probe stops at its first failure. The probe was written for the old one-gun-at-a-time range and
    hasn't changed since the initial commit (741042c). Whoever runs it next will see
    `[RANGE] FAIL PawnshopNine miss still broadcasts`.
+   **Fixed with finding 1 on `pc/range-reload-fix`:** the probe now calls it a retake and checks the
+   reload ended and the magazine is full before the miss. Still not run in Studio.
 3. **Each take sends the client two loadout snapshots, and the first has the old gun in hand.**
    (On main, `RangeService.lua:144-158`.) Measured: a first take sends 2 (the empty loadout from Reset,
    then the gun), an adding take sends 2, and a retake of the gun in hand sends 1. On an adding take, the

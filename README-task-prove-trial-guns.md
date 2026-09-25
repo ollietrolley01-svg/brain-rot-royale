@@ -10,5 +10,5 @@ e666c61). New files only; no game file or existing tool changed.
   now fail. Plus three notes.
 - `tools/trial_guns_proof_check.py`: runs RangeService and WeaponService whole in lupa, fires the real
   podium prompt handlers cut from LobbyService, and runs the real lobby respawn path cut from
-  MatchService. 51 checks, 15/15 planted faults (`--plant`).
+  MatchService. 52 checks, 16/16 planted faults (`--plant`) since pc/range-reload-fix (51, 15/15 before).
 - `tools/trial_guns_proof_world.lua`: the check's Roblox stand-in world and its scenes.

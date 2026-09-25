@@ -787,7 +787,9 @@ do
 end
 
 --------------------------------------------------------------------------------
--- S8. Retaking the gun in hand during its reload (the real Reload)
+-- S8. Retaking the gun in hand during its reload (the real Reload). The retake fills the magazine, so
+-- it has to end the reload too: RangeService.Fire refuses every shot while `reloading` is set, and
+-- Equip does nothing for the slot already held (pc/range-reload-fix; reports/trial-guns-proof.md).
 --------------------------------------------------------------------------------
 do
 	local p = newPlayer("S8_")
@@ -796,16 +798,30 @@ do
 	frame(); clock = clock + 1
 	WS.Reload(p)
 	local def = WeaponData.Get(idOf(1))
-	take(p, 1)
 	local l = WS.Get(p)
-	frame()
-	local stuck = l.reloading and l.slots[l.equipped].mag == def.magSize
-	local waited = 0
+	local started = l.reloading
+	take(p, 1)
+	local c = clientOf(p)
+	local ended = started and not l.reloading and l.slots[l.equipped].mag == def.magSize
+		and p.Character:GetAttribute("Reloading") == nil and c.loadout ~= nil and not c.loadout.reloading
+	-- The cancelled timer must never land afterwards and start (or end) anything.
+	local relapsed, waited = false, 0
+	while waited < def.reloadTime + 0.5 do
+		frame(0.05); waited = waited + 0.05
+		if l.reloading or l.slots[l.equipped].mag ~= def.magSize then relapsed = true end
+	end
+	check(ended and not relapsed, string.format("S8: retaking the gun in hand mid-reload tops it up (%d/%d) and ends the reload at once, "
+		.. "server, character and client, and the cancelled timer never lands (%s, reloadTime %.2f)", l.slots[l.equipped].mag, def.magSize, def.id, def.reloadTime))
+	counts.reloadStuck = (started and l.reloading) and 1 or 0
+	inSync(p, "S8 after retake", true)
+	-- An ordinary reload afterwards still runs its full time and finishes.
+	WS.ConsumeAmmo(p)
+	frame(); clock = clock + 1
+	WS.Reload(p)
+	waited = 0
 	while l.reloading and waited < 30 do frame(0.05); waited = waited + 0.05 end
-	finding(string.format("S8: retaking the gun in hand mid-reload tops the magazine up (%d/%d) but the reload keeps running: "
-		.. "still reloading with a full magazine for %.2f s more (%s reloadTime %.2f)", l.slots[l.equipped].mag, def.magSize, waited, def.id, def.reloadTime))
-	check(not l.reloading and l.slots[l.equipped].mag == def.magSize, "S8: the reload still finishes and the gun is full afterwards")
-	counts.reloadStuck = stuck and 1 or 0
+	check(not l.reloading and l.slots[l.equipped].mag == def.magSize and waited >= def.reloadTime - 0.1,
+		string.format("S8: a reload after that still finishes, full, in its own time (%.2f s)", waited))
 	inSync(p, "S8 after reload", true)
 end
 

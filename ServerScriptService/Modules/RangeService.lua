@@ -135,6 +135,10 @@ function RangeService.Give(player, weaponId)
 				-- The same gun again: hold it and top it up, rather than a second copy of it.
 				slot.mag = def.magSize
 				slot.reserve = def.reserveAmmo
+				-- A full magazine ends any reload. Equip doesn't do it for the gun already in hand (it
+				-- skips the slot you hold), so the reload ran on over the full magazine and Fire refused
+				-- every shot until it finished: 3 s on the Golden Sahur Cannon (reports/trial-guns-proof.md).
+				WeaponService.CancelReload(player)
 				WeaponService.Equip(player, index)
 				WeaponService.Push(player)
 				rangeState:FireClient(player, true)
