@@ -351,6 +351,9 @@ explode = function(model, attackerToken)
 	blast.BlastRadius = 0
 	blast.BlastPressure = 0
 	blast.DestroyJointRadiusPercent = 0
+	-- What it sounds like: ProjectileClient hears a tagged Explosion as that blast (Sfx.Blast).
+	blast:SetAttribute("BlastCue", mine and "ExplosionMine" or "ExplosionBarrel")
+	blast:SetAttribute("BlastRadius", radius)
 	blast.Parent = workspace
 
 	local fireball = Instance.new("Part")

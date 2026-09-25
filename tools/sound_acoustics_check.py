@@ -80,8 +80,11 @@ Inst.__newindex = function(t, k, v)
     d[k] = v
 end
 function Inst:IsA(c) return self.ClassName == c end
-function Inst:Play() table.insert(plays, { sound = self, t = clock, volume = self.Volume }) end
-function Inst:Stop() end
+function Inst:Play()
+    self._d.IsPlaying = true
+    table.insert(plays, { sound = self, t = clock, volume = self.Volume })
+end
+function Inst:Stop() self._d.IsPlaying = false end
 function Inst:Destroy() self.Parent = nil end
 function Inst:GetChildren()
     local out = {}
@@ -107,6 +110,7 @@ task = { delay = function(d, fn, ...) table.insert(pending, { at = clock + d, fn
 time = function() return clock end
 
 local ceilings = {}
+local beats = {}
 workspace = new("Workspace")
 workspace.Terrain = new("Terrain")
 workspace.CurrentCamera = { CFrame = { Position = Vector3.new(0, 0, 0) } }
@@ -121,13 +125,26 @@ workspace.Raycast = function(_, origin, dir, params)
     return best
 end
 
+-- Jitter off unless a check asks for it: the timings and levels below are exact.
+local randomValue = nil
+math.random = function(a, b)
+    local r = randomValue and randomValue() or 0.5
+    if a and b then return a + math.floor(r * (b - a + 1)) end
+    if a then return 1 + math.floor(r * a) end
+    return r
+end
 local SoundConfig = load(scSrc, "SoundConfig")()
 local SC_MARK, SETTINGS_MARK = {}, {}
 local services = {
     SoundService = new("SoundService"),
     Players = { LocalPlayer = { Character = nil } },
     ReplicatedStorage = { WaitForChild = function() return { WaitForChild = function() return SC_MARK end } end },
-    RunService = { Heartbeat = { Connect = function() return { Disconnect = function() end } end } },
+    RunService = { Heartbeat = { Connect = function(_, fn)
+        local conn = {}
+        conn.Disconnect = function() beats[conn] = nil end
+        beats[conn] = fn
+        return conn
+    end } },
 }
 game = { GetService = function(_, n) return services[n] end }
 script = { Parent = { WaitForChild = function() return SETTINGS_MARK end } }
@@ -150,6 +167,21 @@ function api.flush()
     end
 end
 function api.setClock(t) clock = t end
+function api.setRandom(fn) randomValue = fn end
+-- Step every Heartbeat connection (the duck easing back), then again until none is left.
+function api.resetDuck()
+    for _ = 1, 400 do
+        if next(beats) == nil then break end
+        local fns = {}
+        for _, fn in pairs(beats) do table.insert(fns, fn) end
+        for _, fn in ipairs(fns) do fn(0.05) end
+    end
+end
+function api.groups()
+    local out = {}
+    for c in pairs(services.SoundService._d.children) do if c.ClassName == "SoundGroup" then out[c.Name] = c end end
+    return out
+end
 function api.clock() return clock end
 function api.setCeilings(list)
     ceilings = {}
@@ -162,6 +194,10 @@ function api.takePlays()
     return out
 end
 function api.createdCount() return #created end
+-- Every Sound finishes (the mock never ends one by itself).
+function api.silence()
+    for _, c in ipairs(created) do if c.ClassName == "Sound" then c._d.IsPlaying = false end end
+end
 function api.createdSince(n)
     local out = {}
     for i = n + 1, #created do table.insert(out, created[i]) end
@@ -278,11 +314,17 @@ def checks(sc, sfx, root):
         flat = [(p.sound.SoundId, p.t - 1000, p.volume) for p in played if p.sound.Parent.ClassName != "Attachment"]
         crack = any(layers[i].crack for i in range(1, len(layers) + 1))
         want = []
+        # Which layers sound at this range is the near/far cross-fade's business (checked in
+        # sound_polish_check); WHEN each one arrives is physics, worked out here. An outdoor echo
+        # comes back later in open country, by the OPEN stretch.
+        plan = SC.Plan(name, cue, d, False, None, lua.table_from({"own": False, "open": Sfx.Openness()}))
+        stretch = 1 + SC.Acoustics.OPEN.stretch * Sfx.Openness()
         for i in range(1, len(layers) + 1):
             L = layers[i]
-            if L.where == "indoor":
+            if L.where == "indoor" or plan.layers[i].gain <= 0:
                 continue
-            want.append((L.id, (d / BULLET if L.crack else d / C) + L.delay))
+            echo = stretch if L.where == "outdoor" else 1
+            want.append((L.id, (d / BULLET if L.crack else d / C) + L.delay * echo))
         for wid, wt in want:
             if not any(g[0] == wid and abs(g[1] - wt) < 1e-6 for g in got):
                 errors.append(f"{name}@{d}: {os.path.basename(wid)} want {wt:.3f}s got {[round(g[1], 3) for g in got if g[0] == wid]}")
@@ -304,7 +346,9 @@ def checks(sc, sfx, root):
     api.setClock(2000); api.takePlays()
     Sfx.PlayAt("ExplosionFrag", api.v(150, 0, 0), None); api.flush()
     near_plays = len(api.takePlays())
-    if near_plays != len(SC.LayersOf(SC.Sounds.ExplosionFrag)):
+    frag = SC.LayersOf(SC.Sounds.ExplosionFrag)
+    frag_plan = SC.Plan("ExplosionFrag", SC.Sounds.ExplosionFrag, 150, False, None, lua.table_from({"own": False, "open": 1}))
+    if near_plays != sum(1 for i in range(1, len(frag) + 1) if frag_plan.layers[i].gain > 0):
         errors.append(f"ExplosionFrag@150 played {near_plays} sounds (a rumble at close range?)")
     api.setClock(3000); api.takePlays()
     Sfx.PlayAt("GunshotRifle", api.v(400, 0, 0), None, api.v(400, 0, 400)); api.flush()
@@ -339,8 +383,10 @@ def checks(sc, sfx, root):
         api.flush()
         ps = list(api.takePlays().values())
         reverbs = [e for p in ps for e in api.effectsOf(p.sound).values() if e.ClassName == "ReverbSoundEffect"]
-        n_out = sum(1 for i in range(1, 6) if SC.LayersOf(SC.Sounds.GunshotSniper)[i].where == "outdoor")
-        want_plays = 5 - n_out if indoors else 5
+        sl = SC.LayersOf(SC.Sounds.GunshotSniper)
+        # Your own shot: every layer but the far thump, and only the room or the echo layers.
+        want_plays = sum(1 for i in range(1, len(sl) + 1) if sl[i].range != "far"
+                         and sl[i].where != ("outdoor" if indoors else "indoor"))
         if len(ps) != want_plays or not reverbs or any(r.Enabled != indoors for r in reverbs):
             enc.append(f"sniper {'in' if indoors else 'out'}doors: {len(ps)} plays, reverb {[r.Enabled for r in reverbs][:2]}")
     results.append(("a roof overhead is indoors; room reverb only indoors, echo layers only outdoors", not enc,
@@ -372,7 +418,11 @@ def checks(sc, sfx, root):
                 continue
             kinds = [e.ClassName for e in effs]
             positional = s.Parent is not None and s.Parent.ClassName == "Attachment"
-            if SC.RoomGated(n, cue) and "ReverbSoundEffect" not in kinds:
+            ls = SC.LayersOf(cue)
+            outdoor = any(ls[i].where == "outdoor" and ls[i].id == s.SoundId and abs(ls[i].pitch - s.PlaybackSpeed) < 1e-9
+                          for i in range(1, len(ls) + 1))
+            # An outdoor-only echo is silent whenever the room would be on, so it carries none.
+            if SC.RoomGated(n, cue) and "ReverbSoundEffect" not in kinds and not outdoor:
                 starved.append(f"{n} room")
             if positional and "EqualizerSoundEffect" not in kinds:
                 starved.append(f"{n} air")

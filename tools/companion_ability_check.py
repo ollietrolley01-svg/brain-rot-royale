@@ -18,7 +18,8 @@ checks:
   one-shot   every brainrot at max level and max stars, with its style, venom or blast: one use takes
              no more than BrainrotData.MaxUseDamage[rarity] off a target (hits and DoT together, after
              CombatDamageScale) and never takes a full-health player to 0, with or without a full
-             shield; a Secret is never clipped; two uses still kill for every Epic and rarer
+             shield; a Secret is never clipped; three uses still kill for every Epic and rarer (two before
+             TTK +25%, 2026-09-25)
 
     python3 tools/companion_ability_check.py .            the checks
     python3 tools/companion_ability_check.py . --plant    planted faults; every one must be caught
@@ -178,7 +179,7 @@ mods.Combatants = {
         return map
     end,
 }
-mods.MatchConfig = { CombatDamageScale = 0.92, MaxShield = 100 }
+mods.MatchConfig = { CombatDamageScale = 0.736, MaxShield = 100 } -- as MatchConfig (TTK +25%, 2026-09-25)
 mods.CombatService = {
     IsEnabled = function() return true end,
     ConfirmHit = function() if throwConfirm then error("confirm send failed") end end,
@@ -508,7 +509,7 @@ local CS = _G.CS
 local BrainrotData = _G.BrainrotData
 local out, facts = {}, {}
 local function check(ok, msg) if not ok then table.insert(out, msg) end end
-local scale = 0.92
+local scale = 0.736 -- MatchConfig.CombatDamageScale (TTK +25%, 2026-09-25); keep with line 181
 local owner = _G.makeCombatant("Owner", true, 0, "A")
 local enemy = _G.makeCombatant("Enemy", true, 10, "B")
 
@@ -561,19 +562,21 @@ for _, def in ipairs(BrainrotData.Types) do
             check(lost >= math.min(want, cap or 0) - 0.01, string.format("one-shot: %s took %.1f, less than its %.1f", def.name, lost, math.min(want, cap or 0)))
         end
     end
-    -- Two uses, the second as soon as the move is ready, the first's DoT ticking in between.
+    -- Three uses (two before TTK +25%, 2026-09-25), each as soon as the move is ready, DoTs ticking between.
     if BrainrotData.RarityIndex[def.rarity] >= BrainrotData.RarityIndex.Epic then
         fresh(0)
         check(CS.UseAbility(owner, enemy.root.Position) == true, "sweep: first use refused")
         _G.flush()
-        _G.tickVenom(s.cooldown)
-        _G.advance(s.cooldown + 0.01)
-        if enemy.humanoid.Health > 0 then
-            check(CS.UseAbility(owner, enemy.root.Position) == true, "sweep: second use refused")
-            _G.flush()
-            _G.tickVenom(10)
+        for use = 2, 3 do
+            _G.tickVenom(s.cooldown)
+            _G.advance(s.cooldown + 0.01)
+            if enemy.humanoid.Health > 0 then
+                check(CS.UseAbility(owner, enemy.root.Position) == true, "sweep: use " .. use .. " refused")
+                _G.flush()
+            end
         end
-        check(enemy.humanoid.Health <= 0, string.format("two uses: %s (%s) left a full-health player on %.1f", def.name, def.rarity, enemy.humanoid.Health))
+        _G.tickVenom(10)
+        check(enemy.humanoid.Health <= 0, string.format("three uses: %s (%s) left a full-health player on %.1f", def.name, def.rarity, enemy.humanoid.Health))
     end
     -- How often the cap bites on a fresh level-1 copy (for the facts line).
     count[def.rarity] = (count[def.rarity] or 0) + 1
@@ -639,7 +642,7 @@ PLANTS = [
     ("a style far over the side-grade band", DATA, 'Quick = { label = "Quick", power = 0.8,', 'Quick = { label = "Quick", power = 1.4,'),
     ("forks dropped from the Zap branch", SERVICE, "\t\t\t\thitForks(player, forks, stats.damage, tag, report)\n\t\t\t\treportHits(entry, report)\n\t\t\tend\n\t\tend)\n\telse\n\t\t-- Spit, Bonk and Lob travel",
      "\t\t\t\treportHits(entry, report)\n\t\t\tend\n\t\tend)\n\telse\n\t\t-- Spit, Bonk and Lob travel"),
-    ("per-use cap removed", DATA, "BrainrotData.MaxUseDamage = { Common = 34,", "BrainrotData.MaxUseDamage = { Commonx = 34,"),
+    ("per-use cap removed", DATA, "BrainrotData.MaxUseDamage = { Common = 27,", "BrainrotData.MaxUseDamage = { Commonx = 27,"),
     ("cap per hit instead of per use (nothing booked)", SERVICE,
      "\treport.spent[token] = (report.spent[token] or 0) + amount * scale\n", ""),
     ("style DoT outside the cap", SERVICE,

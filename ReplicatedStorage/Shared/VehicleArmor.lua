@@ -29,6 +29,9 @@
 -- (tools/vehicle_ttk_check.py prints the whole table, every class and tier, and what each vehicle
 -- weapon does to a car.)
 --
+-- 2026-09-25: every time-to-kill here is x1.25 (Oliver: "increase ttk of players and vehicles 25%"), done
+-- by MatchConfig.CombatDamageScale 0.92 -> 0.736, not by health: a car now takes 10-15 s of the rifle
+-- and 3-4 rockets, an armoured car 6-8, and the figures below are the 09-24 ones before that scale.
 -- The asks: a car dies to 8-12 s of one Rare rifle at mid range and to 2-3 rockets; a bike to less;
 -- an armoured car has 2-2.5x a car's health, resists small arms by 40-50%, and takes explosives in
 -- full, 5-6 rockets. Two of those can't both hold with a bullet's own damage: a car worth 10 s of a

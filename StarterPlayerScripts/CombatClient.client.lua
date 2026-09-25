@@ -685,6 +685,48 @@ local kickViewmodel
 -- "AutoReload" setting). Asked once per dry pull; the server refuses if there's no ammo left.
 local autoReloadAskedAt = 0
 
+-- THE CLIENT COUNTS ITS OWN ROUNDS (#97 F3). `slot.mag` only changes when a loadout push lands, about
+-- one round trip after a shot, so on a fast gun the client used to keep firing for that round trip
+-- after the last round: 1-2 shots a magazine at 100-150 ms that kicked and flashed here and that the
+-- server refused at ConsumeAmmo (no tracer, no damage). Every shot sent is remembered for a round
+-- trip; a push that lands at time P reflects only the shots sent before about P - rtt, so the ones
+-- after that are taken off what it says. A shot the server refuses (the budget or the aim check, both
+-- ahead of ConsumeAmmo) sends no push; it simply ages out after the round trip and the round comes
+-- back, so a wrong guess costs a fraction of a second, never a stuck empty gun. The server stays the
+-- only authority over ammo.
+local FLIGHT_MARGIN = 0.1 -- seconds past the round trip a sent shot is still counted
+local shotsInFlight = {} -- { t = os.clock(), slot = loadout index, id = weapon id }
+local loadoutPushedAt = 0
+
+local function roundTrip()
+	local ok, ping = pcall(function()
+		return player:GetNetworkPing()
+	end)
+	if not ok or type(ping) ~= "number" or ping ~= ping then
+		return 0.1
+	end
+	return math.clamp(ping, 0.03, 0.5)
+end
+
+-- The rounds left in `slot` once the shots the server hasn't reported yet are taken off.
+local function roundsInHand(slot)
+	if not slot or type(slot.mag) ~= "number" then
+		return 0
+	end
+	local now = os.clock()
+	local rtt = roundTrip()
+	local pending = 0
+	for i = #shotsInFlight, 1, -1 do
+		local shot = shotsInFlight[i]
+		if now - shot.t >= rtt + FLIGHT_MARGIN then
+			table.remove(shotsInFlight, i)
+		elseif shot.t > loadoutPushedAt - rtt and loadout and shot.slot == loadout.equipped and shot.id == slot.id then
+			pending += 1
+		end
+	end
+	return math.max(0, slot.mag - pending)
+end
+
 -- The driver has both hands on the wheel, and a gamepad's triggers are the throttle and brake: while
 -- driving, the fire and aim bindings neither shoot, click nor aim (they still pass the input on to the
 -- vehicle). Passengers can do both.
@@ -710,9 +752,12 @@ local function tryFire()
 	if not slot then
 		return
 	end
-	if slot.mag <= 0 then
+	if roundsInHand(slot) <= 0 then
+		-- Hold fire on the local count, but reload only on the server's: a shot it refused without
+		-- spending ammo (budget, aim check) sends no push, so the local count can read empty with rounds
+		-- still in the magazine, and a reload asked for then would sit through a full reload for nothing.
 		local now = os.clock()
-		if Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
+		if slot.mag <= 0 and Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
 			autoReloadAskedAt = now
 			reloadRemote:FireServer()
 		end
@@ -754,6 +799,7 @@ local function tryFire()
 		end
 		addRecoil(def)
 		kickViewmodel(def)
+		table.insert(shotsInFlight, { t = os.clock(), slot = loadout.equipped, id = slot.id })
 	end
 end
 
@@ -889,7 +935,7 @@ ContextActionService:BindAction("BRR_Fire", function(_, inputState, inputObject)
 		-- An empty gun clicks, once per pull of the trigger rather than once per fire tick.
 		local emptyDef = inCombat() and equippedDef()
 		local emptySlot = emptyDef and loadout.slots[loadout.equipped]
-		if emptySlot and emptySlot.mag <= 0 and not loadout.reloading then
+		if emptySlot and emptySlot.mag <= 0 and not loadout.reloading then -- the server's count, as for the auto-reload
 			Sfx.Play("DryFire", 0.05)
 		end
 		tryFire()
@@ -1302,11 +1348,10 @@ local SHOT_CUE = {
 	squeak = "GunshotSqueak", droplets = "GunshotSquirt", noodle = "GunshotNoodle", bassring = "GunshotBassDrop",
 	gumball = "GunshotGumball", zap = "GunshotZap", disco = "GunshotDisco", snow = "GunshotSnow",
 	lava = "GunshotLavaLamp",
-	-- The workshop guns, borrowing the nearest stock report until they have their own (claude-3b's
-	-- SoundConfig): a blower roars like a belt gun, a hose hisses like the bubble gun, a broom and a
-	-- vacuum thump and whirr, a popper cracks like a cannon and a keyboard clacks like a rifle.
-	leaves = "GunshotLMG", spray = "GunshotBubble", dust = "GunshotShotgun", confetti = "GunshotCannon",
-	keycap = "GunshotRifle",
+	-- The workshop guns are household things, not firearms, so each fires what it is: a blower's rush
+	-- of leaves, a hose's gush, a broom's swish, a party popper's cork and a keyboard's clack.
+	leaves = "GunshotBlower", spray = "GunshotHose", dust = "GunshotBroom", confetti = "GunshotPopper",
+	keycap = "GunshotKeycap",
 }
 -- Guns whose report differs from the rest of their flash kind (claude-3b's sound design), by weapon id.
 local SHOT_CUE_BY_ID = {
@@ -1318,10 +1363,18 @@ local SHOT_CUE_BY_ID = {
 	MicrowaveZapper = "GunshotZap", PizzaCutterCrossbow = "GunshotPizza", DiscoBallDeleter = "GunshotDisco",
 	ToasterMortar = "GunshotToaster", RubberChickenRailgun = "GunshotChicken", LavaLampLancer = "GunshotLavaLamp",
 	SnowGlobeSingularity = "GunshotSnow", GrandmasSlipperLauncher = "GunshotSlipper",
-	-- The workshop guns: the vacuum whirrs rather than thumps, so it takes the heavy report instead of the
-	-- broom's; the rest follow their flash kind above.
-	DustDevilRotary = "GunshotHeavy",
+	-- The workshop guns: the vacuum whirrs rather than swishes, so it has its own rather than the broom's;
+	-- the rest follow their flash kind above.
+	DustDevilRotary = "GunshotVacuum",
 }
+
+-- A gun model's report: a signature gun names its own (GunModelsSignature's ShotCue), everything else
+-- goes by weapon id, then by flash kind.
+local function shotCueOf(gun)
+	local flash = gun and gun:GetAttribute("Flash") or "rifle"
+	return (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""]
+		or SHOT_CUE[flash] or "GunshotRifle"
+end
 -- What flies out of it.
 local TRACER_KIND = {
 	shotgun = "pellet", rotary = "heavy", cannon = "heavy", rail = "energy", bubble = "bubble", rocket = "rocket",
@@ -1481,7 +1534,9 @@ end
 -- magazine.
 local function onViewmodelEvent(kind, a, b)
 	if kind == "sound" then
-		Sfx.Play(a, 0.06)
+		-- A novelty gun (a bubble gun, a keyboard) reloads with toy snaps or a squeaky water pump, not
+		-- a real gun's mag and bolt (SoundConfig.FoleyFor).
+		Sfx.Play(Sfx.FoleyFor(viewmodel and shotCueOf(viewmodel.source), a), 0.06)
 	elseif kind == "casing" then
 		GunFx.Casing(a, b)
 	elseif kind == "drop" then
@@ -1490,10 +1545,19 @@ local function onViewmodelEvent(kind, a, b)
 end
 
 -- A spent case tinks on its first bounce, at most six a second however fast the gun fires; a shotgun
--- shell lands a lower, duller note.
+-- shell lands a lower, duller note. Brass rings on something hard; in grass, sand, snow, mud or water
+-- it lands without a sound. A novelty gun throws no brass worth hearing.
 do
 	local recentTinks = {}
-	GunFx.OnCasingLand = function(_, casing)
+	local SOFT = { Grass = true, LeafyGrass = true, Sand = true, Snow = true, Mud = true, Ground = true, Water = true,
+		Fabric = true }
+	GunFx.OnCasingLand = function(_, casing, material)
+		if material and SOFT[material.Name] then
+			return
+		end
+		if viewmodel and Sfx.IsNovelty(shotCueOf(viewmodel.source)) then
+			return
+		end
 		local now = tick() -- wall time: a one-second window, not CPU time
 		while recentTinks[1] and now - recentTinks[1] > 1 do
 			table.remove(recentTinks, 1)
@@ -1556,7 +1620,7 @@ function kickViewmodel(def)
 		return
 	end
 	local slot = loadout and loadout.equipped and loadout.slots[loadout.equipped]
-	local roundsLeft = slot and math.max(0, (slot.mag or 1) - 1) or 0
+	local roundsLeft = slot and math.max(0, roundsInHand(slot) - 1) or 0
 	local vm = viewmodel.vm
 	local muzzle = vm:Fire(roundsLeft)
 	if muzzle and not viewmodel.scopedIn then
@@ -2072,7 +2136,7 @@ local function drawSegment(shooter, origin, endPoints)
 	end
 end
 
-shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, segment)
+shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, segment, source)
 	if segment then
 		drawSegment(shooter, origin, endPoints)
 		return
@@ -2081,8 +2145,17 @@ shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, seg
 	local gun = shooterGun(shooter, origin)
 	local flash = gun and gun:GetAttribute("Flash") or "rifle"
 	-- A signature gun (GunModelsSignature) names its own report and tracer on the model (ShotCue, Tracer), so a
-	-- new one needs no entry here; everything else goes by weapon id, then by flash kind.
-	local cue = (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
+	-- new one needs no entry here (shotCueOf). A vehicle's or a mount's shot (VehicleWeapons tags it
+	-- "mount"): a launched round whoomps like a launcher, a mounted machine gun hammers like a belt
+	-- gun, rather than both passing for a rifle.
+	if not gun and typeof(source) == "Instance" then
+		-- A bot's shot names its character (CombatService.BroadcastShot): its gun is on it.
+		gun = source:FindFirstChild("HeldGun")
+	end
+	local cue = shotCueOf(gun)
+	if source == "mount" then
+		cue = #endPoints == 0 and "GunshotRocket" or "GunshotLMG"
+	end
 
 	if mine then
 		-- In first person the body — and the gun on it — sits below and beside the camera,
@@ -2225,6 +2298,7 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	end
 
 	loadout = newLoadout
+	loadoutPushedAt = os.clock()
 	-- Build each carried gun's viewmodel template now, while it's being picked up, rather than on its
 	-- first draw (Viewmodel.Preload; it had no caller, so every first draw built one and hitched). One
 	-- gun per frame so a full loadout arriving at once doesn't hitch here instead. Unskinned only: a
