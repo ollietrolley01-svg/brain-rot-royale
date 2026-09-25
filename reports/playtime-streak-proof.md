@@ -1,5 +1,15 @@
 # #76 playtime awards and #77 daily streak prize: an independent check
 
+> **2026-09-25 update.** Oliver decided "count all time in the server" (`pc/playtime-all-time`, merged
+> in 091812e): PlaytimeService pays every 10 minutes in the server whatever the player does, and
+> `MinActiveSamples` is gone. The activity-rule findings below (finding 2, finding 3, the threshold and
+> movement cases in sections 2 and 3, the spectating rows in section 5) are **superseded** and kept as
+> history. `tools/playtime_check.py` now checks the ladder amounts and that statue, fidget and ghost
+> are paid the same as a runner. `tools/playtime_streak_proof.py` was cut to what that check does not
+> cover: a player who leaves is dropped (playtime_check still misses that plant), a rejoin restarts the
+> ladder, the profile-not-loaded fact, and the whole #77 half. It now prints `8 checks, 0 failed` and
+> `7/7 caught`.
+
 Proved against **main at ac22e5e** (fetched 2026-09-25). The feature landed in 698efa3. Since then,
 two commits changed these files: **a2ba3b4** made dead / spectating checks count as idle, and a
 Premium-pass guard went into the Daily Spin's TempPass branch. **9db0d20** and **e05b995** touch
@@ -36,6 +46,8 @@ fault.
 
 ### Finding 2: since a2ba3b4, a player who spectates is barely paid, and that is the losing player
 
+> **Superseded 2026-09-25:** all time in the server now pays; see the note at the top.
+
 After dying in the battle royale, a real player has no character until the match ends or they press
 LEAVE. `CharacterAutoLoads` is off (`MatchService.lua:2127`), and `LeaveSpectate` is at
 `MatchService.lua:475`. Since a2ba3b4, every one of those checks is idle. The model below puts numbers
@@ -57,6 +69,8 @@ round. Whether that is acceptable is Oliver's call. The trade-off:
 These numbers come from a model, not a measurement (see "What this does NOT prove").
 
 ### Finding 3: the two AFK rules differ
+
+> **Superseded 2026-09-25:** all time in the server now pays; see the note at the top.
 
 9db0d20 made the battle royale / team-mode AFK rule count being hurt, firing, reloading and item use
 (`WeaponService.NoteActivity`, `MatchService` `afk.busy`). PlaytimeService was not changed and still
@@ -128,6 +142,9 @@ When the ladder resets and when it doesn't (measured with the real Lua):
   plays 5 hours in one visit gets 675 + 4 × 1,200 = 5,475.
 
 ## 3. Abuse and edge cases, read from source and run in the real Lua
+
+> **Superseded 2026-09-25** for everything about movement (the table, macros, riders, idle input): all
+> time now pays. The leaver, rejoin, profile, clock and bootstrap bullets still hold.
 
 **What "moved" compares** (`PlaytimeService.lua:36-46`): the `HumanoidRootPart` position against the
 same player's position at the previous 30 s check. It measures the straight-line distance, vertical
@@ -219,6 +236,8 @@ have nothing to compare with and never count. No living character counts as idle
 
 ## 5. Economy: before and after
 
+> **Superseded 2026-09-25** for the spectating rows: every profile now gets the full 938 an hour.
+
 These come from `tools/playtime_economy_compare.py`. It uses `tools/economy_model.py` on main for
 everything it can: the profiles, placements, match lengths, cash an hour, and crate sale values. It adds
 two assumptions of its own, which nobody has measured:
@@ -280,6 +299,9 @@ numbers are the right size is Oliver's call.
 - **How much server load stretches a `task.wait(30)`** was not measured.
 
 ## 7. What this branch adds
+
+> **Superseded 2026-09-25:** the script's plant list and counts below are from PR #34. It now has 8
+> checks and 7 plants; see the note at the top.
 
 All new files, relative to 82968cb (the branch was fast-forwarded to ac22e5e before committing):
 

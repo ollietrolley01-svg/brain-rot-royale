@@ -54,6 +54,8 @@ local SMOOTH_LIMIT = 3
 -- The drum launcher's drumlets and the toaster's toast are toys going off, so they have toy blasts.
 local BLAST_CUE = { rocket = "ExplosionRocket", grenade = "ExplosionGrenade", frag = "ExplosionFrag", impact = "ExplosionFrag", sticky = "ExplosionFrag",
 	drumlet = "ExplosionDrum", lobbedToast = "ExplosionToast" }
+-- The server's look-only blasts (HazardService, MountedGuns) arrive as "detonate" with their own cue.
+local WEAPON_CUE = { RotMine = "ExplosionMine", ExplosiveBarrel = "ExplosionBarrel", MountedGunWreck = "ExplosionBarrel" }
 local BLAST_LOOK = { rocket = "rocket", grenade = "grenade", frag = "frag", impact = "frag", sticky = "frag" }
 
 local loadout = nil
@@ -556,12 +558,15 @@ local function onDetonate(info)
 	local distance = (position - camera.CFrame.Position).Magnitude
 
 	if distance < BLAST_CULL then
-		ExplosiveFx.Explosion(position, normal, BLAST_LOOK[kind] or "frag", radius)
+		-- info.weaponId: a silly gun's blast is drawn in its own theme (SillyExplosionFx), same radius.
+		ExplosiveFx.Explosion(position, normal, BLAST_LOOK[kind] or "frag", radius, info.weaponId)
 	end
 
 	-- The blast, its debris off whatever it hit and, right beside it, the muffle; past the cue's reach
-	-- its ExplosionFar rumble carries on alone (Sfx.Blast, Sfx.PlayAt).
-	Sfx.Blast(BLAST_CUE[kind] or "ExplosionFrag", position, normal, radius)
+	-- its ExplosionFar rumble carries on alone (Sfx.Blast, Sfx.PlayAt). A themed blast plays its themed
+	-- cue when SoundConfig has one, and the plain one when it doesn't.
+	local cue = ExplosiveFx.ThemeCue(info.weaponId) or WEAPON_CUE[info.weaponId] or BLAST_CUE[kind] or "ExplosionFrag"
+	Sfx.Blast(cue, position, normal, radius)
 
 	-- The kick: hard at point blank, nothing past a few radii. A smaller blast kicks less.
 	local strength = math.clamp(1 - distance / (radius * 4.5), 0, 1) * (kind == "grenade" and 0.7 or 1)
@@ -575,18 +580,12 @@ local function onDetonate(info)
 	end
 end
 
--- A mine or a fuel barrel (HazardService) goes off as a bare Explosion instance; the server tags it
--- with its cue and radius so it is heard like any other blast.
-workspace.ChildAdded:Connect(function(child)
-	if child:IsA("Explosion") and type(child:GetAttribute("BlastCue")) == "string" then
-		Sfx.Blast(child:GetAttribute("BlastCue"), child.Position, nil, child:GetAttribute("BlastRadius"))
-	end
-end)
-
 -- A vehicle wrecked in sight goes up: its fuel lights (VehicleWreckFx sees the wreck happen).
 VehicleWreckFx.OnWreck = function(model)
 	local chassis = model:FindFirstChild("Chassis")
 	if chassis and chassis:IsA("BasePart") then
+		-- And is seen to: ExplosiveFx's grenade-standard blast (look only; the wreck did no blast damage).
+		ExplosiveFx.Explosion(chassis.Position, nil, "grenade", 12, "VehicleWreck")
 		Sfx.Blast("ExplosionVehicle", chassis.Position, nil, 16)
 	end
 end
@@ -597,8 +596,9 @@ local function onImpact(info)
 		dropEntry(entry)
 	end
 	if typeof(info.position) == "Vector3" and (info.position - camera.CFrame.Position).Magnitude < BLAST_CULL then
-		ExplosiveFx.Impact(info.position, typeof(info.normal) == "Vector3" and info.normal or nil)
-		Sfx.PlayAt("GrenadeBounce", info.position, 0.2)
+		ExplosiveFx.Impact(info.position, typeof(info.normal) == "Vector3" and info.normal or nil, info.weaponId)
+		local themed = ExplosiveFx.ThemeCue(info.weaponId)
+		Sfx.PlayAt(themed or "GrenadeBounce", info.position, 0.2)
 	end
 end
 

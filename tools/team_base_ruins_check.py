@@ -780,9 +780,10 @@ def check_destruct(build, model, parts_by_order, log):
     live = [p for p in model.GetDescendants(model).values() if p.IsA(p, "BasePart")]
     problems = []
     breakable, required = 0, 0
-    # Oliver, 2026-09-24: everything breaks except spawns, the lobby, the storm and the map edges.
-    # In a base that leaves the spawn shelter (the Model named "Spawn") and nothing else.
-    never_names = set()
+    # Oliver 2026-09-24: EVERYTHING breaks except spawns, the lobby, the storm and the map edges, so the
+    # ground, paving, pillars, gate posts and rubble break too; of the base only the spawn shelter is
+    # kept. These are just not REQUIRED to break (the must-break list is the walls).
+    not_required = {"Foundation", "Paving", "Pillar", "RoofBeam", "GatePost", "Gantry", "Rubble"}
     # The spawn shelter is whichever room holds the pads, whatever it is called.
     top_of = lua.globals().topOf
     shelter = None
@@ -793,7 +794,7 @@ def check_destruct(build, model, parts_by_order, log):
         problems.append("destruct: no room holds the pads")
 
     def must_break(part, top):
-        if not part.CanCollide or part.Name in never_names:
+        if not part.CanCollide or part.Name in not_required:
             return False
         # Every wall panel outside the spawn shelter: the perimeter's, the armoury's, the ops room's.
         return top != shelter and (part.Name == "Wall" or (top == "Perimeter" and part.Name.endswith("Wall")))
@@ -809,7 +810,7 @@ def check_destruct(build, model, parts_by_order, log):
             required += 1
             if not can:
                 problems.append("destruct: %s in %s does not break" % (part.Name, top))
-        if can and (top == shelter or part.Name in never_names):
+        if can and top == shelter:
             problems.append("destruct: %s (%s) breaks, and must not" % (part.Name, top))
     # tagged pools stay under DestructibleService's MAX_POOL_SPAN
     pools = {}
@@ -825,19 +826,23 @@ def check_destruct(build, model, parts_by_order, log):
     # Dressing left hanging: a piece of trim (no collision, no query) that touches only parts which can
     # break must go with them -- by being a wall's dressing (DestructibleService drops it), by sharing
     # the pool's tag, or by being inside the same tagged Model. A crate band that is not in its crate's
-    # pool floats when the crate goes.
+    # pool floats when the crate goes. Or by being loose COVER (DestructibleService.IsCover: anchored
+    # trim outside any tagged pool), which goes with the part it lay on when nothing else solid holds it.
     pooled = lua.globals().pooledModel
     pool_model = [pooled(p, model) for p in live]
+    is_cover = [bool(service.IsCover(p)) for p in live]
     carries = {"Wall", "Floor", "Roof", "Gable", "Parapet", "Stair", "Balcony"}
     boxes = [obb(p) for p in parts_by_order]
     hanging, trims = [], 0
     for i, t in enumerate(parts_by_order):
-        if t["collide"] or t["query"]:
-            continue
+        if t["collide"] or t["query"] or t["transparency"] >= 1:
+            continue   # (an invisible volume -- a NoBuildLane -- is not dressing: nobody sees it hang)
         lo, hi = t["aabb"]
         touching = []
         for j, c in enumerate(parts_by_order):
-            if not c["collide"]:
+            # What holds it: anything solid, or a piece of its own pool (a pipe run off its vat's pipe
+            # goes with the vat, whatever else it touches).
+            if not c["collide"] and not (j != i and ":" in t["tag"] and c["tag"] == t["tag"] and c["path"] == t["path"]):
                 continue
             clo, chi = c["aabb"]
             if any(lo[k] > chi[k] + TOUCH or clo[k] > hi[k] + TOUCH for k in range(3)):
@@ -851,8 +856,8 @@ def check_destruct(build, model, parts_by_order, log):
         # the tile goes it is left on the ground, not in the air.
         if lo[1] < TILE_GROUND:
             continue
-        held = False
-        for j in touching:
+        held = is_cover[i]
+        for j in ([] if held else touching):
             c = parts_by_order[j]
             # DestructibleService.dropDressing walks a breaking part's siblings (any part since
             # pc/destruction, not only a building's walls) and takes the trim attached to it.

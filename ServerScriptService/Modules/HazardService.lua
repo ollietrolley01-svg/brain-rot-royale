@@ -27,6 +27,7 @@ local TweenService = game:GetService("TweenService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local ItemModels = require(Shared:WaitForChild("ItemModels"))
 local ZFight = require(Shared:WaitForChild("ZFight"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local CombatService = require(script.Parent:WaitForChild("CombatService"))
@@ -346,64 +347,18 @@ explode = function(model, attackerToken)
 	local position = body and body.Position or model:GetPivot().Position
 	local parent = model.Parent or workspace
 
-	local blast = Instance.new("Explosion")
-	blast.Position = position
-	blast.BlastRadius = 0
-	blast.BlastPressure = 0
-	blast.DestroyJointRadiusPercent = 0
-	-- What it sounds like: ProjectileClient hears a tagged Explosion as that blast (Sfx.Blast).
-	blast:SetAttribute("BlastCue", mine and "ExplosionMine" or "ExplosionBarrel")
-	blast:SetAttribute("BlastRadius", radius)
-	blast.Parent = workspace
+	-- The look: every client draws it with ExplosiveFx, the same layered blast as a grenade or rocket
+	-- (flash, fireballs, shock ring, sparks, smoke, debris, scorch), sized to this blast's radius, with
+	-- its sound and screen kick (ProjectileClient's "detonate"). It used to be a bare Explosion and one
+	-- tweened ball. Look only: the damage below is unchanged.
+	Remotes.Event("ProjectileFx"):FireAllClients("detonate", {
+		position = position,
+		normal = Vector3.yAxis,
+		kind = "grenade",
+		radius = radius,
+		weaponId = weaponId,
+	})
 
-	local fireball = Instance.new("Part")
-	fireball.Name = "Fireball"
-	fireball.Shape = Enum.PartType.Ball
-	fireball.Size = Vector3.new(4, 4, 4)
-	fireball.CFrame = CFrame.new(position)
-	fireball.Color = mine and Color3.fromRGB(190, 255, 120) or Color3.fromRGB(255, 150, 40)
-	fireball.Material = Enum.Material.Neon
-	fireball.Anchored = true
-	fireball.CanCollide = false
-	fireball.CanQuery = false
-	fireball.CanTouch = false
-	fireball.Parent = parent
-	local light = Instance.new("PointLight")
-	light.Color = mine and Color3.fromRGB(170, 255, 120) or Color3.fromRGB(255, 170, 60)
-	light.Range = 40
-	light.Brightness = 4
-	light.Parent = fireball
-	TweenService:Create(fireball, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{ Size = Vector3.new(radius * 1.4, radius * 1.4, radius * 1.4), Transparency = 1 }):Play()
-	TweenService:Create(light, TweenInfo.new(0.55), { Brightness = 0 }):Play()
-	Debris:AddItem(fireball, 0.7)
-
-	-- Scorch mark on the ground, smoking for a while.
-	local scorch = Instance.new("Part")
-	scorch.Name = "Scorch"
-	scorch.Shape = Enum.PartType.Cylinder
-	scorch.Size = Vector3.new(0.12, radius * 0.6, radius * 0.6)
-	scorch.CFrame = CFrame.new(position.X, position.Y - entry.base + 0.1, position.Z) * CFrame.Angles(0, 0, math.pi / 2)
-	scorch.Color = Color3.fromRGB(28, 26, 24)
-	scorch.Material = Enum.Material.Slate
-	scorch.Anchored = true
-	scorch.CanCollide = false
-	scorch.CanQuery = false
-	scorch.CanTouch = false
-	scorch.Parent = parent
-	local smoke = Instance.new("ParticleEmitter")
-	smoke.Color = ColorSequence.new(Color3.fromRGB(60, 58, 56), Color3.fromRGB(120, 118, 116))
-	smoke.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 2), NumberSequenceKeypoint.new(1, 7) })
-	smoke.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1) })
-	smoke.Lifetime = NumberRange.new(2, 3.5)
-	smoke.Speed = NumberRange.new(3, 6)
-	smoke.Rate = 12
-	smoke.SpreadAngle = Vector2.new(25, 25)
-	smoke.Parent = scorch
-	task.delay(6, function()
-		smoke.Enabled = false
-	end)
-	Debris:AddItem(scorch, SCORCH_TIME)
 
 	-- Fragments thrown out: drum plates from a barrel, a few shards from a mine.
 	local fragments = mine and 4 or 6

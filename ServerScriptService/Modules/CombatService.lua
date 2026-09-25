@@ -779,14 +779,31 @@ end
 -- where a hitscan bullet stops. A hitscan gun with the old `ability = "explosive"` gets one too, sized
 -- the way that ability always was (60% of the bullet over splashRadius), so no gun can fall back to a
 -- second, different blast.
+-- A gun with several pellets a shot (a shotgun) gets one blast a pellet, but each is TINY (Oliver,
+-- 2026-09-25): the damage and wall damage are split between the pellets, so a full hit is one
+-- ammo's worth in all, and the radius is halved (never under 2 studs) so the pellets' blasts stay
+-- a cluster of pops on what the pellets struck instead of stacking into one big one. A one-pellet
+-- gun (the Golden Sahur Cannon) is untouched.
+local PELLET_BLAST_RADIUS_SCALE = 0.5
+local PELLET_BLAST_MIN_RADIUS = 2
 function CombatService.BulletBlast(def)
+	local ammo = nil
 	if def.explosiveAmmo then
-		return def.explosiveAmmo
+		ammo = def.explosiveAmmo
+	elseif def.ability == "explosive" and not def.projectile then
+		ammo = { damage = def.damage * 0.6, radius = def.splashRadius or 12, wallDamage = 0 }
+	else
+		return nil
 	end
-	if def.ability == "explosive" and not def.projectile then
-		return { damage = def.damage * 0.6, radius = def.splashRadius or 12, wallDamage = 0 }
+	local pellets = def.pellets or 1
+	if pellets > 1 then
+		return {
+			damage = ammo.damage / pellets,
+			radius = math.max(PELLET_BLAST_MIN_RADIUS, ammo.radius * PELLET_BLAST_RADIUS_SCALE),
+			wallDamage = (ammo.wallDamage or 0) / pellets,
+		}
 	end
-	return nil
+	return ammo
 end
 
 -- One bullet's blast, through ProjectileService's (CombatService.Explode). The victim the bullet struck
@@ -809,6 +826,9 @@ local function bulletBlast(shooterToken, def, position, normal)
 		wallDamage = ammo.wallDamage or 0,
 	})
 end
+-- For a shot that isn't traced here: a bot's hitscan hit (BotService shootAt), so a bot's explosive
+-- ammo goes off like a player's. Nothing for a gun without explosive ammo.
+CombatService.BulletBlastAt = bulletBlast
 
 -- `rewindTo`: the server time the victims are put back to (LagCompensation), or nil for the present.
 -- The shot being fired right now collects its ricochets here, { from, to } each, for Fire to broadcast once

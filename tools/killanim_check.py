@@ -85,11 +85,16 @@ def read(root, path):
 
 
 def base_version(root, path):
-    try:
-        return subprocess.run(["git", "-C", root, "show", f"{BASE_BRANCH}:{path}"], capture_output=True,
-                              text=True, check=True).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+    # A fresh worktree or clone has the base only as a remote-tracking branch: without the origin/
+    # fallback the old-save comparison was skipped silently (and its plant missed).
+    for ref in (BASE_BRANCH, "origin/" + BASE_BRANCH):
+        try:
+            return subprocess.run(["git", "-C", root, "show", f"{ref}:{path}"], capture_output=True,
+                                  text=True, check=True).stdout
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    print(f"killanim_check: WARNING: {BASE_BRANCH} not found (nor origin/); old-save checks skipped")
+    return None
 
 
 def reconcile_block(text):

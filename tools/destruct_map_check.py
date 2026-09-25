@@ -461,14 +461,15 @@ local deepest = 0
 for x = -12, 12, 1 do for z = -12, 12, 1 do deepest = math.min(deepest, mock.surfaceAt(x, z)) end end
 out.deepest, out.dugInARow, out.depths = deepest, dug, table.concat(depths, " ")
 out.floorY = -DS.DigDepth
--- Getting out: walking out from the bottom in eight directions, the steepest stretch (over 2 studs).
+-- Getting out: walking out from the bottom in eight directions, the steepest 8-stud stretch (one
+-- ring: a voxel row up, 8 out) and the tallest single step.
 local steepest, riser = 0, 0
 for k = 0, 7 do
     local a = k / 8 * math.pi * 2
     local prev = mock.surfaceAt(0, 0)
-    for r = 4, 60, 4 do
+    for r = 8, 64, 8 do
         local y = mock.surfaceAt(math.cos(a) * r, math.sin(a) * r)
-        steepest = math.max(steepest, math.deg(math.atan((y - prev) / 4)))
+        steepest = math.max(steepest, math.deg(math.atan((y - prev) / 8)))
         prev = y
     end
     prev = mock.surfaceAt(0, 0)
@@ -563,10 +564,10 @@ def service(faults=(), quiet=False):
                    and out["deepest"] <= out["floorY"] + 1,
                    "the same spot blasted 40 times deepens down to the dig floor and never under it (deepest %.2f, floor %.1f)"
                    % (out["deepest"], out["floorY"])))
-    # (Exact geometry here: the bowl is rings, 2 studs up every 4 out. Real terrain smooths them into a
-    # slope: tools/ground_probe.lua measures the built map.)
-    r.append(check(out["steepest"] <= 35 and out["riser"] <= 2.05,
-                   "you can walk (and drive) out: the steepest 4-stud stretch of the bowl is %.0f degrees (want <= 35), the tallest step %.2f"
+    # (Exact geometry here: the bowl is rings, one 4-stud voxel row up every 8 out. Real terrain smooths
+    # them into a slope: tools/crater_slope_probe.lua measures it in Studio, 27 deg median.)
+    r.append(check(out["steepest"] <= 35 and out["riser"] <= 4.05,
+                   "you can walk (and drive) out: the steepest 8-stud stretch of the bowl is %.0f degrees (want <= 35), the tallest step %.2f"
                    % (out["steepest"], out["riser"])))
     r.append(check(out["asphaltCraters"] == 1 and out["builtCraters"] == out["asphaltCraters"],
                    "asphalt ground digs like any ground; nothing is dug under something built"))

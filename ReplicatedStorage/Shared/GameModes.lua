@@ -245,7 +245,8 @@ GameModes.Modes = {
 		loadout = true,
 
 		respawnDelay = 5,
-		spawnProtection = 3,
+		-- Oliver 09-25: "get rid of spawn prot". 0 grants none (ModeTeams.grantProtection).
+		spawnProtection = 0,
 		scoreTarget = 100,  -- Oliver, 2026-09-18: first to 100 team kills (was 50)
 		timeLimit = 480,
 		scoreLabel = "eliminations",
@@ -270,7 +271,7 @@ GameModes.Modes = {
 		-- A second longer than TDM: losing the hill should cost the side that lost it more than
 		-- losing a duel in the open costs.
 		respawnDelay = 6,
-		spawnProtection = 3,
+		spawnProtection = 0, -- none (Oliver 09-25, as TDM)
 		scoreTarget = 250,
 		timeLimit = 480,
 		scoreLabel = "seconds held",

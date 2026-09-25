@@ -9,7 +9,10 @@ server timelines written in MatchService/VoteService's own order:
     and the next countdown into the next match
   - team deathmatch whose map builds in 1 s: no drop picker, so only the match-state gate hides the reveal
   - a countdown everyone unreadies out of (back to Waiting; the vote stays open, this client unready)
-  - a start that fails before VoteService.Close()
+  - a start that fails before startMatch's VoteService.Close(): the fallback broadcasts Waiting, then
+    closes the vote itself, and the retry countdown re-opens it
+  - the vote's Close broadcast lost (VoteService's announce swallows a throw), so the client holds an
+    open snapshot through a whole match, re-sent mid-match: only the match-state gate keeps it off
   - a client whose FIRST snapshot is the closed one (joined mid-match)
   - the break watched by a player who readies up half way through it
 
@@ -25,9 +28,11 @@ countdown only for a player who is ready; and an open vote IS on screen for a re
 the lobby (so the break's vote cannot quietly be hidden again).
 
 PLANTED FAULTS (permanent, aimed at the invariant, not at the old bug): mutants of the real source -
-reveal ungated by match state, vote ungated by match state, the vote over the break for the unready,
-the vote back to the countdown only, and the old snapshot-content reveal rule - must each break it. If
-a mutant passes, the check is blind and says so.
+reveal ungated by match state, vote ungated by match state, the vote over a match for the ready
+(LOBBY_VOTE += InProgress), the vote over the break for the unready, the vote back to the countdown
+only, and the old snapshot-content reveal rule - must each break it. The two that put the interactive
+vote over a match must be caught IN vote_open_over_match, by the over-a-match clause (the unready
+clause elsewhere does not count for them). If a mutant passes, the check is blind and says so.
 
 Run: python3 tools/vote_open_check.py   (exit 0 = clean pass and every fault caught)
 """
@@ -135,14 +140,35 @@ def unready_break():
 
 
 def start_failed_before_close():
-    # startMatch throws between GameMode.Resolve and VoteService.Close (MatchService:1562-1585): the
-    # pcall's fallback puts the state back to Waiting and nothing closes the vote, so the snapshot
-    # still reads open while no countdown is running.
+    # startMatch throws after the Loading broadcast but before its VoteService.Close() (after Resolve, so
+    # the vote has a winner). The pcall's fallback in MatchService.Start (the `if not ok` branch after
+    # `pcall(startMatch)`, ~:2276-2310) puts the state back to Waiting and broadcasts it, THEN closes the
+    # vote itself (81c1263) -- so the close is watched (one reveal starts) but lands in Waiting, where
+    # View never draws it -- and the loop's own broadcast follows. Everyone is still ready, so the next
+    # tick's countdown re-opens the vote (VoteService.Open before the Countdown broadcast).
     ev, t = [], 0.0
     ev.append((t, "match", {"state": "Countdown"})); ev.append((t, "vote", open_snap()))
     t += 4; ev.append((t, "match", {"state": "Loading"}))
     t += 1; ev.append((t, "match", {"state": "Waiting"}))
+    ev.append((t, "vote", closed_snap("BattleRoyale|Bay")))
+    ev.append((t, "match", {"state": "Waiting"}))
+    t += 1; ev.append((t, "vote", open_snap())); ev.append((t, "match", {"state": "Countdown"}))
     return ev, t + 5
+
+
+def vote_open_over_match():
+    # The Close at startMatch's VoteService.Close() never reaches this client (VoteService's announce
+    # swallows a throw), so its last snapshot says open for the whole match, and a late copy of it
+    # arrives mid-match too. The server never sends an open snapshot in a match; this is the client's
+    # match-state gate on its own, and the one timeline where the "interactive vote over a match"
+    # clause can fire.
+    ev, t = [], 0.0
+    ev.append((t, "match", {"state": "Countdown"})); ev.append((t, "vote", open_snap()))
+    t += 3; ev.append((t, "match", {"state": "Loading"}))
+    t += 2; ev.append((t, "match", {"state": "InProgress"}))
+    t += 4; ev.append((t, "vote", open_snap()))
+    t += 4; ev.append((t, "match", {"state": "Results"}))
+    return ev, t + 3
 
 
 def late_joiner():
@@ -153,10 +179,10 @@ def late_joiner():
 
 TIMELINES = {"br": br_timeline, "tdm_fast_build": tdm_fast_build, "cancelled": cancelled,
              "start_failed_before_close": start_failed_before_close, "late_joiner": late_joiner,
-             "unready_break": unready_break}
+             "unready_break": unready_break, "vote_open_over_match": vote_open_over_match}
 # How many reveals each timeline must start: one per vote the client WATCHED close on a winner.
-EXPECTED_REVEALS = {"br": 2, "tdm_fast_build": 1, "cancelled": 0, "start_failed_before_close": 0,
-                    "late_joiner": 0, "unready_break": 0}
+EXPECTED_REVEALS = {"br": 2, "tdm_fast_build": 1, "cancelled": 0, "start_failed_before_close": 1,
+                    "late_joiner": 0, "unready_break": 0, "vote_open_over_match": 0}
 LOBBY = ("Intermission", "Waiting", "Countdown")
 
 
@@ -196,10 +222,16 @@ def run(source):
             reveals += decided is not None
             votes += bool(is_open)
             break_votes += bool(is_open) and state == "Intermission"
-            if state not in LOBBY + ("Loading",) and (is_open or decided is not None):
-                violations.append(f"{name} t={now}: drawn during {state} (open={is_open}, reveal={decided})")
+            if state not in LOBBY + ("Loading",) and is_open:
+                violations.append(f"{name} t={now}: interactive vote over a match, during {state}")
+            elif state not in LOBBY + ("Loading",) and decided is not None:
+                violations.append(f"{name} t={now}: winner reveal drawn during {state}")
             elif is_open and state not in LOBBY:
                 violations.append(f"{name} t={now}: interactive vote during {state}")
+            # A reveal in the lobby's Waiting/Intermission is harmless in itself, but the failed start's
+            # close must not draw one: View only draws it in Loading/Countdown.
+            elif decided is not None and state in ("Waiting", "Intermission"):
+                violations.append(f"{name} t={now}: the winner reveal is drawn during {state}")
             elif is_open and state != "Countdown" and not client.ready:
                 violations.append(f"{name} t={now}: vote over the lobby during {state} for a player who is not ready")
             elif client.vote.open and client.ready and state in LOBBY and not is_open and decided is None:
@@ -217,6 +249,9 @@ MUTANTS = {
     "vote ungated by match state": (
         'local open = voteOpen == true and (state == "Countdown" or (LOBBY_VOTE[state] == true and ready == true))',
         'local open = voteOpen == true'),
+    "vote over a match for the ready (LOBBY_VOTE += InProgress)": (
+        'local LOBBY_VOTE = { Intermission = true, Waiting = true }',
+        'local LOBBY_VOTE = { Intermission = true, Waiting = true, InProgress = true }'),
     "vote over the break for the unready": (
         '(LOBBY_VOTE[state] == true and ready == true)', '(LOBBY_VOTE[state] == true)'),
     "vote only in the countdown again (the old rule)": (
@@ -225,6 +260,13 @@ MUTANTS = {
     "old snapshot-content reveal rule": (
         'return previous.open == true', 'return true'),
 }
+
+
+# Mutants that put the interactive vote over a match: caught only if that clause fires in the timeline
+# built for it (before it existed, "vote ungated" was caught by the unready clause alone, and the
+# LOBBY_VOTE += InProgress edit passed outright -- reports/vote-menu-proof.md, section 5).
+MUST_CATCH_OVER_MATCH = ("vote ungated by match state", "vote over a match for the ready (LOBBY_VOTE += InProgress)")
+OVER_MATCH = "vote_open_over_match t="
 
 
 def main():
@@ -249,6 +291,10 @@ def main():
             continue
         bad, _, _, _, _ = run(source.replace(old, new, 1))
         caught = len(bad) > 0
+        if label in MUST_CATCH_OVER_MATCH:
+            over = [v for v in bad if v.startswith(OVER_MATCH) and "interactive vote over a match" in v]
+            caught = len(over) > 0
+            bad = over or bad
         print(f"planted fault '{label}': {'CAUGHT' if caught else 'MISSED'} ({len(bad)} violations)"
               + (f", first: {bad[0]}" if bad else ""))
         ok = ok and caught

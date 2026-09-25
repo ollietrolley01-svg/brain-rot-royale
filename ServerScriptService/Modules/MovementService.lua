@@ -647,7 +647,7 @@ local function finishDrop(entry)
 end
 
 local function stepDrops()
-	local now = os.clock()
+	local now = tick() -- wall time, like startedAt: on CPU time the glide runs slow under load
 	for index = #dropping, 1, -1 do
 		local entry = dropping[index]
 		local root, humanoid = entry.root, entry.humanoid
@@ -685,7 +685,7 @@ function MovementService.BotDrop(character, target, onLanded)
 	local canopy = attachCanopy(character, head, root, BOT_DROP_TIMEOUT + 2)
 	table.insert(dropping, {
 		character = character, root = root, humanoid = humanoid, target = target, canopy = canopy,
-		onLanded = onLanded, startedAt = os.clock(),
+		onLanded = onLanded, startedAt = tick(),
 	})
 	if not dropLoop then
 		dropLoop = RunService.Heartbeat:Connect(stepDrops)
@@ -974,12 +974,12 @@ function MovementService.TryParkour(character, forward, options)
 		breakVaultGlass(token, character, plan)
 	end
 	MovementService.SetParkourPose(character, kind, plan.duration + 0.1)
-	local started = os.clock()
+	local started = tick() -- wall time: Parkour.PositionAt is seconds into the move
 	local connection
 	connection = RunService.Heartbeat:Connect(function()
 		local finished = not root.Parent or not character.Parent or humanoid.Health <= 0
 		if not finished then
-			local position, done = Parkour.PositionAt(plan, os.clock() - started)
+			local position, done = Parkour.PositionAt(plan, tick() - started)
 			root.CFrame = CFrame.lookAt(position, position + plan.forward)
 			root.AssemblyLinearVelocity = done and plan.exitVelocity or Vector3.zero
 			finished = done

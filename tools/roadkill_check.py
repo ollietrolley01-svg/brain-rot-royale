@@ -100,7 +100,8 @@ require = function(name)
     return realRequire(name)
 end
 task = { delay = function() end }
-VehicleService = {}
+-- Nobody here sits in an armoured cabin (roadkill_proof_check runs that rule, I8).
+VehicleService = { ShieldingVehicle = function() return nil end }
 local playerOf = {}
 Players = { GetPlayerFromCharacter = function(_, c) return playerOf[c] end }
 Enum = { HumanoidStateType = { FallingDown = "FallingDown" } }

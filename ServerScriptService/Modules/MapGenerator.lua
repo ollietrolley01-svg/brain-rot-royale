@@ -1109,6 +1109,77 @@ function MapGenerator.Build(mapId)
 		end
 		return true
 	end
+	-- ...and nothing the road stands up round it (a fingerpost's boards reach 8.5 studs off their post,
+	-- over a car parked 12 off it) in its footprint, in the strip it pulls out across into the lane, or
+	-- in the room it turns out in: VERGE_ROOM ahead and behind. Anything whose top clears the ground by
+	-- 0.6 and whose foot is under VERGE_HEADROOM counts, as tools/car_placement_check.py counts it.
+	local VERGE_ROOM, VERGE_HEADROOM = 4, 9
+	local standing = {}
+	for _, part in ipairs(roadsModel:GetDescendants()) do
+		if part:IsA("BasePart") and (part.CanCollide or part.Transparency < 1) and part.Size.Magnitude > 0.5 then
+			table.insert(standing, part)
+		end
+	end
+	local function clearOfProps(at, along, side)
+		local ground = MapGenerator.GroundHeightAt(at.X, at.Z)
+		local halfAlong = 9 + VERGE_ROOM
+		-- Across, `side` out from the road: the car's outer half, and inward to the carriageway's edge.
+		local outer, inner = 4.6, VERGE - RoadNetwork.Width / 2
+		for _, part in ipairs(standing) do
+			local cf, size = part.CFrame, part.Size
+			local offset = cf.Position - at
+			local reach = size.Magnitude / 2
+			if math.abs(offset:Dot(along)) < halfAlong + reach and offset:Dot(side) < outer + reach and offset:Dot(side) > -inner - reach then
+				local halfY = (math.abs(cf.RightVector.Y) * size.X + math.abs(cf.UpVector.Y) * size.Y + math.abs(cf.LookVector.Y) * size.Z) / 2
+				if cf.Position.Y + halfY > ground + 0.6 and cf.Position.Y - halfY < ground + VERGE_HEADROOM then
+					-- The part's own box, flattened, against the rectangle (separating axes).
+					local hit = true
+					local corners = {}
+					for _, sx in ipairs({ -0.5, 0.5 }) do
+						for _, sz in ipairs({ -0.5, 0.5 }) do
+							for _, sy in ipairs({ -0.5, 0.5 }) do
+								table.insert(corners, cf:PointToWorldSpace(Vector3.new(sx * size.X, sy * size.Y, sz * size.Z)) - at)
+							end
+						end
+					end
+					local function apartOn(axis, lo, hi)
+						local a, b = math.huge, -math.huge
+						for _, c in ipairs(corners) do
+							local d = c.X * axis.X + c.Z * axis.Z
+							a, b = math.min(a, d), math.max(b, d)
+						end
+						return b < lo or a > hi
+					end
+					if apartOn(along, -halfAlong, halfAlong) or apartOn(side, -inner, outer) then
+						hit = false
+					else
+						for _, axis in ipairs({ cf.RightVector, cf.LookVector, cf.UpVector }) do
+							local flat = Vector3.new(axis.X, 0, axis.Z)
+							if flat.Magnitude > 1e-3 then
+								flat = flat.Unit
+								local lo, hi = math.huge, -math.huge
+								for _, sa in ipairs({ -halfAlong, halfAlong }) do
+									for _, ss in ipairs({ -inner, outer }) do
+										local q = along * sa + side * ss
+										local d = q.X * flat.X + q.Z * flat.Z
+										lo, hi = math.min(lo, d), math.max(hi, d)
+									end
+								end
+								if apartOn(flat, lo, hi) then
+									hit = false
+									break
+								end
+							end
+						end
+					end
+					if hit then
+						return false
+					end
+				end
+			end
+		end
+		return true
+	end
 	local wantedVehicles = math.clamp(math.floor(radius / 95), 6, 16)
 	local LOT_DRIVABLE_SHARE, LOT_DRIVABLE_MOST = 0.25, 0.6
 	-- Most of them in the towns' car parks first (#31); the verge takes whatever is left.
@@ -1142,7 +1213,8 @@ function MapGenerator.Build(mapId)
 				local side = Vector3.new(-along.Z, 0, along.X) * sideSign
 				local at = edge.from + along * (from + span * math.random()) + side * VERGE
 				if space:IsFree(at.X, at.Z, 9, edge.claim) and not MapTerrain.InRiver(river, at.X, at.Z, 14)
-					and not roads:NearBridge(at.X, at.Z, 20) and clearOfPosts(at) and levelAt(at, along, side) and apart(at) then
+					and not roads:NearBridge(at.X, at.Z, 20) and clearOfPosts(at) and levelAt(at, along, side) and apart(at)
+					and clearOfProps(at, along, side) then
 					space:AddCircle(at.X, at.Z, 9)
 					table.insert(onVerge, at)
 					-- Nose along the traffic on its side: `side` +1 is the right of `along`, whose traffic

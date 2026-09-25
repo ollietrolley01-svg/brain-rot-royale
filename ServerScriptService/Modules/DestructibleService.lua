@@ -2264,7 +2264,7 @@ end
 -- A BOWL, NEVER A SHAFT: you can always get out. Every crater is a cone: a flat floor FLOOR_RADIUS
 -- across, then walls rising a stud for every WALL_RUN out (1 in 2, 27 degrees: walkable on
 -- foot and drivable; a humanoid walks slopes to 89 and a vehicle climbs 35), carved as stacked
--- STEP_UP-stud rings that the terrain smooths into a slope. A deeper bowl is a WIDER bowl: 24 deep is
+-- rings, one per 4-stud voxel row, that the terrain smooths into a slope. A deeper bowl is a WIDER bowl: 24 deep is
 -- 45 studs out at the rim. It stops short of anything standing within its rim that is taller than
 -- LIMIT_TALL (a wall, a tree, a post: it would undermine it); a slab on the ground there (a road, a
 -- floor, paving) is dug out from under and comes down into the hole (the support pass).
@@ -2479,11 +2479,15 @@ local function craterAt(position, reach, damage, map)
 	table.insert(ground.burst, clock)
 	-- Whatever lay on the ground there (loot, a supply crate) settles into the hole; the slabs dug out
 	-- from under come down (the support pass, after the dig).
+	-- One ring per ROW OF VOXELS (4 studs), centred on the row: a fill clears the voxels whose middle
+	-- it holds, so the old 2-stud rings off the grid cleared only every other one -- 4 up for 4 out, walls
+	-- of ~50 degrees that trapped cars. A ring's radius is the cone's at its row's middle.
 	local top = math.max(surface.Y, original) + STEP_UP
-	local layers = math.ceil((top - apexY) / STEP_UP)
-	for layer = 0, layers - 1 do
-		local y0 = apexY + layer * STEP_UP
-		workspace.Terrain:FillCylinder(CFrame.new(surface.X, y0 + STEP_UP / 2, surface.Z), STEP_UP, FLOOR_RADIUS + layer * STEP_UP * WALL_RUN, Enum.Material.Air)
+	for row = math.floor(apexY / CELL), math.ceil(top / CELL) do
+		local middle = row * CELL + CELL / 2
+		if middle >= apexY then
+			workspace.Terrain:FillCylinder(CFrame.new(surface.X, middle, surface.Z), CELL, FLOOR_RADIUS + (middle - apexY) * WALL_RUN, Enum.Material.Air)
+		end
 	end
 	forgetAround(surface, rim, map)
 	tellBroken(CFrame.new(Vector3.new(surface.X, (apexY + top) / 2, surface.Z)), Vector3.new(rim * 2, top - apexY + 2, rim * 2))

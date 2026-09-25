@@ -1770,6 +1770,8 @@ function ModeTeams.BreakProtection(token)
 	end
 end
 
+-- Oliver 09-25 ("get rid of spawn prot"): every mode's spawnProtection is 0, so this grants nothing
+-- and IsProtected is never true. The mechanism stays for a mode that wants it back.
 local function grantProtection(token, seconds)
 	if not seconds or seconds <= 0 then
 		return
