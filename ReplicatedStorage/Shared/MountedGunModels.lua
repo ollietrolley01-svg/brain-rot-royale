@@ -200,8 +200,7 @@ local function spadeGrips(L, y, zBack, halfX, gripLen)
 		local n = s < 0 and "L" or "R"
 		L.tube("GripArmTop" .. n, { s * halfX, y + 0.2, zBack + 0.04 }, { s * halfX, y + 0.2, zGrip + 0.04 }, 0.07, "gunmetal")
 		L.tube("GripArmLow" .. n, { s * halfX, y - 0.2, zBack + 0.04 }, { s * halfX, y - 0.2, zGrip + 0.02 }, 0.07, "gunmetal")
-		L.tube("Grip" .. n, { s * halfX, y - gripLen / 2, zGrip }, { s * halfX, y + gripLen / 2, zGrip + 0.03 }, 0.15, "rubber")
-		L.ball("GripCap" .. n, 0.17, { s * halfX, y + gripLen / 2 + 0.03, zGrip + 0.03 }, "darksteel")
+		L.tube("Grip" .. n, { s * halfX, y - gripLen / 2, zGrip }, { s * halfX, y + gripLen / 2, zGrip + 0.03 }, 0.12, "rubber")
 	end
 	L.box("TriggerStem", { 0.06, 0.06, 0.16 }, { 0, y, zBack + 0.12 }, "gunmetal")
 	L.box("Trigger", { halfX * 1.2, 0.09, 0.05 }, { 0, y, zBack + 0.2 }, "brass")
@@ -282,8 +281,9 @@ end
 
 local function hmg()
 	local L = builder()
-	local YAW = 3.14
-	local PITCH = 4.12
+	-- Heights from the floor: a standing gunner's eyes (GunnerEye, on the sight line) at 5.1.
+	local YAW = 3.44
+	local PITCH = 4.42
 	local BORE = PITCH + 0.1
 	local SIGHT = BORE + 0.46
 	L.eyeZ = 2.0
@@ -346,7 +346,7 @@ local function hmg()
 	local zGrip = spadeGrips(L, BORE - 0.02, 1.05, 0.26, 0.46)
 	L.tube("Jacket", { 0, BORE, -0.5 }, { 0, BORE, -2.08 }, 0.34, "gunmetal")
 	for i = 0, 6 do
-		local z = -0.98 - i * 0.16
+		local z = -1.03 - i * 0.15
 		L.tube("CoolingFin" .. i, { 0, BORE, z - 0.025 }, { 0, BORE, z + 0.025 }, 0.46, "darksteel")
 	end
 	L.tube("JacketBand", { 0, BORE, -2.02 }, { 0, BORE, -2.1 }, 0.4, "steel")
@@ -382,7 +382,9 @@ local function hmg()
 	for i, z in ipairs({ -2.94, -3.06 }) do
 		L.box("BrakePort" .. i, { 0.3, 0.07, 0.05 }, { 0, BORE, z }, "black", { group = "recoil" })
 	end
-	shield(L, -0.72, BORE, SIGHT, 3.2, PITCH - 0.95, PITCH + 1.2, 0.22, { 0.5, 0.2 }, 0.9)
+	-- The shield's top is just over the gunner's eyes and its window a wide slit on the sight line: the
+	-- gunner sees through it and over it, and it covers them from the front up to the eyes.
+	shield(L, -0.86, BORE, SIGHT, 3.2, PITCH - 0.95, SIGHT + 0.42, 0.22, { 0.9, 0.2 }, 0.9)
 	L.muzzle = { 0, BORE, -3.18 }
 	-- The gunner's markers: the eye behind the ring, the palms on the spade grips, the reload hand on the can.
 	L.mark("GunnerSight", { 0, SIGHT, 1.8 }, "TurretPitch")
@@ -402,8 +404,8 @@ end
 
 local function cannon()
 	local L = builder()
-	local YAW = 3.1
-	local PITCH = 3.98
+	local YAW = 3.4
+	local PITCH = 4.28
 	local BORE = PITCH + 0.12
 	local SIGHT = BORE + 0.58
 	L.eyeZ = 2.05
@@ -490,7 +492,7 @@ local function cannon()
 	L.tube("MuzzleCollar", { 0, BORE, -1.98 }, { 0, BORE, -2.08 }, 0.38, "steel", { group = "recoil" })
 	L.tube("MuzzleFlare", { 0, BORE, -2.06 }, { 0, BORE, -2.34 }, 0.44, "gunmetal", { group = "recoil" })
 	L.tube("MuzzleBore", { 0, BORE, -2.3 }, { 0, BORE, -2.36 }, 0.3, "black", { group = "recoil" })
-	shield(L, -0.78, BORE, SIGHT, 3.4, PITCH - 0.72, PITCH + 1.28, 0.28, { 0.56, 0.2 }, 1.0)
+	shield(L, -0.78, BORE, SIGHT, 3.4, PITCH - 0.72, SIGHT + 0.42, 0.28, { 0.9, 0.2 }, 1.0)
 	L.muzzle = { 0, BORE, -2.38 }
 	L.mark("GunnerSight", { 0, SIGHT, 1.75 }, "TurretPitch")
 	L.palm("GripR", { 0.3, BORE - 0.02, zGrip + 0.02 }, { -0.35, 0, -1 }, { 1, 0.15, 0.3 }, "TurretPitch")

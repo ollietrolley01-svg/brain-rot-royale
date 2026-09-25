@@ -472,9 +472,9 @@ end
 local function showAmmo(spec, ammo, hot)
 	local whole = math.floor(ammo)
 	nameLabel.Text = spec.hud
-	-- A mount with an infinite pool (the emplacements, MountedGunData) reads "belt / infinity" (Oliver 09-24:
-	-- "make all guns including mounted ones have an infinite ammo pool, still have to reload").
-	local pool = spec.infinitePool and "\u{221E}" or tostring(spec.magazine)
+	-- Every mount's belt refills from an infinite pool (VehicleWeaponData.AmmoAt), so it reads "belt / infinity"
+	-- (Oliver 09-24: "make all guns including mounted ones have an infinite ammo pool, still have to reload").
+	local pool = "\u{221E}"
 	if spec.overheat then
 		local heat = math.clamp(1 - ammo / spec.magazine, 0, 1)
 		ammoLabel.Text = hot and "OVERHEAT" or string.format("%d / %s", whole, pool)
@@ -482,7 +482,7 @@ local function showAmmo(spec, ammo, hot)
 		barFill.Size = UDim2.fromScale(heat, 1)
 		barFill.BackgroundColor3 = Color3.fromRGB(255, math.floor(196 - 130 * heat), math.floor(64 - 40 * heat))
 	else
-		ammoLabel.Text = (spec.infinitePool and whole < 1) and "RELOADING" or string.format("%d / %s", whole, pool)
+		ammoLabel.Text = whole < 1 and "RELOADING" or string.format("%d / %s", whole, pool)
 		ammoLabel.TextColor3 = whole < 1 and Color3.fromRGB(255, 96, 96) or Color3.fromRGB(245, 245, 250)
 		barFill.Size = UDim2.fromScale(math.clamp(ammo / spec.magazine, 0, 1), 1)
 		barFill.BackgroundColor3 = Color3.fromRGB(255, 196, 64)

@@ -722,6 +722,13 @@ local function poseRiders(model, focusDistance)
 					local frame = root.Part0.CFrame * root.C0
 					root.Transform = frame:Inverse() * turn * frame
 				end
+				-- The gunner's hands on the gun's grips, the way an emplacement's gunner holds theirs (MountRig).
+				if turret then
+					local okRig, MountRig = pcall(require, ReplicatedStorage.Shared.MountRig)
+					if okRig then
+						MountRig.ArmsToGrips(character, joints, model)
+					end
+				end
 			end
 		end
 	end

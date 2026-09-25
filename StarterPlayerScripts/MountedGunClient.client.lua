@@ -30,6 +30,7 @@ local MountedGunData = require(Shared:WaitForChild("MountedGunData"))
 local VehicleWeaponData = require(Shared:WaitForChild("VehicleWeaponData"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 local Ballistics = require(Shared:WaitForChild("Ballistics"))
+local MountRig = require(Shared:WaitForChild("MountRig"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -42,7 +43,8 @@ do
 	GunnerView = ok and type(module) == "table" and module or nil
 end
 
-local TAG = MountedGunData.Tag
+-- Every armed model: the emplacements carry this tag as well as MountedGun, the vehicles only this.
+local TAG = "ArmedVehicle"
 -- The turret's attribute names (VehicleWeapons publishes the belt, the last shot and the heat under them).
 local ATTR = VehicleWeaponData.Attributes.turret
 local POSE_DISTANCE = 160
@@ -91,16 +93,23 @@ local function stateOf(model)
 	if s then
 		return s
 	end
+	-- An emplacement (MountedGun) or any vehicle's turret: the firing and heat effects are the same.
 	local kind = model:GetAttribute("MountedGun")
-	local spec = kind and MountedGunData.SpecOf(kind)
+	local spec = kind and MountedGunData.SpecOf(kind) or VehicleWeaponData.ForModel(model:GetAttribute("VehicleModel"), "turret")
 	if not spec then
 		return nil
 	end
+	kind = kind or "vehicle"
 	s = { model = model, spec = spec, kind = kind, recoil = 0, recoilV = 0, bolt = 0, belt = 0, firedAt = model:GetAttribute(ATTR.firedAt) or 0,
 		heatParts = {}, glow = -1 }
-	for name in string.gmatch(model:GetAttribute("HeatParts") or "", "[^,]+") do
-		local part = model:FindFirstChild(name)
-		if part then
+	local heatNames = model:GetAttribute("HeatParts")
+	for _, part in ipairs(model:GetChildren()) do
+		local listed = heatNames and string.find("," .. heatNames .. ",", "," .. part.Name .. ",", 1, true)
+		-- A vehicle's turret: its barrel and jacket parts welded to the pitch pivot.
+		local weld = not heatNames and part:FindFirstChildOfClass("WeldConstraint")
+		local onBarrel = weld and weld.Part0 and weld.Part0.Name == "TurretPitch"
+			and (string.find(part.Name, "Barrel") or string.find(part.Name, "Jacket"))
+		if part:IsA("BasePart") and (listed or onBarrel) then
 			table.insert(s.heatParts, { part = part, color = part.Color, material = part.Material })
 		end
 	end
@@ -123,11 +132,13 @@ end)
 local function ejectCasing(model, s)
 	local pitch = model:FindFirstChild("TurretPitch")
 	local port = pitch and pitch:FindFirstChild("EjectPoint")
-	if not port then
+	-- Rockets leave no case, and a mortar's bomb goes whole.
+	if not pitch or s.spec.projectile == "rocket" or (s.spec.kind == "round" and s.spec.pitchMin >= 0) then
 		return
 	end
-	local frame = port.WorldCFrame
-	local cannon = s.kind == "cannon"
+	-- A vehicle's gun has no marked port: out of the right of the receiver, over the trunnions.
+	local frame = port and port.WorldCFrame or pitch.CFrame * CFrame.new(0.3, 0.12, 0)
+	local cannon = s.kind == "cannon" or s.spec.kind == "round"
 	local casing = Instance.new("Part")
 	casing.Name = "MountedGunCasing"
 	casing.Shape = Enum.PartType.Cylinder
@@ -296,13 +307,18 @@ local function poseGunner(model, s, dt)
 		end
 	end
 	root.Transform = frame:Inverse() * want * frame
-	-- While the gun is reloading or cooling, the right arm goes to the can.
+	-- The hands on the grips (MountRig: the same reach the vehicles' gunners use); while the gun reloads or
+	-- cools the right hand works the can, rocking as it changes the belt.
+	local reloadAt = nil
 	if s.ready == false then
-		local shoulder = joints.RightShoulder
-		if shoulder then
-			shoulder.Transform = CFrame.Angles(math.rad(40), 0, math.rad(35)) * CFrame.Angles(0, 0, math.sin(os.clock() * 7) * 0.15)
+		local _, pitchWorld = MountRig.GunFrames(model)
+		local pitch = model:FindFirstChild("TurretPitch")
+		local mark = pitch and pitch:FindFirstChild("ReloadHand")
+		if pitchWorld and mark then
+			reloadAt = (pitchWorld * mark.CFrame * CFrame.new(0, math.sin(os.clock() * 7) * 0.12, 0)).Position
 		end
 	end
+	MountRig.ArmsToGrips(character, joints, model, reloadAt)
 end
 
 --------------------------------------------------------------------------------
@@ -497,10 +513,13 @@ RunService.Stepped:Connect(function(_, dt)
 					belt.Transform = CFrame.new(s.belt * 0.05 + change, change * 0.5, 0)
 				end
 				showHeat(s, now)
-				poseGunner(model, s, dt)
+				-- A vehicle's gunner is posed by VehicleClient (with MountRig's arms); an emplacement's here.
+				if s.kind ~= "vehicle" then
+					poseGunner(model, s, dt)
+				end
 			end
 			local seat = model:FindFirstChild("GunnerSeat")
-			if seat and seat.Occupant and seat.Occupant.Parent == player.Character then
+			if s.kind ~= "vehicle" and seat and seat.Occupant and seat.Occupant.Parent == player.Character then
 				mine = model
 			end
 		end
