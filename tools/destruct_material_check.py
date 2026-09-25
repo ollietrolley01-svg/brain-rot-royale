@@ -13,8 +13,17 @@ a metal part inside workspace.Map, plays what the server sent through the client
   T  a wall at half health is at damage stage 2 (DamageStage attribute), weathered darker, and
      exactly as opaque as before (tools/crack_check.py holds every damage path to that)
 
-Planted faults, each of which must be caught: wood's profile turned into chunks (W), and a
-see-through bump put into the stage step (T).
+  H  wall health by material (Oliver 09-24: "increase the health of the walls in the map depending
+     on the material"): a building's named Wall and an untagged structural part rank glass < cloth
+     < wood <= plaster < brick < concrete <= stone < metal < diamond plate, diamond plate at least
+     3.5x wood; every wall but glass and cloth is at least the old flat 100; a rifle round (18)
+     still breaks the toughest wall in at most 40 shots; one rocket blast (wallDamage 150, the
+     real DamageInRadius) breaks a wood, plaster or brick wall, two break concrete, metal and
+     diamond plate; a tagged prop (a parked car) keeps its family toughness.
+
+Planted faults, each of which must be caught: wood's profile turned into chunks (W), a
+see-through bump put into the stage step (T), the material spread flattened (metal back to wood's
+toughness: H), and the blast bonus on structure removed (H).
 
     python3 tools/destruct_material_check.py
 """
@@ -44,13 +53,58 @@ plate:SetAttribute("DestructibleHealth", 50)
 -- T: half health is stage 2 and weathers the colour, never fades.
 local before = wall.Transparency
 local r0 = wall.Color.R
-DS.Damage(wall, 60)
+DS.Damage(wall, DS.NamedHealth(wall) * 0.6)
 if wall.Transparency ~= before then fail("T", "battered wall went from transparency " .. before .. " to " .. wall.Transparency) end
 if wall:GetAttribute("DamageStage") ~= 2 then fail("T", "battered wall at stage " .. tostring(wall:GetAttribute("DamageStage"))) end
 if not (wall.Color.R < r0) then fail("T", "battered wall did not darken") end
 
+-- H: wall health by material.
+local order = { "Glass", "Fabric", "WoodPlanks", "Plaster", "Brick", "Concrete", "Granite", "Metal", "DiamondPlate" }
+local strict = { Fabric = true, WoodPlanks = true, Brick = true, Concrete = true, Metal = true, DiamondPlate = true }
+local named, auto = {}, {}
+for i, name in ipairs(order) do
+    local m = Enum.Material[name]
+    local w = part("Wall", Vector3.new(12, 10, 1), Vector3.new(i * 30, 5, 200), m)
+    named[name] = DS.NamedHealth(w)
+    local lone = part("Pier", Vector3.new(8, 12, 1), Vector3.new(i * 30, 6, 260), m)
+    auto[name] = DS.PoolHealth("Prop", { lone }, true)
+    lone:Destroy()
+    if i > 1 then
+        local prev = order[i - 1]
+        for label, t in pairs({ named = named, untagged = auto }) do
+            if t[name] < t[prev] or (strict[name] and t[name] == t[prev]) then
+                fail("H", string.format("%s %s wall %d is not above %s's %d", label, name, t[name], prev, t[prev]))
+            end
+        end
+    end
+    if name ~= "Glass" and name ~= "Fabric" and named[name] < 100 then fail("H", name .. " wall health " .. named[name] .. " is under the old flat 100") end
+    w:Destroy()
+end
+if named.DiamondPlate < named.WoodPlanks * 3.5 then fail("H", "the spread is narrow: diamond plate " .. named.DiamondPlate .. " vs wood " .. named.WoodPlanks) end
+if math.ceil(named.DiamondPlate / 18) > 40 then fail("H", "a rifle needs " .. math.ceil(named.DiamondPlate / 18) .. " shots for diamond plate") end
+-- Rockets: the real blast path, one wall at a time.
+local want = { WoodPlanks = 1, Plaster = 1, Brick = 1, Concrete = 2, Metal = 2, DiamondPlate = 2 }
+local k = 0
+for name, most in pairs(want) do
+    k += 1
+    local w = part("Wall", Vector3.new(12, 10, 1), Vector3.new(0, 5, 600 + k * 60), Enum.Material[name])
+    local blasts = 0
+    while w.Parent and blasts < 10 do
+        blasts += 1
+        DS.DamageInRadius(w.Position + Vector3.new(0, 0, -2), 8, 150, nil)
+        mock.runDue()
+    end
+    if blasts > most then fail("H", string.format("%s wall took %d rockets (want at most %d)", name, blasts, most)) end
+end
+-- A tagged prop keeps its family toughness: a parked car of metal is not a metal wall.
+local carBody = part("Body", Vector3.new(6, 3, 12), Vector3.new(0, 2, 900), Enum.Material.Metal)
+if DS.PoolHealth("Car", { carBody }) ~= DS.PoolHealth("Car", { carBody }, false) then fail("H", "a tagged car's health moved with the structure table") end
+carBody:Destroy()
+local healthRows = { named = named, auto = auto }
+
 -- E: break all three in one frame; the server sends families and makes no debris parts itself.
 local made = #mock.created
+local firedBefore = #mock.remotes.BreakFx.fired
 DS.Damage(crate, 1e6); DS.Damage(wall, 1e6); DS.Damage(plate, 1e6)
 mock.runDue()
 for i = made + 1, #mock.created do
@@ -58,13 +112,13 @@ for i = made + 1, #mock.created do
     fail("E", "the server made a " .. inst.ClassName .. " (" .. tostring(inst.Name) .. ") while breaking")
     break
 end
-local sent = mock.remotes.BreakFx.fired
+local sent = { mock.remotes.BreakFx.fired[firedBefore + 1] }
 local classes = {}
 for _, entry in ipairs(sent[1] and sent[1][1] or {}) do classes[entry[4].Name] = entry[5] end
 if classes.WoodPlanks ~= "wood" or classes.Concrete ~= "stone" or classes.Metal ~= "metal" then
     fail("E", string.format("families sent: wood=%s concrete=%s metal=%s", tostring(classes.WoodPlanks), tostring(classes.Concrete), tostring(classes.Metal)))
 end
-return sent[1] and sent[1][1] or {}, fails
+return sent[1] and sent[1][1] or {}, fails, healthRows
 """
 
 CLIENT_LUA = r"""
@@ -112,8 +166,9 @@ def run(service_faults=(), client_faults=()):
     world.run("local mock = ...; mock.remote('BreakFx')", world.mock)
     ds = world.load(SERVICE, service_faults, name="DestructibleService")
     world.load(CLIENT, client_faults, name="BreakFxClient")
-    batch, fails = world.run(LUA, ds, world.mock)
+    batch, fails, rows = world.run(LUA, ds, world.mock)
     fails = world.run(CLIENT_LUA, world.mock, batch, fails)
+    run.rows = rows
     return [fails[i] for i in range(1, len(fails) + 1)], len(list(batch.values()))
 
 
@@ -122,10 +177,17 @@ def main():
     print(f"real: {examined} breaks examined, {len(fails)} failures")
     for f in fails:
         print("  FAIL", f)
+    rows = run.rows
+    if rows is not None:
+        order = ["Glass", "Fabric", "WoodPlanks", "Plaster", "Brick", "Concrete", "Granite", "Metal", "DiamondPlate"]
+        print("  named Wall health: " + ", ".join("%s %d" % (n, rows["named"][n]) for n in order))
+        print("  untagged 8x12x1:   " + ", ".join("%s %d" % (n, rows["auto"][n]) for n in order))
     planted = [
         ("W", (), [("WoodPlanks = { shape = \"splinter\"", "WoodPlanks = { shape = \"chunk\"")]),
         ("T", [("\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n",
                 "\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n\t\t\tmember.Transparency = math.max(member.Transparency, 0.12)\n")], ()),
+        ("H", [("[M.Metal] = 3.4,", "[M.Metal] = 1,")], ()),
+        ("H", [("scale = 1.5, blast = 2 }", "scale = 1.5, blast = 1 }")], ()),
     ]
     caught = 0
     for tag, service_faults, client_faults in planted:

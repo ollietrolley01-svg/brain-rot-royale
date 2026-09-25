@@ -36,8 +36,8 @@ def mat(t):
     return [[r[0], r[1], r[2]], [r[3], r[4], r[5]], [r[6], r[7], r[8]]]
 
 
-def layout(pure, kind):
-    L = pure.Layout(kind)
+def layout(pure, kind, opts=None):
+    L = pure.Layout(kind, opts)
     parts = []
     for i in range(1, len(L.parts) + 1):
         p = L.parts[i]
