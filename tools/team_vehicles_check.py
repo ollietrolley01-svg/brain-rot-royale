@@ -89,7 +89,12 @@ R.rot = rot
 -- Instances ------------------------------------------------------------------------------------------
 local Inst = {}
 local IM = {}
-IM.__index = function(t, k) if k == "Parent" then return rawget(t, "_parent") end return Inst[k] end
+IM.__index = function(t, k)
+    if k == "Parent" then return rawget(t, "_parent") end
+    -- A chassis stands where its model's pivot is, wherever the checks move it.
+    if k == "Position" and rawget(t, "_follow") then return rawget(t, "_follow")._pivot.p end
+    return Inst[k]
+end
 IM.__newindex = function(t, k, v)
     if k == "Parent" then
         local old = rawget(t, "_parent")
@@ -114,6 +119,15 @@ function Inst:IsA(class) return class == self._class or (class == "BasePart" and
 function Inst:GetAttribute(k) return self._attrs[k] end
 function Inst:SetAttribute(k, v) self._attrs[k] = v end
 function Inst:GetPivot() return self._pivot end
+function Inst:GetDescendants()
+    local list = {}
+    for c in pairs(self._children) do
+        table.insert(list, c)
+        for _, d in ipairs(c:GetDescendants()) do table.insert(list, d) end
+    end
+    return list
+end
+function Inst:FindFirstChildOfClass(class) for c in pairs(self._children) do if c._class == class then return c end end return nil end
 function Inst:IsDescendantOf(root) local p = self.Parent while p do if p == root then return true end p = p.Parent end return false end
 Instance = { new = function(class) return newInst(class) end }
 R.newInst = newInst
@@ -138,6 +152,7 @@ R.loops = {}
 task = {
     spawn = function(f) local co = coroutine.create(f) table.insert(R.loops, co) coroutine.resume(co) end,
     wait = function() coroutine.yield() end,
+    delay = function() end,
 }
 -- The world, laid out round each base at query time -------------------------------------------------
 workspace = newInst("Workspace")
@@ -236,6 +251,12 @@ VehicleService = {
         if spread and spread > TOL then position = position + Vector3.new(8, 0, 0) end
         local model = newInst("Model", options.model)
         rawset(model, "_pivot", CFrame.new(position) * CFrame.Angles(0, yaw, 0))
+        local chassis = newInst("Part", "Chassis")
+        rawset(chassis, "_follow", model)
+        chassis.Parent = model
+        rawset(model, "PrimaryPart", chassis)
+        local seat = newInst("VehicleSeat", "DriveSeat")
+        seat.Parent = model
         model.Parent = parent
         table.insert(R.vehicles, { model = model, kind = kind, modelId = options.model, yaw = yaw })
         R.creates = R.creates + 1
@@ -509,7 +530,7 @@ PLANTS = [
     ("respawn ignores the delay", ("nowMs - slot.lostAt >= delayMs", "nowMs - slot.lostAt >= 0")),
     ("replacement never recorded (cap)", ("\t\t\t\tslot.model = model\n", "\t\t\t\tslot.model = slot.model\n")),
     ("wreck left behind", ("\t\t\t\t\t\twreck:Destroy()", "\t\t\t\t\t\tlocal _ = wreck")),
-    ("no respawn at all", ("\t\t\t\t\tif not parkSlot(team, slot) then", "\t\t\t\t\tif true then")),
+    ("no respawn at all", ("\t\t\t\t\tif parkSlot(team, slot) then", "\t\t\t\t\tif false then")),
     ("cleanup forgets the vehicles", ("\t\tbaseFolder:Destroy()\n", "\t\tlocal _ = baseFolder\n")),
     ("loop outlives the match", ("\tbaseGeneration += 1\n", "\tlocal _ = baseGeneration\n")),
     ("slope accepted", ("if spread <= VehicleService.FootingTolerance then", "if true then")),

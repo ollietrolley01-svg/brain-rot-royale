@@ -163,19 +163,17 @@ def checks(progression_src, service_src, cycle):
                     f"{hour1[0]} coins in {hour1[1]} awards, expected {expected1}"))
     results.append(("the second hour pays at the cap", hour2[0] - hour1[0] == (3600 // cfg.IntervalSeconds) * cfg.CapCoins,
                     f"{hour2[0] - hour1[0]} coins"))
-    # The invariant: a live character that never moves (or only shuffles under MoveStuds) is never paid.
-    results.append(("standing still pays nothing", api.total("statue")[0] == 0, f"{api.total('statue')[0]} coins in 2 h"))
-    results.append(("shuffling under MoveStuds pays nothing", api.total("fidget")[0] == 0, f"{api.total('fidget')[0]} coins in 2 h"))
-    # Dead / spectating is not playing: an idle player who died at the drop and sat on the spectator
-    # camera used to be paid the whole ladder.
-    results.append(("dead / spectating pays nothing", api.total("ghost")[0] == 0,
-                    f"{api.total('ghost')[0]} coins in 2 h"))
+    # All time in the server counts (Oliver, 2026-09-25): standing still, shuffling and being dead or
+    # spectating are paid exactly what a running player is paid.
+    for name in ("statue", "fidget", "ghost"):
+        results.append((f"{name} is paid the same as a running player", api.total(name) == hour2,
+                        f"{api.total(name)[0]} coins in {api.total(name)[1]} awards in 2 h, runner {hour2[0]}"))
     ladder = [api.coins(n) for n in range(1, 10)]
     results.append(("the ladder climbs then holds at the cap",
                     all(b >= a for a, b in zip(ladder, ladder[1:])) and ladder[-1] == cfg.CapCoins and ladder[0] < cfg.CapCoins,
                     " ".join(str(x) for x in ladder)))
-    results.append(("an award needs at least half its stretch active", cfg.MinActiveSamples * 2 >= per_award,
-                    f"{cfg.MinActiveSamples} of {per_award} checks"))
+    results.append(("an award every IntervalSeconds: 6 in each hour", hour1[1] == 3600 // cfg.IntervalSeconds,
+                    f"{hour1[1]} awards in hour 1, {per_award} clock ticks each"))
     # #77: the day a claim lands on, (streak - 1) % cycle + 1, walks 1..cycle and wraps.
     days = [(streak - 1) % cycle + 1 for streak in range(1, 2 * cycle + 1)]
     results.append(("the daily streak prize walks the whole table and wraps",
@@ -185,12 +183,14 @@ def checks(progression_src, service_src, cycle):
 
 def plants(progression_src, service_src):
     """Each plant breaks an invariant; the checks must go red for every one."""
-    yield "MoveStuds = 0 (standing still would pay)", progression_src.replace("MoveStuds = 4", "MoveStuds = 0"), service_src
-    yield "a missing character (dead, spectating) counts as playing", progression_src, service_src.replace(
-        "\t\tsession.last = nil\n\t\treturn false", "\t\tsession.last = nil\n\t\treturn true")
+    # service_src has been through luau_to_lua, so `+=` reads as `x = x + 1` here.
+    yield "a dead or spectating player is not paid (the old rule)", progression_src, service_src.replace(
+        "\tsession.samples = session.samples + 1\n",
+        "\tif not player.Character then return end\n\tsession.samples = session.samples + 1\n")
     yield "the ladder never caps", progression_src.replace(
         "return math.min(p.CapCoins, p.FirstCoins", "return (0 * p.CapCoins + p.FirstCoins"), service_src
-    yield "the active threshold dropped to 1 check", progression_src.replace("MinActiveSamples = 10", "MinActiveSamples = 1"), service_src
+    yield "an award every other stretch", progression_src, service_src.replace(
+        "\tsession.samples = 0\n\tsession.awards", "\tsession.samples = -SAMPLES_PER_AWARD\n\tsession.awards")
 
 
 def main():

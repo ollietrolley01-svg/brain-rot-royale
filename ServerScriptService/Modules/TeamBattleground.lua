@@ -396,9 +396,13 @@ end
 
 -- A heap of broken stone round (cx, cz) on ground at `floor`; every chunk sunk a fifth of its height,
 -- and no two chunks touching (each one's footprint circle keeps clear of every other's in the build).
+-- LESS CLUTTER (Oliver 09-25: "a little less cluttery"): the wear below still draws every random
+-- number it always did, so every wall, stone and bag that stays is exactly where it was (the sightline
+-- and cover proofs stand), but half the loose rubble, the rebar and soot on the ruin walls and the
+-- crates' bands are no longer built, and a line of sandbags is one block a course, not a bag at a time.
 local function rubble(parent, cx, cz, radius, count, floor, colors)
 	colors = colors or { CONCRETE, CONCRETE_DARK, STONE_DARK }
-	for _ = 1, count do
+	for stone = 1, count do
 		for _ = 1, 10 do
 			local angle = rnd(0, math.pi * 2)
 			local reach = radius * math.sqrt(B.rng:NextNumber())
@@ -416,7 +420,10 @@ local function rubble(parent, cx, cz, radius, count, floor, colors)
 			if clear then
 				table.insert(B.stones, { x, z, r })
 				local at = CFrame.new(x, floor + size.Y * 0.2, z) * CFrame.Angles(0, nextTurn(), 0) * CFrame.Angles(tipped(), 0, tipped())
-				put(parent, "Rubble", size, at, colors[B.rng:NextInteger(1, #colors)], MAT.Concrete)
+				local color = colors[B.rng:NextInteger(1, #colors)]
+				if stone % 2 == 1 then
+					put(parent, "Rubble", size, at, color, MAT.Concrete)
+				end
 				break
 			end
 		end
@@ -443,14 +450,16 @@ local function sandbags(parent, x0, z0, x1, z1, courses, floor, noCover)
 		local count = math.max(1, math.floor((length + BAG_GAP) / (BAG_LONG + BAG_GAP) + 0.5))
 		local bag = (length - (count - 1) * BAG_GAP) / count
 		local y = floor + (course - 0.5) * BAG_HIGH
-		for index = 1, count do
-			local u = from + inset + (index - 0.5) * bag + (index - 1) * BAG_GAP
-			local wobble = rnd(-0.07, 0.07)
-			local yaw = rnd(-0.025, 0.025)
-			local size = alongX and Vector3.new(bag, BAG_HIGH, BAG_DEEP) or Vector3.new(BAG_DEEP, BAG_HIGH, bag)
-			local at = alongX and CFrame.new(u, y, across + wobble) or CFrame.new(across + wobble, y, u)
-			put(parent, "Sandbag", size, at * CFrame.Angles(0, yaw, 0), SACK[B.rng:NextInteger(1, #SACK)], MAT.Fabric, opts)
+		local color
+		for _ = 1, count do
+			local _ = { rnd(-0.07, 0.07), rnd(-0.025, 0.025) }
+			local pick = SACK[B.rng:NextInteger(1, #SACK)]
+			color = color or pick
 		end
+		local run = count * bag + (count - 1) * BAG_GAP
+		local u = from + inset + run / 2
+		local size = alongX and Vector3.new(run, BAG_HIGH, BAG_DEEP) or Vector3.new(BAG_DEEP, BAG_HIGH, run)
+		put(parent, "Sandbag", size, alongX and CFrame.new(u, y, across) or CFrame.new(across, y, u), color, MAT.Fabric, opts)
 	end
 	if not noCover and courses >= 3 then
 		coverLine(x0, z0, x1, z1, floor, 1.6)
@@ -465,8 +474,6 @@ local function crates(parent, x, z, base, top, floor, size)
 		local cx = x + (index - (base + 1) / 2) * (size + 0.1)
 		local color = index % 2 == 0 and WOOD_DARK or WOOD
 		box(parent, "Crate", cx - size / 2, cx + size / 2, floor, floor + size, z - size / 2, z + size / 2, color, MAT.WoodPlanks, opts)
-		facePlate(parent, "CrateBand", "z", z - size / 2, 0.08, cx - size / 2 + 0.2, cx + size / 2 - 0.2, floor + size * 0.4,
-			floor + size * 0.52, STEEL_DARK, MAT.Metal, trimWith({ tag = opts.tag }))
 	end
 	for index = 1, top do
 		local cx = x + (index - (top + 1) / 2) * (size + 0.1) + 0.35
@@ -562,7 +569,7 @@ local function panel(parent, ax, az, bx, bz, thick, top, style)
 		local from, share = -length / 2 + inset + 0.3, (length - 2 * inset - 0.6) / math.max(bars, 1)
 		for bar = 1, bars do
 			local u = from + (bar - 0.5) * share + rnd(-0.2, 0.2) * math.min(1, share)
-			rebar(parent, at(u, top, rnd(-half * 0.5, half * 0.5)).Position, rnd(1.0, 2.3), rnd(0.05, 0.4), rnd(0, math.pi * 2))
+			local _ = { at(u, top, rnd(-half * 0.5, half * 0.5)).Position, rnd(1.0, 2.3), rnd(0.05, 0.4), rnd(0, math.pi * 2) }
 		end
 	end
 	-- Plates on a face stand proud of it by a fixed step per kind, their ends on a half-stud grid
@@ -587,7 +594,7 @@ local function panel(parent, ax, az, bx, bz, thick, top, style)
 		local side = B.rng:NextNumber() < 0.5 and 1 or -1
 		local a, b = span(-0.05, rnd(2.2, 3.8))
 		local y1 = base + math.floor(math.min(top - base - 0.3, rnd(3.6, 5.0)) * 2) / 2
-		if y1 > base + 1.2 then
+		if y1 > base + 1.2 and style.soot then
 			put(parent, "Scorch", Vector3.new(b - a, y1 - base - 0.4, PROUD_SOOT * 2), at((a + b) / 2, (base + 0.4 + y1) / 2, side * half),
 				SOOT, MAT.Slate, TRIM)
 		end
@@ -3105,6 +3112,43 @@ function TeamBattleground.ClearSite(site, map)
 	local stretches, odd, furniture = {}, {}, {}
 	local curves, curveOrder = {}, {}
 	local items, itemOrder = {}, {}
+	-- A town's roundabout (MapDecor.Roundabout: ring, island, fountain, splitters, signs, crossings,
+	-- lamps, drains, all in its one model) goes whole when any of it lies inside the apron's edge: taken
+	-- piece by piece it was too wide to clear as one thing and its kerbs read as streets, so it was left
+	-- under and through the arena (Oliver 09-25: "there should not be a roundabout under the
+	-- battleground"). Its town forgets it, so nothing lays out round a ring that is not there.
+	local ringBoxes = {}
+	local roundabouts = {}
+	for _, model in ipairs(map:GetDescendants()) do
+		if model:IsA("Model") and model.Name == "Roundabout" then
+			table.insert(roundabouts, model)
+		end
+	end
+	for _, model in ipairs(roundabouts) do
+		local boxes, inside = {}, false
+		for _, part in ipairs(model:GetDescendants()) do
+			if part:IsA("BasePart") then
+				local x0, x1, z0, z1 = footprintOf(part)
+				table.insert(boxes, { x0, x1, z0, z1 })
+				if nearestTo(x0, x1, z0, z1, centre) <= outer then
+					inside = true
+				end
+			end
+		end
+		if inside then
+			local town = model.Parent
+			model:Destroy()
+			cleared += 1
+			for _, b in ipairs(boxes) do
+				table.insert(ringBoxes, b)
+			end
+			if town then
+				for _, key in ipairs({ "RoundaboutIsland", "RoundaboutOuter", "RoundaboutApproach" }) do
+					town:SetAttribute(key, nil)
+				end
+			end
+		end
+	end
 	for _, part in ipairs(map:GetDescendants()) do
 		if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") and not part:GetAttribute("TeamBattleground") then
 			local x0, x1, z0, z1 = footprintOf(part)
@@ -3142,7 +3186,7 @@ function TeamBattleground.ClearSite(site, map)
 	end
 
 	-- The roads: those reaching the disc cut square at the apron's edge, the cut on the terrain's grid.
-	local removed, keptBoxes, clearedBoxes = {}, {}, {}
+	local removed, keptBoxes, clearedBoxes = {}, {}, ringBoxes
 	local ends = {}
 	for _, road in ipairs(roadsOf(stretches)) do
 		local cl = road.axis == "x" and centre.Z or centre.X

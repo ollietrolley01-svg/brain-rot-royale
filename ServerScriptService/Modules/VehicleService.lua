@@ -1716,6 +1716,12 @@ function VehicleService.Start()
 			local entry = active[index]
 			-- Maps are destroyed wholesale between matches; drop the entries that went with them.
 			if not entry.model.Parent or not entry.rig or not entry.rig.chassis.Parent then
+				-- Its chassis gone (broken off, deleted, fallen below the map) with the model still
+				-- standing: a wreck, to everyone that reads Wrecked (ModeTeams' base vehicles among them).
+				if entry.model.Parent and entry.model:GetAttribute("Wrecked") ~= true then
+					entry.wrecked = true
+					entry.model:SetAttribute("Wrecked", true)
+				end
 				for _, rider in pairs(entry.riders) do
 					if rider.character and rider.character.Parent then
 						setMassless(entry, rider.character, false)
