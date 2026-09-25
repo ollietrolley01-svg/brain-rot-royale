@@ -520,6 +520,11 @@ function T.Apply(state, drive, plan, nav, route)
 		table.insert(via, route.lane)
 		route.lane = nil
 	end
+	-- A base vehicle's way on from its lane to its base's access road (ModeTeams.BaseDriveVia).
+	for _, point in ipairs(route.laneVia or {}) do
+		table.insert(via, point)
+	end
+	route.laneVia = nil
 	for _, point in ipairs(plan.via or {}) do
 		table.insert(via, point)
 	end

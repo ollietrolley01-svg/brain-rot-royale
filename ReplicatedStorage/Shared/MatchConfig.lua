@@ -235,7 +235,7 @@ MatchConfig.TeamBaseVehicles = {
 	-- the carrier, rolled once for both bases), so each side has exactly one and neither has two. In the
 	-- world they are rare (VehicleModels weights 6 and 4 against the cars' 86); at a base, one of six is
 	-- a fair share for a mode built round pushing across one arena.
-	Slots = { "armored", "armed", "car", "car", "car", "bike" },
+	Slots = { "armored", "armed", "car", "car", "car", "car", "bike" },
 	Inner = 22,
 	Outer = 75,
 	PadClearance = 18,

@@ -751,7 +751,7 @@ end
 -- Chests 3 -> 8 (Oliver, 2026-09-23 14:38: "i wanted chests"), so most of a team gets one on the way out;
 -- 8 -> 14 (Oliver, 2026-09-24: "add more chests"), one for each named chest spot in a team's compound
 -- (TeamBaseRuins; tools/team_base_ruins_check.py fails if the two numbers part).
-LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 14 }
+LootService.BaseStock = { weapon = 16, heal = 10, item = 6, chest = 20 }
 LootService.BaseRadius = 85
 
 local function baseKind(item)

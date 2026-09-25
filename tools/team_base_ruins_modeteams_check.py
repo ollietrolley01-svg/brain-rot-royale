@@ -5,7 +5,7 @@ the compound section, BaseLootSpots, Teardown and the base vehicles) plus ClearS
 world of tools/team_vehicles_check.py (flat ground with a hill, a hole, buildings and loot round each
 base; VehicleService.Create parks where it is told). TeamBaseRuins itself is a stub here: its geometry
 is tools/team_base_ruins_check.py's business. The stub hands back a compound shaped like the real one
-(8 pads, one named chest spot per LootService.BaseStock.chest, 6 bays in two rows, 15 loot spots, in the frame it was given) and
+(28 pads, one named chest spot per LootService.BaseStock.chest, 7 bays in two rows, 15 loot spots, in the frame it was given) and
 records what it was asked for. Measured, per match:
 
   * each team's spawn pads ARE its compound's pads, and both compounds got the same seed;
@@ -24,7 +24,14 @@ records what it was asked for. Measured, per match:
   * one compound failing takes both down: open-ground pads for both, no bays handed out;
   * Teardown takes the compounds down and hands back BaseVehicleBays;
   * ClearSpotNear, with a body on the chosen pad, gives the nearest free pad of the compound;
-  * a mode without teams builds no compound.
+  * a mode without teams builds no compound; and a battle royale, then a team match, then a battle
+    royale again on the same server (Oliver, 2026-09-24: "make sure the team bases and battleground
+    don't spawn in the battle royale games"): neither battle royale builds a compound (no Build call,
+    so no base ground levelled) or has a base model, a "Spawn" bunker or a GunEmplacement in its map;
+  * WIRING (static, from the sources): the battle royale's StartWorld never reaches ModeTeams.Setup,
+    TeamBaseRuins or MapTerrain.FlattenPad; ModeTeams.Setup is called only from GameMode's respawn-mode
+    startWorld; TeamBaseRuins.Build only from ModeTeams.BuildRuin; and MatchService builds a fresh map
+    (MapGenerator.Build) for every match, so no ground work outlives its team match.
 
     python3 tools/team_base_ruins_modeteams_check.py .            the checks
     python3 tools/team_base_ruins_modeteams_check.py . --plant    and the planted faults
@@ -143,6 +150,11 @@ function workspace:GetPartBoundsInBox(cf, size, params)
     return hits
 end
 local function site(frame, x, z) return frame * CFrame.new(Vector3.new(x, 0, z)) end
+-- The access roads are tools/team_base_road_check.py's business: here they only count their calls.
+TeamBaseRoads = {
+    Width = 18,
+    Plan = function() R.accessPlans = (R.accessPlans or 0) + 1 return nil, "stub" end,
+}
 TeamBaseRuins = {
     SiteCost = function(frame, mapInfo)
         for _, bad in ipairs(R.badSites) do
@@ -156,14 +168,18 @@ TeamBaseRuins = {
         if R.failTeam == team then error("no ground") end
         local model = R.newInst("Model", "TeamBase")
         model.Parent = mapInfo.map
+        -- What a battle royale must never have in its map: the spawn bunker and the gun mounts.
+        R.newInst("Model", "Spawn").Parent = model
+        R.newInst("Part", "GunEmplacement").Parent = model
         local ruin = { model = model, pads = {}, chestSpots = {}, vehicleBays = {}, lootSpots = {} }
-        for _, z in ipairs({ 16, 30 }) do
-            for _, x in ipairs({ -36, -27, -18, -9 }) do table.insert(ruin.pads, site(frame, x, z)) end
+        -- As the real hall: seven columns by four rows.
+        for _, z in ipairs({ 30, 36.5, 43, 49.5 }) do
+            for _, x in ipairs({ -60.5, -53, -45.5, -38, -30.5, -23, -15.5 }) do table.insert(ruin.pads, site(frame, x, z)) end
         end
-        for i = 1, R.chestStock do table.insert(ruin.chestSpots, site(frame, -40 + ((i - 1) % 7) * 9, 36.9 + math.floor((i - 1) / 7) * 4)) end
-        -- Six bays, as the real yard: three facing the gate, three across the east end facing out.
-        for _, x in ipairs({ 12.5, 25, 37.5 }) do table.insert(ruin.vehicleBays, site(frame, x, -26)) end
-        for _, z in ipairs({ -7, 4, 15 }) do table.insert(ruin.vehicleBays, site(frame, 32, z) * CFrame.Angles(0, -math.pi / 2, 0)) end
+        for i = 1, R.chestStock do table.insert(ruin.chestSpots, site(frame, -40 + ((i - 1) % 7) * 9, -40 + math.floor((i - 1) / 7) * 4)) end
+        -- Seven bays, as the real motor pool: four facing the gatehouse, three facing the east gate.
+        for _, x in ipairs({ 10.5, 25.5, 40.5, 55.5 }) do table.insert(ruin.vehicleBays, site(frame, x, -30)) end
+        for _, z in ipairs({ 14, 29, 44 }) do table.insert(ruin.vehicleBays, site(frame, 35.5, z) * CFrame.Angles(0, -math.pi / 2, 0)) end
         for i = 1, 15 do table.insert(ruin.lootSpots, site(frame, -40 + i * 5, -20)) end
         R.lastRuin = R.lastRuin or {}
         R.lastRuin[team] = ruin
@@ -319,7 +335,7 @@ local root = { Position = pads1[1] + Vector3.new(0, 3, 0) }
 function body:FindFirstChildOfClass() return { Health = 100 } end
 function body:FindFirstChild() return root end
 R.bodies = { [body] = true }
-local got = M.ClearSpotNear(pads1[1], nil, pads1)
+local got = M.ClearSpotNear(pads1[1], nil, pads1, true)
 local isPad = false
 for i = 2, #pads1 do if R.flat(got, pads1[i]) < 1e-6 then isPad = true end end
 if not isPad then fail("ClearSpotNear did not hand over another pad of the compound") end
@@ -364,6 +380,31 @@ R.builds = {}
 M.Setup({ id = "Other", teams = false }, info)
 if #R.builds ~= 0 then fail("a compound built in a mode without teams") end
 M.Teardown()
+
+-- A battle royale, a team match, a battle royale again, on one server.
+local function baseLeft(node)
+    for _, child in ipairs(node:GetChildren()) do
+        local name = child.Name
+        if name == "Spawn" or name == "GunEmplacement" or (name:sub(1, 8) == "TeamBase" and name ~= "TeamBaseVehicles") then
+            return name
+        end
+        local deeper = baseLeft(child)
+        if deeper then return deeper end
+    end
+end
+for round, m in ipairs({ { id = "BattleRoyale", teams = false }, { id = "TeamDeathmatch", teams = true }, { id = "BattleRoyale", teams = false } }) do
+    R.builds = {}
+    M.Setup(m, info)
+    if m.teams then
+        if #R.builds ~= 2 then fail("the team match between the battle royales built " .. #R.builds .. " compounds") end
+    else
+        if #R.builds ~= 0 then fail("battle royale " .. round .. ": a compound was built (its ground levelled)") end
+        local left = baseLeft(map)
+        if left then fail("battle royale " .. round .. ": " .. left .. " in the map") end
+        if M.BaseRuin(1) or M.BaseRuin(2) then fail("battle royale " .. round .. ": ModeTeams still answers for a compound") end
+    end
+    M.Teardown()
+end
 return out
 """
 
@@ -387,8 +428,62 @@ PLANTS = [
     ("compounds left standing", ("\tModeTeams.ClearBattleground()\n\tModeTeams.ClearRuins()\n\tif ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then",
                                  "\tModeTeams.ClearBattleground()\n\tif ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then")),
     ("the rolled axis, road or not", ("\t\tlocal ranked = ModeTeams.RankBaseAxes(axis, mapInfo)", "\t\tlocal ranked = {}")),
-    ("busy pad reused", ("\t\t\tif not occupiedAt(other, except) then\n\t\t\t\treturn other", "\t\t\tif false then\n\t\t\t\treturn other")),
+    ("busy pad reused", ("\t\t\tif around >= PAD_CLEARANCE and (other - pad).Magnitude < bestDistance then",
+                         "\t\t\tif (other - pad).Magnitude < bestDistance then")),
+    ("compounds in a battle royale", ("currentMode ~= nil and currentMode.teams == true", "currentMode ~= nil")),
 ]
+
+# Source edits the WIRING check must catch: (file, old, new, label).
+WIRING_PLANTS = [
+    ("ServerScriptService/Modules/GameMode.lua", "\t\tStormService.Start(mapInfo.radius)\n\tend,",
+     "\t\tStormService.Start(mapInfo.radius)\n\t\tModeTeams.Setup(nil, mapInfo)\n\tend,", "battle royale sets the teams up"),
+    ("ServerScriptService/Modules/MatchService.lua", "mapInfo = MapGenerator.Build(winningMap)", "mapInfo = mapInfo or MapGenerator.Build(winningMap)",
+     "the map kept between matches"),
+    ("ServerScriptService/Modules/GameMode.lua", "\t\tStormService.Start(mapInfo.radius)\n\tend,",
+     "\t\tStormService.Start(mapInfo.radius)\n\t\tTeamBaseRuins.Build(CFrame.new(), nil, mapInfo, 1)\n\tend,", "battle royale builds a base"),
+]
+
+
+def code_lines(text):
+    """The source without its comments (whole-line and trailing), for call-site searches."""
+    import re
+    return [re.sub(r"--.*$", "", line) for line in text.splitlines()]
+
+
+def wiring(root, edits=None):
+    """The static half of the battle-royale check: see the module docstring."""
+    import re
+    from pathlib import Path
+    base = Path(root)
+    files = {str(f.relative_to(base)).replace("\\", "/"): f.read_text(encoding="utf-8") for f in (base / "ServerScriptService").rglob("*.lua")}
+    for rel, old, new in edits or []:
+        files[rel] = files[rel].replace(old, new, 1)
+    problems = []
+    gm = files["ServerScriptService/Modules/GameMode.lua"]
+    start = gm.index("GameMode.BattleRoyale = setmetatable({")
+    br = "\n".join(code_lines(gm[start:gm.index("\n}", start)]))
+    for name in ("ModeTeams", "TeamBaseRuins", "TeamBaseRoads", "FlattenPad", "TeamBattleground"):
+        if name in br:
+            problems.append("wiring: the battle royale's behaviour reaches %s" % name)
+    for rel, text in files.items():
+        for number, line in enumerate(code_lines(text), 1):
+            if re.search(r"\bModeTeams\.Setup\(", line) and rel != "ServerScriptService/Modules/GameMode.lua" \
+                    and not line.lstrip().startswith("function ModeTeams.Setup"):
+                problems.append("wiring: ModeTeams.Setup called from %s:%d" % (rel, number))
+            if re.search(r"TeamBaseRuins\.Build\b(?!Ruin)", line) and "pcall(TeamBaseRuins.Build," not in line \
+                    and not line.lstrip().startswith("function TeamBaseRuins.Build"):
+                problems.append("wiring: TeamBaseRuins.Build called from %s:%d" % (rel, number))
+    calls = [m.start() for m in re.finditer(r"\bModeTeams\.Setup\(", "\n".join(code_lines(gm)))]
+    body = "\n".join(code_lines(gm))
+    for at in calls:
+        head = body.rfind("local function ", 0, at)
+        if not body.startswith("local function startWorld", head):
+            problems.append("wiring: ModeTeams.Setup is called outside the respawn modes' startWorld")
+    ms = "\n".join(code_lines(files["ServerScriptService/Modules/MatchService.lua"]))
+    if not re.search(r"\n\s*mapInfo = MapGenerator\.Build\(", ms):
+        problems.append("wiring: MatchService no longer builds a fresh map for every match")
+    return problems
+
 
 
 def chest_stock(root):
@@ -463,6 +558,7 @@ def run(root, plant=None, seeds=6):
 def main(argv):
     root = argv[1] if len(argv) > 1 and not argv[1].startswith("-") else "."
     failures = run(root)
+    failures += wiring(root)
     for line in failures[:20]:
         print("  FAIL " + line)
     print("team_base_ruins_modeteams_check: 6 matches, %d failures" % len(failures))
@@ -474,8 +570,13 @@ def main(argv):
             hit = bool(found) and not any("anchor not found" in f for f in found)
             caught += hit
             print("%s  %s  (%s)" % ("CAUGHT" if hit else "MISSED", label, found[0] if found else "no failure"))
-        print("team_base_ruins_modeteams_check plants: %d of %d caught" % (caught, len(PLANTS)))
-        ok &= caught == len(PLANTS)
+        for rel, old, new, label in WIRING_PLANTS:
+            found = wiring(root, [(rel, old, new)])
+            caught += bool(found)
+            print("%s  %s  (%s)" % ("CAUGHT" if found else "MISSED", label, found[0] if found else "no failure"))
+        total = len(PLANTS) + len(WIRING_PLANTS)
+        print("team_base_ruins_modeteams_check plants: %d of %d caught" % (caught, total))
+        ok &= caught == total
     return 0 if ok else 1
 
 

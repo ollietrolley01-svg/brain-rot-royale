@@ -61,7 +61,10 @@ local TeamBaseRuins = {}
 
 -- The compound's footprint (X across, Z deep) and the flat ground kept round it. The rubble at the
 -- breaches lies inside the margin, so it is on the flattened pad too.
-TeamBaseRuins.Footprint = Vector3.new(92, 0, 84)
+-- The perimeter's centre lines are at x = +/-WX and z = +/-WZ (Oliver, 2026-09-24: "the bases need to be
+-- bigger to accommodate all the players of each team": sized for 25 a side, a full 50-player server).
+local WX, WZ = 66, 54
+TeamBaseRuins.Footprint = Vector3.new(2 * (WX + 1), 0, 2 * (WZ + 1))
 TeamBaseRuins.Margin = 4
 -- Distinct things built in the footprint that ClearSite removes whole; bigger ones stay, and
 -- SiteCost counts them against a site.
@@ -103,11 +106,23 @@ local GRADE_BANK, GRADE_GATE = 3, 8
 local GRADE_REACH = 136
 -- The pad's flat, as FlattenPad leaves it: the footprint, the margin and two voxel columns (local
 -- half-extents, X and Z).
-local FLAT_X, FLAT_Z = 46 + 4 + 8, 42 + 4 + 8
--- The two vehicle gates' corridors (local): the main gate's span across X, out through -Z; the east
--- gate's span along Z, out through +X. Each a little wider than its opening (4.6..43.4 and -12.6..22).
-local GATE_FRONT = { 0, 48 }
-local GATE_EAST = { -18, 26 }
+local FLAT_X, FLAT_Z = WX + 1 + 4 + 8, WZ + 1 + 4 + 8
+-- The motor pool's lanes: the front row's four side by side from LANE_X0 to LANE_X1 (out through the
+-- gatehouse, -Z), the east row's three from EAST_Z0 to EAST_Z1 (out through the east gate, +X), each
+-- LANE_PITCH wide: the biggest vehicle's width and 6 more. DRIVE_OUT is how far past the compound's
+-- middle every lane is kept clear (tools/team_base_ruins_check.py sweeps it).
+local LANE_PITCH = 15
+local LANE_X0, LANE_X1 = 3, 3 + 4 * LANE_PITCH
+local EAST_Z0, EAST_Z1 = 6.5, 6.5 + 3 * LANE_PITCH
+local DRIVE_OUT = WX + 16
+TeamBaseRuins.Lanes = { pitch = LANE_PITCH, front = { LANE_X0, LANE_X1 }, east = { EAST_Z0, EAST_Z1 }, driveOut = DRIVE_OUT }
+-- Where the access road to the map's roads starts (TeamBaseRoads): the foot of the gatehouse's ramp,
+-- in the middle of its lanes.
+TeamBaseRuins.GateOut = Vector3.new((LANE_X0 + LANE_X1) / 2, 0, -(WZ + 0.8 + 3))
+TeamBaseRuins.GateOutEast = Vector3.new(WX + 0.8 + 3, 0, (EAST_Z0 + EAST_Z1) / 2)
+-- The two vehicle gates' corridors (local), for the ground work: a little wider than the lanes.
+local GATE_FRONT = { LANE_X0 - 4, LANE_X1 + 4 }
+local GATE_EAST = { EAST_Z0 - 4, EAST_Z1 + 4 }
 -- Terrain voxels are 4 studs; MapTerrain draws the surface SurfaceLift over the filled volume.
 local CELL = 4
 
@@ -388,6 +403,84 @@ local function sandbags(parent, tag, x0, z0, x1, z1, courses, floor)
 end
 
 --------------------------------------------------------------------------------
+-- The team insignia
+--------------------------------------------------------------------------------
+
+-- The team's mark (Oliver, 2026-09-24: the round white-disc-and-dot emblems "read as eyes"): a
+-- heater shield, square at the top and pointed at the foot, in a white border, with two chevrons
+-- and a bar over them. Built flat against a face: `centre` on the face, `normal` out of it, `width`
+-- across (the shield is as tall as it is wide). `field` fills the shield (the team's colour on a
+-- neutral wall, dark on a team-coloured banner); the border and the marks are white. Every layer
+-- stands INSIGNIA_STEP prouder than the one under it, so no two share a plane; the lowest is sunk
+-- into the face, so the whole mark touches what it is painted on.
+local INSIGNIA_STEP = 0.07
+local function insignia(parent, centre, normal, width, field, opts)
+	local up = Vector3.new(0, 1, 0)
+	local right = up:Cross(normal).Unit
+	local face = CFrame.fromMatrix(centre, right, up, normal)
+	local thick = 0.12
+	local options = opts and trimWith(opts) or TRIM
+	local level = 0
+	local function plate(name, sx, sy, u, v, angle, color, at)
+		level = at or (level + 1)
+		local front = 0.03 + level * INSIGNIA_STEP
+		return put(parent, name, Vector3.new(sx, sy, thick), face * CFrame.new(u, v, front - thick / 2) * CFrame.Angles(0, 0, angle),
+			color, MAT.SmoothPlastic, options)
+	end
+	local teamName = "TeamInsignia"
+	local w = width
+	local diamond = w / math.sqrt(2)
+	-- The border (white), then the field inset from it: the foot a square turned on its corner, the
+	-- top a plain rectangle over the diamond's upper half.
+	plate("InsigniaBorder", diamond, diamond, 0, 0, math.pi / 4, WHITE_PAINT)
+	plate("InsigniaBorder", w, w / 2, 0, w / 4, 0, WHITE_PAINT)
+	local inner = w - w * 0.16
+	plate(teamName, inner / math.sqrt(2), inner / math.sqrt(2), 0, 0.02 * w, math.pi / 4, field)
+	plate(teamName, inner, w / 2 - w * 0.08, 0, w / 4 + 0.04 * w, 0, field)
+	-- Two chevrons pointing up, and a bar over them.
+	local length, bar = w * 0.36, w * 0.1
+	local tilt = math.rad(34)
+	for _, apex in ipairs({ 0.08 * w, -0.14 * w }) do
+		local du, dv = math.cos(tilt) * length / 2, math.sin(tilt) * length / 2
+		-- The marks all lie on the field: each chevron's two arms a step apart (they cross at the apex).
+		plate("InsigniaChevron", length, bar, -du + bar * 0.3, apex - dv, tilt, WHITE_PAINT, 5)
+		plate("InsigniaChevron", length, bar, du - bar * 0.3, apex - dv, -tilt, WHITE_PAINT, 6)
+	end
+	plate("InsigniaBar", w * 0.42, bar, 0, 0.3 * w, 0, WHITE_PAINT, 5)
+end
+
+-- A lit sign: a steel board on a face with the team's colour round a dark panel, the insignia in the
+-- middle, a neon strip under it and a light. u0..u1 along the face (axis "x": along X, facing
+-- `side` in Z; axis "z": along Z, facing `side` in X), y0..y1 up it.
+local function litSign(parent, axis, at, side, u0, u1, y0, y1, range)
+	local mid, cy = (u0 + u1) / 2, (y0 + y1) / 2
+	-- facePlate names the face's NORMAL axis; `axis` here is the one the sign runs along.
+	local normalAxis = axis == "x" and "z" or "x"
+	local function onFace(proud, a, b, c, d, color, material, name)
+		return facePlate(parent, name, normalAxis, at, side, proud, a, b, c, d, color, material, TRIM)
+	end
+	onFace(0.1, u0, u1, y0, y1, STEEL_DARK, MAT.Metal, "SignBoard")
+	onFace(0.2, u0 + 0.25, u1 - 0.25, y0 + 0.25, y1 - 0.25, B.team, MAT.SmoothPlastic, "TeamSignPanel")
+	onFace(0.3, u0 + 0.55, u1 - 0.55, y0 + 0.55, y1 - 0.55, SOOT, MAT.SmoothPlastic, "SignField")
+	local glow = onFace(0.4, u0 + 0.8, u1 - 0.8, y0 + 0.62, y0 + 0.8, B.team, MAT.Neon, "TeamSignGlow")
+	local normal = axis == "x" and Vector3.new(0, 0, side) or Vector3.new(side, 0, 0)
+	local centre = axis == "x" and Vector3.new(mid, cy + 0.15, at + side * 0.38) or Vector3.new(at + side * 0.38, cy + 0.15, mid)
+	insignia(parent, centre, normal, math.min(y1 - y0 - 0.9, (u1 - u0) * 0.4), B.team)
+	-- Stencilled bars either side of the mark, like lettering seen from a distance.
+	for _, s in ipairs({ -1, 1 }) do
+		for row = 0, 1 do
+			local a = mid + s * (y1 - y0) * 0.55
+			local b = a + s * (u1 - u0) * 0.22
+			local lo, hi = math.min(a, b), math.max(a, b)
+			local y = cy + 0.25 - row * 0.8
+			onFace(0.4, lo, hi, y, y + 0.36, WHITE_PAINT, MAT.SmoothPlastic, "SignLettering")
+		end
+	end
+	light(glow, B.team:Lerp(WARM, 0.5), range or 18, 1.1)
+end
+
+
+--------------------------------------------------------------------------------
 -- Walls
 --------------------------------------------------------------------------------
 
@@ -497,8 +590,8 @@ local function wallPanel(parent, axis, u0, u1, c, thick, top, style)
 		end
 	end
 
-	-- Soot from a blast: always beside a gap, now and then elsewhere.
-	if (style.low or style.slopeUp or B.rng:NextNumber() < 0.25) and length > 2.4 then
+	-- Soot from a blast: always beside a gap, now and then elsewhere (never where style.soot is false).
+	if style.soot ~= false and (style.low or style.slopeUp or B.rng:NextNumber() < 0.25) and length > 2.4 then
 		local side = B.rng:NextNumber() < 0.5 and 1 or -1
 		if style.bareInside and style.out then
 			side = style.out
@@ -566,7 +659,7 @@ local function perimeterRun(parent, axis, c, u0, u1, out, lowStart, lowEnd, hold
 		end
 		wallPanel(parent, axis, a, b, c, 1.6, top, style)
 		if hold and hold >= a and hold <= b then
-			-- The banner: a rod along the top of the outer face, the cloth hanging from it, the eye on it.
+			-- The banner: a rod along the top of the outer face, the cloth hanging from it, the insignia on it.
 			local m = (a + b) / 2
 			local face = c + out * 0.8
 			local function at(u, y, off)
@@ -583,8 +676,7 @@ local function perimeterRun(parent, axis, c, u0, u1, out, lowStart, lowEnd, hold
 				box(parent, "TeamWallBanner", face + out * 0.51 - t, face + out * 0.51 + t, top - 6.6, top - 0.35, m - w, m + w, B.team, MAT.Fabric, TRIM)
 			end
 			local normal = axis == "x" and Vector3.new(0, 0, out) or Vector3.new(out, 0, 0)
-			disc(parent, "BannerEye", at(m, top - 2.6, 0.51), normal, 0.14, 2.4, WHITE_PAINT, MAT.SmoothPlastic)
-			disc(parent, "BannerPupil", at(m + 0.2, top - 2.7, 0.51), normal, 0.22, 1.0, SOOT, MAT.SmoothPlastic)
+			insignia(parent, at(m, top - 3.2, 0.57), normal, 2.6, mix(B.team, SOOT, 0.55))
 		end
 	end
 end
@@ -593,15 +685,15 @@ end
 -- The ground
 --------------------------------------------------------------------------------
 
--- Concrete paving over a rectangle: nx by nz slabs with 0.2 cracks of ground between them. The
--- slabs are "Paving" (DestructibleService.Never) and sunk a stud into the ground.
+-- Concrete paving over a rectangle: nx by nz slabs with 0.2 cracks of ground between them, sunk a
+-- stud into the ground.
 local function paving(parent, x0, x1, z0, z1, nx, nz, colors)
 	local w, d = (x1 - x0) / nx, (z1 - z0) / nz
 	for i = 1, nx do
 		for j = 1, nz do
 			local color = colors[B.rng:NextInteger(1, #colors)]
 			box(parent, "Paving", x0 + (i - 1) * w + 0.1, x0 + i * w - 0.1, TILE_TOP - 1, TILE_TOP,
-				z0 + (j - 1) * d + 0.1, z0 + j * d - 0.1, color, MAT.Concrete, { tag = false })
+				z0 + (j - 1) * d + 0.1, z0 + j * d - 0.1, color, MAT.Concrete)
 		end
 	end
 end
@@ -620,32 +712,50 @@ local function groundDisc(parent, name, x, z, diameter, color, material, level, 
 	return rod(parent, name, Vector3.new(x, y - 0.06, z), Vector3.new(x, y + 0.06, z), diameter, color, material, TRIM)
 end
 
+-- A ramp from the ground up to the paving's top at a vehicle gate, so no wheel meets a lip: a wedge
+-- `run` long outside the wall face at `at` (axis "z": the front wall, the ramp running -Z; "x": the
+-- east wall, running +X), u0..u1 across.
+local function gateRamp(parent, axis, at, u0, u1, run)
+	local rise = TILE_TOP + 0.5
+	if axis == "z" then
+		-- A wedge's tall face is its +Z: turned half round, it is tall at the wall and low outside.
+		put(parent, "Paving", Vector3.new(u1 - u0, rise, run), CFrame.new((u0 + u1) / 2, TILE_TOP - rise / 2, at - run / 2) * CFrame.Angles(0, math.pi, 0),
+			PAVING, MAT.Concrete, { class = "WedgePart" })
+	else
+		put(parent, "Paving", Vector3.new(u1 - u0, rise, run), CFrame.new(at + run / 2, TILE_TOP - rise / 2, (u0 + u1) / 2) * CFrame.Angles(0, math.pi / 2, 0),
+			PAVING, MAT.Concrete, { class = "WedgePart" })
+	end
+end
+
 local function buildGround(model)
 	local ground = Instance.new("Model")
 	ground.Name = "Paving"
-	ground:SetAttribute("Destructible", false)
 	ground.Parent = model
-	-- The foundation: one slab under the whole compound, walls and all, its top 0.1 over the levelled
-	-- ground. Wherever a ray goes down inside the walls -- a crack between slabs, the foot of a wall --
-	-- it finds concrete of the compound's own, never whatever the terrain happens to be doing there.
-	box(ground, "Foundation", -46, 46, -1.2, FOUNDATION_TOP, -42, 42, CONCRETE_DARK, MAT.Concrete, { tag = false })
-	-- The courtyard in cracked slabs; the yard and lane as ONE slab, so no wheel of a parked car and no
-	-- footing ray of VehicleService's stands over a crack.
-	paving(ground, -44.2, 4, -40.2, 8, 4, 4, { PAVING, CONCRETE_DARK, CONCRETE })
-	paving(ground, 4, 44.2, -40.2, 22, 1, 1, { PAVING })
-	-- Painted cracks on the yard slab, a level over the bay paint so the two never share a plane.
-	for _, at in ipairs({ { 12, -6 }, { 25, -35 }, { 9, 16 }, { 40, 11.5 }, { 18.5, -20 } }) do
-		groundMark(ground, "Crack", at[1], at[2], rnd(2.5, 4.5), 0.22,
+	-- The foundation: one slab under the whole compound, its top 0.1 over the levelled ground, so a ray
+	-- down anywhere inside the walls finds concrete of the compound's own.
+	box(ground, "Foundation", -WX - 0.7, WX + 0.7, -1.2, FOUNDATION_TOP, -WZ - 0.7, WZ + 0.7, CONCRETE_DARK, MAT.Concrete)
+	-- The parade ground (the courtyard) in cracked slabs of three greys, and the strip under its gate.
+	paving(ground, -WX + 0.8, 2, -WZ + 0.8, 24, 6, 6, { PAVING, CONCRETE_DARK, CONCRETE })
+	paving(ground, -37, -29, -WZ - 1.4, -WZ + 0.8, 1, 1, { PAVING })
+	-- The alley between the spawn hall and the armoury.
+	paving(ground, -7, 4, 24, WZ - 0.8, 1, 3, { PAVING, CONCRETE })
+	-- The motor pool as TWO slabs (no wheel of a parked car and no footing ray of VehicleService's
+	-- stands over a crack): the apron and the front row, out under the main gate; the east row, out
+	-- under the east gate. Ramps down to the ground outside both.
+	box(ground, "Paving", 2, WX - 0.8, TILE_TOP - 1, TILE_TOP, -WZ - 0.8, 8, PAVING, MAT.Concrete)
+	box(ground, "Paving", 24, WX + 0.8, TILE_TOP - 1, TILE_TOP, 8, WZ - 0.8, PAVING, MAT.Concrete)
+	gateRamp(ground, "z", -WZ - 0.8, LANE_X0, LANE_X1, 3)
+	gateRamp(ground, "x", WX + 0.8, EAST_Z0, EAST_Z1, 3)
+	-- A kerb line of yellow paint where the parade ground meets the motor pool.
+	groundMark(ground, "KerbPaint", 2.1, -14, 0.2, 76, 0, YELLOW_PAINT, MAT.SmoothPlastic, 1)
+	-- Cracks and blast marks, at least 6 apart so no two cross.
+	for _, at in ipairs({ { -56, -40 }, { -27, -30 }, { -6, -44 }, { -4, -18 }, { -38, 8 }, { -58, -4 }, { -22, 16 },
+		{ 14, -4 }, { 44, -2 }, { 30, -48 }, { 52, 30 } }) do
+		groundMark(ground, "Crack", at[1], at[2], rnd(2.5, 5.2), 0.22,
 			B.rng:NextInteger(0, 1) * math.pi / 2 + rnd(0.15, math.pi / 2 - 0.15), SOOT, MAT.Slate, 1)
 	end
-
-	-- Cracks across the courtyard, at least 6 apart so no two cross, and two blast marks.
-	for _, at in ipairs({ { -37, -2 }, { -27, -26 }, { -14, -38 }, { -8, -12 }, { -21, 1 }, { -36, -33 }, { -13, -1 } }) do
-		groundMark(ground, "Crack", at[1], at[2], rnd(2.5, 5.2), 0.22,
-			B.rng:NextInteger(0, 1) * math.pi / 2 + rnd(0.15, math.pi / 2 - 0.15), SOOT, MAT.Slate, 0)
-	end
-	for _, blast in ipairs({ { -17, -7, 4.6 }, { -34.5, -12.5, 3.4 }, { 26, -30, 3.8 } }) do
-		groundDisc(ground, "BlastMark", blast[1], blast[2], blast[3], mix(SOOT, CONCRETE_DARK, 0.35), MAT.Slate, 1)
+	for _, blast in ipairs({ { -17, -8, 4.6 }, { -46, -44, 3.4 }, { 28, -8, 3.8 } }) do
+		groundDisc(ground, "BlastMark", blast[1], blast[2], blast[3], mix(SOOT, CONCRETE_DARK, 0.35), MAT.Slate, 0)
 		groundDisc(ground, "BlastMark", blast[1] + 0.3, blast[2] - 0.2, blast[3] * 0.55, SOOT, MAT.Slate, 2)
 	end
 end
@@ -659,446 +769,433 @@ local function buildPerimeter(model)
 	walls.Name = "Perimeter"
 	walls.Parent = model
 
-	-- Front (z = -41, outside is -Z): the corner run, the breach at x -24..-17, the run to the gate.
-	perimeterRun(walls, "x", -41, -45.8, -24, -1, false, true, -35)
-	perimeterRun(walls, "x", -41, -17, 2.2, -1, true, false)
-	-- Left (x = -45): up to the side breach at z -10..-3, then on to the bunker's own wall.
-	perimeterRun(walls, "z", -45, -40.2, -10, -1, false, true, -36, { -27, -17 })
-	perimeterRun(walls, "z", -45, -3, 8, -1, true, false)
-	-- Right (x = +45), along the yard to the east gate at z -14.6..22 (the back row of bays drives out
-	-- through it); the gate leaf leans on its inner face at z -37..-29, so that stays plain.
-	perimeterRun(walls, "z", 45, -39.8, -14.6, 1, false, true, -27, nil, { -37.5, -29 })
+	-- Front (z = -WZ, outside -Z): the corner to the foot gate, the foot gate to the gatehouse.
+	perimeterRun(walls, "x", -WZ, -WX - 0.8, -40, -1, false, false, -50)
+	perimeterRun(walls, "x", -WZ, -26, LANE_X0 - 8.2, -1, false, false, -15)
+	-- West (x = -WX): the corner to the breach at z -14..-6, the breach to the spawn hall.
+	perimeterRun(walls, "z", -WX, -WZ + 0.8, -14, -1, false, true, -34)
+	perimeterRun(walls, "z", -WX, -6, 24, -1, true, false, 18, { -0.5, 14.5 }, { -0.5, 14.5 })
+	-- East (x = +WX): from the gatehouse's east tower to the east gate's south post.
+	perimeterRun(walls, "z", WX, -WZ + 6.4, EAST_Z0 - 3.9, 1, false, false, -24)
+	-- Back (z = +WZ): the alley's end, and behind the east row of bays.
+	perimeterRun(walls, "x", WZ, -7, 4, 1, false, false)
+	perimeterRun(walls, "x", WZ, 24, WX - 1.2, 1, false, false, 44)
 
-	-- Rubble spilled out of each breach, clear of the way through.
-	rubble(walls, -25.4, -43.6, 1.8, 5, 0)
-	rubble(walls, -15.6, -43.2, 1.6, 4, 0)
-	rubble(walls, -47.4, -11.4, 1.6, 4, 0)
-	rubble(walls, -47.6, -1.4, 1.6, 4, 0)
-	rubble(walls, 48.2, -17.2, 1.4, 4, 0)
-
-	-- The gate: two posts and a gantry over the vehicle way, the team's banner hanging from it.
-	local gate = Instance.new("Model")
-	gate.Name = "Gate"
-	gate:SetAttribute("Destructible", false)
-	gate.Parent = model
-	-- The gantries clear the tallest vehicle there is, the armed Sahur Van (10.3 with its gun), by a
-	-- stud and more: at 11.5 its gun drove into the beam.
-	box(gate, "GatePost", 2.2, 4.6, -1, GANTRY_Y, -42.2, -39.8, CONCRETE_DARK, MAT.Concrete)
-	box(gate, "GatePost", 43.4, 45.8, -1, GANTRY_Y, -42.2, -39.8, CONCRETE_DARK, MAT.Concrete)
-	box(gate, "Gantry", 2.2, 45.8, GANTRY_Y, GANTRY_Y + 1.2, -41.6, -40.4, STEEL, MAT.Metal)
-	-- The east gate, for the back row of bays: one post, and a gantry from it to the supply room's
-	-- roof beam, the team's banner over the way out.
-	-- Its far end rests on the supply room's corner cross beam (top 12.8).
-	box(gate, "GatePost", 43.4, 45.8, -1, 12.8, -14.6, -12.6, CONCRETE_DARK, MAT.Concrete)
-	box(gate, "Gantry", 43.9, 45.3, 12.8, 14.0, -14.6, 23.0, STEEL, MAT.Metal)
-	box(gate, "TeamGateBanner", 44.52, 44.68, 9.9, 13.3, 0.5, 7.5, B.team, MAT.Fabric, TRIM)
-	disc(gate, "GateEmblem", Vector3.new(44.6, 11.5, 4), Vector3.new(1, 0, 0), 0.14, 2.2, WHITE_PAINT, MAT.SmoothPlastic)
-	disc(gate, "GateEmblemEye", Vector3.new(44.6, 11.5, 4), Vector3.new(1, 0, 0), 0.22, 1.0, SOOT, MAT.SmoothPlastic)
-	for x = 6, 42, 9 do
-		rod(gate, "GantryRivet", Vector3.new(x, GANTRY_Y + 0.6, -41.7), Vector3.new(x, GANTRY_Y + 0.6, -41.5), 0.3, STEEL_DARK, MAT.Metal, TRIM)
-	end
-	facePlate(gate, "TeamGatePaint", "z", -42.2, -1, PROUD_PAINT, 2.6, 4.2, 8.6, 10.6, B.team, MAT.SmoothPlastic)
-	facePlate(gate, "TeamGatePaint", "z", -42.2, -1, PROUD_PAINT, 43.8, 45.4, 8.6, 10.6, B.team, MAT.SmoothPlastic)
-	-- The banner hangs through the gantry's middle; it stops 8.6 up, over the tallest car.
-	box(gate, "TeamGateBanner", 20.5, 27.5, GANTRY_Y - 2.9, GANTRY_Y + 0.5, -41.08, -40.92, B.team, MAT.Fabric, TRIM)
-	disc(gate, "GateEmblem", Vector3.new(24, GANTRY_Y - 1.3, -41.0), Vector3.new(0, 0, -1), 0.14, 2.2, WHITE_PAINT, MAT.SmoothPlastic)
-	disc(gate, "GateEmblemEye", Vector3.new(24, GANTRY_Y - 1.3, -41.0), Vector3.new(0, 0, -1), 0.22, 1.0, SOOT, MAT.SmoothPlastic)
-	box(gate, "TeamBannerTatter", 25.2, 27.0, GANTRY_Y - 3.5, GANTRY_Y - 2.6, -41.17, -41.03, mix(B.team, SOOT, 0.3), MAT.Fabric, TRIM)
-	-- A floodlight on the left post, looking in over the yard.
-	local head = box(gate, "GateLamp", 2.6, 4.2, 9.4, 10.4, -39.8, -38.9, STEEL_DARK, MAT.Metal, TRIM)
-	local _ = head
-	local bulb = box(gate, "GateLampGlass", 2.8, 4.0, 9.55, 10.25, -38.9, -38.75, WARM, MAT.Neon, TRIM)
-	light(bulb, WARM, 26, 1.4)
+	-- Rubble spilled out of the breach, clear of the way through.
+	rubble(walls, -WX - 2.2, -15.4, 1.6, 4, 0)
+	rubble(walls, -WX - 2.4, -4.6, 1.6, 4, 0)
+	rubble(walls, -WX + 2.6, -12.8, 1.2, 3, TILE_TOP)
 end
 
 --------------------------------------------------------------------------------
--- The bunker: the spawn shelter
+-- The gates: the gatehouse over the motor pool, the east gate, the foot gate
+--------------------------------------------------------------------------------
+
+-- A truss between two points at the same height along X or Z: bottom and top chords, posts and
+-- diagonals between them. Everything in it is a real part (it is what the sign hangs on).
+local function truss(parent, alongX, u0, u1, c, y0, y1, bay)
+	local function at(u, y)
+		return alongX and Vector3.new(u, y, c) or Vector3.new(c, y, u)
+	end
+	if alongX then
+		box(parent, "Gantry", u0, u1, y0, y0 + 1.2, c - 0.6, c + 0.6, STEEL, MAT.Metal)
+		box(parent, "Gantry", u0, u1, y1 - 0.8, y1, c - 0.5, c + 0.5, STEEL, MAT.Metal)
+	else
+		box(parent, "Gantry", c - 0.6, c + 0.6, y0, y0 + 1.2, u0, u1, STEEL, MAT.Metal)
+		box(parent, "Gantry", c - 0.5, c + 0.5, y1 - 0.8, y1, u0, u1, STEEL, MAT.Metal)
+	end
+	local count = math.max(1, math.floor((u1 - u0) / bay + 0.5))
+	local step = (u1 - u0) / count
+	for index = 1, count - 1 do
+		local u = u0 + index * step
+		if alongX then
+			box(parent, "GantryPost", u - 0.3, u + 0.3, y0 + 1.2, y1 - 0.8, c - 0.3, c + 0.3, STEEL_DARK, MAT.Metal)
+		else
+			box(parent, "GantryPost", c - 0.3, c + 0.3, y0 + 1.2, y1 - 0.8, u - 0.3, u + 0.3, STEEL_DARK, MAT.Metal)
+		end
+	end
+	for index = 1, count do
+		local a, b = u0 + (index - 1) * step, u0 + index * step
+		local flip = index % 2 == 0
+		plateBetween(parent, "GantryBrace", at(flip and a + 0.3 or b - 0.3, y0 + 1.25), at(flip and b - 0.3 or a + 0.3, y1 - 0.85), 0.35, 0.35,
+			STEEL_DARK, MAT.Metal)
+	end
+end
+
+-- A gatehouse tower: a concrete block on a wider plinth, a band at the gantry, slit windows, a
+-- parapet round a flat roof, a banner with the insignia facing out, a ladder on its back.
+local TOWER_TOP = 16
+local function gateTower(gate, x0, x1, z0, z1, ladderX)
+	box(gate, "GateTower", x0 - 0.5, x1 + 0.5, -0.95, 2.2, z0 - 0.5, z1 + 0.5, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "GateTower", x0, x1, 2.2, TOWER_TOP, z0, z1, CONCRETE, MAT.Concrete)
+	-- A band of darker concrete round it at the gantry, the roof slab over the top.
+	box(gate, "TowerBand", x0 - 0.25, x1 + 0.25, GANTRY_Y - 0.4, GANTRY_Y + 0.5, z0 - 0.25, z1 + 0.25, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "TowerRoof", x0 - 0.35, x1 + 0.35, TOWER_TOP, TOWER_TOP + 0.4, z0 - 0.35, z1 + 0.35, CONCRETE_DARK, MAT.Concrete)
+	-- The parapet, with a gap at the back for the ladder.
+	local top = TOWER_TOP + 0.4
+	box(gate, "Parapet", x0 - 0.35, x1 + 0.35, top, top + 1.3, z0 - 0.35, z0 + 0.45, CONCRETE, MAT.Concrete)
+	box(gate, "Parapet", x0 - 0.35, x0 + 0.45, top, top + 1.1, z0 + 0.45, z1 + 0.35, CONCRETE, MAT.Concrete)
+	box(gate, "Parapet", x1 - 0.45, x1 + 0.35, top, top + 1.2, z0 + 0.45, z1 + 0.35, CONCRETE, MAT.Concrete)
+	-- Slits on the front, and a scorch where something hit it.
+	for _, u in ipairs({ x0 + 1.6, x1 - 2.4 }) do
+		facePlate(gate, "WindowSlit", "z", z0, -1, 0.1, u, u + 0.8, 5.5, 8.5, SOOT, MAT.Slate)
+	end
+	facePlate(gate, "Scorch", "z", z0, -1, PROUD_SOOT, x0 + 0.6, x0 + 3.2, 2.6, 6.2, SOOT, MAT.Slate)
+	-- The team's banner down the front, the insignia on it.
+	local mid = (x0 + x1) / 2
+	rod(gate, "BannerRod", Vector3.new(mid - 2, 14.9, z0 - 0.45), Vector3.new(mid + 2, 14.9, z0 - 0.45), 0.35, STEEL_DARK, MAT.Metal, TRIM)
+	box(gate, "TeamTowerBanner", mid - 1.7, mid + 1.7, 9.2, 14.8, z0 - 0.33, z0 - 0.19, B.team, MAT.Fabric, TRIM)
+	insignia(gate, Vector3.new(mid, 12.6, z0 - 0.33), Vector3.new(0, 0, -1), 2.4, mix(B.team, SOOT, 0.55))
+	-- A floodlight on the inner corner, looking in over the pool.
+	local la = ladderX > mid and x0 + 0.3 or x1 - 1.9
+	local lampHead = box(gate, "GateLamp", la, la + 1.6, 10.2, 11.1, z1, z1 + 0.9, STEEL_DARK, MAT.Metal, TRIM)
+	local _ = lampHead
+	local glass = box(gate, "GateLampGlass", la + 0.2, la + 1.4, 10.35, 10.95, z1 + 0.9, z1 + 1.05, WARM, MAT.Neon, TRIM)
+	light(glass, WARM, 28, 1.4)
+	-- The way up: a ladder on the back face.
+	local ladder = Instance.new("TrussPart")
+	ladder.Name = "TowerLadder"
+	ladder.Anchored = true
+	ladder.Size = Vector3.new(2, 16, 2)
+	ladder.CFrame = B.frame * CFrame.new(ladderX, 8, z1 + 1)
+	ladder.Color = STEEL
+	ladder.Material = MAT.Metal
+	ladder.Parent = gate
+	-- Where pc/mounted-guns stands a gun: invisible, not solid, tagged, its CFrame at the gun's base,
+	-- facing out of the compound.
+	local mount = put(gate, "GunEmplacement", Vector3.new(1, 0.2, 1), CFrame.new(mid, top, (z0 + z1) / 2), STEEL_DARK, MAT.Metal,
+		{ trim = true, transparency = 1 })
+	mount.CastShadow = false
+	game:GetService("CollectionService"):AddTag(mount, "GunEmplacement")
+end
+
+local function buildGates(model)
+	local gate = Instance.new("Model")
+	gate.Name = "Gate"
+	gate.Parent = model
+
+	-- THE GATEHOUSE over the motor pool's way out: two towers either side of the four lanes, a truss
+	-- between them over the lanes (its underside GANTRY_Y, over the tallest vehicle there is with a
+	-- stud and more to spare), the lit sign in its middle.
+	gateTower(gate, LANE_X0 - 8.2, LANE_X0 - 0.8, -WZ - 4.4, -WZ + 4.4, LANE_X0 - 4)
+	gateTower(gate, LANE_X1 + 0.8, LANE_X1 + 8.2, -WZ - 4.4, -WZ + 4.4, LANE_X1 + 2.3)
+	truss(gate, true, LANE_X0 - 0.8, LANE_X1 + 0.8, -WZ, GANTRY_Y, GANTRY_Y + 4.4, 7.5)
+	-- The sign stands on the truss's top chord, over the whole way out.
+	litSign(gate, "x", -WZ, -1, (LANE_X0 + LANE_X1) / 2 - 8, (LANE_X0 + LANE_X1) / 2 + 8, GANTRY_Y + 4.4, GANTRY_Y + 8.2, 30)
+
+	-- THE EAST GATE, for the east row: two posts, a truss between them, a sign on the outside.
+	box(gate, "GatePost", WX - 1.2, WX + 1.6, -1, GANTRY_Y + 4.4, EAST_Z0 - 3.9, EAST_Z0 - 0.2, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "GatePost", WX - 1.2, WX + 1.6, -1, GANTRY_Y + 4.4, EAST_Z1 + 0.2, WZ + 0.8, CONCRETE_DARK, MAT.Concrete)
+	box(gate, "PostCap", WX - 1.45, WX + 1.85, GANTRY_Y + 4.4, GANTRY_Y + 4.9, EAST_Z0 - 4.15, EAST_Z0 + 0.05, CONCRETE, MAT.Concrete)
+	box(gate, "PostCap", WX - 1.45, WX + 1.85, GANTRY_Y + 4.4, GANTRY_Y + 4.9, EAST_Z1 - 0.05, WZ + 1.05, CONCRETE, MAT.Concrete)
+	truss(gate, false, EAST_Z0 - 0.2, EAST_Z1 + 0.2, WX + 0.2, GANTRY_Y, GANTRY_Y + 4.4, 7.5)
+	litSign(gate, "z", WX + 0.2, 1, (EAST_Z0 + EAST_Z1) / 2 - 7, (EAST_Z0 + EAST_Z1) / 2 + 7, GANTRY_Y + 4.4, GANTRY_Y + 7.8, 24)
+	for _, z in ipairs({ EAST_Z0 - 2, EAST_Z1 + 2 }) do
+		facePlate(gate, "TeamGatePaint", "x", WX + 1.6, 1, PROUD_PAINT, z - 1, z + 1, 8.6, 10.6, B.team, MAT.SmoothPlastic)
+	end
+
+	-- THE FOOT GATE into the parade ground: two pylons and a lintel, the insignia on each pylon, a
+	-- sandbagged step on the lintel.
+	for _, x in ipairs({ -40, -29 }) do
+		box(gate, "GatePylon", x - 0.3, x + 3.3, -0.9, 12.4, -WZ - 1.6, -WZ + 1.4, CONCRETE, MAT.Concrete)
+		box(gate, "PylonCap", x - 0.55, x + 3.55, 12.4, 12.9, -WZ - 1.85, -WZ + 1.65, CONCRETE_DARK, MAT.Concrete)
+		box(gate, "PylonPlinth", x - 0.55, x + 3.55, -0.95, 1.6, -WZ - 1.85, -WZ + 1.65, CONCRETE_DARK, MAT.Concrete)
+		insignia(gate, Vector3.new(x + 1.5, 6.4, -WZ - 1.6), Vector3.new(0, 0, -1), 2.2, B.team)
+	end
+	box(gate, "Lintel", -37, -29, 9.6, 11.4, -WZ - 1.2, -WZ + 1.0, CONCRETE_DARK, MAT.Concrete)
+	facePlate(gate, "TeamLintelPaint", "z", -WZ - 1.2, -1, PROUD_PAINT, -36.4, -29.6, 10.1, 10.9, B.team, MAT.SmoothPlastic)
+	sandbags(gate, "lintel", -36.6, -WZ - 0.1, -29.4, -WZ - 0.1, 1, 11.4)
+	table.insert(B.doorways, { name = "FootGate", x0 = -36.4, x1 = -29.6, z0 = -WZ - 1.2, z1 = -WZ + 1.0, floor = TILE_TOP, top = 9.6 })
+	local lamp = wallLamp(gate, Vector3.new(-33, 10.5, -WZ + 1.0), Vector3.new(0, 0, 1), 20)
+	local _ = lamp
+end
+
+--------------------------------------------------------------------------------
+-- The spawn hall ("Spawn"): 28 pads under one roof, four ways out
 --------------------------------------------------------------------------------
 
 local BUNKER_TOP = 10.8
 local ROOF_TOP = 12
+-- The pads: seven columns by four rows, 7.5 and 6.5 apart, so a full team of 25 spawns with room
+-- to step off (Oliver, 2026-09-24: "the bases need to be bigger to accommodate all the players").
+local PAD_X = { -60.5, -53, -45.5, -38, -30.5, -23, -15.5 }
+local PAD_Z = { 30, 36.5, 43, 49.5 }
+-- The hall's front doors (x spans), each 8 wide.
+local HALL_DOORS = { { -57, -49 }, { -42, -34 }, { -27, -19 } }
+local HALL_EAST_DOOR = { 36, 44 }
 
-local function buildBunker(model)
-	local bunker = Instance.new("Model")
+local function buildHall(model)
+	local hall = Instance.new("Model")
 	-- "Spawn" is in DestructibleService.Never: nothing in here breaks, whatever it is called.
-	bunker.Name = "Spawn"
-	bunker:SetAttribute("Destructible", false)
-	bunker.Parent = model
+	hall.Name = "Spawn"
+	hall:SetAttribute("Destructible", false)
+	hall.Parent = model
 	local never = { tag = false }
+	local x0, x1, z0, z1 = -WX - 0.8, -7, 24, WZ + 0.8
 
-	-- Floor and thresholds. The floor is 0.5 above the paving, one easy step.
-	box(bunker, "Foundation", -43.8, 2, -0.7, ROOM_FLOOR, 10, 39.8, CONCRETE_DARK, MAT.Concrete, never)
-	box(bunker, "Foundation", -33, -26, -0.7, ROOM_FLOOR, 8, 10, CONCRETE_DARK, MAT.Concrete, never)
-	box(bunker, "Foundation", -16, -9, -0.7, ROOM_FLOOR, 8, 10, CONCRETE_DARK, MAT.Concrete, never)
-	box(bunker, "Foundation", 2, 4, -0.7, ROOM_FLOOR, 28, 35, CONCRETE_DARK, MAT.Concrete, never)
+	-- The floor, 0.5 over the paving: one easy step at every door.
+	box(hall, "Foundation", x0 + 2, x1 - 2, -0.6, ROOM_FLOOR, z0 + 2, z1 - 2, CONCRETE_DARK, MAT.Concrete, never)
+	for _, door in ipairs(HALL_DOORS) do
+		box(hall, "Foundation", door[1], door[2], -0.6, ROOM_FLOOR, z0, z0 + 2, CONCRETE_DARK, MAT.Concrete, never)
+	end
+	box(hall, "Foundation", x1 - 2, x1, -0.6, ROOM_FLOOR, HALL_EAST_DOOR[1], HALL_EAST_DOOR[2], CONCRETE_DARK, MAT.Concrete, never)
 
-	-- Walls, 2 thick. The west and back walls are the compound's own there.
-	local function wall(x0, x1, y1, z0, z1, color)
-		return box(bunker, "BunkerWall", x0, x1, -1, y1, z0, z1, color or BUNKER, MAT.Concrete, never)
+	local function wall(a, b, c, d, y1, color)
+		return box(hall, "BunkerWall", a, b, -1, y1 or BUNKER_TOP, c, d, color or BUNKER, MAT.Concrete, never)
 	end
-	wall(-45.8, -43.8, BUNKER_TOP, 8, 41.8)
-	wall(-43.8, 4, BUNKER_TOP, 39.8, 41.8)
-	-- East: a stub where the corner came down, the doorway to the supply room at z 28..35.
-	wall(2, 4, 4.3, 10, 17, BUNKER_DARK)
-	wall(2, 4, BUNKER_TOP, 17, 28)
-	box(bunker, "BunkerWall", 2, 4, 8.8, BUNKER_TOP, 28, 35, BUNKER, MAT.Concrete, never)
-	wall(2, 4, BUNKER_TOP, 35, 39.8)
-	-- Front: a firing slit, two doorways (x -33..-26 and -16..-9), and the stub at the fallen corner.
-	wall(-43.8, -41, BUNKER_TOP, 8, 10)
-	box(bunker, "BunkerWall", -41, -37, -1, 5, 8, 10, BUNKER, MAT.Concrete, never)
-	box(bunker, "BunkerWall", -41, -37, 6.4, BUNKER_TOP, 8, 10, BUNKER, MAT.Concrete, never)
-	wall(-37, -33, BUNKER_TOP, 8, 10)
-	box(bunker, "BunkerWall", -33, -26, 8.8, BUNKER_TOP, 8, 10, BUNKER, MAT.Concrete, never)
-	wall(-26, -16, BUNKER_TOP, 8, 10)
-	box(bunker, "BunkerWall", -16, -9, 8.8, BUNKER_TOP, 8, 10, BUNKER, MAT.Concrete, never)
-	wall(-9, -4, BUNKER_TOP, 8, 10)
-	wall(-4, 4, 3.5, 8, 10, BUNKER_DARK)
-	table.insert(B.doorways, { name = "BunkerDoorWest", x0 = -33, x1 = -26, z0 = 8, z1 = 10, floor = ROOM_FLOOR, top = 8.8 })
-	table.insert(B.doorways, { name = "BunkerDoorEast", x0 = -16, x1 = -9, z0 = 8, z1 = 10, floor = ROOM_FLOOR, top = 8.8 })
-	table.insert(B.doorways, { name = "BunkerToSupply", x0 = 2, x1 = 4, z0 = 28, z1 = 35, floor = ROOM_FLOOR, top = 8.8 })
+	-- West and back: the compound's own walls here.
+	wall(x0, x0 + 2, z0, z1)
+	wall(x0 + 2, x1, z1 - 2, z1)
+	-- East: the door to the alley.
+	wall(x1 - 2, x1, z0, HALL_EAST_DOOR[1])
+	wall(x1 - 2, x1, HALL_EAST_DOOR[2], z1 - 2)
+	box(hall, "BunkerWall", x1 - 2, x1, 9, BUNKER_TOP, HALL_EAST_DOOR[1], HALL_EAST_DOOR[2], BUNKER, MAT.Concrete, never)
+	table.insert(B.doorways, { name = "HallEast", x0 = x1 - 2, x1 = x1, z0 = HALL_EAST_DOOR[1], z1 = HALL_EAST_DOOR[2], floor = ROOM_FLOOR, top = 9 })
+	-- Front: three wide doors onto the parade ground.
+	local last = x0 + 2
+	for index, door in ipairs(HALL_DOORS) do
+		wall(last, door[1], z0, z0 + 2)
+		box(hall, "BunkerWall", door[1], door[2], 9, BUNKER_TOP, z0, z0 + 2, BUNKER, MAT.Concrete, never)
+		table.insert(B.doorways, { name = "HallDoor" .. index, x0 = door[1], x1 = door[2], z0 = z0, z1 = z0 + 2, floor = ROOM_FLOOR, top = 9 })
+		last = door[2]
+	end
+	wall(last, x1 - 2, z0, z0 + 2)
 
-	-- The roof, and the column line holding its middle.
-	box(bunker, "BunkerRoof", -45.8, -4, BUNKER_TOP, ROOF_TOP, 8, 41.8, BUNKER, MAT.Concrete, never)
-	box(bunker, "BunkerRoof", -4, 4, BUNKER_TOP, ROOF_TOP, 17, 41.8, BUNKER, MAT.Concrete, never)
-	box(bunker, "BunkerBeam", -43.8, 2, 9.8, BUNKER_TOP, 22.4, 23.6, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "BunkerPillar", -32.3, -30.7, ROOM_FLOOR, 9.8, 22.2, 23.8, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "BunkerPillar", -14.3, -12.7, ROOM_FLOOR, 9.8, 22.2, 23.8, BUNKER_DARK, MAT.Concrete, never)
-	-- A broken lip round the roof's front and west edges.
-	box(bunker, "RoofLip", -45.6, -38.5, ROOF_TOP, ROOF_TOP + 0.9, 8.2, 9.0, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "RoofLip", -35.8, -27.2, ROOF_TOP, ROOF_TOP + 0.6, 8.2, 9.0, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "RoofLip", -22.6, -12.4, ROOF_TOP, ROOF_TOP + 0.9, 8.2, 9.0, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "RoofLip", -45.6, -44.8, ROOF_TOP, ROOF_TOP + 0.9, 9.0, 24.5, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "RoofLip", -45.6, -44.8, ROOF_TOP, ROOF_TOP + 0.7, 29.2, 41.6, BUNKER_DARK, MAT.Concrete, never)
-
-	-- THE COLLAPSED CORNER. The roof over x -4..4, z 8..17 came in: one slab lies from the front
-	-- stub's top down onto the floor, on its own rubble, with rebar hanging out of both broken edges.
-	local stubTop, highZ, lowZ = 3.5, 9.2, 19.0
-	local rise = stubTop - ROOM_FLOOR
-	local run = lowZ - highZ
-	local slope = math.atan2(rise, run)
-	local slabLength = math.sqrt(rise * rise + run * run) + 0.3
-	local bottomMid = Vector3.new(-1.35, (stubTop + ROOM_FLOOR) / 2 - 0.1, (highZ + lowZ) / 2)
-	local up = Vector3.new(0, math.cos(slope), math.sin(slope))
-	put(bunker, "FallenRoof", Vector3.new(6.3, 1.2, slabLength),
-		CFrame.new(bottomMid + up * 0.6) * CFrame.Angles(slope, 0, 0), BUNKER, MAT.Concrete, never)
-	rubble(bunker, -2.2, 12.6, 1.8, 5, ROOM_FLOOR, { BUNKER, BUNKER_DARK, CONCRETE_DARK })
-	rubble(bunker, 0.6, 15.6, 1.4, 4, ROOM_FLOOR, { BUNKER, BUNKER_DARK, CONCRETE_DARK })
-	rubble(bunker, -3.0, 18.4, 1.2, 3, ROOM_FLOOR, { BUNKER, BUNKER_DARK })
-	for index = 0, 3 do
-		local z = 9.4 + index * 2.3
-		rebar(bunker, Vector3.new(-4.3, 11.2, z), rnd(1.0, 1.8), rnd(1.6, 2.1), rnd(-0.3, 0.3))
-	end
-	for index = 0, 2 do
-		local x = -3.1 + index * 2.6
-		rebar(bunker, Vector3.new(x, 11.1, 17.3), rnd(1.0, 1.7), rnd(1.7, 2.2), -math.pi / 2 + rnd(-0.3, 0.3))
-	end
-	put(bunker, "BrokenEdge", Vector3.new(1.4, 0.9, 3.2), CFrame.new(-3.6, 10.7, 12.6) * CFrame.Angles(0, 0, -0.35),
-		BUNKER, MAT.Concrete, TRIM)
-	put(bunker, "BrokenEdge", Vector3.new(2.6, 0.9, 1.3), CFrame.new(1.2, 10.7, 17.4) * CFrame.Angles(0.4, 0, 0),
-		BUNKER, MAT.Concrete, TRIM)
-	-- The stubs' own broken tops.
-	for _, x in ipairs({ -3, -0.8, 1.6 }) do
-		rebar(bunker, Vector3.new(x, stubTop, 9.0), rnd(0.9, 1.8), rnd(0.1, 0.5), rnd(0, math.pi * 2))
-	end
-	for _, z in ipairs({ 11.5, 14.5 }) do
-		rebar(bunker, Vector3.new(3.0, 4.3, z), rnd(0.9, 1.6), rnd(0.1, 0.5), rnd(0, math.pi * 2))
+	-- The roof, and the column line that holds its middle.
+	box(hall, "BunkerRoof", x0, x1, BUNKER_TOP, ROOF_TOP, z0, z1, BUNKER, MAT.Concrete, never)
+	box(hall, "BunkerBeam", x0 + 2, x1 - 2, 9.8, BUNKER_TOP, 39.1, 40.4, BUNKER_DARK, MAT.Concrete, never)
+	for _, x in ipairs({ -49.25, -34.25, -19.25 }) do
+		box(hall, "BunkerPillar", x - 0.7, x + 0.7, ROOM_FLOOR, 9.8, 39.05, 40.45, BUNKER_DARK, MAT.Concrete, never)
 	end
 
-	-- The spawn pads: two rows of four under the whole roof, clear of the fallen corner.
-	for _, z in ipairs({ 16, 30 }) do
-		for _, x in ipairs({ -36, -27, -18, -9 }) do
-			box(bunker, "TeamPad", x - 2, x + 2, ROOM_FLOOR, ROOM_FLOOR + 0.16, z - 2, z + 2, B.team, MAT.SmoothPlastic, TRIM)
-			box(bunker, "PadMark", x - 0.6, x + 0.6, ROOM_FLOOR + 0.1, ROOM_FLOOR + 0.24, z - 1.2, z - 0.2, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
+	-- THE FACADE. Pilasters between the doors, standing proud of the roof; a hood over each door with
+	-- the team's colour on its edge and round the opening; a darker plinth; slit windows.
+	for _, x in ipairs({ -45.5, -30.5, -15.5 }) do
+		box(hall, "BunkerPillar", x - 1.2, x + 1.2, -0.9, 12.8, z0 - 1.2, z0 + 0.4, BUNKER_DARK, MAT.Concrete, never)
+		box(hall, "PillarCap", x - 1.45, x + 1.45, 12.8, 13.3, z0 - 1.45, z0 + 0.65, BUNKER, MAT.Concrete, never)
+	end
+	box(hall, "BunkerPillar", x0 - 0.3, x0 + 2.3, -0.9, 13.1, z0 - 1.2, z0 + 2.3, BUNKER_DARK, MAT.Concrete, never)
+	box(hall, "BunkerPillar", x1 - 2.3, x1 + 0.3, -0.9, 13.1, z0 - 1.2, z0 + 2.3, BUNKER_DARK, MAT.Concrete, never)
+	for _, door in ipairs(HALL_DOORS) do
+		local a, b = door[1], door[2]
+		box(hall, "DoorHood", a - 0.9, b + 0.9, 9.4, 9.95, z0 - 2.6, z0, BUNKER_DARK, MAT.Concrete, never)
+		facePlate(hall, "TeamHoodEdge", "z", z0 - 2.6, -1, 0.1, a - 0.7, b + 0.7, 9.5, 9.85, B.team, MAT.SmoothPlastic)
+		facePlate(hall, "TeamDoorFrame", "z", z0, -1, PROUD_PAINT, a - 0.6, a + 0.08, ROOM_FLOOR, 9.0, B.team, MAT.SmoothPlastic)
+		facePlate(hall, "TeamDoorFrame", "z", z0, -1, PROUD_PAINT, b - 0.08, b + 0.6, ROOM_FLOOR, 9.0, B.team, MAT.SmoothPlastic)
+		for _, s in ipairs({ a - 0.2, b + 0.2 }) do
+			local lamp = wallLamp(hall, Vector3.new(s + (s < a and -1.6 or 1.6), 7.8, z0), Vector3.new(0, 0, -1), 16)
+			local _ = lamp
+		end
+	end
+	local pieces = { { x0 + 2.3, HALL_DOORS[1][1] - 0.6 }, { HALL_DOORS[1][2] + 0.6, -46.7 }, { -44.3, HALL_DOORS[2][1] - 0.6 },
+		{ HALL_DOORS[2][2] + 0.6, -31.7 }, { -29.3, HALL_DOORS[3][1] - 0.6 }, { HALL_DOORS[3][2] + 0.6, -16.7 }, { -14.3, x1 - 2.3 } }
+	for _, piece in ipairs(pieces) do
+		facePlate(hall, "Plinth", "z", z0, -1, PROUD_BRICK, piece[1], piece[2], 0.35, 1.6, BUNKER_DARK, MAT.Concrete)
+		if piece[2] - piece[1] > 4 then
+			local m = (piece[1] + piece[2]) / 2
+			facePlate(hall, "WindowSlit", "z", z0, -1, PROUD_PAINT, m - 1.2, m + 1.2, 5.6, 6.5, SOOT, MAT.Slate)
+			facePlate(hall, "TeamStripe", "z", z0, -1, PROUD_PAINT, piece[1] + 0.2, piece[2] - 0.2, 2.4, 3.0, B.team, MAT.SmoothPlastic)
+		end
+	end
+	facePlate(hall, "Scorch", "z", z0, -1, PROUD_SOOT, -18.6, -16.9, 1.2, 5.4, SOOT, MAT.Slate)
+	facePlate(hall, "Scorch", "z", z0, -1, PROUD_SOOT, -64.2, -61.5, 5.2, 9.9, SOOT, MAT.Slate)
+
+	-- THE LANTERN over the middle door: a raised block on the roof with clerestory slits down its sides,
+	-- the team's band round the top and the insignia lit on its face. It is what you see from the gate.
+	local lx0, lx1, lz1 = -47.2, -28.8, 36
+	box(hall, "Lantern", lx0, lx1, ROOF_TOP, 16.6, z0 + 0.6, lz1, BUNKER, MAT.Concrete, never)
+	box(hall, "LanternRoof", lx0 - 0.4, lx1 + 0.4, 16.6, 17.1, z0 + 0.2, lz1 + 0.4, BUNKER_DARK, MAT.Concrete, never)
+	facePlate(hall, "TeamBand", "z", z0 + 0.6, -1, PROUD_PAINT, lx0 + 0.3, lx1 - 0.3, 15.5, 16.3, B.team, MAT.SmoothPlastic)
+	insignia(hall, Vector3.new(-38, 13.9, z0 + 0.6), Vector3.new(0, 0, -1), 3.0, B.team)
+	local glow = facePlate(hall, "TeamSignGlow", "z", z0, -1, PROUD_PAINT, -41.5, -34.5, 11.2, 11.6, B.team, MAT.Neon)
+	light(glow, B.team:Lerp(WARM, 0.5), 20, 1.2)
+	for _, x in ipairs({ lx0, lx1 }) do
+		for z = 27.5, 33.5, 3 do
+			facePlate(hall, "ClerestorySlit", "x", x, x < -38 and -1 or 1, PROUD_PAINT, z, z + 1.6, 13.2, 15.2, SOOT, MAT.Slate)
+		end
+	end
+
+	-- The roof: a parapet round it, a sandbagged lookout on each front corner, a mast and a dish, vents.
+	box(hall, "Parapet", x0, x1, ROOF_TOP, ROOF_TOP + 1.0, z1 - 0.8, z1, BUNKER_DARK, MAT.Concrete, never)
+	box(hall, "Parapet", x0, x0 + 0.8, ROOF_TOP, ROOF_TOP + 1.05, z0 + 2.3, z1 - 0.8, BUNKER_DARK, MAT.Concrete, never)
+	box(hall, "Parapet", x1 - 0.8, x1, ROOF_TOP, ROOF_TOP + 1.05, z0 + 2.3, z1 - 0.8, BUNKER_DARK, MAT.Concrete, never)
+	sandbags(hall, "roofWest", x0 + 3, z0 + 1.6, x0 + 11, z0 + 1.6, 2, ROOF_TOP)
+	sandbags(hall, "roofEast", x1 - 11, z0 + 1.6, x1 - 3, z0 + 1.6, 2, ROOF_TOP)
+	rod(hall, "Aerial", Vector3.new(-58, ROOF_TOP, 46), Vector3.new(-58, ROOF_TOP + 9, 46), 0.35, STEEL, MAT.Metal)
+	rod(hall, "Aerial", Vector3.new(-58, ROOF_TOP + 8.8, 46), Vector3.new(-56.6, ROOF_TOP + 10.9, 46.8), 0.28, STEEL, MAT.Metal)
+	box(hall, "DishMount", -20.8, -19.2, ROOF_TOP, ROOF_TOP + 1.6, 45.2, 46.8, STEEL_DARK, MAT.Metal)
+	put(hall, "Dish", Vector3.new(0.35, 4.2, 4.2),
+		CFrame.new(-20, ROOF_TOP + 2.6, 46) * CFrame.Angles(0, 0.7, 0) * CFrame.Angles(0, 0, 0.9), WHITE_PAINT, MAT.Metal,
+		{ shape = Enum.PartType.Cylinder })
+	for _, v in ipairs({ { -54, 32 }, { -24, 32 }, { -12, 44 } }) do
+		box(hall, "Vent", v[1], v[1] + 2.4, ROOF_TOP, ROOF_TOP + 1.4, v[2], v[2] + 2.4, STEEL, MAT.Metal)
+		box(hall, "VentCap", v[1] - 0.3, v[1] + 2.7, ROOF_TOP + 1.4, ROOF_TOP + 1.7, v[2] - 0.3, v[2] + 2.7, STEEL_DARK, MAT.Metal)
+	end
+	rod(hall, "WaterTank", Vector3.new(-44, ROOF_TOP + 2.6, 47), Vector3.new(-36, ROOF_TOP + 2.6, 47), 3.4, mix(STEEL, RUST, 0.3), MAT.CorrodedMetal)
+	for _, x in ipairs({ -43, -37 }) do
+		box(hall, "TankCradle", x - 0.3, x + 0.3, ROOF_TOP, ROOF_TOP + 0.9, 45.6, 48.4, STEEL_DARK, MAT.Metal)
+	end
+
+	-- THE PADS.
+	for _, z in ipairs(PAD_Z) do
+		for _, x in ipairs(PAD_X) do
+			box(hall, "TeamPad", x - 1.6, x + 1.6, ROOM_FLOOR, ROOM_FLOOR + 0.16, z - 1.6, z + 1.6, B.team, MAT.SmoothPlastic, TRIM)
+			box(hall, "PadMark", x - 0.5, x + 0.5, ROOM_FLOOR + 0.1, ROOM_FLOOR + 0.24, z - 1.1, z - 0.2, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
 			table.insert(B.pads, CFrame.new(x, ROOM_FLOOR, z))
 		end
 	end
 
-	-- Inside: the team's banner and emblem on the back wall, lamps, a cable run, a bunk, the rack.
-	box(bunker, "TeamBanner", -25, -17, 3.2, 8.8, 39.62, 39.82, B.team, MAT.Fabric, TRIM)
-	rod(bunker, "BannerRod", Vector3.new(-25.6, 8.95, 39.55), Vector3.new(-16.4, 8.95, 39.55), 0.3, STEEL_DARK, MAT.Metal, TRIM)
-	disc(bunker, "BannerEye", Vector3.new(-21, 6.2, 39.72), Vector3.new(0, 0, -1), 0.18, 3.0, WHITE_PAINT, MAT.SmoothPlastic)
-	disc(bunker, "BannerPupil", Vector3.new(-21, 6.0, 39.72), Vector3.new(0, 0, -1), 0.26, 1.3, SOOT, MAT.SmoothPlastic)
-	wallLamp(bunker, Vector3.new(-31, 8.2, 39.8), Vector3.new(0, 0, -1), 22)
-	wallLamp(bunker, Vector3.new(-6, 8.2, 39.8), Vector3.new(0, 0, -1), 22)
-	rod(bunker, "Conduit", Vector3.new(-43.72, 9.4, 39.72), Vector3.new(2, 9.4, 39.72), 0.3, STEEL_DARK, MAT.Metal, TRIM)
-	rod(bunker, "Conduit", Vector3.new(-43.72, 9.4, 10), Vector3.new(-43.72, 9.4, 39.8), 0.3, STEEL_DARK, MAT.Metal, TRIM)
-
-	-- A double bunk against the west wall.
-	for _, x in ipairs({ -43.5, -40.9 }) do
-		for _, z in ipairs({ 20.8, 26.2 }) do
-			box(bunker, "BunkPost", x - 0.15, x + 0.15, ROOM_FLOOR, 6.3, z - 0.15, z + 0.15, STEEL, MAT.Metal)
+	-- Inside: the banner and insignia on the back wall, lamps along both long walls, lockers by the
+	-- east door, a cable run.
+	local back = z1 - 2
+	rod(hall, "BannerRod", Vector3.new(-42.6, 9.35, back - 0.3), Vector3.new(-33.4, 9.35, back - 0.3), 0.3, STEEL_DARK, MAT.Metal, TRIM)
+	box(hall, "TeamBanner", -42, -34, 3.2, 9.2, back - 0.2, back, B.team, MAT.Fabric, TRIM)
+	insignia(hall, Vector3.new(-38, 6.6, back - 0.2), Vector3.new(0, 0, -1), 3.4, mix(B.team, SOOT, 0.55))
+	for _, x in ipairs({ -57, -26.5, -12 }) do
+		wallLamp(hall, Vector3.new(x, 8.2, back), Vector3.new(0, 0, -1), 22)
+	end
+	for _, x in ipairs({ -60.5, -30.5 }) do
+		wallLamp(hall, Vector3.new(x, 8.2, z0 + 2), Vector3.new(0, 0, 1), 20)
+	end
+	rod(hall, "Conduit", Vector3.new(x0 + 2.1, 9.4, back - 0.08), Vector3.new(x1 - 2, 9.4, back - 0.08), 0.3, STEEL_DARK, MAT.Metal, TRIM)
+	for _, span in ipairs({ { 27, 34.6 }, { 45.4, 51.8 } }) do
+		for z = span[1], span[2] - 1.2, 1.3 do
+			box(hall, "Locker", x1 - 3.3, x1 - 2, ROOM_FLOOR, 7.0, z, z + 1.2, mix(OLIVE, STEEL, 0.4), MAT.Metal)
 		end
 	end
-	box(bunker, "Bunk", -43.4, -41.0, 1.9, 2.4, 20.9, 26.1, CANVAS, MAT.Fabric)
-	box(bunker, "Bunk", -43.4, -41.0, 4.6, 5.1, 20.9, 26.1, OLIVE, MAT.Fabric)
-	box(bunker, "BunkFrame", -43.5, -40.9, 1.7, 1.9, 20.75, 26.25, STEEL, MAT.Metal)
-	box(bunker, "BunkFrame", -43.5, -40.9, 4.4, 4.6, 20.75, 26.25, STEEL, MAT.Metal)
-
-	-- An empty rack by the west wall, ammo tins left under it.
-	box(bunker, "Rack", -43.8, -43.3, 1.2, 6.4, 11.2, 14.8, WOOD_DARK, MAT.WoodPlanks)
-	for _, y in ipairs({ 2.8, 4.6 }) do
-		box(bunker, "RackBar", -43.3, -42.5, y, y + 0.25, 11.4, 14.6, STEEL, MAT.Metal)
-	end
-	box(bunker, "AmmoTin", -42.9, -41.3, ROOM_FLOOR, 1.9, 11.6, 12.8, OLIVE, MAT.Metal)
-	box(bunker, "AmmoTin", -42.8, -41.4, ROOM_FLOOR, 1.7, 13.2, 14.3, OLIVE, MAT.Metal)
-
-	-- The Rot-O-Matic: a humming console against the back wall, its screen still glowing green.
-	box(bunker, "RotOMatic", -15, -11, ROOM_FLOOR, 5.8, 37.6, 39.8, STEEL, MAT.Metal)
-	box(bunker, "RotOMaticScreen", -14.4, -11.6, 3.4, 5.3, 37.46, 37.74, ROT_GREEN, MAT.Neon, TRIM)
-	box(bunker, "ScreenCrack", -13.6, -12.9, 3.6, 5.1, 37.38, 37.66, SOOT, MAT.Slate, TRIM)
-	put(bunker, "RotOMaticKeys", Vector3.new(3.4, 0.8, 1.2), CFrame.new(-13, 2.9, 37.2) * CFrame.Angles(0.5, 0, 0),
-		STEEL_DARK, MAT.Metal, TRIM)
-	rod(bunker, "RotOMaticAerial", Vector3.new(-12, 5.45, 38.7), Vector3.new(-11.4, 8.4, 38.9), 0.14, STEEL_DARK, MAT.Metal, TRIM)
-	light(put(bunker, "RotOMaticGlow", Vector3.new(0.5, 0.5, 0.5), CFrame.new(-13, 4.3, 37.3), ROT_GREEN, MAT.Neon,
-		trimWith({ shape = Enum.PartType.Ball })), ROT_GREEN, 9, 0.8)
-	-- A filing cabinet knocked flat beside it.
-	put(bunker, "Cabinet", Vector3.new(4.2, 1.8, 2), CFrame.new(-6.9, ROOM_FLOOR + 0.9, 37.6) * CFrame.Angles(0, 0.06, 0),
-		STEEL, MAT.Metal)
-
-	-- On the roof: a sandbagged lookout, a bent aerial and a dish knocked askew.
-	sandbags(bunker, "roofFront", -30, 10.4, -21, 10.4, 2, ROOF_TOP)
-	sandbags(bunker, "roofSide", -31.4, 11.8, -31.4, 17.2, 2, ROOF_TOP)
-	-- The observation cupola over the armoury: a concrete box with a firing slit, its aerial snapped.
-	box(bunker, "Cupola", -43.8, -36.8, ROOF_TOP, ROOF_TOP + 3.4, 30, 38, BUNKER_DARK, MAT.Concrete, never)
-	box(bunker, "CupolaRoof", -44.1, -36.5, ROOF_TOP + 3.4, ROOF_TOP + 4.0, 29.7, 38.3, BUNKER, MAT.Concrete, never)
-	facePlate(bunker, "CupolaSlit", "z", 30, -1, 0.1, -42.6, -38, ROOF_TOP + 1.8, ROOF_TOP + 2.4, SOOT, MAT.Slate)
-	facePlate(bunker, "TeamStripe", "z", 30, -1, PROUD_PAINT, -43.4, -37.2, ROOF_TOP + 0.6, ROOF_TOP + 1.2, B.team, MAT.SmoothPlastic)
-	rod(bunker, "Aerial", Vector3.new(-39, ROOF_TOP + 3.7, 36), Vector3.new(-39, ROOF_TOP + 10.5, 36), 0.35, STEEL, MAT.Metal)
-	rod(bunker, "Aerial", Vector3.new(-39, ROOF_TOP + 10.3, 36), Vector3.new(-37.6, ROOF_TOP + 12.4, 36.8), 0.28, STEEL, MAT.Metal)
-	box(bunker, "DishMount", -26.8, -25.2, ROOF_TOP, ROOF_TOP + 1.6, 34.2, 35.8, STEEL_DARK, MAT.Metal)
-	put(bunker, "Dish", Vector3.new(0.35, 4.2, 4.2),
-		CFrame.new(-26, ROOF_TOP + 2.6, 35) * CFrame.Angles(0, 0.7, 0) * CFrame.Angles(0, 0, 0.9), WHITE_PAINT, MAT.Metal,
-		{ shape = Enum.PartType.Cylinder })
-	box(bunker, "Vent", -12, -9.6, ROOF_TOP, ROOF_TOP + 1.4, 30, 32.4, STEEL, MAT.Metal)
-	box(bunker, "VentCap", -12.3, -9.3, ROOF_TOP + 1.4, ROOF_TOP + 1.7, 29.7, 32.7, STEEL_DARK, MAT.Metal)
-
-	-- The team's Rot Eye painted on the front, between the doors, with the paint run down from it.
-	local eye = Vector3.new(-21, 6.4, 8)
-	local out = Vector3.new(0, 0, -1)
-	disc(bunker, "TeamEmblem", eye, out, 0.14, 5.2, B.team, MAT.SmoothPlastic)
-	disc(bunker, "EmblemWhite", eye + Vector3.new(0, 0.1, 0), out, 0.22, 3.4, WHITE_PAINT, MAT.SmoothPlastic)
-	disc(bunker, "EmblemPupil", eye + Vector3.new(0.3, -0.1, 0), out, 0.30, 1.6, SOOT, MAT.SmoothPlastic)
-	disc(bunker, "EmblemGlint", eye + Vector3.new(0.75, 0.45, 0), out, 0.38, 0.45, WHITE_PAINT, MAT.SmoothPlastic)
-	for _, drip in ipairs({ { -22.3, 3.6 }, { -20.4, 3.4 }, { -19.3, 4.4 } }) do
-		facePlate(bunker, "TeamEmblemDrip", "z", 8, -1, 0.06, drip[1] - 0.18, drip[1] + 0.18, drip[2], 4.6, B.team, MAT.SmoothPlastic)
-	end
-	-- Soot round the doors, stencilled team stripe along the front.
-	facePlate(bunker, "Scorch", "z", 8, -1, PROUD_SOOT, -8.7, -4.6, 0.4, 7.6, SOOT, MAT.Slate)
-	facePlate(bunker, "Scorch", "z", 8, -1, PROUD_SOOT, -36.8, -33.2, 5.0, 9.8, SOOT, MAT.Slate)
-	facePlate(bunker, "TeamStripe", "z", 8, -1, PROUD_PAINT, -43.4, -41.2, 2.3, 3.1, B.team, MAT.SmoothPlastic)
-	facePlate(bunker, "TeamStripe", "z", 8, -1, PROUD_PAINT, -36.8, -33.2, 2.3, 3.1, B.team, MAT.SmoothPlastic)
-	facePlate(bunker, "TeamStripe", "z", 8, -1, PROUD_PAINT, -25.6, -16.4, 2.3, 3.1, B.team, MAT.SmoothPlastic)
-
-	-- Chest spots: the armoury corner and beside the console.
-	table.insert(B.chests, { name = "BunkerArmoury", at = CFrame.new(-40.5, ROOM_FLOOR, 36.9) })
-	table.insert(B.chests, { name = "BunkerConsole", at = CFrame.new(-1.5, ROOM_FLOOR, 36.9) })
-	-- And under the lamp on the back wall, between the two back rows of pads' ends.
-	table.insert(B.chests, { name = "BunkerBackWall", at = CFrame.new(-31.5, ROOM_FLOOR, 36.9) })
-	table.insert(B.loot, CFrame.new(-22.5, ROOM_FLOOR, 36.6))
-	table.insert(B.loot, CFrame.new(-22.5, ROOM_FLOOR, 23))
-	table.insert(B.loot, CFrame.new(-4.5, ROOM_FLOOR, 23))
-	return bunker
+	return hall
 end
 
 --------------------------------------------------------------------------------
--- The supply room
+-- The armoury: a brick shed on a concrete frame, a pitched roof, the chests
 --------------------------------------------------------------------------------
 
-local function buildSupply(model)
+local ARM_X0, ARM_X1, ARM_Z0, ARM_Z1 = 4, 24, 8, WZ + 0.8
+local ARM_EAVES, ARM_RIDGE = 12, 15.4
+
+local function buildArmoury(model)
 	local room = Instance.new("Model")
-	room.Name = "SupplyRoom"
+	room.Name = "Armoury"
 	room.Parent = model
-	local never = { tag = false }
+	local x0, x1, z0, z1 = ARM_X0, ARM_X1, ARM_Z0, ARM_Z1
+	box(room, "Foundation", x0 + 1, x1 - 1, -0.6, ROOM_FLOOR, z0 + 1, z1 - 1.6, CONCRETE_DARK, MAT.Concrete)
+	box(room, "Foundation", 10, 18, -0.6, ROOM_FLOOR, z0, z0 + 1, CONCRETE_DARK, MAT.Concrete)
+	box(room, "Foundation", x0, x0 + 1, -0.6, ROOM_FLOOR, 32.55, 42.25, CONCRETE_DARK, MAT.Concrete)
 
-	box(room, "Foundation", 4, 43.8, -0.7, ROOM_FLOOR, 24, 39.8, CONCRETE_DARK, MAT.Concrete, never)
-	box(room, "Foundation", 20, 27, -0.7, ROOM_FLOOR, 22, 24, CONCRETE_DARK, MAT.Concrete, never)
-	table.insert(B.doorways, { name = "SupplyDoor", x0 = 20, x1 = 27, z0 = 22, z1 = 24, floor = ROOM_FLOOR, top = 9 })
-
-	-- The frame that carries the roof never breaks, so nothing is ever left hanging when the brick
-	-- infill between it is shot out.
-	for _, x in ipairs({ 5, 17, 30, 44.8 }) do
-		for _, z in ipairs({ 23, 40.8 }) do
-			box(room, "Pillar", x - 1, x + 1, -1, 11, z - 1, z + 1, CONCRETE_DARK, MAT.Concrete, never)
+	-- The frame: concrete columns at the corners and down the long walls, brick panels between them.
+	local columnsZ = { z0, 19.5, 31, 42.5, z1 - 1.3 }
+	for _, x in ipairs({ x0, x1 - 1.3 }) do
+		for _, z in ipairs(columnsZ) do
+			box(room, "Pillar", x - 0.25, x + 1.55, -0.95, ARM_EAVES + 0.1, z - 0.25, z + 1.55, CONCRETE_LIGHT, MAT.Concrete)
 		end
 	end
-	box(room, "RoofBeam", 4, 45.8, 11, 12, 22.4, 23.6, RUST, MAT.CorrodedMetal, never)
-	box(room, "RoofBeam", 4, 45.8, 11, 12, 40.2, 41.4, RUST, MAT.CorrodedMetal, never)
-	for _, x in ipairs({ 5, 17, 30, 44.8 }) do
-		box(room, "RoofBeam", x - 0.5, x + 0.5, 12, 12.8, 22.4, 41.4, RUST, MAT.CorrodedMetal, never)
-	end
-	-- What is left of the tin roof, over the back of the room.
-	local sheets = {
-		{ 4.6, 16.9, 30.0, 41.2 },
-		{ 17.1, 29.9, 33.2, 41.2 },
-	}
-	for _, s in ipairs(sheets) do
-		box(room, "RoofSheet", s[1], s[2], 12.8, 13.05, s[3], s[4], mix(STEEL, RUST, 0.45), MAT.CorrodedMetal, never)
-		for rib = 1, 4 do
-			local x = s[1] + (s[2] - s[1]) * rib / 5
-			rod(room, "SheetRib", Vector3.new(x, 13.05, s[3] + 0.3), Vector3.new(x, 13.05, s[4] - 0.3), 0.16,
-				mix(STEEL, RUST, 0.3), MAT.CorrodedMetal, TRIM)
-		end
-	end
-
-	-- Brick infill, 2 thick, in the frame's bays. The front has the doorway (x 20..27) and a blown hole
-	-- down to a stub at x 36..40; the east side is the compound's own wall.
-	local function infill(axis, u0, u1, c, top, style)
+	local function panel(axis, u0, u1, c, style)
 		style.color = style.color or BRICK
-		style.material = MAT.Brick
-		style.health = 150
+		style.material = style.material or MAT.Brick
+		style.plain = true
+		style.wire = false
 		style.brick = false
-		return wallPanel(room, axis, u0, u1, c, 2, top, style)
+		style.soot = false
+		style.health = 160
+		return wallPanel(room, axis, u0, u1, c, 1.3, ARM_EAVES, style)
 	end
-	infill("x", 6, 16, 23, rnd(8.6, 9.6), { out = -1, stripe = true })
-	infill("x", 18, 20, 23, rnd(8.4, 9.6), { out = -1, plain = true })
-	infill("x", 27, 29, 23, rnd(6.2, 7.4), { out = -1, plain = true })
-	infill("x", 31, 36, 23, rnd(8.4, 9.6), { out = -1, stripe = true })
-	infill("x", 36, 40, 23, 2.5, { out = -1, low = true, color = BRICK_DARK })
-	infill("x", 40, 43.8, 23, rnd(7.4, 8.8), { out = -1 })
-	infill("x", 6, 16, 40.8, rnd(8.6, 9.6), { out = 1, stripe = true })
-	infill("x", 18, 29, 40.8, rnd(8.6, 9.6), { out = 1, stripe = true })
-	infill("x", 31, 43.8, 40.8, rnd(8.6, 9.6), { out = 1, stripe = true })
-	infill("z", 24, 31, 44.8, rnd(8.6, 9.6), { out = 1, stripe = true })
-	infill("z", 31, 39.8, 44.8, rnd(7.8, 9.0), { out = 1, stripe = true })
-	rubble(room, 38.2, 25.4, 1.0, 3, ROOM_FLOOR, { BRICK, BRICK_DARK })
+	-- West wall (x = x0 + 0.65), the door to the alley at z 34..42.
+	for index = 1, #columnsZ - 1 do
+		local a, b = columnsZ[index] + 1.55, columnsZ[index + 1] - 0.25
+		if index ~= 3 then
+			panel("z", a, b, x0 + 0.65, { out = -1, stripe = true })
+		end
+		panel("z", a, b, x1 - 0.65, { out = 1, color = BRICK_DARK })
+	end
+	box(room, "Wall", x0, x0 + 1.3, 9, ARM_EAVES, 32.55, 42.25, BRICK, MAT.Brick, { health = 160 })
+	table.insert(B.doorways, { name = "ArmouryWest", x0 = x0, x1 = x0 + 1.3, z0 = 32.55, z1 = 42.25, floor = ROOM_FLOOR, top = 9 })
+	-- The front (z0) with its double door; the back is the compound's wall.
+	panel("x", x0 + 1.55, 10, z0 + 0.65, { out = -1, stripe = true })
+	panel("x", 18, x1 - 1.55, z0 + 0.65, { out = -1, stripe = true })
+	box(room, "Wall", 10, 18, 8.4, ARM_EAVES, z0, z0 + 1.3, BRICK, MAT.Brick, { health = 160 })
+	table.insert(B.doorways, { name = "ArmouryFront", x0 = 10, x1 = 18, z0 = z0, z1 = z0 + 1.3, floor = ROOM_FLOOR, top = 8.4 })
+	panel("x", x0 + 1.55, x1 - 1.55, z1 - 0.65, { out = 1, color = BRICK_DARK, stripe = true })
 
-	-- Four chest alcoves along the back wall, between shelving partitions, each with its number
-	-- painted over it in the team's colour.
-	for _, x in ipairs({ 14, 24, 34 }) do
-		box(room, "Shelf", x - 0.5, x + 0.5, ROOM_FLOOR, 6.3, 34, 39.8, WOOD, MAT.WoodPlanks, { tag = "Shelf:" .. x })
-		box(room, "ShelfTin", x - 0.4, x + 0.4, 6.3, 7.0, 35.2, 36.4, OLIVE, MAT.Metal, trimWith({ tag = "Shelf:" .. x }))
+	-- The pitched roof: two slopes of corrugated steel on a ridge, gables in brick at both ends.
+	local mid = (x0 + x1) / 2
+	local rise = ARM_RIDGE - ARM_EAVES
+	-- The slope's centre line: 0.2 over the wall tops at the wall's middle, rising `rise` to the ridge.
+	local wallLine = x0 + 0.65
+	local slope = rise / (mid - wallLine)
+	for _, s in ipairs({ -1, 1 }) do
+		local eaveX = mid + s * ((x1 - x0) / 2 + 0.8)
+		local eaveY = ARM_EAVES + 0.2 - (math.abs(eaveX - mid) - (mid - wallLine)) * slope
+		local zc = (z0 + z1) / 2
+		plateBetween(room, "Roof", Vector3.new(eaveX, eaveY, zc), Vector3.new(mid, ARM_EAVES + 0.2 + rise + (s > 0 and 0.06 or 0), zc), z1 - z0 + (s < 0 and 1.2 or 1.0), 0.4,
+			s < 0 and mix(STEEL, RUST, 0.45) or mix(STEEL, RUST, 0.6), MAT.CorrodedMetal)
 	end
-	-- One more on the open floor in front of the alcoves, beside the way in from the door.
-	table.insert(B.chests, { name = "SupplyFloor", at = CFrame.new(20.5, ROOM_FLOOR, 31.5) })
-	local alcoves = { { 9, 9 }, { 19, 19.5 }, { 29, 27.3 }, { 39, 39 } }
-	for number, alcove in ipairs(alcoves) do
-		local x, sign = alcove[1], alcove[2]
-		table.insert(B.chests, { name = "SupplyAlcove" .. number, at = CFrame.new(x, ROOM_FLOOR, 36.9) })
-		facePlate(room, "TeamAlcoveNumber", "z", 39.8, -1, PROUD_BRICK, sign - 0.9, sign + 0.9, 6.6, 8.4, B.team, MAT.SmoothPlastic)
-		for pip = 1, number do
-			local px = sign + (pip - (number + 1) / 2) * 0.42
-			disc(room, "AlcovePip", Vector3.new(px, 7.5, 39.8), Vector3.new(0, 0, -1), PROUD_PAINT, 0.32, WHITE_PAINT, MAT.SmoothPlastic)
+	rod(room, "RidgeCap", Vector3.new(mid, ARM_EAVES + rise + 0.45, z0 - 0.4), Vector3.new(mid, ARM_EAVES + rise + 0.45, z1 + 0.4), 0.6, STEEL_DARK, MAT.Metal)
+	for _, zc in ipairs({ z0 + 0.65, z1 - 0.65 }) do
+		for _, s in ipairs({ -1, 1 }) do
+			local run = (x1 - x0) / 2 - 0.2
+			put(room, "Gable", Vector3.new(1.3, rise, run), CFrame.new(mid + s * run / 2, ARM_EAVES + rise / 2, zc) * CFrame.Angles(0, s < 0 and math.pi / 2 or -math.pi / 2, 0),
+				BRICK_DARK, MAT.Brick, { class = "WedgePart", health = 120 })
 		end
 	end
-
-	-- Crates by the west wall, one knocked over with its lid off.
-	local stackA = { tag = "Crate:supplyA" }
-	box(room, "Crate", 6.5, 9.5, ROOM_FLOOR, ROOM_FLOOR + 3, 25, 28, WOOD, MAT.WoodPlanks, stackA)
-	box(room, "Crate", 9.6, 12.6, ROOM_FLOOR, ROOM_FLOOR + 3, 25, 28, WOOD_DARK, MAT.WoodPlanks, stackA)
-	box(room, "Crate", 7.5, 10.5, ROOM_FLOOR + 3, ROOM_FLOOR + 6, 25.2, 28.2, WOOD, MAT.WoodPlanks, stackA)
-	for _, band in ipairs({ { 6.5, 9.5, 25 }, { 9.6, 12.6, 25 } }) do
-		-- In the stack's pool, so the band goes when its crate does rather than hanging in the air.
-		facePlate(room, "CrateBand", "z", band[3], -1, 0.08, band[1] + 0.2, band[2] - 0.2, ROOM_FLOOR + 1.3, ROOM_FLOOR + 1.7,
-			STEEL_DARK, MAT.Metal, trimWith({ tag = stackA.tag }))
+	-- The sign over the front door, and lamps either side of it.
+	litSign(room, "x", z0, -1, 10.4, 17.6, 8.8, 11.8, 16)
+	for _, x in ipairs({ 8.6, 19.4 }) do
+		wallLamp(room, Vector3.new(x, 8, z0), Vector3.new(0, 0, -1), 14)
 	end
-	put(room, "Crate", Vector3.new(2.4, 2.4, 2.4), CFrame.new(14.6, ROOM_FLOOR + 1.2, 26.3) * CFrame.Angles(0, 0.3, 0) * CFrame.Angles(math.pi / 2, 0, 0),
-		WOOD, MAT.WoodPlanks, { tag = "Crate:tipped" })
-	put(room, "CrateLid", Vector3.new(2.4, 0.2, 2.4), CFrame.new(17.2, ROOM_FLOOR + 0.1, 28.9) * CFrame.Angles(0, 0.35, 0),
-		WOOD_DARK, MAT.WoodPlanks, TRIM)
+	-- Painted windows down the west face.
+	for _, z in ipairs({ 14.5, 25, 48 }) do
+		facePlate(room, "Window", "x", x0, -1, PROUD_PAINT, z - 1.6, z + 1.6, 5.4, 8.2, mix(SOOT, STEEL, 0.3), MAT.Glass)
+		facePlate(room, "WindowFrame", "x", x0, -1, PROUD_BRICK, z - 1.9, z + 1.9, 5.1, 8.5, CONCRETE_LIGHT, MAT.Concrete)
+	end
 
-	-- A crate by the doorway, with a ripped sheet of the roof hanging from the beam onto it.
-	box(room, "Crate", 27, 30.2, ROOM_FLOOR, ROOM_FLOOR + 3.2, 26.8, 30, WOOD_DARK, MAT.WoodPlanks, { tag = "Crate:door" })
-	plateBetween(room, "TornSheet", Vector3.new(28.6, 11.1, 23.4), Vector3.new(28.6, ROOM_FLOOR + 3.15, 28.9), 2.8, 0.15,
-		mix(STEEL, RUST, 0.45), MAT.CorrodedMetal, TRIM)
+	-- THE AWNING over the east row: corrugated sheet cantilevered off the east wall on struts, over the
+	-- tallest vehicle's roof. Dressing (no collision, no queries): nothing stands in the bays or their
+	-- ways out, and VehicleService's footing rays pass it.
+	local awning = mix(STEEL, OLIVE, 0.35)
+	plateBetween(room, "Awning", Vector3.new(x1, 12.6, (EAST_Z0 + EAST_Z1) / 2), Vector3.new(x1 + 17, 12.1, (EAST_Z0 + EAST_Z1) / 2),
+		EAST_Z1 - EAST_Z0 + 1, 0.3, awning, MAT.CorrodedMetal, TRIM)
+	for _, z in ipairs({ EAST_Z0 + 1, (EAST_Z0 + EAST_Z1) / 2, EAST_Z1 - 1 }) do
+		plateBetween(room, "AwningStrut", Vector3.new(x1 + 0.1, 8.2, z), Vector3.new(x1 + 9, 12.2, z), 0.3, 0.3, STEEL_DARK, MAT.Metal, TRIM)
+	end
 
-	-- The RotVat: a big brainrot brewing tank, dented, still lit, leaking green onto the floor.
-	local vat = Vector3.new(39.5, 0, 28.5)
-	rod(room, "VatBase", Vector3.new(vat.X, ROOM_FLOOR, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 0.4, vat.Z), 5.0, STEEL_DARK, MAT.Metal,
-		{ tag = "Prop:vat" })
-	rod(room, "RotVat", Vector3.new(vat.X, ROOM_FLOOR + 0.4, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 6.2, vat.Z), 4.6, STEEL, MAT.Metal,
-		{ tag = "Prop:vat" })
-	put(room, "VatDome", Vector3.new(4.6, 4.6, 4.6), CFrame.new(vat.X, ROOM_FLOOR + 6.2, vat.Z), STEEL, MAT.Metal,
-		{ shape = Enum.PartType.Ball, tag = "Prop:vat" })
-	local glow = rod(room, "VatWindow", Vector3.new(vat.X, ROOM_FLOOR + 2.6, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 3.8, vat.Z), 4.72,
-		ROT_GREEN, MAT.Neon, trimWith({ transparency = 0.15, tag = "Prop:vat" }))
-	light(glow, ROT_GREEN, 12, 0.9)
-	rod(room, "VatPipe", Vector3.new(41.5, ROOM_FLOOR + 5.2, vat.Z), Vector3.new(44.1, ROOM_FLOOR + 5.2, vat.Z), 0.55, RUST, MAT.CorrodedMetal, trimWith({ tag = "Prop:vat" }))
-	rod(room, "VatPipe", Vector3.new(vat.X, ROOM_FLOOR + 8.1, vat.Z), Vector3.new(vat.X, ROOM_FLOOR + 10.4, vat.Z), 0.55, RUST, MAT.CorrodedMetal, trimWith({ tag = "Prop:vat" }))
-	rod(room, "VatPipe", Vector3.new(vat.X - 0.3, ROOM_FLOOR + 10.1, vat.Z), Vector3.new(vat.X - 0.3, 11.2, 23.6), 0.45, RUST, MAT.CorrodedMetal, trimWith({ tag = "Prop:vat" }))
-	groundDisc(room, "RotGoo", 37.0, 32.2, 2.6, ROT_GREEN, MAT.Neon, 0, ROOM_FLOOR)
-	groundDisc(room, "RotGoo", 38.6, 33.2, 1.4, ROT_GREEN, MAT.Neon, 1, ROOM_FLOOR)
-
-	-- A bare bulb hanging from the frame.
-	rod(room, "BulbCord", Vector3.new(17, 12.05, 31.5), Vector3.new(17, 9.1, 31.5), 0.08, RUBBER, MAT.Plastic, TRIM)
-	local bulb = put(room, "Bulb", Vector3.new(0.7, 0.7, 0.7), CFrame.new(17, 8.9, 31.5), WARM, MAT.Neon,
-		trimWith({ shape = Enum.PartType.Ball }))
-	light(bulb, WARM, 24, 1.2)
-
-	table.insert(B.loot, CFrame.new(16.5, ROOM_FLOOR, 32.0))
-	table.insert(B.loot, CFrame.new(24.5, ROOM_FLOOR, 31.0))
-	table.insert(B.loot, CFrame.new(33.0, ROOM_FLOOR, 27.0))
-	table.insert(B.loot, CFrame.new(8.0, ROOM_FLOOR, 31.5))
+	-- Inside: racks between the chest spots, crates, lamps, the chests.
+	local lampZ = { 14, 27, 40, 50 }
+	for _, z in ipairs(lampZ) do
+		wallLamp(room, Vector3.new(x1 - 1.3, 8.4, z), Vector3.new(-1, 0, 0), 14)
+	end
+	for _, z in ipairs({ 17, 23.2, 44 }) do
+		box(room, "Rack", x0 + 1.3, x0 + 2.4, ROOM_FLOOR, 6.4, z - 0.4, z + 0.4, WOOD_DARK, MAT.WoodPlanks)
+	end
+	for _, z in ipairs({ 21, 31, 41 }) do
+		box(room, "Rack", x1 - 2.4, x1 - 1.3, ROOM_FLOOR, 6.4, z - 0.4, z + 0.4, WOOD_DARK, MAT.WoodPlanks)
+	end
+	local stack = { tag = "Crate:armoury" }
+	box(room, "Crate", 12.6, 15.6, ROOM_FLOOR, ROOM_FLOOR + 3, 49.4, 52.4, WOOD, MAT.WoodPlanks, stack)
+	box(room, "Crate", 12.9, 15.3, ROOM_FLOOR + 3, ROOM_FLOOR + 5.4, 49.7, 52.1, WOOD_DARK, MAT.WoodPlanks, stack)
+	facePlate(room, "CrateBand", "z", 49.4, -1, 0.08, 12.8, 15.4, ROOM_FLOOR + 1.3, ROOM_FLOOR + 1.7, STEEL_DARK, MAT.Metal, trimWith({ tag = stack.tag }))
+	for _, spot in ipairs({ { "ArmouryWest1", x0 + 5.4, 14 }, { "ArmouryWest2", x0 + 5.4, 20.3 }, { "ArmouryWest3", x0 + 5.4, 26.6 },
+		{ "ArmouryWest4", x0 + 5.4, 48 }, { "ArmouryEast1", x1 - 5.4, 16 }, { "ArmouryEast2", x1 - 5.4, 26 },
+		{ "ArmouryEast3", x1 - 5.4, 36 }, { "ArmouryEast4", x1 - 5.4, 46 } }) do
+		table.insert(B.chests, { name = spot[1], at = CFrame.new(spot[2], ROOM_FLOOR, spot[3]) })
+	end
+	for _, z in ipairs({ 20, 33, 44 }) do
+		table.insert(B.loot, CFrame.new(14, ROOM_FLOOR, z))
+	end
 	return room
 end
 
 --------------------------------------------------------------------------------
--- The vehicle yard
+-- The motor pool
 --------------------------------------------------------------------------------
 
--- Six bays (Oliver, 2026-09-24: "add more cars to spawn bases"). The front row of three faces the
--- gate and drives straight out through it; the back row of three stands across the yard's east end
--- and drives straight out through the east gate. Neither row's way out crosses the other.
-local FRONT_BAYS, FRONT_Z = { 12.5, 25, 37.5 }, -26
-local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32
-local BAY_HALF_WIDTH, BAY_HALF_LENGTH = 6.25, 11
-
--- A camo net over a row of bays: poles on the bay lines at both ends of the bays, cables along
--- the pole tops, the net sagging between. `across` is the list of bay-line positions across the row,
--- `backAt`/`frontAt` where the pole rows stand along it, `alongX` whether the bays run along X (the
--- back row) rather than Z. NOTHING over a bay may be queryable: VehicleService's footing ray starts
--- 24 studs over the spot, and would park the car on the net.
-local function camoNet(yard, across, backAt, frontAt, alongX, torn)
-	-- High enough that the tallest vehicle's gun stays under the net, not through it.
-	local top, sag = 12.9, 11.3
-	local mid = (backAt + frontAt) / 2
-	local function at(a, y, u)
-		if alongX then
-			return Vector3.new(u, y, a)
-		end
-		return Vector3.new(a, y, u)
-	end
-	for _, a in ipairs(across) do
-		for _, u in ipairs({ backAt, frontAt }) do
-			rod(yard, "NetPole", at(a, 0, u), at(a, top, u), 0.8, OLIVE, MAT.Metal)
-		end
-		rod(yard, "NetCable", at(a, top - 0.25, backAt), at(a, top - 0.25, frontAt), 0.12, RUBBER, MAT.Plastic, TRIM)
-	end
-	for _, u in ipairs({ backAt, frontAt }) do
-		rod(yard, "NetCable", at(across[1], top - 0.25, u), at(across[#across], top - 0.25, u), 0.12, RUBBER, MAT.Plastic, TRIM)
-	end
-	local netOpts = trimWith({ transparency = 0.12 })
-	local step = frontAt > backAt and 1 or -1
-	for index = 1, #across - 1 do
-		local a0, a1 = across[index] + 0.05, across[index + 1] - 0.05
-		local w = a1 - a0
-		local ca = (a0 + a1) / 2
-		local color = index == 2 and mix(NET, OLIVE, 0.5) or NET
-		-- The two halves of a panel cross at the sag; the second is a little narrower so their edges
-		-- never share a plane.
-		plateBetween(yard, "CamoNet", at(ca, top - 0.4, backAt), at(ca, sag, mid + 0.3 * step), w, 0.1, color, MAT.Fabric, netOpts)
-		w = w - 0.2
-		if torn == index then
-			-- Torn: the outer half of this panel is gone, a flap hanging from what is left.
-			local edge = mid + 6 * step
-			plateBetween(yard, "CamoNet", at(ca, sag, mid - 0.3 * step), at(ca, 10.6, edge), w, 0.1, color, MAT.Fabric, netOpts)
-			plateBetween(yard, "NetFlap", at(ca + 2, 10.62, edge - 0.2 * step), at(ca + 2.6, 8.4, edge + 0.7 * step), 4.2, 0.1, color,
-				MAT.Fabric, netOpts)
-		else
-			plateBetween(yard, "CamoNet", at(ca, sag, mid - 0.3 * step), at(ca, top - 0.4, frontAt), w, 0.1, color, MAT.Fabric, netOpts)
-		end
-	end
-	-- Scrim strips hanging off the outer cable, between the poles.
-	for index = 1, #across - 1 do
-		for _, t in ipairs({ 0.3, 0.7 }) do
-			local a = across[index] + (across[index + 1] - across[index]) * t
-			if alongX then
-				box(yard, "NetScrim", frontAt - 0.03, frontAt + 0.03, top - 2.2, top - 0.3, a - 0.35, a + 0.35, OLIVE, MAT.Fabric, TRIM)
-			else
-				box(yard, "NetScrim", a - 0.35, a + 0.35, top - 2.2, top - 0.3, frontAt - 0.03, frontAt + 0.03, OLIVE, MAT.Fabric, TRIM)
-			end
-		end
-	end
-end
+-- Bays are LANE_PITCH apart, so each one's way out is the biggest vehicle's width and 6 more
+-- (Oliver, 2026-09-24: "the bots struggle to drive out of the base due to poles in the way"): nothing
+-- stands in a lane from a bay's tail out through its gate, and no parked neighbour is in it either.
+local FRONT_Z = -30
+local FRONT_BAYS = { LANE_X0 + LANE_PITCH / 2, LANE_X0 + LANE_PITCH * 1.5, LANE_X0 + LANE_PITCH * 2.5, LANE_X0 + LANE_PITCH * 3.5 }
+local EAST_X = 35.5
+local EAST_BAYS = { EAST_Z0 + LANE_PITCH / 2, EAST_Z0 + LANE_PITCH * 1.5, EAST_Z0 + LANE_PITCH * 2.5 }
+local BAY_HALF_LENGTH = 9.3
 
 -- The team's number on a bay: a painted square and up to three white pips a row.
 local function bayNumber(yard, number, x, z)
@@ -1120,50 +1217,76 @@ local function buildYard(model)
 	yard.Name = "VehicleYard"
 	yard.Parent = model
 
-	-- The front row: three bays side by side, noses to the gate. Lines between, the number at the
-	-- back of each, a wheel stop behind.
-	for _, x in ipairs({ 6.25, 18.75, 31.25, 43.75 }) do
+	-- The front row: four bays side by side, noses to the gatehouse.
+	for index = 0, #FRONT_BAYS do
+		local x = LANE_X0 + index * LANE_PITCH + (index == 0 and 0.3 or index == #FRONT_BAYS and -0.3 or 0)
 		local line = groundMark(yard, "BayLine", x, FRONT_Z, 0.3, BAY_HALF_LENGTH * 2, 0, YELLOW_PAINT, MAT.SmoothPlastic, 0)
-		-- The yard's pivot turns with the compound (critic C8): a Model with no PrimaryPart has its
-		-- GetBoundingBox on the WORLD axes. DefensePlacement no longer reads the yard's box (the
-		-- NoBuildLane parts below replaced that), but anything that measures the yard still wants its
-		-- box square to the compound. A bay line is square to the compound's frame.
 		if not yard.PrimaryPart then
 			yard.PrimaryPart = line
 		end
 	end
 	for number, x in ipairs(FRONT_BAYS) do
 		table.insert(B.bays, { name = "Bay" .. number, at = CFrame.new(x, TILE_TOP, FRONT_Z) })
-		bayNumber(yard, number, x, FRONT_Z + 9.7)
-		box(yard, "WheelStop", x - 2.2, x + 2.2, TILE_TOP, TILE_TOP + 0.5, FRONT_Z + 11.0, FRONT_Z + 11.6, CONCRETE_LIGHT, MAT.Concrete, { tag = false })
-		groundDisc(yard, "OilStain", x + rnd(-1.5, 1.5), FRONT_Z + rnd(-3, 3), rnd(1.8, 2.8), SOOT, MAT.Slate, 0)
+		bayNumber(yard, number, x, FRONT_Z + BAY_HALF_LENGTH - 1.2)
+		groundDisc(yard, "OilStain", x + rnd(-1.5, 1.5), FRONT_Z + rnd(-3, 3), rnd(1.8, 2.8), SOOT, MAT.Slate, 1)
 	end
-	camoNet(yard, { 6.2, 18.75, 31.25, 43.4 }, FRONT_Z + 11.6, FRONT_Z - 11.8, false, 3)
-
-	-- The back row: three bays across the east end, noses to the east gate.
-	for _, z in ipairs({ -12.5, -1.5, 9.5, 20.5 }) do
-		groundMark(yard, "BayLine", BACK_X, z, BAY_HALF_LENGTH * 2, 0.3, 0, YELLOW_PAINT, MAT.SmoothPlastic, 0)
+	-- The east row: three bays against the armoury, noses to the east gate.
+	for index = 0, #EAST_BAYS do
+		local z = EAST_Z0 + index * LANE_PITCH + (index == 0 and 0.3 or index == #EAST_BAYS and -0.3 or 0)
+		groundMark(yard, "BayLine", EAST_X, z, BAY_HALF_LENGTH * 2, 0.3, 0, YELLOW_PAINT, MAT.SmoothPlastic, 0)
 	end
-	for index, z in ipairs(BACK_BAYS) do
+	for index, z in ipairs(EAST_BAYS) do
 		local number = #FRONT_BAYS + index
-		table.insert(B.bays, { name = "Bay" .. number, at = CFrame.new(BACK_X, TILE_TOP, z) * CFrame.Angles(0, -math.pi / 2, 0) })
-		bayNumber(yard, number, BACK_X - 8.8, z)
-		box(yard, "WheelStop", BACK_X - 10.9, BACK_X - 10.3, TILE_TOP, TILE_TOP + 0.5, z - 2.2, z + 2.2, CONCRETE_LIGHT, MAT.Concrete, { tag = false })
-		groundDisc(yard, "OilStain", BACK_X + rnd(-3, 3), z + rnd(-1.5, 1.5), rnd(1.8, 2.8), SOOT, MAT.Slate, 0)
+		table.insert(B.bays, { name = "Bay" .. number, at = CFrame.new(EAST_X, TILE_TOP, z) * CFrame.Angles(0, -math.pi / 2, 0) })
+		bayNumber(yard, number, EAST_X - BAY_HALF_LENGTH + 1.2, z)
+		groundDisc(yard, "OilStain", EAST_X + rnd(-3, 3), z + rnd(-1.5, 1.5), rnd(1.8, 2.8), SOOT, MAT.Slate, 1)
 	end
-	camoNet(yard, { -12.5, -1.5, 9.5, 20.5 }, BACK_X - 11.4, BACK_X + 11, true, nil)
 
-	-- Where a thrown defense may not go up: each bay and its straight way out through its gate, a
-	-- car's width and a stud either side, out to the DRIVE_OUT line tools/team_base_ruins_check.py
-	-- clears the lanes to (62 from the compound's middle). Invisible, and nothing else can meet them:
-	-- no collision, no queries, no touches. DefensePlacement reads the "NoBuild" tag. These replace a
-	-- rule that refused the yard's whole bounding box plus a 6-stud margin -- about 43% of the compound
-	-- -- so the courtyard, the supply side and the yard's edges are buildable again (#128, 09-24).
-	-- The ends sit off every real face (11.63, not the wheel stop's 11.6) so none shares a plane.
+	-- THE CANOPY over the front row, cable-stayed: masts well BEHIND the bays' tails (on the lane lines,
+	-- out of every way out), beams reaching forward over the bays from them, stays from the mast heads
+	-- to the beam tips, camouflage netting between the beams. Only the masts are solid; the beams, the
+	-- stays and the net are dressing over the lanes (nothing to hit, nothing for a footing ray).
+	local mastZ, tipZ, beamY = FRONT_Z + BAY_HALF_LENGTH + 8, FRONT_Z - BAY_HALF_LENGTH + 1, 12.6
+	local masts = {}
+	for index = 0, #FRONT_BAYS do
+		table.insert(masts, LANE_X0 + index * LANE_PITCH + (index == 0 and 0.6 or index == #FRONT_BAYS and -0.6 or 0))
+	end
+	for _, x in ipairs(masts) do
+		box(yard, "CanopyMast", x - 0.45, x + 0.45, TILE_TOP + 0.2, 17, mastZ - 0.45, mastZ + 0.45, OLIVE, MAT.Metal)
+		box(yard, "MastFoot", x - 0.9, x + 0.9, TILE_TOP, TILE_TOP + 0.6, mastZ - 0.9, mastZ + 0.9, CONCRETE_LIGHT, MAT.Concrete)
+		plateBetween(yard, "CanopyBeam", Vector3.new(x, beamY, mastZ + 0.6), Vector3.new(x, beamY, tipZ), 0.5, 0.7, STEEL_DARK, MAT.Metal, TRIM)
+		rod(yard, "CanopyStay", Vector3.new(x, 16.6, mastZ - 0.2), Vector3.new(x, beamY + 0.3, tipZ + 0.3), 0.14, RUBBER, MAT.Plastic, TRIM)
+		rod(yard, "CanopyStay", Vector3.new(x, 16.2, mastZ - 0.2), Vector3.new(x, beamY + 0.3, (mastZ + tipZ) / 2), 0.14, RUBBER, MAT.Plastic, TRIM)
+	end
+	local netOpts = trimWith({ transparency = 0.12 })
+	for index = 1, #masts - 1 do
+		local a0, a1 = masts[index] + 0.3, masts[index + 1] - 0.3
+		local color = index % 2 == 0 and mix(NET, OLIVE, 0.5) or NET
+		local sag = FRONT_Z
+		plateBetween(yard, "CamoNet", Vector3.new((a0 + a1) / 2, beamY + 0.4, mastZ - 0.6), Vector3.new((a0 + a1) / 2, beamY - 0.5, sag), a1 - a0, 0.1,
+			color, MAT.Fabric, netOpts)
+		plateBetween(yard, "CamoNet", Vector3.new((a0 + a1) / 2, beamY - 0.5, sag - 0.5), Vector3.new((a0 + a1) / 2, beamY + 0.4, tipZ + 0.4),
+			a1 - a0 - 0.2, 0.1, color, MAT.Fabric, netOpts)
+		for _, t in ipairs({ 0.3, 0.7 }) do
+			local a = a0 + (a1 - a0) * t
+			box(yard, "NetScrim", a - 0.35, a + 0.35, beamY - 1.6, beamY + 0.2, tipZ + 0.2, tipZ + 0.26, OLIVE, MAT.Fabric, TRIM)
+		end
+	end
+	-- Floodlights on the two end masts, looking over the bays.
+	for _, x in ipairs({ masts[1], masts[#masts] }) do
+		local head = box(yard, "WorkLamp", x - 0.6, x + 0.6, 14.6, 15.6, mastZ - 1.35, mastZ - 0.45, STEEL_DARK, MAT.Metal, TRIM)
+		local _ = head
+		local glass = box(yard, "WorkLampGlass", x - 0.45, x + 0.45, 14.75, 15.45, mastZ - 1.5, mastZ - 1.35, WARM, MAT.Neon, TRIM)
+		light(glass, WARM, 30, 1.3)
+	end
+
+	-- Where a thrown defense may not go up: each bay and its way out, the lane's full width, out to
+	-- DRIVE_OUT past the compound's middle. Invisible, and nothing else can meet them. DefensePlacement
+	-- reads the "NoBuild" tag.
 	local CollectionService = game:GetService("CollectionService")
-	local laneHalf, reach, low, high = 5.4, 62, -5.95, 13.95
+	local laneHalf, low, high = LANE_PITCH / 2 - 0.05, -5.95, 13.95
 	local function noBuild(x0, x1, z0, z1)
-		local part = box(yard, "NoBuildLane", x0, x1, low, high, z0, z1, CONCRETE_LIGHT, MAT.SmoothPlastic, { tag = false })
+		local part = box(yard, "NoBuildLane", x0, x1, low, high, z0, z1, CONCRETE_LIGHT, MAT.SmoothPlastic)
 		part.Transparency = 1
 		part.CanCollide = false
 		part.CanQuery = false
@@ -1173,19 +1296,36 @@ local function buildYard(model)
 		CollectionService:AddTag(part, "NoBuild")
 	end
 	for _, x in ipairs(FRONT_BAYS) do
-		noBuild(x - laneHalf, x + laneHalf, -reach, FRONT_Z + 11.63)
+		noBuild(x - laneHalf, x + laneHalf, -DRIVE_OUT, FRONT_Z + BAY_HALF_LENGTH + 0.37)
 	end
-	for _, z in ipairs(BACK_BAYS) do
-		noBuild(BACK_X - 11.63, reach, z - laneHalf, z + laneHalf)
+	for _, z in ipairs(EAST_BAYS) do
+		noBuild(EAST_X - BAY_HALF_LENGTH - 0.37, DRIVE_OUT, z - laneHalf, z + laneHalf)
 	end
 
-	-- A work lamp on the back row's inner pole, looking out over the bays.
-	box(yard, "WorkLampArm", 20.6, 21.8, 9.2, 9.6, 9.1, 9.9, STEEL_DARK, MAT.Metal, TRIM)
-	box(yard, "WorkLamp", 21.8, 22.6, 8.6, 9.6, 8.9, 10.1, STEEL_DARK, MAT.Metal, TRIM)
-	local lamp = box(yard, "WorkLampGlass", 22.6, 22.7, 8.75, 9.45, 9.05, 9.95, WARM, MAT.Neon, TRIM)
-	light(lamp, WARM, 26, 1.3)
-
-	-- The apron: tyre stacks and drums between the ways out, the gate's torn-off leaf against the wall.
+	-- The apron between the rows: the fuel point by the east wall, the workshop against the armoury,
+	-- tyres and drums at the edges, all clear of every lane.
+	local fuel = { tag = "Prop:fuel" }
+	box(yard, "FuelPump", 61.6, 63.4, TILE_TOP, TILE_TOP + 4.2, -9.2, -7.6, mix(YELLOW_PAINT, RUST, 0.2), MAT.Metal, fuel)
+	box(yard, "FuelPumpFace", 61.4, 61.6, TILE_TOP + 2.2, TILE_TOP + 3.6, -9, -7.8, SOOT, MAT.Slate, trimWith(fuel))
+	rod(yard, "FuelHose", Vector3.new(61.5, TILE_TOP + 2.4, -7.5), Vector3.new(60.8, TILE_TOP + 0.9, -6.2), 0.25, RUBBER, MAT.Plastic, trimWith(fuel))
+	box(yard, "FuelTankCradle", 58.4, 64.6, TILE_TOP, TILE_TOP + 0.8, -2.6, -1.8, STEEL_DARK, MAT.Metal, fuel)
+	box(yard, "FuelTankCradle", 58.4, 64.6, TILE_TOP, TILE_TOP + 0.8, 1.8, 2.6, STEEL_DARK, MAT.Metal, fuel)
+	rod(yard, "FuelTank", Vector3.new(61.5, TILE_TOP + 2.2, -3.4), Vector3.new(61.5, TILE_TOP + 2.2, 3.4), 3.2, mix(OLIVE, STEEL, 0.3), MAT.Metal, fuel)
+	facePlate(yard, "TeamTankStripe", "x", 59.9, -1, 0.08, -3, 3, TILE_TOP + 2.0, TILE_TOP + 2.5, B.team, MAT.SmoothPlastic, trimWith(fuel))
+	local drum = { tag = "Prop:drums" }
+	for index, at in ipairs({ { 64.1, -16.2 }, { 64.1, -18.3 }, { 61.9, -16.6 } }) do
+		rod(yard, "Drum", Vector3.new(at[1], TILE_TOP, at[2]), Vector3.new(at[1], TILE_TOP + 2.8, at[2]), 1.8,
+			index == 2 and OLIVE or mix(RUST, BRICK, 0.4), MAT.CorrodedMetal, drum)
+	end
+	local bench = { tag = "Prop:bench" }
+	box(yard, "Workbench", 4.8, 9.8, TILE_TOP + 2.9, TILE_TOP + 3.2, 5.4, 7.4, WOOD, MAT.WoodPlanks, bench)
+	for _, x in ipairs({ 5.0, 9.3 }) do
+		for _, z in ipairs({ 5.6, 6.9 }) do
+			box(yard, "BenchLeg", x, x + 0.3, TILE_TOP, TILE_TOP + 2.9, z, z + 0.3, WOOD_DARK, MAT.WoodPlanks, bench)
+		end
+	end
+	box(yard, "Toolbox", 5.4, 7.2, TILE_TOP + 3.2, TILE_TOP + 4.1, 5.8, 6.7, BRICK, MAT.Metal, trimWith(bench))
+	box(yard, "Vice", 8.4, 9.2, TILE_TOP + 3.2, TILE_TOP + 3.9, 5.5, 6.1, STEEL, MAT.Metal, trimWith(bench))
 	local function tyres(x, z, count, tag)
 		for index = 1, count do
 			local y = TILE_TOP + (index - 1) * 0.9
@@ -1193,113 +1333,135 @@ local function buildYard(model)
 		end
 		disc(yard, "TyreHole", Vector3.new(x, TILE_TOP + count * 0.9, z), Vector3.new(0, 1, 0), 0.06, 1.2, SOOT, MAT.Slate, trimWith({ tag = "Prop:" .. tag }))
 	end
-	tyres(18.75, -24, 3, "tyresA")
-	tyres(31.25, -30, 2, "tyresB")
-	local drum = { tag = "Prop:drums" }
-	-- The drums stand by the barriers, clear of bay 1: by the east wall they were inside bay 3 for
-	-- anything as wide as the Sahur Van.
-	rod(yard, "Drum", Vector3.new(6.1, TILE_TOP, -30.8), Vector3.new(6.1, TILE_TOP + 2.8, -30.8), 1.8, mix(RUST, BRICK, 0.4), MAT.CorrodedMetal, drum)
-	rod(yard, "Drum", Vector3.new(6.1, TILE_TOP, -28.7), Vector3.new(6.1, TILE_TOP + 2.8, -28.7), 1.8, OLIVE, MAT.Metal, drum)
-	-- The gate leaf, leaning on the wall: steel frame round a sagging mesh.
-	local lean = math.asin(1.3 / 6.5)
-	local leaf = CFrame.new(42.85, TILE_TOP, -33.3) * CFrame.Angles(0, 0, -lean)
-	local leafOpts = { tag = "Prop:gateLeaf" }
-	put(yard, "GateLeaf", Vector3.new(0.3, 0.3, 6.8), leaf * CFrame.new(0, 0.15, 0), STEEL, MAT.Metal, leafOpts)
-	put(yard, "GateLeaf", Vector3.new(0.3, 0.3, 6.8), leaf * CFrame.new(0, 6.35, 0), STEEL, MAT.Metal, leafOpts)
-	put(yard, "GateLeaf", Vector3.new(0.46, 6.2, 0.3), leaf * CFrame.new(0, 3.25, -3.35), STEEL, MAT.Metal, leafOpts)
-	put(yard, "GateLeaf", Vector3.new(0.46, 6.2, 0.3), leaf * CFrame.new(0, 3.25, 3.35), STEEL, MAT.Metal, leafOpts)
-	put(yard, "GateMesh", Vector3.new(0.08, 5.9, 6.4), leaf * CFrame.new(0, 3.25, 0), STEEL_DARK, MAT.Metal,
-		trimWith({ transparency = 0.45, tag = leafOpts.tag }))
+	tyres(20.5, 5.6, 3, "tyresA")
+	tyres(23.2, 3.4, 2, "tyresB")
 
-	-- The jersey barriers between the yard and the courtyard, with gaps to walk through.
-	for index, span in ipairs({ { -38, -32 }, { -24, -18 }, { -15, -10 } }) do
+	-- Jersey barriers between the parade ground and the pool, with gaps to walk through.
+	for index, span in ipairs({ { -46, -40 }, { -34, -28 }, { -18, -12 } }) do
 		local opts = { tag = "Barrier:" .. index }
-		box(yard, "Barrier", 4.2, 5.8, TILE_TOP, TILE_TOP + 1.0, span[1], span[2], CONCRETE_LIGHT, MAT.Concrete, opts)
-		box(yard, "Barrier", 4.55, 5.45, TILE_TOP + 1.0, TILE_TOP + 2.9, span[1] + 0.1, span[2] - 0.1, CONCRETE_LIGHT, MAT.Concrete, opts)
-		facePlate(yard, "TeamBarrierPaint", "x", 4.55, -1, 0.08, span[1] + 0.8, span[2] - 0.8, TILE_TOP + 1.9, TILE_TOP + 2.5, B.team, MAT.SmoothPlastic, trimWith({ tag = opts.tag }))
+		box(yard, "Barrier", -0.8, 0.8, TILE_TOP, TILE_TOP + 1.0, span[1], span[2], CONCRETE_LIGHT, MAT.Concrete, opts)
+		box(yard, "Barrier", -0.45, 0.45, TILE_TOP + 1.0, TILE_TOP + 2.9, span[1] + 0.1, span[2] - 0.1, CONCRETE_LIGHT, MAT.Concrete, opts)
+		facePlate(yard, "TeamBarrierPaint", "x", -0.45, -1, 0.08, span[1] + 0.8, span[2] - 0.8, TILE_TOP + 1.9, TILE_TOP + 2.5, B.team,
+			MAT.SmoothPlastic, trimWith({ tag = opts.tag }))
 	end
 
-	-- The lane behind the bays: a workbench against the supply wall, a lamp post come down.
-	local bench = { tag = "Prop:bench" }
-	box(yard, "Workbench", 8, 13, TILE_TOP + 2.9, TILE_TOP + 3.2, 19.6, 21.6, WOOD, MAT.WoodPlanks, bench)
-	for _, x in ipairs({ 8.2, 12.5 }) do
-		for _, z in ipairs({ 19.8, 21.1 }) do
-			box(yard, "BenchLeg", x, x + 0.3, TILE_TOP, TILE_TOP + 2.9, z, z + 0.3, WOOD_DARK, MAT.WoodPlanks, bench)
-		end
+	table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(6.5, TILE_TOP, 1.2) })
+	table.insert(B.chests, { name = "FuelPoint", at = CFrame.new(54, TILE_TOP, -8) })
+	for _, at in ipairs({ { 12, -10 }, { 30, -4 }, { 44, -12 }, { 52, 2 } }) do
+		table.insert(B.loot, CFrame.new(at[1], TILE_TOP, at[2]))
 	end
-	box(yard, "Toolbox", 8.6, 10.4, TILE_TOP + 3.2, TILE_TOP + 4.1, 20.0, 20.9, BRICK, MAT.Metal, trimWith({ tag = bench.tag }))
-	box(yard, "Vice", 11.6, 12.4, TILE_TOP + 3.2, TILE_TOP + 3.9, 19.7, 20.3, STEEL, MAT.Metal, trimWith({ tag = bench.tag }))
-	rod(yard, "FallenLampPost", Vector3.new(8, TILE_TOP + 0.25, -3.6), Vector3.new(18, TILE_TOP + 0.25, -3.6), 0.5, STEEL_DARK, MAT.Metal,
-		{ tag = "Prop:fallenLamp" })
-	box(yard, "FallenLampHead", 17.9, 19.4, TILE_TOP, TILE_TOP + 0.7, -4.2, -3.0, STEEL_DARK, MAT.Metal, { tag = "Prop:fallenLamp" })
-
-	-- A chest beside the workbench, clear of the back row's bays and their way out.
-	table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(16.5, TILE_TOP, 19.5) })
-	table.insert(B.loot, CFrame.new(8.0, TILE_TOP, 14.0))
-	table.insert(B.loot, CFrame.new(12.0, TILE_TOP, 8.0))
-	table.insert(B.loot, CFrame.new(14.0, TILE_TOP, -11.5))
 	return yard
 end
 
 --------------------------------------------------------------------------------
--- The courtyard
+-- The parade ground: watchtower, ops room, flag, cover
 --------------------------------------------------------------------------------
 
+-- The watchtower in the front-west corner: steel legs, a plank deck with sandbags, a searchlight,
+-- a tin roof, a ladder. One pool (the Model is tagged), so when it goes it goes whole.
 local function buildTower(model)
-	-- One pool (the Model is tagged), so when it goes it goes whole.
 	local tower = Instance.new("Model")
 	tower.Name = "Watchtower"
 	tower:SetAttribute("Destructible", "Shelter")
 	tower.Parent = model
-	local x0, x1, z0, z1 = -42.4, -35.6, -38.2, -31.4
-	local deck = 7.6
-	-- Legs: the two at the back run on up as the roof posts; the front two snapped off at the rail.
-	for _, leg in ipairs({ { x0, z0, 11.6 }, { x0, z1, 11.6 }, { x1, z0, 9.0 }, { x1, z1, 9.0 } }) do
+	local x0, x1, z0, z1 = -63.4, -56.6, -52.2, -45.4
+	local deck = 9.6
+	for _, leg in ipairs({ { x0, z0, 14.4 }, { x0, z1, 14.4 }, { x1, z0, 14.4 }, { x1, z1, 14.4 } }) do
 		box(tower, "TowerLeg", leg[1] - 0.4, leg[1] + 0.4, 0, leg[3], leg[2] - 0.4, leg[2] + 0.4, STEEL, MAT.Metal)
 	end
-	box(tower, "TowerDeck", -42.7, -35.3, deck - 0.6, deck, -38.5, -31.1, WOOD_DARK, MAT.WoodPlanks)
-	-- Cross bracing on the front face and the east face (one of its braces is gone).
+	box(tower, "TowerDeck", x0 - 0.3, x1 + 0.3, deck - 0.6, deck, z0 - 0.3, z1 + 0.3, WOOD_DARK, MAT.WoodPlanks)
 	local function brace(a, b)
 		plateBetween(tower, "TowerBrace", a, b, 0.25, 0.25, STEEL_DARK, MAT.Metal)
 	end
-	brace(Vector3.new(x0, 0.9, z0 - 0.1), Vector3.new(x1, 6.6, z0 - 0.1))
-	brace(Vector3.new(x1, 0.9, z0 + 0.12), Vector3.new(x0, 6.6, z0 + 0.12))
-	brace(Vector3.new(x0 - 0.1, 0.9, z1), Vector3.new(x0 - 0.1, 6.6, z0))
-	brace(Vector3.new(x1 + 0.1, 0.9, z0), Vector3.new(x1 + 0.1, 6.6, z1))
-	-- Rails on three sides; the ladder side is open.
-	box(tower, "TowerRail", x0 + 0.4, x1 - 0.4, 8.4, 8.7, z0 - 0.15, z0 + 0.15, STEEL, MAT.Metal)
-	box(tower, "TowerRail", x0 - 0.15, x0 + 0.15, 8.4, 8.7, z0 + 0.4, z1 - 0.4, STEEL, MAT.Metal)
-	box(tower, "TowerRail", x0 + 0.4, -38.4, 8.4, 8.7, z1 - 0.15, z1 + 0.15, STEEL, MAT.Metal)
-	put(tower, "TowerRail", Vector3.new(3.4, 0.3, 0.3), CFrame.new(-37.3, 7.9, z1) * CFrame.Angles(0, 0, 0.5), STEEL, MAT.Metal)
-	-- Sandbags along the front of the deck, and a searchlight.
-	sandbags(tower, "tower", -41.7, -37.6, -36.3, -37.6, 1, deck)
-	box(tower, "SearchlightStand", -41.6, -40.8, deck, deck + 1.2, -33.0, -32.2, STEEL_DARK, MAT.Metal)
-	local lamp = rod(tower, "Searchlight", Vector3.new(-41.2, deck + 1.7, -32.0), Vector3.new(-41.2, deck + 1.7, -33.6), 1.2, STEEL_DARK, MAT.Metal)
-	local _ = lamp
-	local glass = disc(tower, "SearchlightGlass", Vector3.new(-41.2, deck + 1.7, -33.6), Vector3.new(0, 0, -1), 0.08, 1.0, WARM, MAT.Neon)
-	light(glass, WARM, 20, 1.2)
-	-- The roof came down onto the snapped legs.
-	local high, low = Vector3.new(x0, 11.6, 0), Vector3.new(x1, 9.0, 0)
-	local tilt = math.atan2(high.Y - low.Y, low.X - high.X)
-	local mid = (high + low) / 2
-	put(tower, "TowerRoof", Vector3.new((low - high).Magnitude + 1.4, 0.25, 8.2),
-		CFrame.new(mid.X, mid.Y, (z0 + z1) / 2) * CFrame.Angles(0, 0, -tilt) * CFrame.new(0, 0.05, 0),
-		mix(STEEL, RUST, 0.5), MAT.CorrodedMetal)
-	-- A chest under the deck, between the legs; the way in is the open north side.
-	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(-39, TILE_TOP, -34.8) })
-	-- A pennant on the tall back leg.
-	rod(tower, "PennantPole", Vector3.new(x0, 11.4, z0), Vector3.new(x0, 14.2, z0), 0.2, STEEL, MAT.Metal)
-	box(tower, "TeamPennant", x0 + 0.05, x0 + 2.6, 12.9, 14.1, z0 - 0.04, z0 + 0.04, B.team, MAT.Fabric, TRIM)
-	-- The way up.
+	brace(Vector3.new(x0, 0.9, z1 + 0.1), Vector3.new(x1, deck - 1, z1 + 0.1))
+	brace(Vector3.new(x1, 0.9, z1 - 0.12), Vector3.new(x0, deck - 1, z1 - 0.12))
+	box(tower, "TowerRail", x0 + 0.4, x1 - 0.4, deck + 0.8, deck + 1.1, z0 - 0.15, z0 + 0.15, STEEL, MAT.Metal)
+	box(tower, "TowerRail", x0 - 0.15, x0 + 0.15, deck + 0.8, deck + 1.1, z0 + 0.4, z1 - 0.4, STEEL, MAT.Metal)
+	sandbags(tower, "tower", x0 + 0.7, z0 + 0.7, x1 - 0.7, z0 + 0.7, 1, deck)
+	box(tower, "SearchlightStand", x1 - 1.6, x1 - 0.8, deck, deck + 1.2, z0 + 2.6, z0 + 3.4, STEEL_DARK, MAT.Metal)
+	rod(tower, "Searchlight", Vector3.new(x1 - 1.2, deck + 1.7, z0 + 3.6), Vector3.new(x1 - 1.2, deck + 1.7, z0 + 2.0), 1.2, STEEL_DARK, MAT.Metal)
+	local glass = disc(tower, "SearchlightGlass", Vector3.new(x1 - 1.2, deck + 1.7, z0 + 2.0), Vector3.new(0, 0, -1), 0.08, 1.0, WARM, MAT.Neon)
+	light(glass, WARM, 22, 1.2)
+	-- A pitched tin roof on the four legs.
+	local mid = (x0 + x1) / 2
+	for _, s in ipairs({ -1, 1 }) do
+		plateBetween(tower, "TowerRoof", Vector3.new(mid + s * ((x1 - x0) / 2 + 0.8), 14.25, (z0 + z1) / 2), Vector3.new(mid, 16.0 + (s > 0 and 0.06 or 0), (z0 + z1) / 2),
+			z1 - z0 + (s < 0 and 1.6 or 1.4), 0.25, s < 0 and mix(STEEL, RUST, 0.5) or mix(STEEL, RUST, 0.35), MAT.CorrodedMetal)
+	end
+	rod(tower, "PennantPole", Vector3.new(x0, 14.4, z0), Vector3.new(x0, 18.2, z0), 0.2, STEEL, MAT.Metal)
+	box(tower, "TeamPennant", x0 + 0.05, x0 + 2.6, 16.9, 18.1, z0 - 0.04, z0 + 0.04, B.team, MAT.Fabric, TRIM)
 	local ladder = Instance.new("TrussPart")
 	ladder.Name = "TowerLadder"
 	ladder.Anchored = true
-	ladder.Size = Vector3.new(2, 8, 2)
-	ladder.CFrame = B.frame * CFrame.new(-34.3, 4, -34.8)
+	ladder.Size = Vector3.new(2, 10, 2)
+	ladder.CFrame = B.frame * CFrame.new(x1 + 1.4, 5, z0 + 1.4)
 	ladder.Color = STEEL
 	ladder.Material = MAT.Metal
 	ladder.Parent = tower
+	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(mid, TILE_TOP, (z0 + z1) / 2) })
 	return tower
+end
+
+-- The ops room: a one-storey brick block with a broken second storey on its north-west corner, a
+-- flat roof, a door on the east and on the north, a window on the south.
+local function buildOps(model)
+	local ops = Instance.new("Model")
+	ops.Name = "OpsRoom"
+	ops.Parent = model
+	local x0, x1, z0, z1 = -60, -44, -26, -10
+	local top = 9
+	box(ops, "Foundation", x0 + 1.2, x1 - 1.2, -0.6, ROOM_FLOOR, z0 + 1.2, z1 - 1.2, CONCRETE_DARK, MAT.Concrete)
+	box(ops, "Foundation", x1 - 1.2, x1, -0.6, ROOM_FLOOR, -21, -15, CONCRETE_DARK, MAT.Concrete)
+	box(ops, "Foundation", -54, -48, -0.6, ROOM_FLOOR, z1 - 1.2, z1, CONCRETE_DARK, MAT.Concrete)
+	local function w(axis, u0, u1, c, t, style)
+		style.color = style.color or BRICK
+		style.material = style.material or MAT.Brick
+		style.wire = false
+		style.soot = false
+		style.health = 150
+		return wallPanel(ops, axis, u0, u1, c, 1.2, t, style)
+	end
+	-- South, with a window at x -54..-50 (sill 3.2, head 6.2).
+	w("x", x0, -54, z0 + 0.6, top, { out = -1, stripe = true, plain = true })
+	w("x", -50, x1, z0 + 0.6, top, { out = -1, stripe = true, plain = true })
+	box(ops, "Wall", -54, -50, -1, 3.2, z0, z0 + 1.2, BRICK, MAT.Brick, { health = 150 })
+	box(ops, "Wall", -54, -50, 6.2, top, z0, z0 + 1.2, BRICK, MAT.Brick, { health = 150 })
+	box(ops, "WindowSill", -54.3, -49.7, 3.2, 3.5, z0 - 0.3, z0 + 1.1, CONCRETE_LIGHT, MAT.Concrete, TRIM)
+	-- West.
+	w("z", z0 + 1.2, z1 - 1.2, x0 + 0.6, top, { out = -1, plain = true, brick = true })
+	-- East, the door at z -21..-15.
+	w("z", z0 + 1.2, -21, x1 - 0.6, top, { out = 1, plain = true })
+	w("z", -15, z1 - 1.2, x1 - 0.6, top, { out = 1, plain = true })
+	box(ops, "Wall", x1 - 1.2, x1, 8, top, -21, -15, BRICK, MAT.Brick, { health = 150 })
+	table.insert(B.doorways, { name = "OpsEast", x0 = x1 - 1.2, x1 = x1, z0 = -21, z1 = -15, floor = ROOM_FLOOR, top = 8 })
+	-- North, the door at x -54..-48.
+	w("x", x0, -54, z1 - 0.6, top, { out = 1, plain = true })
+	w("x", -48, x1, z1 - 0.6, top, { out = 1, plain = true })
+	box(ops, "Wall", -54, -48, 8, top, z1 - 1.2, z1, BRICK, MAT.Brick, { health = 150 })
+	table.insert(B.doorways, { name = "OpsNorth", x0 = -54, x1 = -48, z0 = z1 - 1.2, z1 = z1, floor = ROOM_FLOOR, top = 8 })
+	-- The roof, a parapet with a broken run, the stub of the storey above on the north-west corner.
+	box(ops, "Roof", x0, x1, top, top + 0.6, z0, z1, CONCRETE_DARK, MAT.Concrete, { health = 200 })
+	box(ops, "Parapet", x0, x1, top + 0.6, top + 1.4, z0, z0 + 0.6, BRICK_DARK, MAT.Brick)
+	box(ops, "Parapet", x1 - 0.6, x1, top + 0.6, top + 1.2, z0 + 0.6, -16, BRICK_DARK, MAT.Brick)
+	box(ops, "Wall", x0, -53, top + 0.6, top + 5.4, z1 - 1.2, z1, BRICK_DARK, MAT.Brick, { health = 150 })
+	box(ops, "Wall", x0, x0 + 1.2, top + 0.6, top + 4.2, -17, z1 - 1.2, BRICK_DARK, MAT.Brick, { health = 150 })
+	rebar(ops, Vector3.new(-53.5, top + 5.4, z1 - 0.6), 1.6, 0.3, 0.4)
+	rebar(ops, Vector3.new(-56.5, top + 5.4, z1 - 0.6), 1.2, 0.5, 2.1)
+	rebar(ops, Vector3.new(x0 + 0.6, top + 4.2, -16.4), 1.4, 0.4, 1.2)
+	rubble(ops, -46, -6.4, 1.6, 4, TILE_TOP, { BRICK, BRICK_DARK, CONCRETE_DARK })
+	-- Inside: a map table, a board with the insignia, a lamp, the chest.
+	local table_ = { tag = "Prop:mapTable" }
+	box(ops, "MapTable", -58.4, -55.4, ROOM_FLOOR + 2.6, ROOM_FLOOR + 2.9, -24.4, -20.4, WOOD, MAT.WoodPlanks, table_)
+	for _, leg in ipairs({ { -58.2, -24.2 }, { -55.9, -24.2 }, { -58.2, -21.1 }, { -55.9, -21.1 } }) do
+		box(ops, "TableLeg", leg[1], leg[1] + 0.3, ROOM_FLOOR, ROOM_FLOOR + 2.6, leg[2], leg[2] + 0.3, WOOD_DARK, MAT.WoodPlanks, table_)
+	end
+	box(ops, "MapSheet", -58.1, -55.7, ROOM_FLOOR + 2.9, ROOM_FLOOR + 3.0, -24.1, -20.7, mix(CANVAS, WHITE_PAINT, 0.4), MAT.Fabric, trimWith(table_))
+	box(ops, "Board", x0 + 1.2, x0 + 1.6, 3.35, 7.05, -16, -11.8, WOOD_DARK, MAT.WoodPlanks, TRIM)
+	insignia(ops, Vector3.new(x0 + 1.6, 5.2, -13.9), Vector3.new(1, 0, 0), 2.2, B.team)
+	wallLamp(ops, Vector3.new(-52, 7.4, z0 + 1.2), Vector3.new(0, 0, 1), 14)
+	table.insert(B.chests, { name = "OpsRoom", at = CFrame.new(-50, ROOM_FLOOR, -16.5) })
+	table.insert(B.loot, CFrame.new(-54, ROOM_FLOOR, -15))
+	return ops
 end
 
 local function buildCourtyard(model)
@@ -1307,127 +1469,74 @@ local function buildCourtyard(model)
 	yard.Name = "Courtyard"
 	yard.Parent = model
 
-	buildTower(model)
+	-- The flag on its plinth, the team's colours with the insignia on them.
+	box(yard, "FlagPlinth", -31.6, -28.4, TILE_TOP - 0.3, TILE_TOP + 1.2, -3.6, -0.4, CONCRETE_LIGHT, MAT.Concrete, { tag = "Prop:flag" })
+	box(yard, "FlagPlinthCap", -31.8, -28.2, TILE_TOP + 1.2, TILE_TOP + 1.5, -3.8, -0.2, CONCRETE, MAT.Concrete, { tag = "Prop:flag" })
+	rod(yard, "FlagPole", Vector3.new(-30, TILE_TOP + 1.5, -2), Vector3.new(-30, 17.5, -2), 0.35, STEEL, MAT.Metal, { tag = "Prop:flag" })
+	box(yard, "TeamFlag", -29.8, -24.6, 13.2, 17.0, -2.07, -1.93, B.team, MAT.Fabric, trimWith({ tag = "Prop:flag" }))
+	insignia(yard, Vector3.new(-27.2, 15.1, -2.07), Vector3.new(0, 0, -1), 2.2, mix(B.team, SOOT, 0.55), { tag = "Prop:flag" })
 
-	-- The MG nest: sandbags three high on the front, two on the sides, open to the bunker. A tripod
-	-- still stands on the front line, its gun long gone.
-	sandbags(yard, "nestFront", -31.2, -20.3, -20.8, -20.3, 3, TILE_TOP)
-	sandbags(yard, "nestWest", -30.6, -19.6, -30.6, -13.2, 2, TILE_TOP)
-	sandbags(yard, "nestEast", -21.4, -19.6, -21.4, -13.2, 2, TILE_TOP)
-	local apex = Vector3.new(-26, TILE_TOP + 3 * BAG_HIGH + 0.9, -20.3)
-	for index = 0, 2 do
-		local angle = index * math.pi * 2 / 3 + 0.4
-		rod(yard, "TripodLeg", apex, Vector3.new(-26 + math.cos(angle) * 0.6, TILE_TOP + 3 * BAG_HIGH - 0.1, -20.3 + math.sin(angle) * 0.35),
-			0.12, STEEL_DARK, MAT.Metal, trimWith({ tag = "Sandbags:nestFront" }))
-	end
-	box(yard, "AmmoTin", -29.6, -28.6, TILE_TOP - 0.1, TILE_TOP + 1.0, -14.5, -13.4, OLIVE, MAT.Metal, { tag = "Prop:nestTin" })
-	table.insert(B.chests, { name = "MachineGunNest", at = CFrame.new(-26, TILE_TOP, -15.8) })
+	-- The machine-gun nest behind the front wall, sandbagged on three sides.
+	sandbags(yard, "nestFront", -24, -WZ + 3.4, -14, -WZ + 3.4, 3, TILE_TOP)
+	sandbags(yard, "nestWest", -24.6, -WZ + 4.6, -24.6, -WZ + 8.8, 2, TILE_TOP)
+	sandbags(yard, "nestEast", -13.4, -WZ + 4.6, -13.4, -WZ + 8.8, 2, TILE_TOP)
+	table.insert(B.chests, { name = "MachineGunNest", at = CFrame.new(-19, TILE_TOP, -WZ + 7.2) })
 
-	-- Sandbags either side of the front breach.
-	sandbags(yard, "breachWest", -32.5, -35, -25.5, -35, 2, TILE_TOP)
-	sandbags(yard, "breachEast", -15.5, -35, -8.5, -35, 2, TILE_TOP)
-
-	-- The lean-to against the west wall: a tin roof on two posts, a chest under it, the radio crate.
-	local leanTo = { tag = "Shelter:leanTo" }
-	box(yard, "LeanToPost", -37.55, -37.05, TILE_TOP, 7.2, -25.85, -25.35, WOOD_DARK, MAT.WoodPlanks, leanTo)
-	box(yard, "LeanToPost", -37.55, -37.05, TILE_TOP, 7.2, -18.65, -18.15, WOOD_DARK, MAT.WoodPlanks, leanTo)
-	plateBetween(yard, "LeanToRoof", Vector3.new(-44.5, 7.95, -22), Vector3.new(-36.6, 7.12, -22), 8.8, 0.25,
-		mix(STEEL, RUST, 0.55), MAT.CorrodedMetal, leanTo)
-	table.insert(B.chests, { name = "LeanTo", at = CFrame.new(-40.8, TILE_TOP, -22) })
-	local radio = { tag = "Crate:radio" }
-	box(yard, "Crate", -43.9, -41.1, TILE_TOP, TILE_TOP + 2.4, -29.4, -26.6, WOOD, MAT.WoodPlanks, radio)
-	box(yard, "MemeRadio", -43.4, -41.6, TILE_TOP + 2.4, TILE_TOP + 3.5, -28.6, -27.4, OLIVE, MAT.Metal, trimWith({ tag = radio.tag }))
-	box(yard, "MemeRadioDial", -42.9, -42.1, TILE_TOP + 2.7, TILE_TOP + 3.2, -28.72, -28.52, ROT_GREEN, MAT.Neon, trimWith({ tag = radio.tag }))
-	rod(yard, "MemeRadioAerial", Vector3.new(-41.9, TILE_TOP + 3.3, -27.8), Vector3.new(-41.3, TILE_TOP + 6.2, -27.5), 0.1, STEEL_DARK, MAT.Metal, trimWith({ tag = radio.tag }))
-
-	-- The flag: a concrete block, the pole, the team's colours with the Rot Eye on them.
-	box(yard, "Plinth", -4.7, -2.3, TILE_TOP, TILE_TOP + 1.0, -30.2, -27.8, CONCRETE_LIGHT, MAT.Concrete, { tag = false })
-	rod(yard, "FlagPole", Vector3.new(-3.5, TILE_TOP + 0.7, -29), Vector3.new(-3.5, 15.5, -29), 0.36, STEEL, MAT.Metal, { tag = "Prop:flag" })
-	put(yard, "FlagFinial", Vector3.new(0.6, 0.6, 0.6), CFrame.new(-3.5, 15.6, -29), YELLOW_PAINT, MAT.Metal,
-		trimWith({ shape = Enum.PartType.Ball, tag = "Prop:flag" }))
-	box(yard, "TeamFlag", -3.5, 1.1, 12.4, 15.2, -29.05, -28.95, B.team, MAT.Fabric, trimWith({ tag = "Prop:flag" }))
-	box(yard, "TeamFlagTatter", 0.2, 1.9, 12.0, 12.9, -28.97, -28.87, mix(B.team, SOOT, 0.35), MAT.Fabric, trimWith({ tag = "Prop:flag" }))
-	-- Through the cloth, so it reads from both sides.
-	disc(yard, "FlagEye", Vector3.new(-1.5, 13.9, -29), Vector3.new(0, 0, -1), 0.11, 1.8, WHITE_PAINT, MAT.SmoothPlastic, trimWith({ tag = "Prop:flag" }))
-
-	-- The Rot Generator by the west door: a skid-mounted brainrot dynamo, blown, one window still lit,
-	-- its cable run across the paving to the bunker.
-	local gen = { tag = "Prop:generator" }
-	box(yard, "GeneratorSkid", -40, -39.4, TILE_TOP, TILE_TOP + 0.3, 0.1, 3.5, STEEL_DARK, MAT.Metal, gen)
-	box(yard, "GeneratorSkid", -36.6, -36, TILE_TOP, TILE_TOP + 0.3, 0.1, 3.5, STEEL_DARK, MAT.Metal, gen)
-	box(yard, "RotGenerator", -40, -36, TILE_TOP + 0.3, TILE_TOP + 3.1, 0.3, 3.3, OLIVE, MAT.Metal, gen)
-	rod(yard, "GeneratorFlywheel", Vector3.new(-40.3, TILE_TOP + 1.8, 1.8), Vector3.new(-39.7, TILE_TOP + 1.8, 1.8), 2.2, STEEL, MAT.Metal, trimWith({ tag = gen.tag }))
-	rod(yard, "GeneratorExhaust", Vector3.new(-39, TILE_TOP + 3.0, 2.6), Vector3.new(-39, TILE_TOP + 5.4, 2.6), 0.6, RUST, MAT.CorrodedMetal, trimWith({ tag = gen.tag }))
-	local window = box(yard, "GeneratorWindow", -38.8, -37.2, TILE_TOP + 1.3, TILE_TOP + 2.3, 0.22, 0.38, ROT_GREEN, MAT.Neon, trimWith({ tag = gen.tag }))
-	light(window, ROT_GREEN, 8, 0.6)
-	facePlate(yard, "Scorch", "z", 0.3, -1, 0.1, -39.8, -38.9, TILE_TOP + 2.4, TILE_TOP + 2.9, SOOT, MAT.Slate, trimWith({ tag = gen.tag }))
-	local cable = { Vector3.new(-36.2, TILE_TOP + 0.1, 1.6), Vector3.new(-34.2, TILE_TOP + 0.1, 3.4), Vector3.new(-34.6, TILE_TOP + 0.1, 7.9) }
-	for index = 1, #cable - 1 do
-		rod(yard, "PowerCable", cable[index], cable[index + 1], 0.22, RUBBER, MAT.Plastic, TRIM)
-	end
-	rod(yard, "PowerCable", Vector3.new(-34.6, TILE_TOP, 7.9), Vector3.new(-34.6, 3.2, 7.9), 0.22, RUBBER, MAT.Plastic, TRIM)
-
-	-- Crates dumped by the front of the bunker.
-	box(yard, "Crate", -24.5, -21.5, TILE_TOP, TILE_TOP + 3, 4.4, 7.4, WOOD, MAT.WoodPlanks, { tag = "Crate:front" })
-	put(yard, "Crate", Vector3.new(2, 2, 2), CFrame.new(-19.4, TILE_TOP + 1, 5.6) * CFrame.Angles(0, 0.6, 0), WOOD_DARK,
-		MAT.WoodPlanks, { tag = "Crate:frontSmall" })
-
-	-- The Rot Cannon: an abandoned brainrot field piece, barrel still cocked at the sky, its coils
-	-- glowing, a puddle of goo under the breech.
-	local cannon = { tag = "Prop:cannon" }
-	for _, x in ipairs({ -13.8, -10.7 }) do
-		rod(yard, "CannonWheel", Vector3.new(x, TILE_TOP + 1.1, -8), Vector3.new(x + 0.5, TILE_TOP + 1.1, -8), 2.2, WOOD_DARK, MAT.WoodPlanks, cannon)
-	end
-	rod(yard, "CannonAxle", Vector3.new(-13.6, TILE_TOP + 1.1, -8), Vector3.new(-10.4, TILE_TOP + 1.1, -8), 0.35, STEEL_DARK, MAT.Metal, cannon)
-	box(yard, "CannonCarriage", -13.0, -11.0, TILE_TOP + 1.0, TILE_TOP + 2.0, -10.4, -6.6, OLIVE, MAT.Metal, cannon)
-	plateBetween(yard, "CannonTrail", Vector3.new(-12, TILE_TOP + 1.3, -6.8), Vector3.new(-12, TILE_TOP + 0.15, -3.4), 0.8, 0.4, OLIVE, MAT.Metal, cannon)
-	local breech, muzzle = Vector3.new(-12, TILE_TOP + 2.2, -8.2), Vector3.new(-12, TILE_TOP + 5.0, -14.4)
-	rod(yard, "CannonBarrel", breech, muzzle, 0.9, STEEL_DARK, MAT.Metal, cannon)
-	local dir = (muzzle - breech).Unit
-	rod(yard, "CannonMuzzle", muzzle - dir * 0.5, muzzle + dir * 0.1, 1.3, STEEL, MAT.Metal, cannon)
-	for _, t in ipairs({ 0.35, 0.55 }) do
-		local at = breech + (muzzle - breech) * t
-		rod(yard, "CannonCoil", at - dir * 0.2, at + dir * 0.2, 1.1, ROT_GREEN, MAT.Neon, trimWith({ tag = cannon.tag }))
-	end
-	groundDisc(yard, "RotGoo", -12.4, -9.2, 1.6, ROT_GREEN, MAT.Neon, 0)
-
-	-- Sandbags blown in off the west breach, lying where they fell.
-	for index, bag in ipairs({ { -42.6, -11.6, 0.4 }, { -40.9, -12.4, 1.2 }, { -42.1, -1.6, 2.1 } }) do
-		put(yard, "Sandbag", Vector3.new(BAG_LONG, BAG_HIGH, BAG_DEEP), CFrame.new(bag[1], TILE_TOP + BAG_HIGH / 2 - 0.05, bag[2])
-			* CFrame.Angles(0, bag[3], 0.08 * index), SAND[index], MAT.Fabric, { tag = "Sandbags:spill" .. index })
+	-- A blast wall of concrete T-sections in front of the hall's doors, with gaps between them: cover
+	-- for anyone stepping off the pads, and no straight line from the foot gate onto a door.
+	for index, x in ipairs({ -53, -38, -23 }) do
+		local opts = { tag = "BlastWall:" .. index }
+		box(yard, "BlastWall", x - 4, x + 4, TILE_TOP - 0.2, 6.4, 12.4, 13.4, CONCRETE_LIGHT, MAT.Concrete, opts)
+		box(yard, "BlastWallFoot", x - 4.3, x + 4.3, TILE_TOP - 0.3, TILE_TOP + 0.6, 11.3, 14.5, CONCRETE, MAT.Concrete, opts)
+		facePlate(yard, "TeamBlastPaint", "z", 12.4, -1, 0.08, x - 3.4, x + 3.4, 4.6, 5.3, B.team, MAT.SmoothPlastic, trimWith(opts))
+		facePlate(yard, "Scorch", "z", 12.4, -1, 0.16, x - 2.6 + index, x - 0.4 + index, 1.0, 4.2, SOOT, MAT.Slate, trimWith(opts))
 	end
 
-	-- A cable reel on its side.
-	local reel = { tag = "Prop:reel" }
-	rod(yard, "Reel", Vector3.new(-13.1, TILE_TOP + 1.5, -22), Vector3.new(-12.8, TILE_TOP + 1.5, -22), 3.0, WOOD, MAT.WoodPlanks, reel)
-	rod(yard, "Reel", Vector3.new(-11.2, TILE_TOP + 1.5, -22), Vector3.new(-10.9, TILE_TOP + 1.5, -22), 3.0, WOOD, MAT.WoodPlanks, reel)
-	rod(yard, "ReelCore", Vector3.new(-12.8, TILE_TOP + 1.5, -22), Vector3.new(-11.2, TILE_TOP + 1.5, -22), 1.8, RUBBER, MAT.Plastic, reel)
+	-- Cover across the open ground: jersey barriers and sandbag crescents, crate stacks, tank traps.
+	for index, b in ipairs({ { -52, -36, -46, -36 }, { -30, -24, -24, -24 }, { -14, -30, -8, -30 }, { -44, -2, -38, -2 } }) do
+		local opts = { tag = "Barrier:c" .. index }
+		box(yard, "Barrier", b[1], b[3], TILE_TOP, TILE_TOP + 1.0, b[2] - 0.8, b[2] + 0.8, CONCRETE_LIGHT, MAT.Concrete, opts)
+		box(yard, "Barrier", b[1] + 0.1, b[3] - 0.1, TILE_TOP + 1.0, TILE_TOP + 2.9, b[2] - 0.45, b[2] + 0.45, CONCRETE_LIGHT, MAT.Concrete, opts)
+	end
+	sandbags(yard, "coverA", -40, -32, -34, -32, 3, TILE_TOP)
+	sandbags(yard, "coverB", -20, 2, -14, 2, 3, TILE_TOP)
+	sandbags(yard, "coverC", -10, -16, -10, -10, 3, TILE_TOP)
+	local crates = { tag = "Crate:yardA" }
+	box(yard, "Crate", -24, -21, TILE_TOP, TILE_TOP + 3, -40, -37, WOOD, MAT.WoodPlanks, crates)
+	box(yard, "Crate", -20.9, -17.9, TILE_TOP, TILE_TOP + 3, -40, -37, WOOD_DARK, MAT.WoodPlanks, crates)
+	box(yard, "Crate", -23, -20, TILE_TOP + 3, TILE_TOP + 5.6, -39.8, -37.2, WOOD, MAT.WoodPlanks, crates)
+	local crates2 = { tag = "Crate:yardB" }
+	box(yard, "Crate", -60, -57, TILE_TOP, TILE_TOP + 3, -34, -31, WOOD_DARK, MAT.WoodPlanks, crates2)
+	put(yard, "Crate", Vector3.new(2.4, 2.4, 2.4), CFrame.new(-55.2, TILE_TOP + 1.2, -32.4) * CFrame.Angles(0, 0.35, 0), WOOD, MAT.WoodPlanks, crates2)
+	for index, at in ipairs({ { -50, -42 }, { -8, -40 } }) do
+		local opts = { tag = "Prop:trap" .. index }
+		for k = 0, 2 do
+			local yaw = k * math.pi / 3 + 0.2
+			put(yard, "TankTrap", Vector3.new(4.2, 0.45, 0.45), CFrame.new(at[1], TILE_TOP + 1.25, at[2]) * CFrame.Angles(0, yaw, 0.62 * (k == 1 and -1 or 1)),
+				mix(STEEL, RUST, 0.6), MAT.CorrodedMetal, opts)
+		end
+	end
 
-	-- The ruin of an older building: a brick corner standing in the courtyard.
-	local ruin = Instance.new("Model")
-	ruin.Name = "Ruin"
-	ruin.Parent = model
-	wallPanel(ruin, "x", -6.6, -1, -16, 1.2, 5.6, { color = BRICK, material = MAT.Brick, brick = false })
-	wallPanel(ruin, "z", -15.4, -11, -6, 1.2, 4.2, { color = BRICK_DARK, material = MAT.Brick, brick = false })
-	rubble(ruin, -3.6, -17.8, 1.4, 5, TILE_TOP, { BRICK, BRICK_DARK, CONCRETE_DARK })
+	-- The lean-to against the west wall: posts, a canvas roof, crates under it.
+	local lean = { tag = "Shelter:leanTo" }
+	for _, z in ipairs({ 0.6, 13.4 }) do
+		box(yard, "LeanPost", -58.6, -58.0, TILE_TOP, 6.4, z - 0.3, z + 0.3, WOOD_DARK, MAT.WoodPlanks, lean)
+	end
+	plateBetween(yard, "LeanRoof", Vector3.new(-WX + 0.8, 7.6, 7), Vector3.new(-57.6, 6.35, 7), 14.2, 0.2, CANVAS, MAT.Fabric, lean)
+	box(yard, "Crate", -64.4, -62.0, TILE_TOP, TILE_TOP + 2.4, 11, 13.4, WOOD, MAT.WoodPlanks, { tag = "Crate:lean" })
+	table.insert(B.chests, { name = "LeanTo", at = CFrame.new(-61.8, TILE_TOP, 6.4) })
 
-	-- Caches: one in the lee of the brick ruin's corner, one by the flag.
-	table.insert(B.chests, { name = "RuinCorner", at = CFrame.new(-2.8, TILE_TOP, -12.8) })
-	table.insert(B.chests, { name = "FlagCache", at = CFrame.new(-8.5, TILE_TOP, -27) })
-
-	-- A lamp post at the corner of the bunker.
-	box(yard, "LampBase", 0.2, 1.4, TILE_TOP, TILE_TOP + 0.6, 4.6, 5.8, CONCRETE_DARK, MAT.Concrete, { tag = "Prop:lampPost" })
-	rod(yard, "LampPost", Vector3.new(0.8, TILE_TOP + 0.5, 5.2), Vector3.new(0.8, 9.8, 5.2), 0.4, STEEL_DARK, MAT.Metal, { tag = "Prop:lampPost" })
-	box(yard, "LampArm", -1.2, 0.8, 9.25, 9.55, 5.05, 5.35, STEEL_DARK, MAT.Metal, trimWith({ tag = "Prop:lampPost" }))
-	box(yard, "LampHead", -1.9, -0.9, 8.75, 9.25, 4.8, 5.6, STEEL_DARK, MAT.Metal, trimWith({ tag = "Prop:lampPost" }))
-	local glassPart = box(yard, "LampGlass", -1.8, -1.0, 8.65, 8.75, 4.9, 5.5, WARM, MAT.Neon, trimWith({ tag = "Prop:lampPost" }))
-	light(glassPart, WARM, 26, 1.3)
-
-	table.insert(B.loot, CFrame.new(-13, TILE_TOP, -30))
-	table.insert(B.loot, CFrame.new(-36.5, TILE_TOP, -8))
-	table.insert(B.loot, CFrame.new(-10, TILE_TOP, -5))
-	table.insert(B.loot, CFrame.new(-30, TILE_TOP, 3.5))
-	table.insert(B.loot, CFrame.new(-17, TILE_TOP, -15))
+	-- The rest of the chest spots in the open, and the loot.
+	table.insert(B.chests, { name = "FootGate", at = CFrame.new(-44, TILE_TOP, -WZ + 5) })
+	table.insert(B.chests, { name = "FlagCache", at = CFrame.new(-24, TILE_TOP, -2) })
+	table.insert(B.chests, { name = "CourtyardEast", at = CFrame.new(-7, TILE_TOP, -24) })
+	table.insert(B.chests, { name = "HallPorchWest", at = CFrame.new(-61, TILE_TOP, 18.5) })
+	table.insert(B.chests, { name = "HallPorchEast", at = CFrame.new(-12.5, TILE_TOP, 18.5) })
+	table.insert(B.chests, { name = "Alley", at = CFrame.new(-1.5, TILE_TOP, 48) })
+	for _, at in ipairs({ { -40, -42 }, { -30, -46 }, { -8, -48 }, { -36, -20 }, { -20, -18 }, { -10, -4 }, { -48, 6 },
+		{ -30, 7 }, { -8, 12 }, { -46, 19 }, { -30, 19 }, { -1.5, 30 }, { -1.5, 40 } }) do
+		table.insert(B.loot, CFrame.new(at[1], TILE_TOP, at[2]))
+	end
 	return yard
 end
 
@@ -1454,13 +1563,23 @@ function TeamBaseRuins.Layout(frame, teamColor, seed)
 	model.Name = "TeamBase"
 	buildGround(model)
 	buildPerimeter(model)
-	buildBunker(model)
-	buildSupply(model)
+	buildGates(model)
+	buildHall(model)
+	buildArmoury(model)
 	buildYard(model)
+	buildTower(model)
+	buildOps(model)
 	buildCourtyard(model)
 
+	-- The ways out on foot, just outside each (local x, z): every one reachable from every pad.
+	local exits = {
+		{ name = "foot gate", x = -33, z = -WZ - 4 },
+		{ name = "gatehouse", x = (LANE_X0 + LANE_X1) / 2, z = -WZ - 4 },
+		{ name = "west breach", x = -WX - 4, z = -10 },
+		{ name = "east gate", x = WX + 4, z = (EAST_Z0 + EAST_Z1) / 2 },
+	}
 	local info = { frame = frame, pads = {}, chestSpots = {}, vehicleBays = {}, lootSpots = {}, names = { chests = {}, bays = {} },
-		localPads = B.pads, localChests = {}, localBays = {}, localLoot = B.loot, doorways = B.doorways }
+		localPads = B.pads, localChests = {}, localBays = {}, localLoot = B.loot, doorways = B.doorways, exits = exits }
 	for _, pad in ipairs(B.pads) do
 		table.insert(info.pads, frame * pad)
 	end
@@ -2005,8 +2124,11 @@ function TeamBaseRuins.SiteCost(site, mapInfo)
 	local frame = flatFrame(site)
 	local roads = mapInfo and mapInfo.roads
 	local river = mapInfo and mapInfo.river
-	local halfX = TeamBaseRuins.Footprint.X / 2 + TeamBaseRuins.Margin
-	local halfZ = TeamBaseRuins.Footprint.Z / 2 + TeamBaseRuins.Margin
+	-- Out to the pad's flat edge and a cell more, the ground FlattenPad writes (it refuses a road or a
+	-- pad anywhere in it): sampling only the footprint and margin let sites through that it then refused,
+	-- all RUIN_TRIES of them on PatapimPlains seed 7 once the compound grew.
+	local halfX = FLAT_X + CELL
+	local halfZ = FLAT_Z + CELL
 	for x = -halfX, halfX, 8 do
 		for z = -halfZ, halfZ, 8 do
 			local p = frame * Vector3.new(x, 0, z)

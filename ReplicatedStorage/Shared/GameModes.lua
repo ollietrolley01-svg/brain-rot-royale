@@ -67,6 +67,34 @@ function GameModes.TeamName(index)
 	return team and team.name or "No team"
 end
 
+-- The team insignia the bases wear (TeamBaseRuins' insignia): a heater shield -- square top, pointed
+-- foot -- in a white border, the team's colour inside, two white chevrons and a bar. As a builder spec
+-- for UI: a list of rectangles drawn in order, in a box one unit wide and one tall (centre 0, 0; y up),
+-- each { x, y, w, h, rotation (degrees, anticlockwise), color }. `color` is the team's Color3 or white.
+-- No image asset exists; a UI that only takes an image id (TeamPickerScreen's insignia()) ignores a
+-- table and keeps its own mark.
+function GameModes.TeamInsignia(index)
+	local team = GameModes.TeamColor(index)
+	local white = Color3.fromRGB(226, 222, 210)
+	local r2 = math.sqrt(2)
+	local inner = 0.84
+	local cos, sin = math.cos(math.rad(34)), math.sin(math.rad(34))
+	local length, bar = 0.36, 0.1
+	local layers = {
+		{ x = 0, y = 0, w = 1 / r2, h = 1 / r2, rotation = 45, color = white },
+		{ x = 0, y = 0.25, w = 1, h = 0.5, rotation = 0, color = white },
+		{ x = 0, y = 0.02, w = inner / r2, h = inner / r2, rotation = 45, color = team },
+		{ x = 0, y = 0.29, w = inner, h = 0.42, rotation = 0, color = team },
+	}
+	for _, apex in ipairs({ 0.08, -0.14 }) do
+		local du, dv = cos * length / 2, sin * length / 2
+		table.insert(layers, { x = -du + bar * 0.3, y = apex - dv, w = length, h = bar, rotation = 34, color = white })
+		table.insert(layers, { x = du - bar * 0.3, y = apex - dv, w = length, h = bar, rotation = -34, color = white })
+	end
+	table.insert(layers, { x = 0, y = 0.3, w = 0.42, h = bar, rotation = 0, color = white })
+	return { kind = "shield", layers = layers }
+end
+
 --------------------------------------------------------------------------------
 -- The spawn loadout (Oliver: "you spawn with a green weapon some heals, and throwables")
 --------------------------------------------------------------------------------

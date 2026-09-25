@@ -71,6 +71,8 @@ V3.__eq = function(a, b) return a.X == b.X and a.Y == b.Y and a.Z == b.Z end
 V3.__tostring = function(v) return string.format("%.3f, %.3f, %.3f", v.X, v.Y, v.Z) end
 function V3.Cross(a, b) return vec(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X) end
 function V3.Dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+function V3.Min(a, b) return vec(math.min(a.X, b.X), math.min(a.Y, b.Y), math.min(a.Z, b.Z)) end
+function V3.Max(a, b) return vec(math.max(a.X, b.X), math.max(a.Y, b.Y), math.max(a.Z, b.Z)) end
 Vector3 = { new = function(x, y, z) return vec(x or 0, y or 0, z or 0) end }
 Vector3.zero = vec(0, 0, 0)
 Vector3.xAxis, Vector3.yAxis, Vector3.zAxis = vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1)

@@ -251,10 +251,10 @@ local function setup()
 		-- The ramps out of the vehicle gates and the banks on the other sides.
 		-- Out of each gate along its middle, from 6 past the wall to 124 past the pad's flat edge (the work
 		-- reaches 136 past it and meets the ground as it stands there); the banks on the other sides out to 48.
-		local frontRamp, frontEnd, frontAt = steepest(team, Vector3.new(24, 0, -48), Vector3.new(0, 0, -1), 130)
-		local eastRamp, eastEnd, eastAt = steepest(team, Vector3.new(52, 0, 4), Vector3.new(1, 0, 0), 130)
+		local frontRamp, frontEnd, frontAt = steepest(team, Vector3.new(33, 0, -60), Vector3.new(0, 0, -1), 130)
+		local eastRamp, eastEnd, eastAt = steepest(team, Vector3.new(72, 0, 29), Vector3.new(1, 0, 0), 130)
 		local banks, bankAt = 0, ""
-		for _, line in ipairs({ { -30, 46, 0, 1 }, { 20, 46, 0, 1 }, { -50, -20, -1, 0 }, { -50, 20, -1, 0 }, { -30, -46, 0, -1 } }) do
+		for _, line in ipairs({ { -30, 60, 0, 1 }, { 20, 60, 0, 1 }, { -72, -30, -1, 0 }, { -72, 10, -1, 0 }, { -50, -60, 0, -1 } }) do
 			local grade, _, where = steepest(team, Vector3.new(line[1], 0, line[2]), Vector3.new(line[3], 0, line[4]), 48)
 			if grade > banks then
 				banks, bankAt = grade, string.format("%d out from (%d, %d)", where, line[1], line[2])
@@ -413,7 +413,7 @@ local views = {
 		settle = 4,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 90, 90, -130), at(1, 0, 0, 0), 55)
+			look(camera, at(1, 125, 115, -175), at(1, 0, 0, 0), 55)
 		end,
 	},
 	{
@@ -421,22 +421,22 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(2, 90, 90, -130), at(2, 0, 0, 0), 55)
+			look(camera, at(2, 125, 115, -175), at(2, 0, 0, 0), 55)
 		end,
 	},
-	outside("03_front_from_the_arena_eye_level", 10, -100, 10, 5, 0),
-	outside("04_east_side_eye_level", 105, -10, 0, 5, 0),
-	outside("05_back_eye_level", -10, 100, 0, 5, 0),
-	outside("06_west_side_eye_level", -105, 10, 0, 5, 0),
+	outside("03_front_from_the_arena_eye_level", 5, -135, 5, 7, 0),
+	outside("04_east_side_eye_level", 140, -5, 0, 7, 0),
+	outside("05_back_eye_level", -5, 130, 0, 7, 0),
+	outside("06_west_side_eye_level", -140, 5, 0, 7, 0),
 	{
 		name = "07_main_gate_ramp_with_a_vehicle",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			standVehicle(24, -70, Vector3.new(0, 0, -1))
-			local g = groundLocal(1, 58, -118) or state.ruins[1].height
-			local from = at(1, 58, 0, -118)
-			look(camera, Vector3.new(from.X, g + 16, from.Z), at(1, 24, 0, -62), 65)
+			standVehicle(25.5, -78, Vector3.new(0, 0, -1))
+			local g = groundLocal(1, 75, -140) or state.ruins[1].height
+			local from = at(1, 75, 0, -140)
+			look(camera, Vector3.new(from.X, g + 18, from.Z), at(1, 30, 4, -60), 65)
 		end,
 	},
 	{
@@ -444,10 +444,10 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			standVehicle(76, 4, Vector3.new(1, 0, 0))
-			local g = groundLocal(1, 118, 44) or state.ruins[1].height
-			local from = at(1, 118, 0, 44)
-			look(camera, Vector3.new(from.X, g + 16, from.Z), at(1, 62, 0, 4), 65)
+			standVehicle(92, 29, Vector3.new(1, 0, 0))
+			local g = groundLocal(1, 150, 75) or state.ruins[1].height
+			local from = at(1, 150, 0, 75)
+			look(camera, Vector3.new(from.X, g + 18, from.Z), at(1, 72, 4, 29), 65)
 		end,
 	},
 	{
@@ -459,7 +459,7 @@ local views = {
 				state.shown:Destroy()
 				state.shown = nil
 			end
-			look(camera, at(1, 150, 120, 120), at(1, 0, 0, 0), 55)
+			look(camera, at(1, 200, 165, 170), at(1, 0, 0, 0), 55)
 		end,
 	},
 	{
@@ -467,9 +467,9 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			local p = at(2, 10, 0, -100)
+			local p = at(2, 5, 0, -135)
 			local g = groundAt(p.X, p.Z) or state.ruins[2].height
-			look(camera, Vector3.new(p.X, g + 5.2, p.Z), at(2, 10, 5, 0), 65)
+			look(camera, Vector3.new(p.X, g + 5.2, p.Z), at(2, 5, 7, 0), 65)
 		end,
 	},
 	{
@@ -477,8 +477,8 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			-- Just inside the west door, head height, across the two rows of pads.
-			look(camera, at(1, -31, 5.8, 12), at(1, -12, 3, 32), 70)
+			-- Inside the east end of the spawn hall, head height, across the 28 pads.
+			look(camera, at(1, -11, 7.5, 27.5), at(1, -52, 1.5, 47), 75)
 		end,
 	},
 	{
@@ -486,7 +486,7 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 8, 14, 18), at(1, 30, 1, -16), 70)
+			look(camera, at(1, 2, 15, -4), at(1, 38, 1, -40), 72)
 		end,
 	},
 	{
@@ -494,7 +494,7 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 23.5, 6.5, 25), at(1, 24, 2, 38), 75)
+			look(camera, at(1, 14, 6.5, 11), at(1, 14, 2.5, 46), 75)
 		end,
 	},
 	{
@@ -502,7 +502,7 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, -39, 10.5, -35), at(1, -14, 1, -8), 70)
+			look(camera, at(1, -60, 12.8, -48.8), at(1, -28, 1, -4), 72)
 		end,
 	},
 	{
@@ -511,9 +511,103 @@ local views = {
 		setup = function(_, camera)
 			setup()
 			Lighting.ClockTime = 19.4
-			look(camera, at(1, -10, 30, -70), at(1, 0, 0, 5), 60)
+			look(camera, at(1, -10, 42, -110), at(1, 0, 0, 5), 60)
+		end,
+	},
+	{
+		name = "16_gatehouse_from_outside",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			local g = groundLocal(1, 18, -100) or state.ruins[1].height
+			local from = at(1, 18, 0, -100)
+			look(camera, Vector3.new(from.X, g + 5.2, from.Z), at(1, 33, 13, -54), 65)
+		end,
+	},
+	{
+		name = "17_spawn_hall_facade",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			look(camera, at(1, -26, 7, -8), at(1, -40, 8, 24), 70)
 		end,
 	},
 }
+
+-- Each base's access road to the map's roads, from high over its middle.
+for team = 1, 2 do
+	table.insert(views, {
+		name = string.format("%d_access_road_team%d", 17 + team, team),
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			local ruin = state.ruins[team]
+			local plan = ruin and ruin.accessPlan
+			if not plan then
+				note(string.format("team %d: NO ACCESS ROAD (%s)", team, tostring(ruin and ruin.accessWhy)))
+				look(camera, at(team, 0, 160, 120), at(team, 0, 0, -60), 60)
+				return
+			end
+			local first, last = plan.points[1], plan.points[#plan.points]
+			local mid = (first + last) / 2
+			local span = (last - first).Magnitude
+			note(string.format("team %d: access road %.0f studs, %d stretches, gate %d", team, plan.length, #plan.points - 1, plan.gate or 1))
+			local road = ruin.accessRoad
+			local slabs, first = 0, nil
+			for _, p in ipairs(road and road:GetDescendants() or {}) do
+				if p.Name == "RoadSurface" then
+					slabs += 1
+					first = first or p
+				end
+			end
+			note(string.format("team %d: road model %s parent %s, %d slabs%s", team, tostring(road), tostring(road and road.Parent),
+				slabs, first and string.format(", first top %.1f at (%.0f, %.0f), ground ray %s", first.Position.Y + first.Size.Y / 2,
+				first.Position.X, first.Position.Z, tostring(groundAt(first.Position.X, first.Position.Z))) or ""))
+			local base = ruin.frame.Position
+			local away = Vector3.new(mid.X - base.X, 0, mid.Z - base.Z)
+			away = away.Magnitude > 1 and away.Unit or Vector3.new(0, 0, 1)
+			local side = Vector3.new(-away.Z, 0, away.X)
+			local centre = Vector3.new(mid.X, ruin.height, mid.Z)
+			look(camera, centre + side * (span * 0.6 + 80) + Vector3.new(0, span * 0.55 + 90, 0) - away * 40, centre, 60)
+		end,
+	})
+end
+
+-- Down the access road that climbs most, from a driver's height, a quarter of the way along.
+table.insert(views, {
+	name = "20_access_road_on_the_hill",
+	settle = 3,
+	setup = function(_, camera)
+		setup()
+		local best, rise = nil, -1
+		for team = 1, 2 do
+			local ruin = state.ruins[team]
+			local plan = ruin and ruin.accessPlan
+			local heights = plan and plan.heights
+			if heights then
+				local lo, hi = math.huge, -math.huge
+				for _, h in ipairs(heights) do
+					lo, hi = math.min(lo, h), math.max(hi, h)
+				end
+				if hi - lo > rise then
+					best, rise = { plan = plan, heights = heights, team = team }, hi - lo
+				end
+			end
+		end
+		if not best then
+			note("no access road to look down")
+			look(camera, at(1, 0, 60, -160), at(1, 0, 0, 0), 60)
+			return
+		end
+		local n = #best.plan.points
+		local i = math.max(1, math.floor(n * 0.2))
+		local j = math.min(n, i + 10)
+		local p, q = best.plan.points[i], best.plan.points[j]
+		note(string.format("team %d's road rises %.1f; stats: grade %.3f, pitch %.2f deg, earthwork %.1f", best.team, rise,
+			best.plan.stats and best.plan.stats.grade or -1, best.plan.stats and best.plan.stats.pitch or -1,
+			best.plan.stats and best.plan.stats.earthwork or -1))
+		look(camera, Vector3.new(p.X, best.heights[i] + 5.5, p.Z), Vector3.new(q.X, best.heights[j] + 3, q.Z), 70)
+	end,
+})
 
 return views
