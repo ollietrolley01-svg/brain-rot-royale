@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 05:00 (EDT).
+Last updated: 2026-09-25 04:06 (EDT). (The 05:00 stamp before this ran ahead of the clock.)
 
 ## What changed since 2026-09-22
 
@@ -30,7 +30,8 @@ Last updated: 2026-09-25 05:00 (EDT).
 | Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` (PR #37) | **Done, awaiting Oliver's merge.** No path opens the vote or team picker over a match. Latent: the failed-start fallback never clears `dropSelect` (build-machine fix) |
 | Jacob (bimjom) | playtime proof cut to the all-time rule | `task/playtime-proof-new-rule` (PR #38) | **Done, awaiting Oliver's merge** |
 | Jacob (bimjom) | #57/#110 roadkill proof | `task/prove-roadkill` (PR #39) | **Done, awaiting Oliver's merge.** Fires for player and bot drivers. Oliver's calls (03:00 message): spawn protection removed; armour protects riders; the damage scale applies with no driver. The build machine does the fixes |
-| Jacob (bimjom) | #113/#126/#131/#99 lag: **optimize**, not just prove | `task/prove-bot-lag` | Claimed 09-25 02:22. Game-file edits allowed for lag work only (rules in the 03:00 message) |
+| Jacob (bimjom) | #113/#126/#131 lag: **optimize**, not just prove | `task/prove-bot-lag` (PR #43) | Proof **merged to main** (7e53b01). #99 was done by the build machine (443304b). Game-file edits allowed for lag work only (rules in the 03:00 message) |
+| Jacob (bimjom) | lag: `findTarget` crowd cost (#126/#131), BotService.lua, speed only | `task/lag-findtarget` (not pushed yet) | Claimed 09-25 03:42 (PR #44, mailbox). Nobody else is in findTarget. Told to cut from `origin/main`, not 927bc44 (0406 message) |
 | Jacob (bimjom) | #117 lobby trial-guns proof | `task/prove-trial-guns` | Claimed 09-25 02:22. Dropped at 03:00, **back on at 03:15** (Oliver: "continue doing these") |
 
 ## Recently changed on main: expect these to move under you
@@ -62,9 +63,10 @@ file and line. The build machine owns the fix.
 
 ## Lag work: two sides, keep each other updated (Oliver, 03:40: "make them update eachother when theyre done")
 
-- Jacob: `task/prove-bot-lag` (PR #43), tick cost for #113/#126/#131.
-- The build machine: `pc/lag-bug-sweep` (lag and bug sweep, local, not pushed yet) and
-  `pc/bot-movement-smooth` (#99: animation and waypoints).
+- Jacob: `task/lag-findtarget`, `findTarget` crowd cost in BotService.lua (#126/#131). Proof harness:
+  `tools/bot_lag_proof_check.py` on main (PR #43, plus the build machine's M1-M3 rows).
+- The build machine: `pc/lag-bug-sweep` (lag and bug sweep, local, not pushed yet; in BotService.lua it
+  touches only `Vehicles.driverThink`/`startRide`). `pc/bot-movement-smooth` (#99) is on main (443304b).
 - When either side finishes a lag change, it posts a `lag-update` mailbox message with the files and
   functions it touched and the numbers before and after. Read the other side's latest lag-update
   before you start an optimization.
