@@ -64,9 +64,9 @@ SoundConfig.Sounds = {
 	-- (CombatClient's SHOT_CUE / SHOT_CUE_BY_ID), and the fallback for an unmapped gun is
 	-- GunshotRifle. Kept as the original recipe for reference.
 	Gunshot = {
-		volume = 0.34,
+		calibre = "rifle",
+		volume = 0.415,
 		pitch = 1,
-		maxDistance = 420,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.45 },
@@ -79,9 +79,10 @@ SoundConfig.Sounds = {
 		},
 	},
 
-	-- Your shot landed: a short high tick, deliberately thin so it cuts through the shot itself.
+	-- Your shot landed: a short high tick, deliberately thin so it cuts through the shot itself -- and
+	-- quieter than the shot (tools/sound_polish_check.py: hit feedback sits under a rifle's report).
 	HitConfirm = {
-		volume = 0.5,
+		volume = 0.36,
 		pitch = 1,
 		category = "Weapons",
 		layers = {
@@ -92,7 +93,7 @@ SoundConfig.Sounds = {
 
 	-- A headshot, for the shooter: the hit tick with a bell over it so it reads as better.
 	Headshot = {
-		volume = 0.62,
+		volume = 0.4,
 		pitch = 1,
 		category = "Weapons",
 		layers = {
@@ -104,7 +105,7 @@ SoundConfig.Sounds = {
 
 	-- The crack everyone near it hears on a headshot.
 	HeadshotCrack = {
-		volume = 0.5,
+		volume = 0.38,
 		pitch = 1,
 		maxDistance = 300,
 		category = "Weapons",
@@ -149,10 +150,10 @@ SoundConfig.Sounds = {
 	-- Rapid-fire families (SMG, rotary) keep short bodies and less low end so a long burst stays a
 	-- rattle instead of turning to mush; single-shot heavies get the longest tails.
 	GunshotPistol = {
+		calibre = "pistol",
 		-- Crisp and dry: a bright crack, a short pop of body, almost no tail.
 		volume = 0.34,
 		pitch = 1,
-		maxDistance = 360,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.75 },
@@ -168,9 +169,9 @@ SoundConfig.Sounds = {
 	-- The SMGs: the lightest, shortest report in the game, so 11-14 rounds a second reads as a
 	-- chatter rather than a smear.
 	GunshotSMG = {
+		calibre = "smg",
 		volume = 0.32,
 		pitch = 1,
-		maxDistance = 320,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 1.95 },
@@ -184,9 +185,9 @@ SoundConfig.Sounds = {
 	},
 	-- A revolver is a big round from a short barrel: a hand-cannon boom with a short room ring.
 	GunshotRevolver = {
-		volume = 0.4,
+		calibre = "revolver",
+		volume = 0.342,
 		pitch = 1,
-		maxDistance = 420,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.25 },
@@ -199,10 +200,10 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotRifle = {
+		calibre = "rifle",
 		-- Crack plus a mid body and a little chest, and a faint metallic ring off the receiver.
-		volume = 0.36,
+		volume = 0.396,
 		pitch = 1,
-		maxDistance = 460,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.4, crack = true },
@@ -219,9 +220,9 @@ SoundConfig.Sounds = {
 	},
 	-- A battle-rifle round from a long barrel: more body than a rifle, a room-sized tail.
 	GunshotDMR = {
-		volume = 0.4,
+		calibre = "dmr",
+		volume = 0.442,
 		pitch = 1,
-		maxDistance = 620,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
@@ -236,9 +237,9 @@ SoundConfig.Sounds = {
 	},
 	-- Belt-fed: a rifle's crack over more weight, dirtier, for long bursts at a steadier rate.
 	GunshotLMG = {
-		volume = 0.38,
+		calibre = "lmg",
+		volume = 0.43,
 		pitch = 1,
-		maxDistance = 520,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.95, pitch = 1.3, crack = true },
@@ -261,11 +262,11 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotHeavy = {
+		calibre = "rotary",
 		-- The chaingun at 13 a second: each shot short and tight so the stream is a buzz-saw roar, the
 		-- weight carried by the bass rather than a long body, the top end shaved so it doesn't tire you.
-		volume = 0.34,
+		volume = 0.465,
 		pitch = 1,
-		maxDistance = 500,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.85, pitch = 1.3, crack = true },
@@ -278,13 +279,13 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotShotgun = {
+		calibre = "shotgun",
 		-- Mostly boom: a wide explosion body, a lower crack, a thump of bass and a short room tail.
 		-- Pitched lower than any rifle: a 12-bore's muzzle blast comes out of a wide bore at low
 		-- pressure, so its energy sits an octave or so under a rifle's, and the shot is subsonic, so
 		-- there is no separate crack.
 		volume = 0.42,
 		pitch = 1,
-		maxDistance = 440,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 1.45 },
@@ -299,16 +300,16 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotSniper = {
+		calibre = "sniper",
 		-- The loudest single crack in the game, a heavy body, and a long outdoor roll: a quiet, slow
 		-- second explosion a beat later, under a long reverb, so it is heard across the map.
 		volume = 0.44,
 		pitch = 1,
-		maxDistance = 800,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.1, crack = true },
 			{ id = BOOM2, volume = 0.95, pitch = 1.4 },
-			{ id = BASS, volume = 0.7, pitch = 1.0 },
+			{ id = BASS, volume = 0.7, pitch = 0.8 },
 			-- Outdoors the roll is the terrain answering: a slow second boom, then a fainter echo
 			-- off something further away. Indoors the room reverb below replaces both.
 			{ id = BOOM3, volume = 0.3, pitch = 0.9, delay = 0.08, where = "outdoor" },
@@ -320,11 +321,11 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotSuppressed = {
+		calibre = "suppressed",
 		-- A cough, not a crack: a thin high tick, the action cycling, a hiss of gas; lows cut.
 		acoustic = "suppressed",
 		volume = 0.38,
 		pitch = 1,
-		maxDistance = 140,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.35, pitch = 2.9 },
@@ -335,12 +336,13 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -12, MidGain = -3, HighGain = -2 } } },
 	},
 	GunshotRocket = {
+		calibre = "launcher",
 		-- A launch, not a bang: a deep whoomp out of the tube, the motor's whoosh, a thump and a tail.
 		volume = 0.46,
 		pitch = 1,
-		maxDistance = 650,
 		category = "Weapons",
 		layers = {
+			{ id = HIT, volume = 0.4, pitch = 0.7 },
 			{ id = BOOM3, volume = 0.8, pitch = 1.2 },
 			{ id = JUMP, volume = 0.85, pitch = 0.5 },
 			{ id = FALL, volume = 0.3, pitch = 2.2 },
@@ -349,7 +351,9 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.4, WetLevel = -9, DryLevel = 0 } } },
 	},
 	GunshotRail = {
-		-- Electric: a descending ping, a hard bright crack, a zip of charge, flanged so it shimmers.
+		-- Delulu Railgun: electric, not gunpowder. A descending ping, a hard bright zap off the rails,
+		-- a thump of discharge and a zip of charge, flanged so it shimmers. Loud: it carries.
+		novelty = true,
 		acoustic = "energy",
 		volume = 0.44,
 		pitch = 1,
@@ -357,9 +361,9 @@ SoundConfig.Sounds = {
 		category = "Weapons",
 		layers = {
 			{ id = PING, volume = 0.85, pitch = 0.4 },
-			{ id = SNAP, volume = 0.6, pitch = 2.3 },
+			{ id = SNAP, volume = 0.55, pitch = 2.6 },
 			{ id = BASS, volume = 0.55, pitch = 2.0 },
-			{ id = BOOM2, volume = 0.3, pitch = 3.0 },
+			{ id = HIT, volume = 0.3, pitch = 2.2 },
 			{ id = SLIDER, volume = 0.15, pitch = 3.0 },
 		},
 		effects = {
@@ -368,20 +372,25 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotBubble = {
-		-- A pop and a blub: a tiny high snap, water, a springy bounce, a soft click, chorused wet.
+		-- Bubble Blaster / Burster: bubbles, not bullets. A soft pop, a wet blorp, a springy wobble and
+		-- a soapy whoosh, chorused so it shimmers. No crack, no echo tail, no casing.
+		novelty = true,
+		foley = "water",
 		volume = 0.4,
 		pitch = 1,
 		maxDistance = 220,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 0.3, pitch = 3.3 },
+			{ id = BUTTON, volume = 0.45, pitch = 2.2 },
 			{ id = WATER, volume = 0.55, pitch = 2.5 },
-			{ id = JUMP, volume = 0.35, pitch = 2.1 },
-			{ id = BUTTON, volume = 0.25, pitch = 2.0 },
+			{ id = JUMP, volume = 0.3, pitch = 2.1 },
+			{ id = SLIDER, volume = 0.18, pitch = 1.6, delay = 0.02 },
+			{ id = SNAP, volume = 0.2, pitch = 3.3 },
 		},
 		effects = { { "ChorusSoundEffect", { Depth = 0.2, Mix = 0.4, Rate = 3 } } },
 	},
 	GunshotCrossbow = {
+		novelty = true,
 		-- A twang: a slow low snap for the string, a buzz as it settles, the thunk of the stock.
 		-- A bow has no muzzle blast, so it carries like a suppressed gun, not a loud one.
 		acoustic = "suppressed",
@@ -397,11 +406,11 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = 3, MidGain = 0, HighGain = -2 } } },
 	},
 	GunshotCannon = {
+		calibre = "cannon",
 		-- The biggest report there is: a slow full-length explosion, a low crack, heavy bass, a second
 		-- boom a beat behind for the muzzle blast, and a long tail.
 		volume = 0.48,
 		pitch = 1,
-		maxDistance = 700,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 0.95 },
@@ -419,18 +428,22 @@ SoundConfig.Sounds = {
 	-- still short and loud enough to place positionally in a fight.
 	GunshotSqueak = {
 		-- Squeaky Duck Popper: a rubber squeak (a voice pitched right up) on a small plastic pop.
+		novelty = true,
+		foley = "toy",
 		volume = 0.4,
 		pitch = 1,
 		maxDistance = 300,
 		category = "Weapons",
 		layers = {
-			{ id = OOF, volume = 0.35, pitch = 2.6 },
-			{ id = SNAP, volume = 0.5, pitch = 2.0 },
-			{ id = BUTTON, volume = 0.3, pitch = 2.4 },
+			{ id = OOF, volume = 0.4, pitch = 2.6 },
+			{ id = BUTTON, volume = 0.4, pitch = 2.4 },
+			{ id = CLICK, volume = 0.35, pitch = 1.4 },
 		},
 		effects = { { "ChorusSoundEffect", { Depth = 0.15, Mix = 0.35, Rate = 5 } } },
 	},
 	GunshotSquirt = {
+		novelty = true,
+		foley = "water",
 		-- Juice Box Squirter: a pressurised psst and a short splash, no bang at all.
 		volume = 0.36,
 		pitch = 1,
@@ -444,28 +457,33 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -8, MidGain = 0, HighGain = 2 } } },
 	},
 	GunshotNoodle = {
-		-- Spaghetti Slinger: a shotgun's boom with a wet splat in it.
+		-- Spaghetti Slinger: a colander of wet noodles flung hard. A sloppy splat, the thwap of a
+		-- handful landing, a plop and a swish; heavy enough to place, but no bang in it.
+		novelty = true,
+		foley = "toy",
 		volume = 0.42,
 		pitch = 1,
-		maxDistance = 420,
+		maxDistance = 360,
 		category = "Weapons",
 		layers = {
-			{ id = BOOM3, volume = 0.8, pitch = 1.9 },
-			{ id = WATER, volume = 0.4, pitch = 1.4 },
-			{ id = SNAP, volume = 0.6, pitch = 1.0 },
-			{ id = BASS, volume = 0.4, pitch = 1.4 },
+			{ id = WATER, volume = 0.6, pitch = 1.4 },
+			{ id = LAND, volume = 0.55, pitch = 0.8 },
+			{ id = HIT, volume = 0.35, pitch = 0.9 },
+			{ id = SLIDER, volume = 0.2, pitch = 1.2 },
+			{ id = BASS, volume = 0.25, pitch = 1.6 },
 		},
-		effects = { { "DistortionSoundEffect", { Level = 0.2 } } },
 	},
 	GunshotBassDrop = {
-		-- Boombox Bassline: the drop. A distorted sub thump, a tape clunk, and a quick echo.
+		-- Boombox Bassline: the drop. A distorted sub thump, a kick drum, a tape clunk, a quick echo.
+		novelty = true,
+		foley = "toy",
 		volume = 0.46,
 		pitch = 1,
 		maxDistance = 360,
 		category = "Weapons",
 		layers = {
 			{ id = BASS, volume = 1, pitch = 0.6 },
-			{ id = BOOM2, volume = 0.5, pitch = 1.2 },
+			{ id = HIT, volume = 0.45, pitch = 0.5 },
 			{ id = JUMP, volume = 0.6, pitch = 0.5 },
 			{ id = SWITCH3, volume = 0.3, pitch = 0.5 },
 		},
@@ -476,7 +494,9 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotGumball = {
-		-- Gumball Gatling: plastic clacks and a bounce, fast and light for 12 a second.
+		-- Gumball Gatling: the crank's plastic clack, a gumball bouncing off, fast and light for 12 a second.
+		novelty = true,
+		foley = "toy",
 		volume = 0.32,
 		pitch = 1,
 		maxDistance = 300,
@@ -484,12 +504,14 @@ SoundConfig.Sounds = {
 		layers = {
 			{ id = BUTTON, volume = 0.6, pitch = 1.2 },
 			{ id = COLLIDE, volume = 0.4, pitch = 2.4 },
-			{ id = SNAP, volume = 0.4, pitch = 1.6 },
+			{ id = HIT, volume = 0.3, pitch = 2.0 },
 			{ id = CLICK, volume = 0.3, pitch = 1.0 },
 		},
 	},
 	GunshotFidget = {
-		-- Fidget Disc Launcher: a whirr spinning up, a ping, a flat launch snap, flanged.
+		-- Fidget Disc Launcher: a whirr spinning up, a ping, the flick of the disc leaving, flanged.
+		novelty = true,
+		foley = "toy",
 		volume = 0.42,
 		pitch = 1,
 		maxDistance = 400,
@@ -497,11 +519,14 @@ SoundConfig.Sounds = {
 		layers = {
 			{ id = SLIDER, volume = 0.5, pitch = 2.0 },
 			{ id = PING, volume = 0.3, pitch = 1.8 },
-			{ id = SNAP, volume = 0.5, pitch = 1.5 },
+			{ id = CLICK, volume = 0.4, pitch = 2.2 },
+			{ id = SWITCH3, volume = 0.25, pitch = 1.6 },
 		},
 		effects = { { "FlangeSoundEffect", { Depth = 0.5, Mix = 0.4, Rate = 12 } } },
 	},
 	GunshotZap = {
+		novelty = true,
+		foley = "toy",
 		-- Microwave Zapper: an electric buzz (a tremolo at mains-hum speed), a beep, a zap.
 		acoustic = "energy",
 		volume = 0.36,
@@ -517,6 +542,7 @@ SoundConfig.Sounds = {
 		effects = { { "TremoloSoundEffect", { Depth = 0.6, Duty = 0.5, Frequency = 30 } } },
 	},
 	GunshotPizza = {
+		novelty = true,
 		-- Pizza Cutter Crossbow: the crossbow's twang with a blade ringing off it.
 		volume = 0.45,
 		pitch = 1,
@@ -531,6 +557,8 @@ SoundConfig.Sounds = {
 	},
 	GunshotDisco = {
 		-- Disco Ball Deleter: a bright ping and a bass hit, shimmering (chorus and a slow flange).
+		novelty = true,
+		foley = "toy",
 		volume = 0.36,
 		pitch = 1,
 		maxDistance = 360,
@@ -538,7 +566,7 @@ SoundConfig.Sounds = {
 		layers = {
 			{ id = PING, volume = 0.6, pitch = 1.2 },
 			{ id = BASS, volume = 0.5, pitch = 1.4 },
-			{ id = SNAP, volume = 0.4, pitch = 2.2 },
+			{ id = SNAP, volume = 0.35, pitch = 2.8 },
 		},
 		effects = {
 			{ "ChorusSoundEffect", { Depth = 0.3, Mix = 0.5, Rate = 2 } },
@@ -546,7 +574,9 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotToaster = {
-		-- Toaster Mortar: the pop-up spring, a launch whoomp, and a "ding" a beat later.
+		-- Toaster Mortar: the pop-up spring, the thunk of the toast leaving the tube, and a "ding".
+		novelty = true,
+		foley = "toy",
 		volume = 0.46,
 		pitch = 1,
 		maxDistance = 520,
@@ -554,19 +584,22 @@ SoundConfig.Sounds = {
 		layers = {
 			{ id = JUMP, volume = 0.8, pitch = 0.45 },
 			{ id = SWITCH3, volume = 0.6, pitch = 0.6 },
-			{ id = BOOM3, volume = 0.5, pitch = 1.5 },
+			{ id = LAND, volume = 0.5, pitch = 0.6 },
+			{ id = BASS, volume = 0.3, pitch = 1.2 },
 			{ id = PING, volume = 0.3, pitch = 1.6, delay = 0.1 },
 		},
 	},
 	GunshotChicken = {
-		-- Rubber Chicken Railgun: the rail's electric crack, and the chicken screaming over it.
+		-- Rubber Chicken Railgun: the rail's electric zap, and the chicken screaming over it.
+		novelty = true,
+		foley = "toy",
 		volume = 0.46,
 		pitch = 1,
 		maxDistance = 700,
 		category = "Weapons",
 		layers = {
 			{ id = PING, volume = 0.8, pitch = 0.4 },
-			{ id = SNAP, volume = 0.6, pitch = 2.3 },
+			{ id = SNAP, volume = 0.5, pitch = 2.8 },
 			{ id = BASS, volume = 0.5, pitch = 2.0 },
 			{ id = UUH, volume = 0.55, pitch = 1.7, delay = 0.02 },
 			{ id = OOF, volume = 0.3, pitch = 2.2, delay = 0.02 },
@@ -574,22 +607,27 @@ SoundConfig.Sounds = {
 		effects = { { "FlangeSoundEffect", { Depth = 0.5, Mix = 0.35, Rate = 9 } } },
 	},
 	GunshotLavaLamp = {
-		-- Lava Lamp Lancer: a marksman rifle's report with a deep, liquid bloop under it.
-		-- Its reverb is part of the bloop, not a room, so it plays indoors and out.
+		-- Lava Lamp Lancer: a lamp, not a rifle. A deep liquid bloop of wax, a glassy thunk from the
+		-- globe and a warm hum under it. Its reverb is part of the bloop, not a room.
+		novelty = true,
+		foley = "water",
 		tail = "always",
-		volume = 0.4,
+		volume = 0.42,
 		pitch = 1,
-		maxDistance = 600,
+		maxDistance = 450,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 1, pitch = 1.2 },
-			{ id = BOOM2, volume = 0.7, pitch = 1.8 },
-			{ id = BASS, volume = 0.3, pitch = 0.8 },
-			{ id = WATER, volume = 0.2, pitch = 0.8 },
+			{ id = WATER, volume = 0.5, pitch = 0.8 },
+			{ id = HIT, volume = 0.5, pitch = 0.7 },
+			{ id = BASS, volume = 0.5, pitch = 0.8 },
+			{ id = JUMP, volume = 0.3, pitch = 0.6 },
+			{ id = PING, volume = 0.12, pitch = 0.9 },
 		},
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.1, WetLevel = -11, DryLevel = 0 } } },
 	},
 	GunshotSnow = {
+		novelty = true,
+		foley = "water",
 		-- Snow Globe Singularity: a soft crack, a glassy tinkle and a hush of snow, bright and cold.
 		tail = "always",
 		volume = 0.38,
@@ -608,6 +646,8 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotSlipper = {
+		novelty = true,
+		foley = "toy",
 		-- Grandma's Slipper Launcher: a spring twang and a soft thwap, with a disapproving grunt.
 		volume = 0.44,
 		pitch = 1,
@@ -626,10 +666,10 @@ SoundConfig.Sounds = {
 	-- shotgun a shotgun's boom -- so positional hearing still tells you what is shooting; the object is laid
 	-- over the top. The model names its cue (attribute ShotCue), so CombatClient needs no entry per gun.
 	GunshotTung = {
+		calibre = "pistol",
 		-- Sahur Pistol: a pistol's crack with a hollow wooden knock in it, the drummer's "tok".
 		volume = 0.36,
 		pitch = 1,
-		maxDistance = 360,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 1.6 },
@@ -640,10 +680,10 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = 2, MidGain = 2, HighGain = -1 } } },
 	},
 	GunshotPopcorn = {
+		calibre = "pistol",
 		-- Pocket Popper: a bright pop with a kernel bursting a beat behind it.
-		volume = 0.36,
+		volume = 0.329,
 		pitch = 1,
-		maxDistance = 340,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.9 },
@@ -654,10 +694,10 @@ SoundConfig.Sounds = {
 		effects = { { "CompressorSoundEffect", { Threshold = -22, Ratio = 5, Attack = 0.002, Release = 0.08 } } },
 	},
 	GunshotPistachio = {
+		calibre = "pistol",
 		-- Pistacchio Pum: a dry pistol shot with a shell cracking open in the transient.
 		volume = 0.35,
 		pitch = 1,
-		maxDistance = 360,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.45 },
@@ -667,11 +707,11 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.1 } } },
 	},
 	GunshotRot = {
+		calibre = "suppressed",
 		-- Rot SMG: the can suppressor's cough, and something wet in it.
 		acoustic = "suppressed",
 		volume = 0.38,
 		pitch = 1,
-		maxDistance = 140,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.3, pitch = 2.6 },
@@ -682,10 +722,10 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -10, MidGain = -2, HighGain = -3 } } },
 	},
 	GunshotCrumb = {
+		calibre = "rifle",
 		-- Crumbly Carbine: a light rifle crack with a crunch through the middle of it.
-		volume = 0.35,
+		volume = 0.409,
 		pitch = 1,
-		maxDistance = 440,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.5, crack = true },
@@ -696,10 +736,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.16 } } },
 	},
 	GunshotClonk = {
+		calibre = "shotgun",
 		-- Ciabatta Clonk: a shotgun's boom with the heavy metal clonk of the old security action under it.
 		volume = 0.42,
 		pitch = 1,
-		maxDistance = 440,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 1.4 },
@@ -713,10 +753,10 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotCroc = {
+		calibre = "rifle",
 		-- Crocodilo Rifle: an AK's heavy crack, and the jaws snapping shut on it.
 		volume = 0.38,
 		pitch = 1,
-		maxDistance = 470,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
@@ -727,10 +767,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
 	},
 	GunshotShark = {
+		calibre = "shotgun",
 		-- Tralala Shotgun: the pump's boom with a splash through it.
 		volume = 0.42,
 		pitch = 1,
-		maxDistance = 440,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 1.45 },
@@ -741,10 +781,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.24 } } },
 	},
 	GunshotLag = {
+		calibre = "smg",
 		-- Lag Switch SMG: a light SMG crack with a digital blip that stutters behind it.
 		volume = 0.32,
 		pitch = 1,
-		maxDistance = 320,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 1.95 },
@@ -755,10 +795,10 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -6, MidGain = 0, HighGain = 2 } } },
 	},
 	GunshotScroll = {
+		calibre = "smg",
 		-- Scrolla Scrolla Brrrap: an SMG's chatter with a screen-tap click on every round.
 		volume = 0.32,
 		pitch = 1,
-		maxDistance = 320,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 1.9 },
@@ -768,10 +808,10 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -6, MidGain = 0, HighGain = 2 } } },
 	},
 	GunshotTrail = {
+		calibre = "rifle",
 		-- Scarponcino Trotto Trotto: a carbine's crack that carries, and the valley answering.
-		volume = 0.36,
+		volume = 0.411,
 		pitch = 1,
-		maxDistance = 460,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.4, crack = true },
@@ -782,10 +822,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.18 } } },
 	},
 	GunshotBanana = {
+		calibre = "rifle",
 		-- Bananini Burst: a rifle's crack with a soft, squashy thump under it.
-		volume = 0.36,
+		volume = 0.402,
 		pitch = 1,
-		maxDistance = 460,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.45, crack = true },
@@ -796,10 +836,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.18 } } },
 	},
 	GunshotLawn = {
+		calibre = "dmr",
 		-- Grass Toucher DMR: a battle rifle's report, and the sprinkler's hiss after it.
-		volume = 0.4,
+		volume = 0.469,
 		pitch = 1,
-		maxDistance = 620,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
@@ -810,10 +850,10 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.3, WetLevel = -10, DryLevel = 0 } } },
 	},
 	GunshotSigma = {
+		calibre = "dmr",
 		-- Sigma Scout: a marksman's report with the plates clanking on the bar.
-		volume = 0.4,
+		volume = 0.433,
 		pitch = 1,
-		maxDistance = 620,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
@@ -824,10 +864,10 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.2, WetLevel = -11, DryLevel = 0 } } },
 	},
 	GunshotMeadow = {
+		calibre = "dmr",
 		-- Prato Prato Pium: a marksman's report, lighter, with a bright chime in its tail.
-		volume = 0.38,
+		volume = 0.494,
 		pitch = 1,
-		maxDistance = 600,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.25, crack = true },
@@ -838,10 +878,10 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.2, WetLevel = -11, DryLevel = 0 } } },
 	},
 	GunshotAura = {
+		calibre = "shotgun",
 		-- Aura Scattergun: a shotgun's boom with a shimmer of light ringing off it.
-		volume = 0.42,
+		volume = 0.448,
 		pitch = 1,
-		maxDistance = 440,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 1.45 },
@@ -855,10 +895,10 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotGlitch = {
+		calibre = "smg",
 		-- Glitch SMG: an SMG's chatter that stutters -- a digital blip, then the shot again, smaller.
 		volume = 0.33,
 		pitch = 1,
-		maxDistance = 330,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 1.9 },
@@ -869,10 +909,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.35 } } },
 	},
 	GunshotVampire = {
+		calibre = "lmg",
 		-- Camelo Vampire LMG: a belt-fed's heavy report with a leathery wing-beat in its tail.
-		volume = 0.38,
+		volume = 0.414,
 		pitch = 1,
-		maxDistance = 480,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
@@ -883,10 +923,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.24 } } },
 	},
 	GunshotBank = {
+		calibre = "dmr",
 		-- Six-Seven Marksman: a marksman's report with a hollow court-floor bounce under it.
-		volume = 0.4,
+		volume = 0.462,
 		pitch = 1,
-		maxDistance = 620,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.2, crack = true },
@@ -897,11 +937,11 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 1.3, WetLevel = -10, DryLevel = 0 } } },
 	},
 	GunshotRatio = {
+		calibre = "suppressed",
 		-- Piccolino Ratatatà: the suppressed cough and a phone's send-swoosh.
 		acoustic = "suppressed",
 		volume = 0.36,
 		pitch = 1,
-		maxDistance = 140,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.35, pitch = 2.9 },
@@ -911,10 +951,10 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -12, MidGain = -3, HighGain = -2 } } },
 	},
 	GunshotBreach = {
+		calibre = "shotgun",
 		-- Porta Porta Bonk: a shotgun's boom and a door slamming into the frame.
-		volume = 0.42,
+		volume = 0.457,
 		pitch = 1,
-		maxDistance = 440,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 1.4 },
@@ -937,10 +977,10 @@ SoundConfig.Sounds = {
 		},
 	},
 	GunshotRizz = {
+		calibre = "rifle",
 		-- Rizz Rifle: a rifle's crack with a bright, sweet ring behind it.
-		volume = 0.36,
+		volume = 0.419,
 		pitch = 1,
-		maxDistance = 460,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.45, crack = true },
@@ -951,10 +991,10 @@ SoundConfig.Sounds = {
 		effects = { { "ChorusSoundEffect", { Depth = 0.2, Mix = 0.3, Rate = 3 } } },
 	},
 	GunshotReceipt = {
+		calibre = "lmg",
 		-- Scontrino Infinito: a belt-fed's report with the printer's chatter in every round.
-		volume = 0.38,
+		volume = 0.411,
 		pitch = 1,
-		maxDistance = 480,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
@@ -965,10 +1005,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
 	},
 	GunshotForest = {
+		calibre = "rotary",
 		-- Patapim Chaingun: the rotary's roar with a rustle of leaves through it.
-		volume = 0.38,
+		volume = 0.45,
 		pitch = 1,
-		maxDistance = 500,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 0.9, pitch = 1.6 },
@@ -979,10 +1019,10 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -3, MidGain = 0, HighGain = 1 } } },
 	},
 	GunshotNonna = {
+		calibre = "shotgun",
 		-- Nonna Double Barrel: a big old boom and a disapproving click of the tongue.
 		volume = 0.44,
 		pitch = 1,
-		maxDistance = 460,
 		category = "Weapons",
 		layers = {
 			{ id = BOOM3, volume = 1, pitch = 1.3 },
@@ -993,10 +1033,10 @@ SoundConfig.Sounds = {
 		effects = { { "ReverbSoundEffect", { DecayTime = 0.9, WetLevel = -14, DryLevel = 0 } } },
 	},
 	GunshotAudit = {
+		calibre = "rifle",
 		-- Occhietto Pium Pium: a clean rifle crack and a stamp coming down.
-		volume = 0.36,
+		volume = 0.411,
 		pitch = 1,
-		maxDistance = 460,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.45, crack = true },
@@ -1007,10 +1047,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.18 } } },
 	},
 	GunshotAdmin = {
+		calibre = "pistol",
 		-- Capo Supremo Bonkolone: a pistol's crack, bit-crushed, with a console blip.
 		volume = 0.35,
 		pitch = 1,
-		maxDistance = 360,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.7 },
@@ -1020,10 +1060,10 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.4 } } },
 	},
 	GunshotCollect = {
+		calibre = "rifle",
 		-- Ultimo Bum: an AK's crack with a cash register's clunk.
 		volume = 0.38,
 		pitch = 1,
-		maxDistance = 470,
 		category = "Weapons",
 		layers = {
 			{ id = SNAP, volume = 1, pitch = 1.3, crack = true },
@@ -1034,6 +1074,7 @@ SoundConfig.Sounds = {
 		effects = { { "DistortionSoundEffect", { Level = 0.22 } } },
 	},
 	GunshotPikpik = {
+		novelty = true,
 		-- Zanzarino Pikpik: a thin air-gun pfft and a mosquito's whine going away.
 		acoustic = "suppressed",
 		volume = 0.34,
@@ -1041,7 +1082,7 @@ SoundConfig.Sounds = {
 		maxDistance = 170,
 		category = "Weapons",
 		layers = {
-			{ id = SNAP, volume = 0.55, pitch = 2.3 },
+			{ id = SNAP, volume = 0.5, pitch = 2.6 },
 			{ id = CLICK, volume = 0.25, pitch = 1.8 },
 			{ id = SLIDER, volume = 0.22, pitch = 3.4, delay = 0.02 },
 			{ id = PING, volume = 0.06, pitch = 3.8, delay = 0.04 },
@@ -1049,7 +1090,9 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = -8, MidGain = -2, HighGain = 2 } } },
 	},
 	GunshotTamburo = {
-		-- Tamburo Tung Tung: the big bass drum -- a deep skin thump, the boom under it, the snares' rattle.
+		-- Tamburo Tung Tung: the big bass drum -- a deep skin thump, the shell's boom, the snares' rattle.
+		novelty = true,
+		foley = "toy",
 		volume = 0.44,
 		pitch = 1,
 		maxDistance = 420,
@@ -1057,12 +1100,13 @@ SoundConfig.Sounds = {
 		layers = {
 			{ id = HIT, volume = 0.9, pitch = 0.42 },
 			{ id = BASS, volume = 0.8, pitch = 0.7 },
-			{ id = BOOM3, volume = 0.45, pitch = 1.1 },
+			{ id = LAND, volume = 0.45, pitch = 0.5 },
 			{ id = SLIDER, volume = 0.18, pitch = 2.4, delay = 0.03 },
 		},
 		effects = { { "ReverbSoundEffect", { DecayTime = 0.8, WetLevel = -12, DryLevel = 0 } } },
 	},
 	GunshotBoomerang = {
+		novelty = true,
 		-- Bananerang: a crossbow's twang, and the whup-whup of a boomerang cutting the air.
 		acoustic = "suppressed",
 		volume = 0.45,
@@ -1077,6 +1121,181 @@ SoundConfig.Sounds = {
 		effects = { { "EqualizerSoundEffect", { LowGain = 2, MidGain = 0, HighGain = -1 } } },
 	},
 
+	-- The workshop guns (WorkshopArsenal): household things, not firearms, so each fires what it is.
+	GunshotKeycap = {
+		-- Rage Quit Carbine: a mechanical keyboard. One hard clack per keycap, the spring under it.
+		novelty = true,
+		foley = "toy",
+		volume = 0.4,
+		pitch = 1,
+		maxDistance = 260,
+		category = "Weapons",
+		layers = {
+			{ id = CLICK, volume = 0.7, pitch = 1.1 },
+			{ id = BUTTON, volume = 0.5, pitch = 1.4 },
+			{ id = SWITCH, volume = 0.3, pitch = 1.8 },
+			{ id = COLLIDE, volume = 0.15, pitch = 2.6 },
+		},
+	},
+	GunshotBroom = {
+		-- Clean Sweep Double: both barrels of bristles -- a hard swish and the thwack of the head.
+		novelty = true,
+		foley = "toy",
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 280,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.45, pitch = 0.7 },
+			{ id = LAND, volume = 0.6, pitch = 0.9 },
+			{ id = STEPS, volume = 0.25, pitch = 1.6 },
+			{ id = BASS, volume = 0.25, pitch = 1.4 },
+		},
+	},
+	GunshotHose = {
+		-- Hose Down Sniper: a lance of cold water -- the nozzle clicking open, a gush and a hiss.
+		novelty = true,
+		foley = "water",
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 360,
+		category = "Weapons",
+		layers = {
+			{ id = WATER, volume = 0.7, pitch = 1.1 },
+			{ id = SLIDER, volume = 0.3, pitch = 1.3 },
+			{ id = CLICK, volume = 0.3, pitch = 0.8 },
+			{ id = SWIM, volume = 0.25, pitch = 1.8, delay = 0.03 },
+		},
+	},
+	GunshotVacuum = {
+		-- Dust Devil Rotary: a canister vacuum spitting dust bunnies, 12 a second -- a whirr of air and
+		-- a soft thup per bunny, short so the stream stays a whine, not a smear.
+		novelty = true,
+		foley = "toy",
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 300,
+		category = "Weapons",
+		layers = {
+			{ id = FALL, volume = 0.25, pitch = 2.4 },
+			{ id = BUTTON, volume = 0.4, pitch = 0.9 },
+			{ id = SLIDER, volume = 0.2, pitch = 2.2 },
+			{ id = LAND, volume = 0.25, pitch = 1.8 },
+		},
+	},
+	GunshotBlower = {
+		-- Yard Work Blower: a leaf blower's rush of air and a scatter of leaves, 10 a second.
+		novelty = true,
+		foley = "toy",
+		volume = 0.45,
+		pitch = 1,
+		maxDistance = 320,
+		category = "Weapons",
+		layers = {
+			{ id = FALL, volume = 0.35, pitch = 1.6 },
+			{ id = STEPS, volume = 0.25, pitch = 2.0 },
+			{ id = BASS, volume = 0.2, pitch = 2.4 },
+			{ id = CLICK, volume = 0.2, pitch = 0.7 },
+		},
+	},
+	GunshotPopper = {
+		-- Party Foul Cannon: a party popper the size of a cannon -- a big cork POP, streamers
+		-- ripping out and confetti pattering down.
+		novelty = true,
+		foley = "toy",
+		volume = 0.46,
+		pitch = 1,
+		maxDistance = 420,
+		category = "Weapons",
+		layers = {
+			{ id = BUTTON, volume = 0.7, pitch = 0.8 },
+			{ id = HIT, volume = 0.5, pitch = 1.2 },
+			{ id = JUMP, volume = 0.3, pitch = 1.3 },
+			{ id = SWITCH3, volume = 0.3, pitch = 1.9 },
+			{ id = STEPS, volume = 0.25, pitch = 2.4, delay = 0.04 },
+		},
+	},
+	-- A far-off gun, heard from past its report's reach (Sfx.PlayAt hands over to this): the dull
+	-- thump and roll that is all that crosses the map, flat, fading by distance, late by the time
+	-- it takes to get here. Only the calibres with a `distant` in SoundConfig.Firearms reach it.
+	DistantGunfire = {
+		burst = "distant",
+		volume = 0.35,
+		pitch = 1,
+		maxDistance = 1600,
+		tail = "always",
+		category = "Weapons",
+		layers = {
+			{ id = BOOM3, volume = 0.8, pitch = 0.7 },
+			{ id = BASS, volume = 0.6, pitch = 0.6 },
+			{ id = BOOM2, volume = 0.3, pitch = 0.9, delay = 0.03 },
+		},
+		effects = {
+			{ "EqualizerSoundEffect", { HighGain = -18, MidGain = -8, LowGain = 3 } },
+			{ "ReverbSoundEffect", { DecayTime = 2.2, WetLevel = -6, DryLevel = -2 } },
+		},
+	},
+	-- A bullet only just missing you (Sfx.PlayAt): a short high tearing whizz past the ear, heard flat
+	-- because it is right at your head. Capped (`burst`) so a burst of near misses stays a few whizzes.
+	BulletWhiz = {
+		burst = "whiz",
+		volume = 0.4,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = SLIDER, volume = 0.6, pitch = 3.2 },
+			{ id = FALL, volume = 0.25, pitch = 3.0 },
+			{ id = SNAP, volume = 0.2, pitch = 2.9 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = -14, MidGain = 0, HighGain = 3 } } },
+	},
+	-- A novelty gun's reload (SoundConfig.FoleyFor): a toy's plastic snaps and a water gun's slosh and
+	-- squeaky pump stand in for the mag, bolt and slide of a real one.
+	ToyOut = {
+		volume = 0.4,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = BUTTON, volume = 0.6, pitch = 1.6 }, { id = SWITCH3, volume = 0.35, pitch = 1.9 } },
+	},
+	ToyIn = {
+		volume = 0.42,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = CLICK, volume = 0.6, pitch = 1.5 }, { id = BUTTON, volume = 0.4, pitch = 2.0, delay = 0.05 } },
+	},
+	ToyRack = {
+		volume = 0.42,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = SWITCH3, volume = 0.55, pitch = 1.4 },
+			{ id = OOF, volume = 0.1, pitch = 3.0, delay = 0.06 },
+			{ id = CLICK, volume = 0.35, pitch = 1.8, delay = 0.1 },
+		},
+	},
+	WaterOut = {
+		volume = 0.4,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = WATER, volume = 0.45, pitch = 2.2 }, { id = BUTTON, volume = 0.35, pitch = 1.4 } },
+	},
+	WaterIn = {
+		volume = 0.42,
+		pitch = 1,
+		category = "Weapons",
+		layers = { { id = WATER, volume = 0.5, pitch = 1.6 }, { id = CLICK, volume = 0.35, pitch = 1.6, delay = 0.08 } },
+	},
+	WaterRack = {
+		-- The squeaky pump: plastic sliding, a rubber squeak at the end of the stroke, a puff of air.
+		volume = 0.42,
+		pitch = 1,
+		category = "Weapons",
+		layers = {
+			{ id = SWITCH3, volume = 0.5, pitch = 1.2 },
+			{ id = OOF, volume = 0.12, pitch = 3.2, delay = 0.04 },
+			{ id = SLIDER, volume = 0.25, pitch = 2.4, delay = 0.05 },
+		},
+	},
 	-- Flair: the little noises of a signature gun being shown off (Viewmodel's FLAIR clips).
 	FlairBuzz = {
 		-- A mosquito's whine, close to the ear.
@@ -1554,7 +1773,7 @@ SoundConfig.Sounds = {
 
 	-- A crate or chest coming open: a heavy latch, then a rising shine.
 	CrateOpen = {
-		volume = 0.62,
+		volume = 0.42,
 		pitch = 1,
 		category = "Interface",
 		layers = {
@@ -1608,19 +1827,28 @@ SoundConfig.Sounds = {
 	-- Explosives (ProjectileClient, HitSplatClient): launcher rounds, grenades, smoke, splats
 	--------------------------------------------------------------------------------
 
-	-- A rocket going off: a sharp crack off `snap`, the two explosion files under it, one slowed
-	-- for the deep body, and a sub thump. A long room tail, because a blast fills a street.
-	-- Every blast: the reverb is the room when the listener is under a roof; out in the open the tail
-	-- is a late, slowed echo off the terrain instead, and past `distant.from` studs the ExplosionFar
-	-- rumble is layered in underneath as the crack and the top end fall away.
+	-- Every real blast is built the same way, sized by `blast` (SoundConfig.Blasts adds the shared
+	-- layers when this module loads):
+	--   crack    `snap` slowed right down, the pressure wave's edge; tagged `range = "near"`, so past
+	--            the blast class's XFADE band it drops out and only the low end is left;
+	--   boom     the explosion files, slowed for size: a grenade's is short, a vehicle's rolls;
+	--   sub      (shared) a bass thump felt in the chest close up, gone with distance;
+	--   debris   (shared) rubble and dirt coming down 0.15-0.6 s after; ProjectileClient adds a second
+	--            debris cue for what the blast went off against (SoundConfig.Debris);
+	--   tail     indoors the room reverb and a short boomy bloom (shared); outdoors a late, slowed echo
+	--            off the terrain, stretched in open country (Sfx.Openness);
+	--   far      (shared) a delayed low thump that fades in with range, and past `distant.from` the flat
+	--            ExplosionFar rumble, which carries on alone out to 1800 studs.
+	-- `duck = true`: close enough (Acoustics.DUCK), it muffles the world for a second (Sfx.Duck).
 	ExplosionRocket = {
+		blast = "rocket",
+		duck = true,
 		volume = 0.8,
 		pitch = 1,
-		maxDistance = 900,
 		category = "Weapons",
 		distant = { cue = "ExplosionFar", from = 250 },
 		layers = {
-			{ id = SNAP, volume = 0.9, pitch = 0.5 },
+			{ id = SNAP, volume = 0.9, pitch = 0.5, range = "near" },
 			{ id = BOOM2, volume = 1, pitch = 1.1 },
 			{ id = BOOM3, volume = 1, pitch = 0.72 },
 			{ id = BASS, volume = 0.9, pitch = 0.55 },
@@ -1630,13 +1858,14 @@ SoundConfig.Sounds = {
 	},
 	-- A 40mm: smaller and sharper, less tail.
 	ExplosionGrenade = {
+		blast = "grenade",
+		duck = true,
 		volume = 0.7,
 		pitch = 1,
-		maxDistance = 750,
 		category = "Weapons",
 		distant = { cue = "ExplosionFar", from = 250 },
 		layers = {
-			{ id = SNAP, volume = 0.8, pitch = 0.65 },
+			{ id = SNAP, volume = 0.8, pitch = 0.65, range = "near" },
 			{ id = BOOM2, volume = 1, pitch = 1.3 },
 			{ id = BASS, volume = 0.7, pitch = 0.75 },
 			{ id = BOOM3, volume = 0.25, pitch = 0.6, delay = 0.4, where = "outdoor" },
@@ -1645,13 +1874,14 @@ SoundConfig.Sounds = {
 	},
 	-- A frag: the body of the rocket's blast with a metallic ring over it for the fragments.
 	ExplosionFrag = {
-		volume = 0.8,
+		blast = "frag",
+		duck = true,
+		volume = 0.71,
 		pitch = 1,
-		maxDistance = 850,
 		category = "Weapons",
 		distant = { cue = "ExplosionFar", from = 250 },
 		layers = {
-			{ id = SNAP, volume = 0.9, pitch = 0.55 },
+			{ id = SNAP, volume = 0.9, pitch = 0.55, range = "near" },
 			{ id = BOOM3, volume = 1, pitch = 0.9 },
 			{ id = BOOM2, volume = 0.8, pitch = 1.25 },
 			{ id = METAL, volume = 0.5, pitch = 0.8, delay = 0.05 },
@@ -1660,11 +1890,71 @@ SoundConfig.Sounds = {
 		},
 		effects = { { "ReverbSoundEffect", { DecayTime = 2.0, WetLevel = -8, DryLevel = 0 } } },
 	},
+	-- A Rot Mine going off underfoot (HazardService): a buried charge, so more earth than air -- a
+	-- dull heavy thud of dirt thrown up over the crack.
+	ExplosionMine = {
+		blast = "frag",
+		duck = true,
+		volume = 0.75,
+		pitch = 1,
+		category = "Weapons",
+		distant = { cue = "ExplosionFar", from = 250 },
+		layers = {
+			{ id = SNAP, volume = 0.8, pitch = 0.6, range = "near" },
+			{ id = BOOM3, volume = 1, pitch = 0.85 },
+			{ id = BOOM2, volume = 0.7, pitch = 1.2 },
+			{ id = BASS, volume = 0.8, pitch = 0.55 },
+			{ id = LAND, volume = 0.5, pitch = 0.5, delay = 0.03 },
+			{ id = BOOM3, volume = 0.3, pitch = 0.5, delay = 0.42, where = "outdoor" },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 1.8, WetLevel = -9, DryLevel = 0 } } },
+	},
+	-- A fuel barrel (HazardService): the fuel lighting first -- a rushing whoomph -- then the drum
+	-- bursting, a plate of it ringing off.
+	ExplosionBarrel = {
+		blast = "rocket",
+		duck = true,
+		volume = 0.82,
+		pitch = 1,
+		category = "Weapons",
+		distant = { cue = "ExplosionFar", from = 250 },
+		layers = {
+			{ id = SNAP, volume = 0.8, pitch = 0.5, range = "near" },
+			{ id = FALL, volume = 0.5, pitch = 0.55 },
+			{ id = BOOM3, volume = 1, pitch = 0.7 },
+			{ id = BOOM2, volume = 0.8, pitch = 1.0, delay = 0.04 },
+			{ id = METAL, volume = 0.4, pitch = 0.6, delay = 0.06 },
+			{ id = BASS, volume = 0.8, pitch = 0.5 },
+			{ id = BOOM3, volume = 0.35, pitch = 0.45, delay = 0.5, where = "outdoor" },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 2.4, WetLevel = -8, DryLevel = 0 } } },
+	},
+	-- A vehicle going up when it is wrecked (VehicleWreckFx): the biggest blast in the game. The
+	-- tank's fuel lights with a long rushing whoomph under the crack, the body rolls, and the wreck
+	-- rains metal (the vehicle size's debris is metal, not rubble).
+	ExplosionVehicle = {
+		blast = "vehicle",
+		duck = true,
+		volume = 1.05,
+		pitch = 1,
+		category = "Weapons",
+		distant = { cue = "ExplosionFar", from = 300 },
+		layers = {
+			{ id = SNAP, volume = 0.8, pitch = 0.45, range = "near" },
+			{ id = FALL, volume = 0.6, pitch = 0.45, delay = 0.03 },
+			{ id = BOOM3, volume = 1, pitch = 0.6 },
+			{ id = BOOM2, volume = 0.8, pitch = 0.9 },
+			{ id = BASS, volume = 0.7, pitch = 0.5 },
+			{ id = BOOM3, volume = 0.4, pitch = 0.42, delay = 0.55, where = "outdoor" },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 2.8, WetLevel = -7, DryLevel = 0 } } },
+	},
 	-- The same blast heard from across the map: a rumble with the top taken off, played flat (not
 	-- positional) at a volume set by distance, so a fight far away still reads as thunder. Its reverb
 	-- is the roll of distance, not a room, so it plays under a roof or not. `maxDistance` here is
-	-- where Sfx.PlayDistant fades it to nothing (ProjectileClient's FAR_RUMBLE).
+	-- where Sfx.PlayDistant fades it to nothing; Sfx.PlayAt hands a blast over to it past the blast's reach.
 	ExplosionFar = {
+		burst = "rumble",
 		volume = 0.5,
 		pitch = 1,
 		maxDistance = 1800,
@@ -1677,6 +1967,210 @@ SoundConfig.Sounds = {
 		effects = {
 			{ "EqualizerSoundEffect", { HighGain = -18, MidGain = -8, LowGain = 4 } },
 			{ "ReverbSoundEffect", { DecayTime = 3.5, WetLevel = -4, DryLevel = -2 } },
+		},
+	},
+	-- The ringing after a blast right beside you: a faint high tone that hangs for a second or two
+	-- under the muffle (Sfx.Duck). Quiet on purpose -- felt more than heard.
+	BlastRing = {
+		volume = 0.05,
+		pitch = 1,
+		tail = "always",
+		category = "Effects",
+		layers = { { id = PING, volume = 1, pitch = 1.9 } },
+		effects = {
+			{ "EqualizerSoundEffect", { HighGain = 2, MidGain = 0, LowGain = -20 } },
+			{ "ReverbSoundEffect", { DecayTime = 2.5, WetLevel = 0, DryLevel = -6 } },
+		},
+	},
+
+	-- What comes down after a blast, by what it went off against (SoundConfig.Debris). Each is a
+	-- scatter of small impacts spread over half a second, quiet, and heard only near the blast.
+	-- `burst` shares one cap between them, so a chain of blasts can't bury the mix in gravel.
+	DebrisDirt = {
+		burst = "debris",
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Effects",
+		layers = {
+			{ id = STEPS, volume = 0.6, pitch = 0.55, delay = 0.15 },
+			{ id = LAND, volume = 0.5, pitch = 0.5, delay = 0.26 },
+			{ id = STEPS, volume = 0.35, pitch = 0.8, delay = 0.45 },
+		},
+		effects = { { "EqualizerSoundEffect", { LowGain = 2, MidGain = 0, HighGain = -6 } } },
+	},
+	DebrisRubble = {
+		burst = "debris",
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Effects",
+		layers = {
+			{ id = COLLIDE, volume = 0.6, pitch = 0.5, delay = 0.15 },
+			{ id = HIT, volume = 0.45, pitch = 0.45, delay = 0.28 },
+			{ id = COLLIDE, volume = 0.35, pitch = 0.7, delay = 0.46 },
+		},
+	},
+	DebrisWood = {
+		burst = "debris",
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 180,
+		category = "Effects",
+		layers = {
+			{ id = COLLIDE, volume = 0.55, pitch = 0.8, delay = 0.14 },
+			{ id = SNAP, volume = 0.5, pitch = 0.7, delay = 0.2 },
+			{ id = LAND, volume = 0.35, pitch = 0.9, delay = 0.4 },
+		},
+	},
+	DebrisMetal = {
+		burst = "debris",
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 200,
+		category = "Effects",
+		layers = {
+			{ id = METAL, volume = 0.55, pitch = 0.7, delay = 0.16 },
+			{ id = METAL, volume = 0.35, pitch = 1.1, delay = 0.36 },
+			{ id = COLLIDE, volume = 0.25, pitch = 1.2, delay = 0.52 },
+		},
+	},
+	DebrisGlass = {
+		burst = "debris",
+		volume = 0.5,
+		pitch = 1,
+		maxDistance = 200,
+		category = "Effects",
+		layers = {
+			{ id = METAL, volume = 0.45, pitch = 2.2, delay = 0.12 },
+			{ id = SNAP, volume = 0.35, pitch = 2.6, delay = 0.18 },
+			{ id = METAL, volume = 0.3, pitch = 2.8, delay = 0.34 },
+			{ id = PING, volume = 0.1, pitch = 2.4, delay = 0.3 },
+		},
+	},
+	DebrisWater = {
+		burst = "debris",
+		volume = 0.55,
+		pitch = 1,
+		maxDistance = 200,
+		category = "Effects",
+		layers = {
+			{ id = WATER, volume = 0.8, pitch = 0.7, delay = 0.12 },
+			{ id = WATER, volume = 0.45, pitch = 1.1, delay = 0.4 },
+		},
+	},
+
+	-- The silly explosives' own blasts (Oliver: "give the silly explosives their own silly
+	-- explosion"). ExplosiveFx plays Explosion<Theme> for a themed weapon. Cartoon sounds, no real
+	-- boom, no debris, no ear-ring -- but loud and far-carrying, because they still hurt.
+	ExplosionParty = {
+		-- Party Foul Cannon: a huge cork pop, a party horn squealing, confetti rustling down.
+		novelty = true,
+		volume = 0.9,
+		pitch = 1,
+		maxDistance = 520,
+		category = "Weapons",
+		layers = {
+			{ id = BUTTON, volume = 0.9, pitch = 0.7 },
+			{ id = HIT, volume = 0.6, pitch = 1.0 },
+			{ id = BASS, volume = 0.5, pitch = 1.1 },
+			{ id = UUH, volume = 0.35, pitch = 2.4, delay = 0.05 },
+			{ id = SLIDER, volume = 0.3, pitch = 2.6, delay = 0.05 },
+			{ id = STEPS, volume = 0.35, pitch = 2.6, delay = 0.14 },
+			{ id = SWITCH3, volume = 0.2, pitch = 2.2, delay = 0.18 },
+		},
+	},
+	ExplosionSlipper = {
+		-- Grandma's Slipper Launcher: one enormous comedy THWACK and a boing as it bounces off.
+		novelty = true,
+		volume = 0.9,
+		pitch = 1,
+		maxDistance = 480,
+		category = "Weapons",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 0.7 },
+			{ id = HIT, volume = 0.7, pitch = 0.6 },
+			{ id = BASS, volume = 0.5, pitch = 0.9 },
+			{ id = JUMP, volume = 0.7, pitch = 0.55, delay = 0.06 },
+			{ id = OOF, volume = 0.25, pitch = 0.8, delay = 0.12 },
+		},
+	},
+	ExplosionFidget = {
+		-- Fidget Disc Launcher: a whirring spin-up that flies apart in a clatter of bearings.
+		novelty = true,
+		volume = 0.9,
+		pitch = 1,
+		maxDistance = 480,
+		category = "Weapons",
+		layers = {
+			{ id = FALL, volume = 0.4, pitch = 2.8 },
+			{ id = SLIDER, volume = 0.4, pitch = 2.2 },
+			{ id = BASS, volume = 0.45, pitch = 1.2, delay = 0.1 },
+			{ id = COLLIDE, volume = 0.6, pitch = 1.8, delay = 0.12 },
+			{ id = CLICK, volume = 0.5, pitch = 1.2, delay = 0.14 },
+			{ id = METAL, volume = 0.3, pitch = 1.6, delay = 0.2 },
+		},
+		effects = { { "FlangeSoundEffect", { Depth = 0.45, Mix = 0.35, Rate = 10 } } },
+	},
+	ExplosionGold = {
+		-- Golden Sahur Cannon: a cash register's cha-ching and a shower of coins.
+		novelty = true,
+		volume = 0.9,
+		pitch = 1,
+		maxDistance = 480,
+		category = "Weapons",
+		layers = {
+			{ id = SWITCH, volume = 0.6, pitch = 0.9 },
+			{ id = PING, volume = 0.8, pitch = 1.3, delay = 0.04 },
+			{ id = BASS, volume = 0.45, pitch = 1.0 },
+			{ id = METAL, volume = 0.35, pitch = 2.4, delay = 0.1 },
+			{ id = METAL, volume = 0.25, pitch = 2.9, delay = 0.22 },
+			{ id = CLICK, volume = 0.25, pitch = 2.6, delay = 0.3 },
+		},
+	},
+	ExplosionCoffee = {
+		-- Cappuccina Launcher: a big splash of coffee, a slurp, and the hiss of it steaming.
+		novelty = true,
+		volume = 0.9,
+		pitch = 1,
+		maxDistance = 480,
+		category = "Weapons",
+		layers = {
+			{ id = WATER, volume = 1, pitch = 0.6 },
+			{ id = LAND, volume = 0.5, pitch = 0.6 },
+			{ id = BASS, volume = 0.5, pitch = 0.8 },
+			{ id = SWIM, volume = 0.4, pitch = 0.7, delay = 0.15 },
+			{ id = SWIM, volume = 0.3, pitch = 2.2, delay = 0.25 },
+		},
+	},
+	ExplosionDrum = {
+		-- Tamburo Tung Tung's drumlets going off: TUNG -- a bass drum hit as a blast, snares rattling.
+		novelty = true,
+		volume = 0.8,
+		pitch = 1,
+		maxDistance = 420,
+		category = "Weapons",
+		layers = {
+			{ id = HIT, volume = 1, pitch = 0.4 },
+			{ id = BASS, volume = 0.8, pitch = 0.6 },
+			{ id = LAND, volume = 0.6, pitch = 0.45 },
+			{ id = SLIDER, volume = 0.2, pitch = 2.4, delay = 0.03 },
+		},
+		effects = { { "ReverbSoundEffect", { DecayTime = 0.9, WetLevel = -11, DryLevel = 0 } } },
+	},
+	ExplosionToast = {
+		-- Toaster Mortar's toast landing hot: the spring's twang, a crusty thump, crumbs, a "ding".
+		novelty = true,
+		volume = 0.85,
+		pitch = 1,
+		maxDistance = 460,
+		category = "Weapons",
+		layers = {
+			{ id = LAND, volume = 1, pitch = 0.55 },
+			{ id = BASS, volume = 0.6, pitch = 0.9 },
+			{ id = SWITCH3, volume = 0.5, pitch = 0.7 },
+			{ id = STEPS, volume = 0.35, pitch = 1.8, delay = 0.1 },
+			{ id = PING, volume = 0.35, pitch = 1.6, delay = 0.18 },
 		},
 	},
 	-- A rocket in flight: the falling-wind file, sped up, looped on the round itself
@@ -2764,9 +3258,30 @@ SoundConfig.Sounds = {
 --             the terrain sends back. A cue whose reverb is part of its character, not a room,
 --             says `tail = "always"`.
 --
+--   near/far  close up you hear the whole event; far off, only its low end. Layers tagged
+--             `range = "near"` (the crack of a blast, its sub thump, its debris) fade out and
+--             layers tagged `range = "far"` (a delayed, dull thump) fade in across the class's
+--             XFADE band, so a shot 200 studs off is a different sound, not a quieter one;
+--   yours     your own shot is heard from behind the gun, fuller and closer: layers tagged
+--             `who = "self"` (the action cycling, the chest thump) play only on a flat Sfx.Play,
+--             never on a positional one;
+--   open      the outdoor slap-back comes from whatever is there to answer it: in a street the
+--             walls answer fast, in open country the tree line and hills answer late and long.
+--             Sfx casts OPEN.rays level rays from the listener; the share that hit nothing
+--             stretches the outdoor layers' delay and lifts their level;
+--   variety   every play is nudged in pitch and level by the class's `jitter` (a total span:
+--             0.08 is +-4%), so automatic fire never repeats one identical sample;
+--   caps      a cue plays through a fixed pool of voices (a new shot cuts the oldest tail), and
+--             no more than BURST[class].max plays of a class start in one BURST window, so a
+--             chain of blasts or a wall of full-auto can't stack into clipping. The Weapons and
+--             Effects groups also run through a gentle bus compressor (BUS).
+--
 -- Layer tags: `crack = true` marks the bullet's crack; `where = "outdoor"` / `"indoor"` plays a
--- layer only there. Cue fields: `acoustic` names the class outright; `distant = { cue, from }`
--- layers a far rumble in past `from` studs.
+-- layer only there; `range` and `who` as above. Cue fields: `acoustic` names the class outright;
+-- `distant = { cue, from, gain }` layers a far rumble in past `from` studs, and carries on alone
+-- past the cue's own reach out to the rumble's; `calibre` (guns) and `blast` (explosives) pull in
+-- the shared layers and reach of FIREARMS / BLASTS below; `novelty = true` marks a weapon that is
+-- not a firearm (a bubble gun, a slipper launcher) and so gets none of the gunpowder.
 
 local METRES_PER_STUD = 0.28
 
@@ -2780,6 +3295,9 @@ SoundConfig.Acoustics = {
 	-- report only: its crack arrives with the report, at this fraction.
 	CRACK_REACH = 40,
 	CRACK_OFF_PATH = 0.5,
+	-- A shot whose line passes within `reach` studs of the listener, fired from at least `minRange`
+	-- away, whizzes past (BulletWhiz) as the bullet arrives.
+	WHIZ = { reach = 6, minRange = 20 },
 	-- Where a cue with no `maxDistance` fades out (before the class cap).
 	DEFAULT_MAX_DISTANCE = 400,
 	-- Effects on one Sound: the cue's own chain plus the per-play air and room effects. Every
@@ -2790,16 +3308,43 @@ SoundConfig.Acoustics = {
 	-- The room reverb given to a gun or blast cue that has none of its own.
 	ROOM = { DecayTime = 0.9, WetLevel = -9, DryLevel = 0 },
 
+	-- `xfade` is the near/far band in studs; `jitter` the per-play pitch and level span.
 	CLASSES = {
-		gun = { rollMin = 24, maxCap = 900, room = true, air = { low = 0, mid = -6, high = -20 } },
-		blast = { rollMin = 40, maxCap = 1000, room = true, air = { low = 3, mid = -8, high = -24 } },
-		energy = { rollMin = 18, maxCap = 800, room = true, air = { low = 0, mid = -4, high = -14 } },
-		suppressed = { rollMin = 8, maxCap = 200, room = true, air = { low = 0, mid = -3, high = -10 } },
+		gun = { rollMin = 24, maxCap = 900, room = true, air = { low = 0, mid = -6, high = -20 }, xfade = { 60, 180 }, jitter = 0.08 },
+		blast = { rollMin = 40, maxCap = 1000, room = true, air = { low = 3, mid = -8, high = -24 }, xfade = { 80, 260 }, jitter = 0.1 },
+		energy = { rollMin = 18, maxCap = 800, room = true, air = { low = 0, mid = -4, high = -14 }, xfade = { 60, 180 }, jitter = 0.08 },
+		suppressed = { rollMin = 8, maxCap = 200, room = true, air = { low = 0, mid = -3, high = -10 }, xfade = { 30, 90 }, jitter = 0.08 },
 		-- Hands and feet: reloads, bolts, pickups, vaults. Short range in real life, short here.
-		foley = { rollMin = 6, maxCap = 160, room = false, air = { low = 0, mid = -2, high = -8 } },
+		foley = { rollMin = 6, maxCap = 160, room = false, air = { low = 0, mid = -2, high = -8 }, xfade = { 20, 60 }, jitter = 0.08 },
 		-- Everything else in the world: breaks, companions, vehicles. Keeps the old 14-stud start.
-		world = { rollMin = 14, maxCap = 900, room = false, air = { low = 0, mid = -3, high = -10 } },
+		world = { rollMin = 14, maxCap = 900, room = false, air = { low = 0, mid = -3, high = -10 }, xfade = { 40, 140 }, jitter = 0.06 },
 	},
+
+	-- No more than `max` plays of a class start inside one `window` (seconds): the rest of a chain of
+	-- blasts, or of twenty guns firing in one frame, are dropped rather than stacked into clipping.
+	BURST = {
+		gun = { window = 1 / 30, max = 6 },
+		blast = { window = 0.1, max = 3 },
+		debris = { window = 0.1, max = 2 },
+		whiz = { window = 0.08, max = 2 },
+		distant = { window = 0.15, max = 2 },
+		rumble = { window = 0.15, max = 2 },
+	},
+	-- Voices per cue: flat (your own) and positional (everyone else's). A new play takes the oldest
+	-- voice and cuts its tail, which is what keeps full-auto from piling up.
+	VOICES = { flat = 4, positional = 8 },
+	-- Level rays for how open the country around the listener is, and how far an open sky
+	-- stretches the outdoor echo's delay (x1 + stretch) and lifts it (x lift).
+	OPEN = { rays = 4, reach = 90, ttl = 0.5, stretch = 0.8, lift = 0.35 },
+	-- The bus compressor on each category's group: catches the sum of many voices, not one.
+	BUS = {
+		Weapons = { Threshold = -12, Ratio = 3, Attack = 0.004, Release = 0.2 },
+		Effects = { Threshold = -14, Ratio = 3, Attack = 0.005, Release = 0.25 },
+	},
+	-- A big blast close by muffles the world for a moment (Sfx.Duck): the top end of every group
+	-- drops by up to `high` dB and comes back over `hold` seconds. Only a blast whose cue says
+	-- `duck = true`, only inside `reach` x its radius, and never for one smaller than `minRadius`.
+	DUCK = { high = -16, mid = -5, hold = 1.0, reach = 1.5, minRadius = 9 },
 
 	FOLEY = {
 		Reload = true, DryFire = true, Equip = true, MagOut = true, MagIn = true, ChargeBack = true,
@@ -2809,6 +3354,7 @@ SoundConfig.Acoustics = {
 		CoverClose = true, RocketSeat = true, StringCock = true, BoltSeat = true, EnergyCharge = true,
 		CasingTink = true, Pickup = true, SlideStart = true, Mantle = true, Vault = true,
 		DoubleJump = true, StaminaEmpty = true,
+		ToyOut = true, ToyIn = true, ToyRack = true, WaterOut = true, WaterIn = true, WaterRack = true,
 		-- A signature gun being shown off (Viewmodel's FLAIR clips) is handling noise too.
 		FlairTap = true, FlairPop = true, FlairRattle = true, FlairChomp = true, FlairSqueak = true, FlairBeep = true,
 		FlairSwipe = true, FlairWhoosh = true, FlairClank = true, FlairChime = true, FlairBat = true, FlairBounce = true,
@@ -2818,6 +3364,194 @@ SoundConfig.Acoustics = {
 }
 
 local Acoustics = SoundConfig.Acoustics
+
+--------------------------------------------------------------------------------
+-- Firearms and blasts: what every real gun and every real explosive shares, by size
+--------------------------------------------------------------------------------
+--
+-- A cue's own layers are its character (the crack and body of THIS gun). What a gunshot is made of
+-- in real life beyond that is the same for every gun of a calibre, so it lives here once and is
+-- added to each cue that names a `calibre` (or a `blast` size) when this module loads:
+--   body     (suppressed only) the muffled thump of the gas behind the can, which is most of what a
+--            suppressed shot is;
+--   action   the bolt or slide cycling just after the shot; only you, holding it, hear it;
+--   chest    the low thump you feel behind your own gun and not from anyone else's;
+--   room     indoors, a short boomy low bloom as the walls hand the blast straight back;
+--   slap     outdoors, the report answered off the terrain (only when the cue has no echo of its
+--            own); Sfx stretches it in open country;
+--   far      from past the XFADE band, a delayed dull thump: all that's left of a shot at range;
+--   reach    how far the report carries positionally, and `distant` how loud the flat far thump
+--            (DistantGunfire) is out beyond that. Only the bigger calibres carry across the map.
+-- `level` is the band the cue's own direct loudness must sit in (tools/sound_polish_check.py):
+-- the tiers go up with calibre, so a pistol can never be louder than a rifle, nor a rifle than a
+-- sniper. Layer volumes here are absolute (they are divided by the cue's own volume when added).
+-- Tiers: 1 suppressed, 2 smg, 3 pistol, 4 revolver, 5 rifle/rotary, 6 lmg, 7 shotgun/dmr, 8 sniper,
+-- 9 cannon. A launcher is a launch, not a report, so it has no tier.
+SoundConfig.Firearms = {
+	suppressed = { tier = 1, level = { 0.18, 0.28 }, reach = 140, body = { BASS, 0.07, 1.6 },
+		chest = { BASS, 0.08, 1.8 }, room = { BASS, 0.07, 1.5 }, far = { BASS, 0.1, 1.7 } },
+	smg = { tier = 2, level = { 0.29, 0.35 }, reach = 320,
+		action = { CLICK, 0.1, 1.7, 0.03 }, chest = { BASS, 0.1, 2.2 }, room = { BASS, 0.1, 1.6 },
+		slap = { BOOM3, 0.035, 1.0, 0.2 }, far = { BOOM3, 0.08, 0.95 } },
+	pistol = { tier = 3, level = { 0.36, 0.42 }, reach = 360,
+		action = { SWITCH, 0.1, 1.5, 0.045 }, chest = { BASS, 0.12, 2.0 }, room = { BASS, 0.12, 1.4 },
+		slap = { BOOM3, 0.04, 0.95, 0.22 }, far = { BOOM3, 0.09, 0.9 } },
+	revolver = { tier = 4, level = { 0.43, 0.46 }, reach = 420,
+		action = { CLICK, 0.09, 1.05, 0.06 }, chest = { BASS, 0.16, 1.5 }, room = { BASS, 0.16, 1.2 },
+		slap = { BOOM3, 0.05, 0.9, 0.24 }, far = { BOOM3, 0.11, 0.8 } },
+	rifle = { tier = 5, level = { 0.47, 0.52 }, reach = 480, distant = 0.5,
+		action = { CLICK, 0.09, 1.3, 0.04 }, chest = { BASS, 0.14, 1.8 }, room = { BASS, 0.15, 1.3 },
+		slap = { BOOM3, 0.05, 0.95, 0.25 }, far = { BOOM3, 0.12, 0.8 } },
+	rotary = { tier = 5, level = { 0.47, 0.52 }, reach = 480, distant = 0.5,
+		chest = { BASS, 0.1, 2.2 }, room = { BASS, 0.1, 1.6 },
+		slap = { BOOM3, 0.035, 1.0, 0.25 }, far = { BOOM3, 0.1, 0.9 } },
+	lmg = { tier = 6, level = { 0.52, 0.565 }, reach = 520, distant = 0.6,
+		action = { CLICK, 0.1, 1.1, 0.04 }, chest = { BASS, 0.16, 1.6 }, room = { BASS, 0.16, 1.2 },
+		slap = { BOOM3, 0.055, 0.9, 0.26 }, far = { BOOM3, 0.13, 0.75 } },
+	shotgun = { tier = 7, level = { 0.57, 0.645 }, reach = 600, distant = 0.6,
+		chest = { BASS, 0.22, 0.9 }, room = { BASS, 0.2, 0.9 },
+		slap = { BOOM3, 0.07, 0.75, 0.28 }, far = { BOOM3, 0.15, 0.6 } },
+	dmr = { tier = 7, level = { 0.57, 0.645 }, reach = 600, distant = 0.75,
+		action = { SWITCH, 0.1, 1.1, 0.05 }, chest = { BASS, 0.2, 1.3 }, room = { BASS, 0.18, 1.1 },
+		slap = { BOOM3, 0.07, 0.8, 0.3 }, far = { BOOM3, 0.15, 0.7 } },
+	sniper = { tier = 8, level = { 0.66, 0.74 }, reach = 900, distant = 1,
+		chest = { BASS, 0.3, 0.7 }, room = { BASS, 0.25, 0.8 },
+		slap = { BOOM3, 0.09, 0.7, 0.35 }, far = { BOOM3, 0.2, 0.55 } },
+	cannon = { tier = 9, level = { 0.75, 0.86 }, reach = 900, distant = 1,
+		chest = { BASS, 0.32, 0.6 }, room = { BASS, 0.3, 0.7 },
+		slap = { BOOM3, 0.1, 0.6, 0.4 }, far = { BOOM3, 0.22, 0.5 } },
+	launcher = { reach = 650, distant = 0.6,
+		chest = { BASS, 0.25, 0.7 }, room = { BASS, 0.22, 0.8 },
+		slap = { BOOM3, 0.08, 0.7, 0.3 }, far = { BOOM3, 0.15, 0.6 } },
+}
+
+-- Explosives by size. Every real blast has a crack (the cue's own, fading out with distance), a
+-- body, a sub thump you feel up close, debris coming down after it, and a tail; `level` bands go up
+-- with size (grenade < frag/mine < rocket/barrel < a vehicle going up) and so does `reach`.
+SoundConfig.Blasts = {
+	grenade = { tier = 1, level = { 0.8, 0.95 }, reach = 750,
+		sub = { BASS, 0.5, 0.5 }, room = { BASS, 0.35, 0.7 },
+		debris = { { COLLIDE, 0.16, 0.55, 0.16 }, { STEPS, 0.14, 0.7, 0.3 } }, far = { BOOM3, 0.3, 0.45, 0.1 } },
+	frag = { tier = 2, level = { 1.05, 1.25 }, reach = 850,
+		sub = { BASS, 0.6, 0.45 }, room = { BASS, 0.4, 0.65 },
+		debris = { { COLLIDE, 0.2, 0.5, 0.18 }, { STEPS, 0.16, 0.6, 0.34 } }, far = { BOOM3, 0.35, 0.42, 0.1 } },
+	rocket = { tier = 3, level = { 1.3, 1.5 }, reach = 900,
+		sub = { BASS, 0.7, 0.42 }, room = { BASS, 0.45, 0.6 },
+		debris = { { COLLIDE, 0.24, 0.45, 0.2 }, { STEPS, 0.18, 0.55, 0.38 } }, far = { BOOM3, 0.4, 0.4, 0.12 } },
+	vehicle = { tier = 4, level = { 1.55, 1.85 }, reach = 1000,
+		sub = { BASS, 0.8, 0.38 }, room = { BASS, 0.5, 0.55 },
+		debris = { { METAL, 0.3, 0.55, 0.22 }, { COLLIDE, 0.26, 0.4, 0.4 }, { METAL, 0.16, 0.8, 0.58 } },
+		far = { BOOM3, 0.45, 0.36, 0.12 } },
+}
+
+-- What an explosion throws down depends on what it went off against (ProjectileClient reads the
+-- surface under the blast): a patter of earth, a rattle of rubble, splinters, a clang, glass, a
+-- splash. Enum.Material names to debris cues; anything else is rubble.
+SoundConfig.Debris = {
+	MATERIAL = {
+		Grass = "DebrisDirt", LeafyGrass = "DebrisDirt", Ground = "DebrisDirt", Mud = "DebrisDirt", Sand = "DebrisDirt",
+		Snow = "DebrisDirt", Fabric = "DebrisDirt",
+		Wood = "DebrisWood", WoodPlanks = "DebrisWood", Cardboard = "DebrisWood",
+		Metal = "DebrisMetal", CorrodedMetal = "DebrisMetal", DiamondPlate = "DebrisMetal", Foil = "DebrisMetal",
+		Glass = "DebrisGlass", Ice = "DebrisGlass", Water = "DebrisWater",
+	},
+	DEFAULT = "DebrisRubble",
+}
+
+-- A novelty gun's reload: each mechanical stage the viewmodel plays (Viewmodel's "sound" events)
+-- becomes its toy or water-gun stand-in, by the shot cue's `foley`. A firearm keeps the real thing.
+SoundConfig.NoveltyFoley = {
+	STAGE = {
+		MagOut = "Out", CylinderOpen = "Out", BreakOpen = "Out", CoverOpen = "Out", LeverOpen = "Out", BoltBack = "Out",
+		MagIn = "In", ShellIn = "In", CylinderClose = "In", BreakClose = "In", CoverClose = "In", RocketSeat = "In",
+		BoltSeat = "In",
+		ChargeBack = "Rack", ChargeRelease = "Rack", SlideRelease = "Rack", PumpBack = "Rack", PumpForward = "Rack",
+		BoltForward = "Rack", LeverClose = "Rack", HammerCock = "Rack",
+	},
+	KIND = { toy = "Toy", water = "Water" },
+}
+
+function SoundConfig.FoleyFor(shotCue, stageCue)
+	local cue = SoundConfig.Sounds[shotCue or ""]
+	local kind = cue and cue.novelty and SoundConfig.NoveltyFoley.KIND[cue.foley or ""]
+	local stage = SoundConfig.NoveltyFoley.STAGE[stageCue or ""]
+	if kind and stage then
+		return kind .. stage
+	end
+	return stageCue
+end
+
+-- Whether a shot cue is a novelty gun's (no gunpowder, no brass).
+function SoundConfig.IsNovelty(shotCue)
+	local cue = SoundConfig.Sounds[shotCue or ""]
+	return cue ~= nil and cue.novelty == true
+end
+
+function SoundConfig.DebrisCue(materialName)
+	if materialName == nil or materialName == "Air" then
+		return nil
+	end
+	return SoundConfig.Debris.MATERIAL[materialName] or SoundConfig.Debris.DEFAULT
+end
+
+-- A shared layer spec { id, absolute volume, pitch, delay } as a layer of `cue`.
+local function sharedLayer(cue, spec, tags)
+	local layer = { id = spec[1], volume = spec[2] / (cue.volume or 1), pitch = spec[3] / (cue.pitch or 1), delay = spec[4] or 0 }
+	for key, value in pairs(tags) do
+		layer[key] = value
+	end
+	return layer
+end
+
+local function hasLayer(cue, key, value)
+	for _, layer in ipairs(cue.layers) do
+		if layer[key] == value then
+			return true
+		end
+	end
+	return false
+end
+
+local function addShared(cue, family)
+	if type(cue.layers) ~= "table" then
+		cue.layers = { { id = cue.id } }
+		cue.id = nil
+	end
+	cue.maxDistance = family.reach
+	if family.body then
+		table.insert(cue.layers, sharedLayer(cue, family.body, { role = "body" }))
+	end
+	if family.action then
+		table.insert(cue.layers, sharedLayer(cue, family.action, { who = "self", role = "action" }))
+	end
+	if family.chest then
+		table.insert(cue.layers, sharedLayer(cue, family.chest, { who = "self", role = "chest" }))
+	end
+	if family.sub then
+		table.insert(cue.layers, sharedLayer(cue, family.sub, { range = "near", role = "sub" }))
+	end
+	for _, spec in ipairs(family.debris or {}) do
+		table.insert(cue.layers, sharedLayer(cue, spec, { range = "near", role = "debris" }))
+	end
+	table.insert(cue.layers, sharedLayer(cue, family.room, { where = "indoor", role = "room" }))
+	if family.slap and not hasLayer(cue, "where", "outdoor") then
+		table.insert(cue.layers, sharedLayer(cue, family.slap, { where = "outdoor", role = "slap" }))
+	end
+	table.insert(cue.layers, sharedLayer(cue, family.far, { range = "far", role = "far" }))
+end
+
+for _, cue in pairs(SoundConfig.Sounds) do
+	local firearm = cue.calibre and SoundConfig.Firearms[cue.calibre]
+	local blast = cue.blast and SoundConfig.Blasts[cue.blast]
+	if firearm then
+		addShared(cue, firearm)
+		if firearm.distant then
+			cue.distant = { cue = "DistantGunfire", from = math.floor(firearm.reach * 0.6), gain = firearm.distant }
+		end
+	elseif blast then
+		addShared(cue, blast)
+	end
+end
 
 function SoundConfig.ClassOf(name, cue)
 	if cue and Acoustics.CLASSES[cue.acoustic or ""] then
@@ -2833,6 +3567,14 @@ function SoundConfig.ClassOf(name, cue)
 		return "blast"
 	end
 	return "world"
+end
+
+-- The per-play pitch and level span for a cue (0.08 is +-4%): its own `jitter`, else its class's.
+function SoundConfig.JitterOf(name, cue)
+	if cue and type(cue.jitter) == "number" then
+		return cue.jitter
+	end
+	return Acoustics.CLASSES[SoundConfig.ClassOf(name, cue)].jitter or 0
 end
 
 -- RollOffMinDistance and RollOffMaxDistance for a cue played in the world.
@@ -2871,7 +3613,9 @@ end
 --   room           the room reverb on or off, or nil when this cue's reverb is not a room
 --   low/mid/high   the air equaliser's gains
 --   distant        the gain for the cue's `distant` rumble, 0 when there is none
-function SoundConfig.Plan(name, cue, distance, enclosed, nearPath)
+-- `listen`, optional: { own = true } for your own flat play (the `who = "self"` layers sound, the
+-- far ones never do), and `open` 0..1, how open the country is (Sfx.Openness), for the slap-back.
+function SoundConfig.Plan(name, cue, distance, enclosed, nearPath, listen)
 	local layers = SoundConfig.LayersOf(cue)
 	if not layers then
 		return nil
@@ -2894,16 +3638,34 @@ function SoundConfig.Plan(name, cue, distance, enclosed, nearPath)
 		first *= squeeze
 	end
 
+	local own = type(listen) == "table" and listen.own == true
+	local open = type(listen) == "table" and math.clamp(tonumber(listen.open) or 0, 0, 1) or 0
+	local band = Acoustics.CLASSES[SoundConfig.ClassOf(name, cue)].xfade
+	local fade = own and 0 or math.clamp((distance - band[1]) / (band[2] - band[1]), 0, 1)
+	local openness = Acoustics.OPEN
+
 	local plan = { start = first, layers = {}, room = nil, distant = 0 }
 	for index, layer in ipairs(layers) do
 		local gain = 1
+		local delay = layer.delay
 		if (layer.where == "outdoor" and enclosed) or (layer.where == "indoor" and not enclosed) then
+			gain = 0
+		elseif layer.who == "self" and not own then
 			gain = 0
 		elseif layer.crack and nearPath == false then
 			gain = Acoustics.CRACK_OFF_PATH
 		end
+		if layer.range == "near" then
+			gain *= 1 - fade
+		elseif layer.range == "far" then
+			gain *= fade
+		end
+		if layer.where == "outdoor" then
+			delay *= 1 + openness.stretch * open
+			gain *= 1 + openness.lift * (open - 0.5)
+		end
 		local arrives = layer.crack and first or report
-		plan.layers[index] = { delay = layer.delay + (arrives - first), gain = gain }
+		plan.layers[index] = { delay = delay + (arrives - first), gain = gain }
 	end
 	if SoundConfig.RoomGated(name, cue) then
 		plan.room = enclosed == true
@@ -2912,7 +3674,7 @@ function SoundConfig.Plan(name, cue, distance, enclosed, nearPath)
 	if type(cue.distant) == "table" then
 		local _, far = SoundConfig.Rolloff(name, cue)
 		local from = cue.distant.from or 0
-		plan.distant = math.clamp((distance - from) / math.max(far - from, 1), 0, 1)
+		plan.distant = math.clamp((distance - from) / math.max(far - from, 1), 0, 1) * (cue.distant.gain or 1)
 	end
 	return plan
 end
@@ -2996,6 +3758,9 @@ function SoundConfig.LayersOf(cue)
 					delay = layer.delay or 0,
 					crack = layer.crack == true,
 					where = layer.where,
+					who = layer.who,
+					range = layer.range,
+					role = layer.role,
 				})
 			end
 		end

@@ -1658,7 +1658,7 @@ function ModeTeams.GrantLoadout(player)
 	end
 
 	local stacks = 0
-	for _, entry in ipairs(GameModes.Loadout.items) do
+	for _, entry in ipairs(GameModes.RollLoadout()) do
 		local item = ItemData.Get(entry.id)
 		if item then
 			local wanted = math.min(entry.count, item.stack)
@@ -1675,6 +1675,10 @@ function ModeTeams.GrantLoadout(player)
 		for _, slot in pairs(loadout.slots) do
 			slot.issued = true
 		end
+	end
+	-- Full shield on every spawn. SetShield clamps to MatchConfig.MaxShield.
+	if GameModes.Loadout.fullShield then
+		WeaponService.SetShield(player, math.huge)
 	end
 	return weaponId, stacks
 end

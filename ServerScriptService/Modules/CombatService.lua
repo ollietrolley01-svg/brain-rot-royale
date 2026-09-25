@@ -372,12 +372,18 @@ end
 -- and vehicle mounts alike, so spawn protection ends the moment its holder opens fire.
 CombatService.OnShot = nil
 
-function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity)
+-- `source`, optional: "mount" for a vehicle's or a mounted gun's shot (VehicleWeapons), so clients
+-- give it a mount's report. A bot's shot sends the bot's character in that place instead, so a client
+-- finds the gun it is holding rather than guessing from whatever head is nearest the muzzle.
+function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity, source)
 	if CombatService.OnShot then
 		pcall(CombatService.OnShot, shooterToken)
 	end
 	local shooterPlayer = Combatants.IsPlayer(shooterToken) and shooterToken or nil
-	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity)
+	if source == nil and Combatants.IsBot(shooterToken) then
+		source = shooterToken.character
+	end
+	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity, false, source)
 end
 
 -- The rest of a shot that did not come out of the muzzle: a ricochet leaving a wall. Clients draw its tracer
@@ -823,6 +829,16 @@ local function riderBehind(shooterToken, vehicle, from, direction, params, rewin
 	return victimCharacter, victimToken, result
 end
 
+-- Whether the line from -> to crosses any part of `vehicle` (a present-time test, for a rewound rider:
+-- see the rider cover in firePellet). Not a shot ray: it only ever looks at that one vehicle.
+local function bodyBetween(vehicle, from, to, params)
+	local only = RaycastParams.new()
+	only.FilterType = Enum.RaycastFilterType.Include
+	only.FilterDescendantsInstances = { vehicle }
+	only.CollisionGroup = params.CollisionGroup -- the same parts the shot's own world ray could stop on
+	return workspace:Raycast(from, to - from, only) ~= nil
+end
+
 local function firePellet(shooterToken, character, origin, direction, def, rewindTo, segments, bounced)
 	segments = segments or shotSegments
 	local params = buildRaycastParams(character, shooterToken)
@@ -972,7 +988,29 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		-- share, to the vehicle), or in the open (a bike, a truck bed, a gunner's chest), which takes none.
 		local coverModel, coverSeat, coverId = VehicleCover.SeatOf(victimCharacter)
 		if coverModel and CombatService.DamageVehicle then
-			local via = VehicleCover.CrossesGlass(coverModel, currentOrigin, result.Position) and "glass" or "open"
+			-- A REWOUND rider was struck where they sat a ping ago, but the car around them is tested where
+			-- it is now: at 62-106 studs/s that is most of a car length away, so every such hit used to
+			-- read as "open" and the rider took full damage (#97 F2). A seated rider moves rigidly with
+			-- the car, so the rewind's own carry, inverted, takes the shot into the car's PRESENT frame,
+			-- where its glass and body really are.
+			local from, to = currentOrigin, result.Position
+			if result.Rewound and result.Carry then
+				local back = result.Carry:Inverse()
+				from, to = back * from, back * to
+			end
+			-- Body before glass on a rewound shot: that is what the world ray meets in present time (glass is
+			-- CanQuery=false, and Hull_Upper encloses the ArmorGlass/ArmorSlit on the TartarugaScout and
+			-- CameloCarrier). Glass first read a shot through a sealed screen as "glass" (20%) rewound but
+			-- "body" (8%) in present time: 2.5x the damage from lag compensation alone.
+			local via
+			if result.Rewound and result.Carry and bodyBetween(coverModel, from, to, params) then
+				-- The world ray never met this car's body (it was somewhere else by now), so it's asked here.
+				via = "body"
+			elseif VehicleCover.CrossesGlass(coverModel, from, to) then
+				via = "glass"
+			else
+				via = "open"
+			end
 			local share = VehicleCover.Share(coverId, coverSeat.Name, via)
 			if share < 1 then
 				CombatService.DamageVehicle(shooterToken, coverModel, def.damage * through * (1 - share), "bullet", def.id, result.Position)

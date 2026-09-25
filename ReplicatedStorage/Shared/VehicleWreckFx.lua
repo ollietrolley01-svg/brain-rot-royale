@@ -60,7 +60,25 @@ end
 -- enabled (nothing ever destroys the old one) -- duplicate emitters, compounding smoke rate, and a
 -- leaked Instance per drop. Dropped explicitly on AncestryChanged, same shape as `lamps` above.
 local smoke = {}
+
+-- Called once with the model when a vehicle this client has already seen whole becomes wrecked (its
+-- blast: ProjectileClient sets it). A wreck that was already a wreck when first seen stays silent.
+VehicleWreckFx.OnWreck = nil
+-- Strong keys, dropped when the model leaves the world (the same shape as `smoke` below).
+local seenWrecked = {}
+
 function VehicleWreckFx.SetSmoke(model, wrecked)
+	local seen = seenWrecked[model]
+	if seen == nil then
+		model.AncestryChanged:Connect(function()
+			if not model:IsDescendantOf(workspace) then
+				seenWrecked[model] = nil
+			end
+		end)
+	elseif wrecked and seen == false and VehicleWreckFx.OnWreck then
+		VehicleWreckFx.OnWreck(model)
+	end
+	seenWrecked[model] = wrecked == true
 	local emitter = smoke[model]
 	if not emitter then
 		if not wrecked then

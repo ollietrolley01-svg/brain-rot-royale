@@ -91,7 +91,7 @@ local ROWS = {
 	{ "mine", "RotMine", "grenade", 10 },
 	{ "barrel", "ExplosiveBarrel", "grenade", 15 },
 	{ "mounted_wreck", "MountedGunWreck", "grenade", 8 },
-	{ "vehicle_wreck_proposed", "VehicleWreck", "rocket", 12 },
+	{ "vehicle_wreck", "VehicleWreck", "grenade", 12 },
 }
 local AGES = { 0.1, 0.35, 0.9 }
 

@@ -335,6 +335,8 @@ function Builder:plate(name, size, at, text, face, role, textRole, textArea)
 	return part
 end
 
+local HULL_FRICTION, HULL_FRICTION_WEIGHT = 0.05, 20
+
 -- A collider: transparent, and with the chassis the only collidable parts. Only "Chassis" has mass.
 function Builder:hull(name, size, center, density)
 	local part = Instance.new("Part")
@@ -347,7 +349,12 @@ function Builder:hull(name, size, center, density)
 	part.CanTouch = true
 	part.CanQuery = true
 	part.Massless = name ~= "Chassis"
-	part.CustomPhysicalProperties = PhysicalProperties.new(density or 1.0, 0.3, 0, 1, 1)
+	-- Rough ground (Oliver 09-24): the body slides on what it scrapes. With ordinary friction, a belly or
+	-- a nose that touched a rock the wheels were still climbing gripped it and the vehicle stopped dead
+	-- on it -- measured on a course cut to the real maps' rockiest ground, most cars stuck on the first
+	-- rock taller than their clearance. The friction weight makes the body's own (near-zero) friction
+	-- win over the ground's. Hitting a wall or a vehicle head-on is unchanged: that is the normal force.
+	part.CustomPhysicalProperties = PhysicalProperties.new(density or 1.0, HULL_FRICTION, 0, HULL_FRICTION_WEIGHT, 1)
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.Parent = self.model
@@ -358,6 +365,43 @@ function Builder:hull(name, size, center, density)
 		self.anchors[part] = false
 	end
 	return part
+end
+
+-- The underside (Oliver 09-25: cars hung up on rocks by the belly). The Chassis block is one box whose
+-- bottom sat 1.0-1.6 studs off the ground (tools/vehicle_clearance_probe.lua) with square ends, so a
+-- rock taller than that caught its flat front face or its bottom edge and held the car while the
+-- wheels spun. Now the Chassis keeps its size, mass and CanQuery (shots, blast falloff, bot footprint
+-- all read it unchanged) but no longer collides; its collision is three boxes and two ramps:
+--   Hull_Body   the block above the ramps, full length -- the same sides, ends and roof as before
+--   Hull_Belly  the underside, BELLY_RAISE higher than the block's bottom, between the ramps
+--   Hull_NoseRamp / Hull_TailRamp  wedges bevelling the belly's front and rear edges (~25 deg), so
+--               a rock the wheels are climbing meets a slope the low-friction hull slides up, not a face
+local BELLY_RAISE, BELLY_RAMP, BELLY_RUN = 0.5, 0.9, 2.0
+function Builder:belly()
+	local chassis = self.chassis
+	local size, at = chassis.Size, chassis.Position
+	local raise = math.min(BELLY_RAISE, size.Y * 0.25)
+	local ramp = math.min(BELLY_RAMP, (size.Y - raise) * 0.45)
+	local run = math.min(BELLY_RUN * ramp / BELLY_RAMP, size.Z * 0.2)
+	local bottom = -size.Y / 2 + raise
+	local upper = size.Y / 2 - (bottom + ramp)
+	self:hull("Hull_Body", V(size.X, upper, size.Z), at + V(0, bottom + ramp + upper / 2, 0), 0.1)
+	self:hull("Hull_Belly", V(size.X, ramp, size.Z - 2 * run), at + V(0, bottom + ramp / 2, 0), 0.1)
+	-- A WedgePart's slope runs from its bottom front edge up to its top back edge; turned over about Z
+	-- the cut-away corner is the bottom front (-Z), turned over about X it is the bottom rear (+Z).
+	for _, end_ in ipairs({ { "Hull_NoseRamp", -1, CFrame.Angles(0, 0, math.pi) }, { "Hull_TailRamp", 1, CFrame.Angles(math.pi, 0, 0) } }) do
+		local part = self:hull(end_[1], V(size.X, ramp, run), at + V(0, bottom + ramp / 2, end_[2] * (size.Z / 2 - run / 2)), 0.1)
+		local wedge = Instance.new("WedgePart")
+		for _, key in ipairs({ "Name", "Size", "Transparency", "Anchored", "CanCollide", "CanTouch", "CanQuery", "Massless",
+			"CustomPhysicalProperties", "Parent" }) do
+			wedge[key] = part[key]
+		end
+		wedge.CFrame = part.CFrame * end_[3]
+		self.hulls[table.find(self.hulls, part)] = wedge
+		self.anchors[part], self.anchors[wedge] = nil, false
+		part:Destroy()
+	end
+	chassis.CanCollide = false
 end
 
 local function invisible(name, frame, parent)
@@ -3435,6 +3479,7 @@ function VehicleModels.Build(modelId, rng, opts)
 	local b = newBuilder(model, scheme)
 	local layout = def.build(b)
 	assert(b.chassis, modelId .. " built no Chassis")
+	b:belly()
 	-- An armed model's weapons (see Mounted weapons above): the turret, and the driver's gun; bikes have
 	-- none. opts.unarmed leaves both off: BuildStatic's parked cars are scenery, not something to man, and
 	-- get what an unarmed car has there instead (a lid on the Rotster's hatch, crates in the Ranger's bed).

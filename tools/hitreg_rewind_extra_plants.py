@@ -60,7 +60,7 @@ VARIANT = [
      "end\n"),
     ('rawget(root, "_props").CFrame = CFrame.new(-6 + opts.speed * t, 3, -40)',
      'rawget(root, "_props").CFrame = MOTION(opts.speed, t)'),
-    ("Vector3.new(-6 + opts.speed * fireAt, 3, -40)", "MOTION(opts.speed, fireAt).Position"),
+    ("Vector3.new(-6 + opts.speed * seen, 3, -40)", "MOTION(opts.speed, seen).Position"),
 ]
 
 

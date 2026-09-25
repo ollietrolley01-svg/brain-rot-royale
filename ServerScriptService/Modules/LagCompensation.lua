@@ -12,7 +12,13 @@
 --
 --   * THE INTERVAL is the server's own reading of the shooter's ping (Player:GetNetworkPing). NO CLIENT
 --     TIMESTAMP IS EVER READ: a time the client could write is an aimbot by another name.
---   * THE CAP is 200 ms. A shot whose interval is longer is ruled on the PRESENT, not on a rewind to the
+--   * PLUS THE INTERPOLATION DELAY (#97 F1). GetNetworkPing is the bare network round trip. The shooter
+--     saw other players later still: Roblox draws replicated physics behind real time, interpolated,
+--     so their picture of a victim is older than one round trip. Rewinding by the ping alone ruled a
+--     strafing target about 0.9 studs late per 50 ms left out. InterpolationDelay is added on top of
+--     the ping. Roblox publishes no number for it, so it is a tunable estimate (see its line below);
+--     tools/hitreg_rewind_probe.lua measures what is actually left over in a live session.
+--   * THE CAP is 200 ms of PING. A shot whose interval is longer is ruled on the PRESENT, not on a rewind to the
 --     cap and not on an extrapolation: past 200 ms the victim has moved nearly two torsos and the
 --     shooter's picture of them is not something to kill people over.
 --   * BOTS use the present. They don't aim through a network, so there is nothing to undo.
@@ -51,6 +57,11 @@ local LagCompensation = {}
 LagCompensation.Samples = 20
 -- The longest rewind honoured, in seconds. Anything older is ruled on the present.
 LagCompensation.Cap = 0.2
+-- Added to every rewind on top of the ping (seconds). An ESTIMATE, not a measurement: Roblox documents
+-- that replicated physics is delayed and interpolated but gives no figure, and community measurements
+-- run from about 50 ms upward. 50 ms is the low end, so the rewind errs toward too little (the cover
+-- trade stays short) rather than too much. Tune it from the probe's "left over" median.
+LagCompensation.InterpolationDelay = 0.05
 -- How far from its root a body part can reach. A candidate whose rewound root is further than this
 -- from the ray can't be struck, so its parts are never tested.
 LagCompensation.Reach = 8
@@ -146,7 +157,7 @@ function LagCompensation.RewindTime(shooterToken, arrival)
 	if not ok or type(ping) ~= "number" or ping ~= ping or ping <= 0 or ping > LagCompensation.Cap then
 		return nil
 	end
-	return arrival - ping
+	return arrival - ping - LagCompensation.InterpolationDelay
 end
 
 -- The ray against one box: the fraction along `vector` it enters at and the world normal of the face
@@ -234,7 +245,7 @@ function LagCompensation.Raycast(origin, vector, params, at)
 	world.RespectCanCollide = params.RespectCanCollide
 	local worldHit = workspace:Raycast(origin, vector, world)
 	local best = worldHit and (worldHit.Position - origin).Magnitude / vector.Magnitude or math.huge
-	local bestPart, bestNormal = nil, nil
+	local bestPart, bestNormal, bestCarry = nil, nil, nil
 
 	for _, character in ipairs(candidates) do
 		local root = character:FindFirstChild("HumanoidRootPart")
@@ -254,7 +265,7 @@ function LagCompensation.Raycast(origin, vector, params, at)
 					if not skip then
 						local t, normal = rayBox(origin, vector, carry * part.CFrame, part.Size)
 						if t and t < best then
-							best, bestPart, bestNormal = t, part, normal
+							best, bestPart, bestNormal, bestCarry = t, part, normal, carry
 						end
 					end
 				end
@@ -274,6 +285,10 @@ function LagCompensation.Raycast(origin, vector, params, at)
 			Material = bestPart.Material,
 			Distance = (position - origin).Magnitude,
 			Rewound = true,
+			-- past root * present root:Inverse(): takes a point from where the victim is now to where they
+			-- were at `at`. Its inverse carries the shot into the present, which is how CombatService
+			-- tests a rewound rider against the glass of the car they are still sitting in (#97 F2).
+			Carry = bestCarry,
 		}
 	end
 	if LagCompensation.Observer then
