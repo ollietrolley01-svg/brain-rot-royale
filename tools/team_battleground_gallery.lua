@@ -336,5 +336,8 @@ for k = 1, 2 do
 	table.insert(views, endView(k, false))
 	table.insert(views, endView(k, true))
 end
+-- The two capture areas (objective capture mode), each with its ring marked round it.
+table.insert(views, view("20_zone_A_keep_capture_ring", { 46, 52, -58 }, { 0, 0, 0 }, 62))
+table.insert(views, view("21_zone_B_pit_capture_ring", { -40, 46, -62 }, { -84, 0, 0 }, 62))
 
 return views

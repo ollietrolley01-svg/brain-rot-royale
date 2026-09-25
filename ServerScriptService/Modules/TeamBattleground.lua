@@ -2017,7 +2017,8 @@ local function buildSentry(root)
 	end
 	-- Its gun faces up the market at the keep's east door, the bridge's deck and the keep behind it
 	-- standing across every line to the far base.
-	local frame = facing(43, DECK, -66, 43, 0)
+	-- Turned 28 degrees east of straight up the market: the keep's middle (objective A) is outside its arc.
+	local frame = facing(43, DECK, -66, 78, 0)
 	gunNest(sentry, frame)
 	emplacement(sentry, "SentryPost", frame, "the market, the keep's east door")
 	table.insert(B.cover, here(36.5, DECK, -63))
@@ -2146,7 +2147,9 @@ local function buildBattery(root)
 	facePlate(battery, "RimCoping", "x", -46, 0.12, -25.5, -19.5, RIM - 0.55, RIM - 0.15, LIME, MAT.Marble)
 	-- Up its back from the keep's side: the way in the pit's defenders cannot see from the gun.
 	flightX(battery, "BatteryStair", -25.4, -20.4, -39.4, -46, 0, RIM, 8, LIME_DARK, MAT.Sandstone, -0.5)
-	local frame = facing(-52.7, RIM, -22.5, -90, -22.5)
+	-- Turned 28 degrees south of straight across: it covers the pit's cut and the rim, and the pit's
+	-- middle (objective B) is outside its arc.
+	local frame = facing(-52.7, RIM, -22.5, -90, -42.3)
 	gunNest(battery, frame)
 	emplacement(battery, "BermBattery", frame, "the pit (objective B) and its cut")
 	return battery
@@ -2323,6 +2326,98 @@ end
 
 -- The whole battleground in `frame` (its origin on the ground at the centre, LookVector to team 1),
 -- parented to nothing. Returns the model and its lists in local space as well as world.
+-- THE CAPTURE AREAS (Oliver 2026-09-24: "make sure the battlegrounds have areas for the objectives in the
+-- objective capture mode"). ModeKingOfTheHill takes the battleground's two objectives as they are
+-- (info.objectives: the keep's floor, the pit's fountain) and captures within CAPTURE_RADIUS of each,
+-- flat (ObjectiveZone.DefaultRadius, GameModes' hillRadius). The two places were built for it -- cover
+-- inside and at the edge, many ways in, high ground on each (tools/team_battleground_check.py, zones)
+-- -- and this marks the capture ring on them: a painted band in rot green, laid in short chords on
+-- whatever floor lies there (the ground, the forecourt's paving, the pit's rim, the keep's flags), up
+-- to CAPTURE_LIFT over the objective, and left out where a wall or a piece of cover stands on the
+-- line, so the ring reads round the whole area without painting anything's side.
+TeamBattleground.CaptureRadius = 28
+local function buildCaptureRings(model)
+	local CAPTURE_RADIUS, CAPTURE_LIFT, CAPTURE_CHORDS = TeamBattleground.CaptureRadius, 7, 96
+	local inverse = B.frame:Inverse()
+	local solids = {}
+	-- Every visible part is something the ring must not run into (a ramp, a scorch mark, a kerb); only
+	-- upright blocks that collide and are wide enough to walk on are floors it may lie on.
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Transparency < 1 then
+			local rel = inverse * part.CFrame
+			local size = part.Size
+			local r, u, b = rel.RightVector, rel.UpVector, rel.LookVector
+			local ex = math.abs(r.X) * size.X / 2 + math.abs(u.X) * size.Y / 2 + math.abs(b.X) * size.Z / 2
+			local ey = math.abs(r.Y) * size.X / 2 + math.abs(u.Y) * size.Y / 2 + math.abs(b.Y) * size.Z / 2
+			local ez = math.abs(r.Z) * size.X / 2 + math.abs(u.Z) * size.Y / 2 + math.abs(b.Z) * size.Z / 2
+			local upright = part:IsA("Part") and part.Shape == Enum.PartType.Block and math.abs(u.Y) > 0.99 -- worn flags lean a little
+			table.insert(solids, { inv = upright and rel:Inverse() or CFrame.new(rel.Position):Inverse(),
+				hx = upright and size.X / 2 or ex, hz = upright and size.Z / 2 or ez,
+				top = rel.Position.Y + ey, bottom = rel.Position.Y - ey, at = rel.Position, reach = math.sqrt(ex * ex + ez * ez),
+				floor = upright and part.CanCollide and math.min(size.X, size.Z) >= 1.2 })
+		end
+	end
+	local zones = folder(model, "CaptureZones", true)
+	for index, objective in ipairs(TeamBattleground.ObjectivesLocal) do
+		local zone = folder(zones, "CaptureZone" .. string.char(64 + index), true)
+		local near = {}
+		for _, solid in ipairs(solids) do
+			local d = Vector3.new(solid.at.X - objective.X, 0, solid.at.Z - objective.Z).Magnitude
+			if math.abs(d - CAPTURE_RADIUS) <= solid.reach + 1 then
+				table.insert(near, solid)
+			end
+		end
+		-- The floor at a point of the ring: the highest wide top under it, no higher than CAPTURE_LIFT over
+		-- the objective (the ground at 0 when there is none); nil where something stands on it there.
+		local function floorAt(p)
+			local floor, blocked = 0, false
+			for _, solid in ipairs(near) do
+				local l = solid.inv * Vector3.new(p.X, solid.at.Y, p.Z)
+				if math.abs(l.X) <= solid.hx + 0.15 and math.abs(l.Z) <= solid.hz + 0.15 then -- across a crack between flags
+					if solid.floor and solid.top <= objective.Y + CAPTURE_LIFT and solid.top > floor then
+						floor = solid.top
+					end
+				end
+			end
+			for _, solid in ipairs(near) do
+				local l = solid.inv * Vector3.new(p.X, solid.at.Y, p.Z)
+				if math.abs(l.X) <= solid.hx + 0.5 and math.abs(l.Z) <= solid.hz + 0.5 and solid.top > floor + 0.005 and solid.bottom < floor + 3 then
+					blocked = true
+				end
+			end
+			return not blocked and floor or nil
+		end
+		local step = 2 * math.pi / CAPTURE_CHORDS
+		for k = 0, CAPTURE_CHORDS - 1 do
+			-- Symmetric about the mirror: chord k and its reflection are laid alike.
+			local a0, a1 = k * step, (k + 1) * step
+			local function at(a, r)
+				r = r or CAPTURE_RADIUS
+				return Vector3.new(objective.X + math.cos(a) * r, 0, objective.Z + math.sin(a) * r)
+			end
+			-- The band's floor at its two ends and middle, along both its edges and its line.
+			local fm, level = floorAt(at((a0 + a1) / 2)), true
+			for _, a in ipairs({ a0 + step * 0.1, (a0 + a1) / 2, a1 - step * 0.1 }) do
+				for _, r in ipairs({ CAPTURE_RADIUS - 0.8, CAPTURE_RADIUS, CAPTURE_RADIUS + 0.8 }) do
+					-- On its line the floor is one height; under its edges it may drop (a crack between
+					-- flagstones, a floor's edge) but nothing may stand or rise there.
+					local f = floorAt(at(a, r))
+					if not f or not fm or f > fm + 0.02 or (r == CAPTURE_RADIUS and math.abs(f - fm) >= 0.02) then
+						level = false
+					end
+				end
+			end
+			if level then
+				local p0, p1 = at(a0), at(a1)
+				local mid = (p0 + p1) / 2
+				local length = (p1 - p0).Magnitude - 0.3
+				put(zone, "CaptureRing", Vector3.new(1.6, 0.08, length),
+					CFrame.lookAt(Vector3.new(mid.X, fm + 0.04, mid.Z), Vector3.new(p1.X, fm + 0.04, p1.Z)), ROT_GREEN, MAT.SmoothPlastic, TRIM)
+			end
+		end
+	end
+end
+
 function TeamBattleground.Layout(frame, seed)
 	B = { frame = frame, cover = {}, loot = {}, doorways = {}, routes = {}, power = {}, zips = {}, lanes = {}, emplacements = {} }
 	local model = Instance.new("Model")
@@ -2357,6 +2452,7 @@ function TeamBattleground.Layout(frame, seed)
 	end
 	B.mirror = false
 	buildMiddle(model)
+	buildCaptureRings(model)
 
 	local info = {
 		frame = frame,

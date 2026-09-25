@@ -2,7 +2,9 @@
 -- up on it, and its roads audited round the arena -- how many ends were finished (gateways), and any
 -- road left stopping short on open ground near the apron's edge (a carriageway piece whose end runs
 -- on into nothing, within REACH of the edge, and no gateway there). tools/team_battleground_check.py
--- runs the same audit (between the AUDIT markers) on its mock town.
+-- runs the same audit (between the AUDIT markers) on its mock town. Then objective capture (KOTH) is
+-- started on the same arena, and each of its objectives must be the middle of one of the arena's
+-- marked capture rings (CaptureRing marks at TeamBattleground.CaptureRadius, in 7 of 12 sectors at least).
 --
 --   powershell -ExecutionPolicy Bypass -File tools/runtest.ps1 -Probe tools/team_battleground_roadends_probe.lua -WaitSeconds 900 [-PlaceFile <rbxlx>]
 
@@ -113,6 +115,7 @@ local modules = game:GetService("ServerScriptService"):WaitForChild("Modules")
 local MapGenerator = require(modules:WaitForChild("MapGenerator"))
 local ModeTeams = require(modules:WaitForChild("ModeTeams"))
 local TB = require(modules:WaitForChild("TeamBattleground"))
+local KOTH = require(modules:WaitForChild("ModeKingOfTheHill"))
 local GameModes = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("GameModes"))
 local REACH = 60
 local DUMP = false
@@ -153,6 +156,41 @@ for _, id in ipairs({ "SahurSprings", "TralalaTown", "BombardiroBay", "RotRidge"
 			if finished < 2 or #open > 0 then
 				bad += 1
 			end
+			-- Objective capture on the same arena.
+			local kothMode = GameModes.Get("KingOfTheHill")
+			local ok3, err = pcall(KOTH.Start, kothMode, info)
+			local positions = ok3 and KOTH.Positions() or {}
+			local marks = {}
+			for _, p in ipairs(field.model:GetDescendants()) do
+				if p.Name == "CaptureRing" then
+					table.insert(marks, p.Position)
+				end
+			end
+			local zoned = 0
+			for _, centre in ipairs(positions) do
+				local sectors, count = {}, 0
+				for _, m in ipairs(marks) do
+					local d = Vector3.new(m.X - centre.X, 0, m.Z - centre.Z)
+					if math.abs(d.Magnitude - TB.CaptureRadius) <= 1.2 and math.abs(m.Y - centre.Y) <= 8 then
+						local s = math.floor((math.deg(math.atan2(d.Z, d.X)) % 360) / 30)
+						if not sectors[s] then
+							sectors[s] = true
+							count += 1
+						end
+					end
+				end
+				if count >= 7 then
+					zoned += 1
+				else
+					local f = field.frame:PointToObjectSpace(centre)
+					out("  objective at local (%.1f, %.2f, %.1f): %d of 12 sectors marked (%d marks on the map's arena)", f.X, f.Y, f.Z, count, #marks)
+				end
+			end
+			out("%s: KOTH %s, %d objectives, %d on marked capture areas", id, ok3 and "started" or ("FAILED " .. tostring(err)), #positions, zoned)
+			if #positions ~= 2 or zoned ~= 2 then
+				bad += 1
+			end
+			pcall(KOTH.Stop)
 		end
 		pcall(ModeTeams.Teardown)
 	end
