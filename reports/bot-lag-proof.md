@@ -1,7 +1,9 @@
 # #113 / #126 / #131 / #99 bot lag: do the budgets hold, where is the worst tick, why does movement look low-fps?
 
-Jacob's branch `task/prove-bot-lag`, cut from main **`f1bb3b4`**. Every number and line reference below is from
-`f1bb3b4`. Nothing was run in Roblox. I measured things outside Studio (Python + lupa, running the game's own Lua)
+Jacob's branch `task/prove-bot-lag`, cut from main `f1bb3b4`, then merged with main **`68bb8de`** (after Oliver merged
+`pc/ttk-plus-25`, `pc/mounted-guns-powerful`, `pc/hitreg-fixes` and all-wheel drive) and run again: 0 failures, 11/11
+plants, and every count the same. Main's only change to `BotService.lua` in that time is at line 6291 (a bot counts
+the team kit's other defenses as its pop-up), after every line cited here, so the line references hold for both. Nothing was run in Roblox. I measured things outside Studio (Python + lupa, running the game's own Lua)
 or read them from source, and each claim says which. No game file or existing tool was edited.
 
 The rows: #113 "The bots are pretty laggy", #126 "Too many bots in one area = lag", #131 "Fix as much lag as
@@ -106,7 +108,7 @@ has to be judged by eye in a playtest.
 spawns and leaving a mounted gun. So if player movement looks low-fps, it's the client's frame rate or replication,
 not server code. That needs a playtest.
 
-## 1. The think loop, end to end (main f1bb3b4)
+## 1. The think loop, end to end (main 68bb8de)
 
 - **Every 4 frames:** `BotService.Start`'s thread wakes (`task.wait(0.25 / 4)`, `BotService.lua:6416`, rounded up to
   4 frames at 60 Hz). `BotNav.Pump()` (`:6429`) starts up to 3 route computes (`BotNav.lua:73`) while fewer than 15
@@ -237,10 +239,13 @@ reads `BotService.Stats`.
 
 ## Outside the brief
 
-- **`tools/clock_ratchet.py` exits 1 on main `f1bb3b4`** (it is in CLAUDE.md's fast set, not one of the three checks
-  below). It flags `StarterPlayerScripts/MountedGunClient.client.lua` (78ea65d) as having 2 `os.clock()` deadlines
-  off the baseline, at `:299` and `:562`. Both are `math.sin(os.clock() * k)` wobbles in a client animation, not
-  deadlines, so this looks like a ratchet false positive. Reported, not fixed.
+- **`tools/clock_ratchet.py` exits 1 on main** (it is in CLAUDE.md's fast set, not one of the three checks
+  below). On `f1bb3b4` it flagged `StarterPlayerScripts/MountedGunClient.client.lua` (78ea65d) as having 2
+  `os.clock()` deadlines off the baseline, at `:299` and `:562`. Both are `math.sin(os.clock() * k)` wobbles in a
+  client animation, not deadlines, so that looks like a ratchet false positive. On `68bb8de` it also flags
+  `CombatClient.client.lua`, at 10 deadlines against 8 accepted. The two new ones came with `pc/hitreg-fixes`
+  (b254eac): the shot-in-flight age at `:716-721` and the auto-reload retry at `:759-760`. Those are real
+  deadlines. Reported in the mailbox as a bug, not fixed.
 
 ## What this does NOT prove
 

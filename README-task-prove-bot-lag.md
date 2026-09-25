@@ -1,6 +1,6 @@
 # task/prove-bot-lag
 
-A proof of OLIVER_LIST #113, #126, #131 and #99 (bot lag, and movement that looks low-fps) against main `f1bb3b4`,
+A proof of OLIVER_LIST #113, #126, #131 and #99 (bot lag, and movement that looks low-fps) against main `f1bb3b4`, rerun after merging main `68bb8de` with the same results,
 the commit this branch was cut from. It adds new files only; no game file or existing tool is changed.
 
 - `reports/bot-lag-proof.md`: the verdict, the findings ranked, the numbers, and what is not proven.
