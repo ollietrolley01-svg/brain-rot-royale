@@ -494,6 +494,12 @@ for _, modelId in ipairs(vehicleIds) do
 		end
 		current = view
 		local pitch = math.max((s.restPitch or 0) + 2, math.deg(VehicleWeaponData.PitchFloor(s, math.rad(10))))
+		if s.kind == "round" and s.pitchMin >= 0 then
+			-- A lobbing gun laid on a long landing, on a field wide enough to come down on (the stage's
+			-- own is 700 across), so its range ladder is on the ground.
+			pitch = 40
+			block(folder, Vector3.new(3000, 1, 3000), CFrame.new(ORIGIN - Vector3.new(0, 0.6, 0)), Color3.fromRGB(108, 120, 86), Enum.Material.Grass)
+		end
 		view.yaw, view.wantYaw, view.pitch, view.wantPitch = 10, 10, pitch, pitch
 		view:SetAiming(true)
 		for _ = 1, 50 do

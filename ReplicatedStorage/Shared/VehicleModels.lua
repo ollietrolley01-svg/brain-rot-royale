@@ -2638,13 +2638,15 @@ end
 -- a sunshade lip, the glass leaning back a touch, the dot, and `ticks` ranging marks under it for a gun
 -- whose round drops. For such a gun `drop` makes the window that much deeper below the dot, where
 -- GunnerView's view goes down to the landing point, with the ticks spread down it (the dot is point
--- blank, each tick further out). Every piece starts with `name`.
-local function reflexSight(b, name, P, s, cx, cy, cz, w, h, ticks, drop)
+-- blank, each tick further out). `fine` draws a thin frame, a pin-prick dot and hairline ticks on the
+-- glass itself (a sight set close to the eye, where the ordinary ones fill the view). Every piece
+-- starts with `name`.
+local function reflexSight(b, name, P, s, cx, cy, cz, w, h, ticks, drop, fine)
 	drop = drop or 0
 	cy = cy - drop / 2
 	h = h + drop
 	local dotY = cy + drop / 2
-	local t = 0.05
+	local t = fine and 0.025 or 0.05
 	b:box(name .. "SightBase", V(w + 2 * t + 0.04, 0.06, 0.34) * s, P(cx, cy - h / 2 - t - 0.03, cz + 0.02), "trim")
 	b:box(name .. "SightClamp", V(0.14, 0.08, 0.2) * s, P(cx, cy - h / 2 - t - 0.1, cz + 0.02), "mesh")
 	b:box(name .. "SightKnob", V(0.06, 0.06, 0.06) * s, P(cx + w / 2 + t + 0.03, cy - h / 2 - t - 0.03, cz + 0.1), "chrome")
@@ -2654,10 +2656,12 @@ local function reflexSight(b, name, P, s, cx, cy, cz, w, h, ticks, drop)
 	b:box(name .. "SightHood", V(w + 2 * t, t, 0.34) * s, P(cx, cy + h / 2 + t / 2, cz - 0.02), "engine")
 	b:box(name .. "SightLip", V(w + 2 * t, 0.04, 0.12) * s, P(cx, cy + h / 2 + 0.02, cz - 0.22), "trim")
 	b:box(name .. "SightGlass", V(w, h, 0.02) * s, CF(P(cx, cy, cz - 0.08)) * A(-6, 0, 0), "sightglass")
-	b:ball(name .. "SightDot", 0.036 * s, P(cx, dotY, cz - 0.1), "reticle")
+	local onGlass = fine and cz - 0.09 or cz - 0.1
+	b:ball(name .. "SightDot", (fine and 0.014 or 0.036) * s, P(cx, dotY, onGlass), "reticle")
 	local step = drop > 0 and drop / ((ticks or 0) + 1) or 0.045
 	for index = 1, ticks or 0 do
-		b:box(name .. "SightTick" .. index, V(0.08 - index * 0.012, 0.014, 0.014) * s, P(cx, dotY - step * index, cz - 0.1), "ticks")
+		local size = fine and V(0.036 - index * 0.006, 0.005, 0.005) or V(0.08 - index * 0.012, 0.014, 0.014)
+		b:box(name .. "SightTick" .. index, size * s, P(cx, dotY - step * index, onGlass), "ticks")
 	end
 end
 
@@ -3129,7 +3133,7 @@ function MountStyles.agl(b, mount, names)
 		b:tube("GunMuzzleRing", P(0, 0.12, -2.02), P(0, 0.12, -2.26), 0.38 * s, "trim")
 		b:tube("GunMuzzleBore", P(0, 0.12, -2.2), P(0, 0.12, -2.32), 0.24 * s, "mesh")
 		-- A reflex sight with range ticks under the dot (the grenades drop), on the sight line.
-		reflexSight(b, "Gun", P, s, 0, 0.72, -0.15, 0.32, 0.2, 3, 0.15)
+		reflexSight(b, "Gun", P, s, 0, 0.72, -0.45, 0.32, 0.2, 3, 0.15, true)
 		beltRounds(b, "GunBeltRound", P(-0.6, 0.37, 0.0), P(-0.38, 0.33, 0.0), 3, s * 1.5)
 		b:box("GunCanLatch", V(0.04, 0.14, 0.12) * s, P(-0.95, 0.18, 0.05), "chrome")
 		b:box("GunCanStencil", V(0.45, 0.1, 0.56) * s, P(-0.72, -0.1, 0.05), "trim")
