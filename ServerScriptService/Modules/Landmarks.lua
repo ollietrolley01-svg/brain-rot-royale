@@ -2080,6 +2080,18 @@ local function turbineRidge(model, origin, ctx)
 	-- The maintenance hut beside the middle tower, its door toward the front.
 	local hutAt = origin * CFrame.new(0, 0, -14)
 	local hg = ctx.groundHeightAt(hutAt.X, hutAt.Z) or origin.Y
+	-- On a slope the ground under the hut's outline can stand well over the ground at its middle: raise
+	-- the floor to within 1.2 of the highest ground under it (the walls reach 2 under it), so no side is
+	-- buried.
+	for ix = -2, 2 do
+		for iz = -2, 2 do
+			local at = (origin * CFrame.new(ix * 2.4, 0, -14 + iz * 1.75)).Position
+			local g = ctx.groundHeightAt(at.X, at.Z)
+			if g then
+				hg = math.max(hg, g - 1.2)
+			end
+		end
+	end
 	local hut = CFrame.new(hutAt.X, hg, hutAt.Z) * origin.Rotation
 	local hutModel = footing(model, "Hut", hutAt.X, hg, hutAt.Z, 9.2, 6.6)
 	local wallColor = Color3.fromRGB(150, 150, 146)
