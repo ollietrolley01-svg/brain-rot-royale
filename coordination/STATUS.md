@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 01:48 (EDT).
+Last updated: 2026-09-25 02:10 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -26,19 +26,25 @@ Last updated: 2026-09-25 01:48 (EDT).
 | Jacob (bimjom) | #84/#109 car-bounce proof | `task/prove-car-bounce` (PR #31) | **Merged to main 09-25 (36aa63a).** #84/#109 stays unproven until a playtest `[VehicleJolt]` count |
 | Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` (PR #33) | **Merged to main 09-25.** Both fire-rate faults fixed on main (1e964ca); F1-F4 **fixed on `pc/hitreg-fixes`** (b254eac, waiting on Oliver's merge) |
 | Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` (PR #34) | **Merged to main 09-25.** Payouts hold. Oliver decided spectator pay: **all time in the server counts** (pc/playtime-all-time, on main) |
-| Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` | Claimed 09-25 01:01 (PR #32) |
-| Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` | Claimed 09-25 01:03 (2731d7a, merged with PR #32). After #122 |
+| Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` (PR #35) | **Done, awaiting Oliver's merge.** Players' explosive guns all reach the blast. Found: a bot's Golden Sahur Cannon never explodes (BotService `shootAt`); `explosive_ammo_check.py` crashes on main since d370e62. Row stays unproven for the on-screen look |
+| Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` (PR #37) | **Done, awaiting Oliver's merge.** No path opens the vote or team picker over a match. Latent: the failed-start fallback never clears `dropSelect` (build-machine fix) |
+| Jacob (bimjom) | playtime proof cut to the all-time rule | `task/playtime-proof-new-rule` (PR #38) | **Done, awaiting Oliver's merge** |
+| Jacob (bimjom) | #57/#110 roadkill proof | `task/prove-roadkill` | Claimed 09-25 01:31 (PR #36). Proof only |
 
 ## Recently changed on main: expect these to move under you
 
 The build machine touched these in the last day. Read-only is fine; if a proof needs a change here,
 report it in the mailbox and don't edit.
 
-- Vehicles: `VehicleService.lua`, `VehicleDynamics.lua` (parked-rest a1eb7a8, base-vehicle respawn b5cbc05)
+- Vehicles: `VehicleService.lua`, `VehicleDynamics.lua`, `VehicleModels.lua` (parked-rest a1eb7a8, base-vehicle respawn b5cbc05,
+  ride lift and rough-ground underside 52a5608, on main at 05437cf)
 - **Waiting on Oliver's merge (touch nothing here):** `pc/hitreg-fixes` (`LagCompensation.lua`, `CombatService.lua`
   rider cover, `CombatClient.client.lua` round count, `VehicleWeaponClient.client.lua` fire gate, the hitreg tools)
   and `pc/mounted-guns-powerful` (`MountedGunData.lua`, `VehicleWeaponData.lua`, `mounted_guns_check.py`,
   `vehicle_ttk_check.py`: Oliver wants the ground and car guns very powerful)
+  and `pc/ttk-plus-25` (stacked on the guns branch: `MatchConfig.CombatDamageScale` 0.92 -> 0.736, so every
+  kill of a player, bot, vehicle or mounted gun takes 25% longer; companion caps x0.8; the TTK bands in
+  `vehicle_ttk_check`, `mounted_guns_check` and `companion_ability_check` x1.25)
 - Bots: `BotService.lua`, `BotGunner.lua` (new), `BotDriveTactics.lua`, `MountedGun*`
 - Team modes: `ModeTeams.lua`, `TeamBattleground.lua`, `MatchConfig.lua`
 - Lobby, roundabouts, interiors, wall durability, shed loot (the `pc/*` names on the branch list)
@@ -56,9 +62,13 @@ work is proving rows marked "in tree, unproven" and reporting bugs nobody has fo
 claiming, check STATUS, `git log origin/main --grep`, and the row itself (see
 `messages/2026-09-25-0120-oliver-jacob-only-new-useful-work.md`). Priority order:
 
-1. #122 explosive ammo (6ef6a52), claimed, Jacob
-2. #107 game-choosing menu mid-match (81c1263, fefa725), claimed, Jacob (after #122)
-3. #57/#110 roadkill (32de759, 41631ba)
-4. #113/#126 bot lag, #99 movement looks low-fps
+1. #57/#110 roadkill (32de759, 41631ba), claimed, Jacob
+2. #113/#126 bot lag, #99 movement looks low-fps
+3. #117 lobby trial guns change every pickup (e666c61)
+4. #85 chests and supply drops spill loot on the ground (3441c0f, d508889)
+5. #51 old road cars can't be destroyed (21c6199, 81c1263, d2be199)
+6. #114 popup barricade in the team kit, two KOTH objectives (7baed01)
+
+(#122 and #107 are done as proofs: PRs #35 and #37, awaiting Oliver's merge.)
 
 Claim a row with a one-line mailbox message before you start, as before.

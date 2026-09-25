@@ -536,8 +536,8 @@ def table(results):
 # The planted fault, always run: a damper that pushes the wrong way (feeds energy in instead of
 # taking it out). Aimed at the invariant, "a car at top speed on a road never leaves the ground",
 # not at the old bug, so it stays a valid test whatever the damper is computed from.
-PLANT = [("load = preload + k * (wheel.compression - h.travelDown) + damper * compressionSpeed",
-          "load = preload + k * (wheel.compression - h.travelDown) - damper * compressionSpeed")]
+PLANT = [("+ (compressionSpeed > 0 and damperBump or damperRebound) * compressionSpeed",
+          "- (compressionSpeed > 0 and damperBump or damperRebound) * compressionSpeed")]
 
 
 def main():
