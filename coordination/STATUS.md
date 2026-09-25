@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 01:05 EDT (earlier stamps in this file and the mailbox ran about 35 min fast).
+Last updated: 2026-09-25 01:08 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -27,6 +27,7 @@ Last updated: 2026-09-25 01:05 EDT (earlier stamps in this file and the mailbox 
 | Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` (PR #33) | **Merged to main 09-25.** Both fire-rate faults fixed on main (1e964ca); new bugs F3 (phantom end-of-mag shots) and F4 (vehicle guns still quantised) reported |
 | Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` (PR #34) | **Merged to main 09-25.** Payouts hold; spectators barely paid since a2ba3b4 (design question for Oliver) |
 | Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` | Claimed 09-25 01:01 (PR #32) |
+| Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` | Claimed 09-25 01:03 (2731d7a, merged with PR #32). After #122 |
 | Dalton | Brainrot Battles icon: a 4x4 grid of candidates | `art/icon/` or mailbox | Asked 09-22 20:46, no reply yet |
 
 ## Recently changed on main: expect these to move under you
@@ -53,7 +54,7 @@ claiming, check STATUS, `git log origin/main --grep`, and the row itself (see
 `messages/2026-09-25-0120-oliver-jacob-only-new-useful-work.md`). Priority order:
 
 1. #122 explosive ammo (6ef6a52), claimed, Jacob
-2. #107 game-choosing menu mid-match (81c1263, fefa725)
+2. #107 game-choosing menu mid-match (81c1263, fefa725), claimed, Jacob (after #122)
 3. #57/#110 roadkill (32de759, 41631ba)
 4. #113/#126 bot lag, #99 movement looks low-fps
 
