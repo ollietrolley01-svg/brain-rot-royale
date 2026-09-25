@@ -934,7 +934,7 @@ PLANTS = [
     (BOTSERVICE, "local near, nearCount = combatantsNear(position, reach)",
      "local near, nearCount = combatantList, #combatantList",
      "bound: findTarget walks the whole lobby again (candidates examined = N-1)"),
-    (BOTSERVICE, "\t\t\t\tlocal row = candidatePool[count]\n", "\t\t\t\tlocal row = nil\n",
+    (BOTSERVICE, "\tlocal row = scratch.candidatePool[slot]\n", "\tlocal row = nil\n",
      "bound: a fresh row per candidate per think (allocation)"),
     (BOTSERVICE, "\t\tif spent >= budget.FrameCap * share then\n", "\t\tif false then\n",
      "bound: the ray budget refuses nothing"),

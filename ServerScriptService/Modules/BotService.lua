@@ -1317,11 +1317,28 @@ local teamFocus = {}
 -- returned is valid until the next findTarget call (fight() and botVehicleThink use it at once;
 -- quickFirstShot copies what it needs before its timer).
 --
+-- CROWD COST (#126/#131). In a crowd the grid returns everyone, and each think made a row for every
+-- candidate and sorted them all, then looked at three or so. Now the four lowest scores are held as
+-- the candidates are scored, and a row is made only for a candidate the walk takes. The order is the
+-- old one: a held candidate is taken only when its score is below the next one held, and every score
+-- not held is at least the fourth, so each one taken is where any sort would put it. When the walk
+-- needs a fourth, or the next score is shared (or NaN), the whole list is built and sorted as before
+-- and the walk carries on where it was: the ones already taken sort first, and equal scores come out
+-- in whatever order table.sort makes of that same list. tools/findtarget_equivalence_check.py holds
+-- it to the old function.
+--
 -- One table for the file's pooled per-think rows (the main chunk is near Luau's 200-local limit;
 -- tools/verify.py counts them): findTarget's candidates and planCombatMove's options.
 local scratch = {
 	candidatePool = {},
 	candidates = {},
+	-- findTarget's candidates as it scores them, in grid order: the combatant row, score and distance.
+	scored = {},
+	scores = {},
+	distances = {},
+	-- ... and the few lowest of those scores, with their places in `scored`.
+	lowScores = {},
+	lowAt = {},
 	-- planCombatMove sorts combatOptions in place, so it is refilled from baseOptions (the nine
 	-- standard moves) plus, for a Flanker, the two flankOptions rows, every replan.
 	combatOptions = {},
@@ -1337,12 +1354,29 @@ local scratch = {
 	end,
 }
 
+-- findTarget's pooled candidate row number `slot`, filled from a combatant row.
+function scratch.row(slot, entry, distance, score)
+	local row = scratch.candidatePool[slot]
+	if not row then
+		row = {}
+		scratch.candidatePool[slot] = row
+	end
+	row.token, row.character, row.root, row.distance, row.score = entry.token, entry.character, entry.root, distance, score
+	row.throughCover = nil
+	return row
+end
+
 local function findTarget(bot, root, head, now)
 	local threat = now - bot.lastHurtAt < THREAT_WINDOW and CombatService.GetLastAttacker(bot) or nil
-	local reach = math.max(MatchConfig.BotVisionRange, bot.weapon and bot.weapon.range or 0)
-	local candidatePool, candidates = scratch.candidatePool, scratch.candidates
+	local vision = MatchConfig.BotVisionRange
+	local reach = math.max(vision, bot.weapon and bot.weapon.range or 0)
+	local pick = bot.archetype and bot.archetype.targetPick
+	local focus = bot.focusTeam and teamFocus[bot.focusTeam]
+	local candidates, scored, scores, distances = scratch.candidates, scratch.scored, scratch.scores, scratch.distances
 	table.clear(candidates)
-	local count = 0
+	-- Held as they are scored: the `keep` lowest scores, ascending (see the walk below).
+	local lowScores, lowAt = scratch.lowScores, scratch.lowAt
+	local count, unordered, keep, held = 0, false, 4, 0
 
 	local position = root.Position
 	-- Only combatants within reach can qualify, so only they are looked at (the grid, not the list).
@@ -1354,7 +1388,7 @@ local function findTarget(bot, root, head, now)
 		if token ~= bot and entry.humanoid.Health > 0 and hostile(bot, token) then
 			local distance = (entry.position - position).Magnitude
 			-- Past vision range only whoever is shooting us, and only as far as our gun reaches.
-			if distance <= MatchConfig.BotVisionRange or (token == threat and distance <= reach) then
+			if distance <= vision or (token == threat and distance <= reach) then
 				local humanoid = entry.humanoid
 				local score = distance
 				if entry.isPlayer then
@@ -1373,7 +1407,6 @@ local function findTarget(bot, root, head, now)
 				-- proportion to what they have lost; "threat" doubles down on whoever is shooting us;
 				-- "engaged" (Flanker, Opportunist) prefers someone busy fighting somebody else. "closest"
 				-- is the score as it stands. A team's focus target is pulled closer for everyone on it.
-				local pick = bot.archetype and bot.archetype.targetPick
 				if pick == "weakest" then
 					score *= 0.45 + 0.55 * humanoid.Health / math.max(1, humanoid.MaxHealth)
 				elseif pick == "threat" and token == threat then
@@ -1384,31 +1417,61 @@ local function findTarget(bot, root, head, now)
 						score *= 0.55
 					end
 				end
-				local focus = bot.focusTeam and teamFocus[bot.focusTeam]
 				if focus and focus.token == token and focus.by ~= bot and now - focus.at < THREAT_WINDOW then
 					score *= 0.6
 					STATS.focusFire += 1
 				end
 				count += 1
-				local row = candidatePool[count]
-				if not row then
-					row = {}
-					candidatePool[count] = row
+				scored[count], scores[count], distances[count] = entry, score, distance
+				if score ~= score then
+					unordered = true
+				elseif held < keep or score < lowScores[keep] then
+					-- Into the held list, in order, the highest dropping off the end when it is full.
+					if held < keep then
+						held += 1
+					end
+					local slot = held
+					while slot > 1 and lowScores[slot - 1] > score do
+						lowScores[slot], lowAt[slot] = lowScores[slot - 1], lowAt[slot - 1]
+						slot -= 1
+					end
+					lowScores[slot], lowAt[slot] = score, count
 				end
-				row.token, row.character, row.root, row.distance, row.score = token, entry.character, entry.root, distance, score
-				row.throughCover = nil
-				candidates[count] = row
 			end
 		end
 	end
 	if count == 0 then
 		return nil
 	end
-	table.sort(candidates, scratch.byScore)
 
+	-- The candidates in score order, sight-tested until one is seen and noticed or the think's
+	-- LOS_CHECKS_PER_THINK fresh rays are spent. Most walks end within the few held, so those are
+	-- taken in turn. Past them (the last one held only marks where they end), or at a shared score,
+	-- the whole list is sorted as before, and the walk carries on there.
 	local look = flatLook(root)
-	local fresh = 0
-	for index, candidate in ipairs(candidates) do
+	local fresh, index, cursor, sorted = 0, 0, 1, false
+	while true do
+		local candidate
+		if not sorted then
+			if unordered or (cursor == keep and held == keep) or (cursor < held and lowScores[cursor + 1] == lowScores[cursor]) then
+				for slot = 1, count do
+					candidates[slot] = scratch.row(slot, scored[slot], distances[slot], scores[slot])
+				end
+				table.sort(candidates, scratch.byScore)
+				sorted = true
+			elseif cursor <= held then
+				local at = lowAt[cursor]
+				cursor += 1
+				candidate = scratch.row(index + 1, scored[at], distances[at], scores[at])
+			end
+		end
+		if sorted then
+			candidate = candidates[index + 1]
+		end
+		if not candidate then
+			break
+		end
+		index += 1
 		local visible, computed, entry = sightOf(bot, head, candidate.token, candidate.character, now, index == 1)
 		if computed then
 			fresh += 1
