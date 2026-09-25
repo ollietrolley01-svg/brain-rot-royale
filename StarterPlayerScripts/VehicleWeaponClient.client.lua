@@ -359,9 +359,19 @@ local function swingMount(vehicle, mount, spec, yawTarget, pitchTarget, dt)
 		swing = { yaw = 0, pitch = spec.restPitch or 0 }
 		perVehicle[mount] = swing
 	end
-	local step = SWING_RATE * dt
-	swing.yaw = approach(swing.yaw, yawTarget, step)
-	swing.pitch = approach(swing.pitch, pitchTarget, step)
+	local follow = GunnerView and GunnerView.Pure and GunnerView.Pure.follow
+	if follow then
+		-- Someone else's mount from a 10 Hz attribute: the same damped follow the gunner's own view uses,
+		-- so it reads as a turret turning, never as steps (Oliver 09-24: "rotation ... smoother").
+		local speed = math.min(SWING_RATE, (spec.slew or SWING_RATE) * 1.25)
+		local accel = (spec.slewAccel or speed * 6)
+		swing.yaw, swing.yawV = follow(swing.yaw, swing.yawV or 0, yawTarget, dt, speed, accel, false, 10)
+		swing.pitch, swing.pitchV = follow(swing.pitch, swing.pitchV or 0, pitchTarget, dt, speed, accel, false, 10)
+	else
+		local step = SWING_RATE * dt
+		swing.yaw = approach(swing.yaw, yawTarget, step)
+		swing.pitch = approach(swing.pitch, pitchTarget, step)
+	end
 	yawJoint.Transform = CFrame.Angles(0, math.rad(swing.yaw), 0)
 	pitchJoint.Transform = CFrame.Angles(math.rad(swing.pitch), 0, 0)
 end
@@ -462,14 +472,17 @@ end
 local function showAmmo(spec, ammo, hot)
 	local whole = math.floor(ammo)
 	nameLabel.Text = spec.hud
+	-- A mount with an infinite pool (the emplacements, MountedGunData) reads "belt / infinity" (Oliver 09-24:
+	-- "make all guns including mounted ones have an infinite ammo pool, still have to reload").
+	local pool = spec.infinitePool and "\u{221E}" or tostring(spec.magazine)
 	if spec.overheat then
 		local heat = math.clamp(1 - ammo / spec.magazine, 0, 1)
-		ammoLabel.Text = hot and "OVERHEAT" or string.format("%d / %d", whole, spec.magazine)
+		ammoLabel.Text = hot and "OVERHEAT" or string.format("%d / %s", whole, pool)
 		ammoLabel.TextColor3 = hot and Color3.fromRGB(255, 110, 70) or Color3.fromRGB(245, 245, 250)
 		barFill.Size = UDim2.fromScale(heat, 1)
 		barFill.BackgroundColor3 = Color3.fromRGB(255, math.floor(196 - 130 * heat), math.floor(64 - 40 * heat))
 	else
-		ammoLabel.Text = string.format("%d / %d", whole, spec.magazine)
+		ammoLabel.Text = (spec.infinitePool and whole < 1) and "RELOADING" or string.format("%d / %s", whole, pool)
 		ammoLabel.TextColor3 = whole < 1 and Color3.fromRGB(255, 96, 96) or Color3.fromRGB(245, 245, 250)
 		barFill.Size = UDim2.fromScale(math.clamp(ammo / spec.magazine, 0, 1), 1)
 		barFill.BackgroundColor3 = Color3.fromRGB(255, 196, 64)

@@ -112,6 +112,43 @@ function Pure.slew(from, to, step, wraps)
 	return out
 end
 
+-- The mount's angle following the wanted one (Oliver 09-24: "the mounted guns rotation needs to be made
+-- smoother"): a critically damped spring (natural frequency `omega`) held to the mount's top speed and
+-- acceleration, which brakes in time to stop ON the wanted angle -- so a flick never overshoots, the arc's
+-- limit (the wanted angle is clamped to it) is eased into rather than hit, and it settles softly.
+-- Sub-stepped at 1/240 s: the same motion at any frame rate. Returns the angle and its velocity (deg/s).
+Pure.FollowOmega = 16
+function Pure.follow(value, velocity, target, dt, maxSpeed, maxAccel, wraps, omega)
+	omega = omega or Pure.FollowOmega
+	local left = math.min(dt, 0.1)
+	while left > 1e-6 do
+		local h = math.min(left, 1 / 240)
+		local delta = target - value
+		if wraps then
+			delta = (delta + 180) % 360 - 180
+		end
+		local accel = omega * omega * delta - 2 * omega * velocity
+		-- Moving toward the target and no further to go than it takes to stop: brake at full.
+		if delta * velocity > 0 and velocity * velocity / (2 * maxAccel) >= math.abs(delta) then
+			accel = -velocity * velocity / (2 * math.abs(delta) + 1e-6) * (velocity > 0 and 1 or -1)
+		end
+		accel = math.clamp(accel, -maxAccel, maxAccel)
+		velocity = math.clamp(velocity + accel * h, -maxSpeed, maxSpeed)
+		local stepTaken = velocity * h
+		-- Never step past the target.
+		if (delta > 0 and stepTaken > delta) or (delta < 0 and stepTaken < delta) then
+			stepTaken = delta
+			velocity = 0
+		end
+		value += stepTaken
+		left -= h
+	end
+	if wraps then
+		value = (value + 180) % 360 - 180
+	end
+	return value, velocity
+end
+
 -- The barrel's ray at (yaw, pitch) degrees, world space: `rest` the yaw pivot's frame at rest,
 -- `pivot` the pitch pivot and `muzzle` the muzzle as VehicleWeaponData.Solve takes them.
 function Pure.barrel(rest, pivot, muzzle, yaw, pitch)
@@ -298,6 +335,12 @@ function GunnerView.Start(vehicle, spec, options)
 	local yawPart, pitchPart, muzzle = vehicle:FindFirstChild(names.yaw), vehicle:FindFirstChild(names.pitch), vehicle:FindFirstChild(names.muzzle)
 	local yawJoint, pitchJoint = jointOf(yawPart), jointOf(pitchPart)
 	local eye = yawPart and yawPart:FindFirstChild("GunnerEye")
+	-- A stationary emplacement (MountedGuns) carries its GunnerEye on TurretPitch instead: the gunner's head
+	-- rides the grips up and down, so the hip view always looks through the shield's sight window.
+	local eyeOnPitch = false
+	if not eye and pitchPart and pitchPart:FindFirstChild("GunnerEye") then
+		eye, eyeOnPitch = pitchPart:FindFirstChild("GunnerEye"), true
+	end
 	local sight = pitchPart and pitchPart:FindFirstChild("GunnerSight")
 	local gripR, gripL = pitchPart and pitchPart:FindFirstChild("GripR"), pitchPart and pitchPart:FindFirstChild("GripL")
 	if not (yawJoint and pitchJoint and muzzle and eye and sight and gripR and gripL and yawJoint.Part0) then
@@ -309,6 +352,7 @@ function GunnerView.Start(vehicle, spec, options)
 	self.yawPart, self.pitchPart, self.muzzle = yawPart, pitchPart, muzzle
 	self.yawJoint, self.pitchJoint = yawJoint, pitchJoint
 	self.eye, self.sight, self.gripR, self.gripL = eye, sight, gripR, gripL
+	self.eyeOnPitch = eyeOnPitch
 	self.reloadHand = (yawPart:FindFirstChild("ReloadHand") or pitchPart:FindFirstChild("ReloadHand"))
 	self.reloadOnYaw = yawPart:FindFirstChild("ReloadHand") ~= nil
 	-- The mount's shape at rest, in the yaw pivot's own frame (what VehicleWeaponData.Solve takes).
@@ -449,9 +493,11 @@ function GunnerView:Update(dt, state)
 	end
 	dt = math.min(dt, 0.1)
 	self:look(dt)
-	local step = (self.spec.slew or 240) * dt
-	self.yaw = Pure.slew(self.yaw, self.wantYaw, step, self.spec.yawLimit >= 180)
-	self.pitch = Pure.slew(self.pitch, self.wantPitch, step, false)
+	-- Damped, speed- and acceleration-limited (Pure.follow); `slewAccel` defaults to six times the slew.
+	local speed = self.spec.slew or 240
+	local accel = self.spec.slewAccel or speed * 6
+	self.yaw, self.yawV = Pure.follow(self.yaw, self.yawV or 0, self.wantYaw, dt, speed, accel, self.spec.yawLimit >= 180)
+	self.pitch, self.pitchV = Pure.follow(self.pitch, self.pitchV or 0, self.wantPitch, dt, speed, accel, false)
 	-- The kick springs back, sub-stepped.
 	local left = dt
 	while left > 1e-4 do
@@ -478,7 +524,7 @@ function GunnerView:Update(dt, state)
 
 	-- The camera: the eye, turned with the yaw and tipped with the barrel (or, lobbing, toward where the
 	-- bomb comes down); aiming, at the sight.
-	local hipEye = yawFrame * self.eye.CFrame
+	local hipEye = (self.eyeOnPitch and pitchFrame or yawFrame) * self.eye.CFrame
 	local lookPitch = self.pitch + self.kickPitch
 	if self.lobs then
 		local flat = Vector3.new(impact.X - hipEye.X, 0, impact.Z - hipEye.Z).Magnitude
