@@ -114,6 +114,11 @@ function Pure.Survey(world, ctx, x, z, P)
 	if not y or not walkable or normalY < P.FloorNormal then
 		return nil, "no floor"
 	end
+	-- Somewhere a player can walk to: the ground itself, or a floor within a step of it (a bridge deck, a
+	-- platform) -- never a rooftop nobody can climb to.
+	if world.reachable and not world.reachable(x, z, y) then
+		return nil, "unreachable floor"
+	end
 	local lowest, highest = y, y
 	for i = 0, 3 do
 		local dx, dz = dirOf(i * 90 + 45)
@@ -435,7 +440,7 @@ MountedGunPlacement.Pure = Pure
 -- The real world (Roblox)
 --------------------------------------------------------------------------------
 
-local function worldFor(mapFolder, roads)
+local function worldFor(roads, groundAt)
 	local down = RaycastParams.new()
 	down.FilterType = Enum.RaycastFilterType.Exclude
 	down.IgnoreWater = false
@@ -455,7 +460,7 @@ local function worldFor(mapFolder, roads)
 		if hit == nil then
 			local result = workspace:Raycast(Vector3.new(x, 400, z), Vector3.new(0, -520, 0), down)
 			hit = result and { result.Position.Y, result.Normal.Y, result.Material ~= Enum.Material.Water
-				and (result.Instance == workspace.Terrain or result.Instance.CanCollide) } or false
+				and (result.Instance == workspace.Terrain or result.Instance.CanCollide), result.Instance == workspace.Terrain } or false
 			cache[key] = hit
 		end
 		if not hit then
@@ -480,6 +485,11 @@ local function worldFor(mapFolder, roads)
 	function world.boxFree(x, y, z, sx, sy, sz)
 		local parts = workspace:GetPartBoundsInBox(CFrame.new(x, y, z), Vector3.new(sx, sy, sz), overlap)
 		return #parts == 0
+	end
+	function world.reachable(x, z, y)
+		world.floor(x, z)
+		local hit = cache[math.floor(x * 4 + 0.5) * 1000003 + math.floor(z * 4 + 0.5)]
+		return (hit and hit[4]) or y <= groundAt(x, z) + 4
 	end
 	function world.onRoad(x, z)
 		return roads ~= nil and roads.WithinCorridor ~= nil and roads:WithinCorridor(x, z) == true
@@ -549,7 +559,7 @@ end
 -- The chosen spots for a built map: { { cframe, kind, score, covers, why }, ... } and the rejection tally.
 function MountedGunPlacement.Choose(mapInfo, seed, groundAt)
 	local ctx, roads = contextFor(mapInfo, groundAt)
-	local world = worldFor(mapInfo.map, roads)
+	local world = worldFor(roads, groundAt)
 	local chosen, rejected, considered = Pure.Choose(world, ctx, seed, Pure.Params, function()
 		task.wait()
 	end)

@@ -46,6 +46,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local MountedGunData = require(Shared:WaitForChild("MountedGunData"))
 local MountedGunModels = require(Shared:WaitForChild("MountedGunModels"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local SafeValue = require(Shared:WaitForChild("SafeValue"))
 -- Required for its side effect: the emplacements' weapons merged into VehicleWeaponData.
 require(Shared:WaitForChild("VehicleWeaponData"))
 
@@ -495,7 +496,7 @@ local function hookDamage()
 		if innerBlast then
 			innerBlast(centre, radius, amount, owner)
 		end
-		if typeof(centre) ~= "Vector3" or type(radius) ~= "number" or type(amount) ~= "number" then
+		if not SafeValue.Vector3(centre) or type(radius) ~= "number" or type(amount) ~= "number" then
 			return
 		end
 		for _, model in ipairs(CollectionService:GetTagged(MountedGunData.Tag)) do

@@ -164,7 +164,8 @@ def model_checks(repo, source=None, verbose=True):
         eye = lay["markers"]["GunnerEye"]["pos"]
         shields = [p for p in parts if p["shield"]]
         points = [[x, eye[1] + dy, eye[2] + 0.2] for x in (-0.7, -0.35, 0.0, 0.35, 0.7) for dy in (0.1, -0.45, -0.9, -1.4)]
-        for bearing, lo, hi in ((0, 0.75, 1.01), (90, -0.01, 0.1), (-90, -0.01, 0.1), (180, -0.01, 0.1)):
+        # From the front everything but the sight slit (the gunner's eyes look through it) is covered.
+        for bearing, lo, hi in ((0, 0.65, 1.01), (90, -0.01, 0.1), (-90, -0.01, 0.1), (180, -0.01, 0.1)):
             toward = geom.mv(geom.ry(bearing), [0, 0, 1])  # the shot's way: from the front it travels +Z
             stopped = 0
             for target in points:
@@ -381,6 +382,7 @@ box(0, 5, -200, 40, 10, 2)            -- a wall just north of (0, -194)
 box(207, 13.5, 0, 2, 3, 2)            -- a boulder behind the hilltop
 box(0, 23.5, 212, 4, 3, 1)            -- a parapet on the mesa (cover there, so only its flank fails)
 box(-200, 1.5, 36, 3, 3, 3)
+box(-120, 5, -120, 16, 10, 16)        -- a house: its roof is a floor nobody can climb to
 for gx = -540, 540, 24 do for gz = -540, 540, 24 do
     if math.sqrt(gx * gx + gz * gz) < 560 and math.abs(gx) > 60 then box(gx + 7, 1.25, gz + 5, 2.5, 2.5, 2.5) end
 end end
@@ -423,6 +425,7 @@ function world.boxFree(x, y, z, sx, sy, sz)
     return true
 end
 function world.onRoad(x, z) return math.abs(z - 120) < 12 and math.abs(x) < 500 end
+function world.reachable(x, z, y) return y <= W.height(x, z) + 4 end
 local ctx = {
     radius = 600, lobby = { 0, 500, 0 },
     spawns = { { 420, 0, -60 } },
@@ -448,6 +451,7 @@ PLANTED_SPOTS = [
     ("a spot overlooking a drop point", 60, -270, 0, "overlooks a drop point"),
     ("a spot on the water", 0, -330, None, "no floor"),
     ("a spot on a road", 100, 120, None, "road"),
+    ("a spot on a rooftop", -120, -120, None, "unreachable floor"),
 ]
 
 

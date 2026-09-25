@@ -25,6 +25,9 @@ local MountedGunData = require(Shared:WaitForChild("MountedGunData"))
 local VehicleWeaponData = require(Shared:WaitForChild("VehicleWeaponData"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 local GunnerView = require(StarterPlayer:WaitForChild("StarterPlayerScripts"):WaitForChild("GunnerView"))
+local MountRig = require(Shared:WaitForChild("MountRig"))
+-- A list of view-name prefixes renders just those views (e.g. { "veh_" }); nil renders them all.
+local ONLY = nil
 local modules = game:GetService("ServerScriptService"):WaitForChild("Modules")
 
 local ORIGIN = Vector3.new(0, 420, 0)
@@ -114,6 +117,13 @@ local function poseGun(model, yawDeg, pitchDeg, recoil)
 	end
 	about(model, "TurretPitch", CFrame.Angles(math.rad(pitchDeg), 0, 0))
 	about(model, "TurretYaw", CFrame.Angles(0, math.rad(yawDeg), 0))
+	-- The joints say the same, so MountRig (which reads them, as it does in a game) finds the grips posed.
+	local yawJoint = model:FindFirstChild("TurretYaw") and model.TurretYaw:FindFirstChild("Joint")
+	local pitchJoint = model:FindFirstChild("TurretPitch") and model.TurretPitch:FindFirstChild("Joint")
+	if yawJoint and pitchJoint then
+		yawJoint.Transform = CFrame.Angles(0, math.rad(yawDeg), 0)
+		pitchJoint.Transform = CFrame.Angles(math.rad(pitchDeg), 0, 0)
+	end
 end
 
 local R15_JOINTS = {
@@ -140,7 +150,7 @@ local function newRig()
 	return ok and rig or nil
 end
 
-local function poseRider(rig, rootFrame, pose)
+local function poseRider(rig, rootFrame, pose, gun)
 	local motors = {}
 	for _, joint in ipairs(R15_JOINTS) do
 		local part0, part1 = rig:FindFirstChild(joint[1]), rig:FindFirstChild(joint[2])
@@ -165,11 +175,19 @@ local function poseRider(rig, rootFrame, pose)
 	local root = rig:FindFirstChild("HumanoidRootPart")
 	local before = root.CFrame
 	root.CFrame = rootFrame
+	-- The joints as MountRig sees them in a game: C0, C1 and this frame's Transform; it reaches the arms.
+	local fake = {}
+	for _, m in ipairs(motors) do
+		fake[m.name] = { C0 = m.c0, C1 = m.c1, Transform = (pose and pose[m.name]) or CFrame.identity }
+	end
+	if gun then
+		MountRig.ArmsToGrips(rig, fake, gun)
+	end
 	local placed = { [root] = true }
 	for _ = 1, 4 do
 		for _, m in ipairs(motors) do
 			if placed[m.part0] and not placed[m.part1] then
-				m.part1.CFrame = m.part0.CFrame * m.c0 * ((pose and pose[m.name]) or CFrame.identity) * m.c1:Inverse()
+				m.part1.CFrame = m.part0.CFrame * m.c0 * fake[m.name].Transform * m.c1:Inverse()
 				placed[m.part1] = true
 			end
 		end
@@ -314,7 +332,7 @@ for _, kind in ipairs({ "hmg", "cannon" }) do
 		local rig = newRig()
 		if rig then
 			rig.Parent = folder
-			poseRider(rig, gunnerRoot(model, yaw, pitch), VehicleModels.Poses.GunnerStand)
+			poseRider(rig, gunnerRoot(model, yaw, pitch), VehicleModels.Poses.GunnerStand, model)
 			local head = rig:FindFirstChild("Head")
 			local eye = model:FindFirstChild("TurretPitch"):FindFirstChild("GunnerEye")
 			note(string.format("%s_3p: hands %.2f / %.2f from the grips, eyes %.2f from GunnerEye, feet lowest %.2f above the floor", kind,
@@ -363,7 +381,7 @@ for step, t in ipairs({ 0, 0.5, 1 }) do
 			for joint, transform in pairs(VehicleModels.Poses.GunnerStand) do
 				posed[joint] = CFrame.identity:Lerp(transform, s)
 			end
-			poseRider(rig, standing:Lerp(seated, s), posed)
+			poseRider(rig, standing:Lerp(seated, s), posed, t >= 1 and model or nil)
 		end
 		look(camera, ORIGIN + Vector3.new(-8, 5.5, 9), ORIGIN + Vector3.new(0, 3, 1.5), 50)
 	end)
@@ -428,9 +446,78 @@ add("map_emplacement", 6, function(folder, camera)
 	end
 end)
 
+-- Every vehicle's turret: three angles close in on the gun, and its sight through GunnerView (aimed).
+local vehicleIds = {}
+for modelId in pairs(VehicleModels.Mounts) do
+	table.insert(vehicleIds, modelId)
+end
+table.sort(vehicleIds)
+local function vehicle(folder, modelId)
+	local model = VehicleModels.Build(modelId, Random.new(7), { scheme = 1 })
+	model.Parent = folder
+	model:PivotTo(CFrame.new(ORIGIN + Vector3.new(0, 0.5, 0)))
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+		end
+	end
+	return model
+end
+for _, modelId in ipairs(vehicleIds) do
+	for i, from in ipairs({ Vector3.new(-6, 3, -7), Vector3.new(8, 2, 1), Vector3.new(4, 4.5, 7) }) do
+		add(string.format("veh_%s_%s", modelId, ({ "a", "b", "c" })[i]), 1, function(folder, camera)
+			stopCurrent()
+			stage(folder)
+			local model = vehicle(folder, modelId)
+			local s = VehicleWeaponData.ForModel(modelId, "turret")
+			local pitch = math.max((s.restPitch or 0) + 4, math.deg(VehicleWeaponData.PitchFloor(s, math.rad(20))))
+			poseGun(model, 20, pitch, 0)
+			local at = model:FindFirstChild("TurretPitch").Position
+			look(camera, at + from, at, 50)
+		end)
+	end
+	add(string.format("veh_%s_sight", modelId), 1, function(folder, camera)
+		stopCurrent()
+		stage(folder)
+		local model = vehicle(folder, modelId)
+		local s = VehicleWeaponData.ForModel(modelId, "turret")
+		local rig = newRig()
+		if rig then
+			rig.Parent = model
+			rig:PivotTo(CFrame.new(ORIGIN + Vector3.new(0, -40, 0)))
+		end
+		local view = GunnerView.Start(model, s, { noInput = true, character = rig, guiParent = StarterGui })
+		if not view then
+			note(modelId .. ": GunnerView did not start")
+			return
+		end
+		current = view
+		local pitch = math.max((s.restPitch or 0) + 2, math.deg(VehicleWeaponData.PitchFloor(s, math.rad(10))))
+		view.yaw, view.wantYaw, view.pitch, view.wantPitch = 10, 10, pitch, pitch
+		view:SetAiming(true)
+		for _ = 1, 50 do
+			view:Update(DT, { ready = true })
+		end
+		poseGun(model, view.yaw, view.pitch + view.kickPitch, 0)
+	end)
+end
+
 add("zz_cleanup", 0.3, function(_, camera)
 	stopCurrent()
 	camera.CameraType = Enum.CameraType.Fixed
 end)
+
+if ONLY then
+	local kept = {}
+	for _, v in ipairs(views) do
+		for _, prefix in ipairs(ONLY) do
+			if string.sub(v.name, 1, #prefix) == prefix or v.name == "zz_cleanup" then
+				table.insert(kept, v)
+				break
+			end
+		end
+	end
+	views = kept
+end
 
 return views
