@@ -28,6 +28,8 @@ not guessed at. They are listed under "Open, for Oliver" and printed as `OPEN` o
   off each side of a 375 px upright phone. It is now the screen width less 12 px a side, capped at 620.
   No new top-level local: it's inside `setSpectating`.
 - `tools/device_compat_check.py` (new): the check, below.
+- `tools/device_compat_gallery.lua` (new): the renders below. No game code; it copies the spectate
+  plate out of CombatClient and draws `hud_layout_check --dump`'s 1920x1080 rects.
 
 ## The check
 
@@ -69,6 +71,36 @@ and vote pad entry. This branch gives **problems: 0**, and **9/9** planted fault
    right, the health bar, hotbar and ability icon 16 px from the bottom, and the banner and mode score
    10 px from the top. A 5% TV margin is 96 px on the sides and 54 px top and bottom. Add a console-only
    inset (in PhoneLayout/UiKit, when `GuiService:IsTenFootInterface()`), or leave it?
+   The render (Renders, above) shows these 12 crossing it: banner and team mode score (44 px past the
+   top), health (80 left, 38 bottom), companion card, speed pill and boon panel (80 left), stamina bar
+   (24 bottom), hotbar (80 right, 38 bottom), minimap, bounty and kill feed (80 right), ability icon
+   (38 bottom). Inside it: compass, crosshair, toast, and the vehicle and vehicle-gun panels. The menu
+   is inside.
+
+## Renders
+
+`tools/device_compat_gallery.lua`, one Linux-harness run in edit mode. The numbers come from the
+gallery's `note` lines, not from reading the picture.
+
+![spectate portrait](reports/device-compat/spectate_portrait.jpg)
+
+375x667 upright. Before: the 620 px plate runs 122 px off each side and the text is cut at both ends.
+After: the plate is 351 px wide, and the longest touch text (a 20-character name) wraps to 2 lines,
+32 px tall inside the 48 px plate. NEXT and LEAVE (252 px across) fit above it.
+
+![spectate landscape](reports/device-compat/spectate_landscape.jpg)
+
+667x375. 620 already fit, so before and after are the same: one line, no change on wider screens.
+
+![TV-safe HUD](reports/device-compat/tvsafe_hud.jpg)
+
+The HUD at 1920x1080 with the 5% band shaded. 12 of 18 elements cross it (red), listed under open
+question 5 below.
+
+![TV-safe menu](reports/device-compat/tvsafe_menu.jpg)
+
+The real MenuShell at 1920x1080. The panel (369,181, 1180x760) and every piece in it sit inside the
+safe area.
 
 ## Not proven (needs Studio or a real device)
 
@@ -77,6 +109,11 @@ and vote pad entry. This branch gives **problems: 0**, and **9/9** planted fault
 - Whether ButtonSelect (bound to the menu, handler returns Pass) also toggles Roblox's own UI selection
   mode. The docs don't say.
 - The CAS cap in the emulator: bind a vehicle gun on a phone emulator and count the buttons drawn.
-- The spectate plate at 375x667: a render.
-- TV-safe area on Xbox: the rects above come from the mocked HUD. Whether a real TV crops them needs a
-  render with the 5% margin drawn in, or a console.
+  Edit mode can't show this. The touch buttons are drawn by a CoreScript that only runs on a touch
+  client, and a probe calling `GetAllBoundActionInfo` would only read back its own binds. From the
+  source, the buttons asked for are 7 on foot (8 holding a throwable: COOK), 8 in a driver's seat
+  (BRAKE, 9 with FIRE on an armed car), and 11 on a mounted gun (FIRE, AIM, RELOAD, LEAVE). At most 7 get drawn.
+- The spectate plate is rendered (above), but only from a copy of its code in the gallery, not in a
+  live client.
+- TV-safe area on Xbox: the render above takes its rects from the mocked HUD (`--dump`). Whether a real
+  TV crops them needs a console.
