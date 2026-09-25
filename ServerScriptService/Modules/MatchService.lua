@@ -229,6 +229,7 @@ local bountyMinKills, bountyMultiplier = BOUNTY_MIN_KILLS, 1
 -- systems (trades in progress) can shut themselves down.
 MatchService.OnMatchStart = nil
 MatchService.OnMatchEnd = nil
+MatchService.OnMapBuilt = nil
 
 local function countKeys(map)
 	local total = 0
@@ -1794,6 +1795,13 @@ local function startMatch()
 	-- A Night Ops match lays its own lighting over the map's time of day.
 	MapGenerator.ApplyLightingOverride(event.lighting)
 	LootService.Populate(mapInfo)
+	-- The map is built: MountedGuns puts its guns up (Bootstrap sets this; the mode says which guns).
+	if MatchService.OnMapBuilt then
+		local okGuns, gunsErr = pcall(MatchService.OnMapBuilt, mapInfo, currentMode)
+		if not okGuns then
+			warn("[MatchService] OnMapBuilt failed: " .. tostring(gunsErr))
+		end
+	end
 	BotService.Clear()
 	-- The map's RoadNetwork, so bot drivers route along the roads (BotService.SetRoads).
 	if BotService.SetRoads then
