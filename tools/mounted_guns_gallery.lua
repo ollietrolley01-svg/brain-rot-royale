@@ -464,7 +464,8 @@ local function vehicle(folder, modelId)
 	return model
 end
 for _, modelId in ipairs(vehicleIds) do
-	for i, from in ipairs({ Vector3.new(-6, 3, -7), Vector3.new(8, 2, 1), Vector3.new(4, 4.5, 7) }) do
+	-- Close on the gun (the whole vehicle is in the vehicle galleries): front quarter, side, rear quarter.
+	for i, from in ipairs({ Vector3.new(-3.2, 1.6, -3.8), Vector3.new(4.6, 1.1, 0.4), Vector3.new(2.4, 2.4, 4.0) }) do
 		add(string.format("veh_%s_%s", modelId, ({ "a", "b", "c" })[i]), 1, function(folder, camera)
 			stopCurrent()
 			stage(folder)

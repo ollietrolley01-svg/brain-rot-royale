@@ -163,7 +163,10 @@ end
 -- Sandbags round the front: `layers` rows of bags on an arc of radius `radius`, from -`half` to +`half`
 -- degrees either side of straight ahead (-Z), each bag a little turned and squashed so the wall reads as
 -- stacked by hand, with its tied ends. Group base, collidable: this is low cover a player can crouch at.
-local function sandbags(L, radius, half, layers, perRow)
+-- `center` turns the whole arc (degrees, 0 is ahead) and `prefix` names its bags.
+local function sandbags(L, radius, half, layers, perRow, center, prefix)
+	center = center or 0
+	prefix = prefix or "Sandbag"
 	local bagH = 0.6
 	for layer = 1, layers do
 		local count = perRow - (layer - 1)
@@ -175,16 +178,17 @@ local function sandbags(L, radius, half, layers, perRow)
 				a = -half * (count - 1) / count + t * 2 * half * (count - 1) / count
 			end
 			local jitter = ((i * 37 + layer * 11) % 7 - 3) * 1.1
+			a = a + center
 			local x, z = math.sin(math.rad(a)) * r, -math.cos(math.rad(a)) * r
 			local y = bagH / 2 + (layer - 1) * (bagH - 0.04)
 			local frame = ry(-a + jitter)
 			local look = ((i + layer) % 3 == 0) and "canvasdark" or "canvas"
-			L.add(string.format("Sandbag%d_%d", layer, i), "Block", { 1.5, bagH, 0.86 }, { x, y, z }, frame, look,
+			L.add(string.format("%s%d_%d", prefix, layer, i), "Block", { 1.5, bagH, 0.86 }, { x, y, z }, frame, look,
 				{ collide = true })
 			-- The tied ends: a narrower, darker gather at each end of the bag.
 			for _, e in ipairs({ -1, 1 }) do
 				local ex, ez = frame[1] * e * 0.8, frame[7] * e * 0.8
-				L.add(string.format("SandbagTie%d_%d%s", layer, i, e < 0 and "L" or "R"), "Block", { 0.14, bagH * 0.62, 0.56 },
+				L.add(string.format("%sTie%d_%d%s", prefix, layer, i, e < 0 and "L" or "R"), "Block", { 0.14, bagH * 0.62, 0.56 },
 					{ x + ex, y, z + ez }, frame, "twine")
 			end
 		end
@@ -520,10 +524,21 @@ Pure.RiderRoot = 1.65
 Pure.EyeAboveRoot = 1.7
 Pure.EyeAhead = 0.7
 
-function Pure.Layout(kind)
+-- opts.flankBags: a map spot with no cover of its own (MountedGunPlacement's sandbag spots) gets a
+-- chest-high sandbag wall either side of the gunner, open at the back so he can still get on.
+Pure.FlankBags = { radius = 3.6, half = 30, layers = 4, perRow = 6, center = 122 }
+function Pure.Layout(kind, opts)
 	local maker = Pure.Makers[kind]
 	assert(maker, "no mounted gun kind " .. tostring(kind))
 	local L = maker()
+	if opts and opts.flankBags then
+		local F = Pure.FlankBags
+		local keep = L.group
+		L.group = "base"
+		sandbags(L, F.radius, F.half, F.layers, F.perRow, F.center, "FlankBagR")
+		sandbags(L, F.radius, F.half, F.layers, F.perRow, -F.center, "FlankBagL")
+		L.group = keep
+	end
 	local eye = L.markers.GunnerEye.pos
 	L.seat = { eye[1], eye[2] - Pure.RiderRoot - Pure.EyeAboveRoot, eye[3] + Pure.EyeAhead }
 	return L
@@ -562,8 +577,8 @@ end
 -- everything else is welded to its group's pivot, and the pivots hang from each other on Motor6Ds named
 -- Joint. Parts are queryable (bullets and blasts find them) and only the base, the sandbags and the
 -- spare cans collide. Returns the model, not yet parented.
-function MountedGunModels.Build(kind, cframe)
-	local L = Pure.Layout(kind)
+function MountedGunModels.Build(kind, cframe, opts)
+	local L = Pure.Layout(kind, opts)
 	local model = Instance.new("Model")
 	model.Name = "MountedGun"
 	local root

@@ -129,6 +129,8 @@ local KINDS = {
 	Shelter = 1.6, Wreck = 1.5, Container = 2.2,
 	Car = 1.8, Bench = 0.8, Bin = 0.7, Hydrant = 1.2, Planter = 0.8, Umbrella = 0.4, Lamp = 1,
 	RoofProp = 1, Prop = 1, Sign = 0.8,
+	-- A house's furniture (MapBuildings.furnishRoom): each piece is one pool, cover that gives way.
+	Furniture = 0.9,
 }
 DestructibleService.Kinds = KINDS
 

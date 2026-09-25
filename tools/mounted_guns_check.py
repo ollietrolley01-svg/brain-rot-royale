@@ -177,6 +177,19 @@ def model_checks(repo, source=None, verbose=True):
                 fail(problems, f"M6 {kind}: from bearing {bearing} the shield stops {share:.0%} of shots at the gunner "
                                f"(wanted {lo:.0%}-{min(hi, 1):.0%})")
             cover[(kind, bearing)] = share
+        # M8 a sandbagged map spot (FlankBags): the chest-high rays MountedGunPlacement counts as cover,
+        # from the gun's centre, are stopped beside-and-behind on both sides, and the back stays open
+        flank = geom.attach(geom.layout(pure, kind, lua.table(flankBags=True)))
+        bags = [geom.obb(p) for p in flank["parts"] if p["name"].startswith("FlankBag")]
+        chest = [0.0, 2.2, 0.0]
+        blocked = {}
+        for rel in (90, 135, 180, -135, -90):
+            way = geom.mv(geom.ry(rel), [0, 0, -1])
+            blocked[rel] = any(geom.ray_box(chest, way, b, 15) is not None for b in bags)
+        if not (blocked[135] and blocked[-135]):
+            fail(problems, f"M8 {kind}: the flank sandbags do not stop the chest-high cover rays behind the gunner ({blocked})")
+        if blocked[180]:
+            fail(problems, f"M8 {kind}: the flank sandbags close the back, where the gunner gets on")
         if verbose:
             print(f"  {kind:7} {len(parts)} parts, {len(set(p['look'] for p in parts)) if 'look' in parts[0] else '?'} looks; "
                   f"base low {low:.3f}; connected {len(seen)}/{len(parts)}; crossings {len(hits)}")
@@ -534,6 +547,43 @@ def placement_checks(repo, source=None, verbose=True):
         print(f"  synthetic map: {len(spots_a)} guns ({cannons} cannons) from {considered} candidates; rejected: {tally}")
     if len(spots_a) < 6:
         fail(problems, f"P3 only {len(spots_a)} guns chosen on the synthetic map")
+    # P4 sandbags: only a spot that fails on cover alone and still overlooks something is sandbagged, it
+    # ranks below the same spot with cover, and the chooser adds them after every covered spot and only
+    # up to Count.target
+    copy = lua.eval("function(P, k, v) local c = {} for a, b in pairs(P) do c[a] = b end c[k] = v return c end")
+    bare = copy(P, "Sandbags", False)
+    fussy = copy(P, "SandbagMinCoverage", 999)
+    found = None
+    for c in list(pure.Candidates(ctx, P).values())[:400]:
+        survey, _ = tup(pure.Survey(world, ctx, c[1], c[2], P), 2)
+        if not survey:
+            continue
+        ok0, _, _, why0 = tup(pure.Best(world, survey, bare), 4)
+        if ok0 or why0 != "no cover":
+            continue
+        ok1, score1, _, d1 = tup(pure.Best(world, survey, P), 4)
+        if ok1:
+            found = (survey, score1, d1)
+            break
+    if not found:
+        fail(problems, "P4 no sandbag spot on the synthetic map (every coverless spot rejected)")
+    else:
+        survey, score1, d1 = found
+        if not d1.sandbag:
+            fail(problems, "P4 a coverless spot was accepted without sandbags")
+        if d1.coverage < P.SandbagMinCoverage:
+            fail(problems, f"P4 a sandbag spot overlooking {d1.coverage} points of interest")
+        ok2, _, _, why2 = tup(pure.Best(world, survey, fussy), 4)
+        if ok2:
+            fail(problems, "P4 a sandbag spot overlooking too little was accepted")
+    bagged = [c.details.sandbag for c in chosen_a.values()]
+    if True in bagged:
+        if False in bagged[bagged.index(True):]:
+            fail(problems, "P4 a sandbagged spot chosen ahead of a covered one")
+        if len(bagged) > P.Count.target:
+            fail(problems, f"P4 sandbags past the target: {len(bagged)} guns (target {P.Count.target})")
+    if verbose:
+        print(f"  sandbagged: {bagged.count(True)} of {len(bagged)} on the synthetic map")
     return problems
 
 
@@ -910,6 +960,10 @@ def planted(repo):
         ("a gun that turns all the way round", lambda: balance_checks(repo, data.replace("yawLimit = 60,", "yawLimit = 180,"), verbose=False)[0], "B4"),
         ("the pit check taken out", lambda: placement_checks(repo, placement.replace('return nil, "pit"', 'rise = rise'), verbose=False), "P2"),
         ("the flank check taken out", lambda: placement_checks(repo, placement.replace('if routes == 0 then', 'if routes < 0 then'), verbose=False), "P2"),
+        ("sandbags at a spot overlooking nothing", lambda: placement_checks(repo, placement.replace(
+            "if sandbag and coverage < P.SandbagMinCoverage then", "if false then"), verbose=False), "P4"),
+        ("flank sandbags only knee high", lambda: model_checks(repo, model_src(
+            "layers = 4, perRow = 6, center = 122", "layers = 2, perRow = 6, center = 122"), verbose=False), "M8"),
         ("the field-of-fire check taken out", lambda: placement_checks(repo, placement.replace("if median < P.FireMinClear then", "if false then"), verbose=False), "P2"),
         ("guns from the last match left standing", lambda: lifecycle_checks(repo, guns.replace(
             'function Life:start(teams, mapInfo)\n\tself:clear("round end")', 'function Life:start(teams, mapInfo)'), verbose=False), "L1"),
