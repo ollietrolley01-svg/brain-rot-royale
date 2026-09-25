@@ -66,7 +66,7 @@ Pure.Params = {
 	FlankStepLength = 4,
 	FlankStep = 3.2,
 	Facings = 8,
-	MaxCandidates = 520,
+	MaxCandidates = 640,
 }
 
 local function flatDist(a, b)
@@ -324,9 +324,10 @@ function Pure.Candidates(ctx, P)
 		table.insert(out, { x, z, why })
 	end
 	for _, l in ipairs(ctx.landmarks or {}) do
-		for _, r in ipairs({ 22, 38 }) do
+		-- Outside the landmark's own drop clearance (a landmark is a drop point), looking back over it.
+		for ring, r in ipairs({ 78, 100, 125 }) do
 			for i = 0, 7 do
-				local dx, dz = dirOf(i * 45 + (r == 38 and 22.5 or 0))
+				local dx, dz = dirOf(i * 45 + ring * 15)
 				add(l[1] + dx * r, l[3] + dz * r, "landmark")
 			end
 		end
