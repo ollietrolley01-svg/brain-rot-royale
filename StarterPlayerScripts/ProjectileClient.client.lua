@@ -556,10 +556,12 @@ local function onDetonate(info)
 	local distance = (position - camera.CFrame.Position).Magnitude
 
 	if distance < BLAST_CULL then
-		ExplosiveFx.Explosion(position, normal, BLAST_LOOK[kind] or "frag", radius)
+		-- info.weaponId: a silly gun's blast is drawn in its own theme (SillyExplosionFx), same radius.
+		ExplosiveFx.Explosion(position, normal, BLAST_LOOK[kind] or "frag", radius, info.weaponId)
 	end
 
-	local cue = BLAST_CUE[kind] or "ExplosionFrag"
+	-- A themed blast plays its themed cue when SoundConfig has one, and the plain one when it doesn't.
+	local cue = ExplosiveFx.ThemeCue(info.weaponId) or BLAST_CUE[kind] or "ExplosionFrag"
 	if distance <= (CUE_REACH[cue] or 800) then
 		Sfx.PlayAt(cue, position, 0.12)
 	elseif distance < FAR_RUMBLE then
@@ -584,8 +586,9 @@ local function onImpact(info)
 		dropEntry(entry)
 	end
 	if typeof(info.position) == "Vector3" and (info.position - camera.CFrame.Position).Magnitude < BLAST_CULL then
-		ExplosiveFx.Impact(info.position, typeof(info.normal) == "Vector3" and info.normal or nil)
-		Sfx.PlayAt("GrenadeBounce", info.position, 0.2)
+		ExplosiveFx.Impact(info.position, typeof(info.normal) == "Vector3" and info.normal or nil, info.weaponId)
+		local themed = ExplosiveFx.ThemeCue(info.weaponId)
+		Sfx.PlayAt(themed or "GrenadeBounce", info.position, 0.2)
 	end
 end
 

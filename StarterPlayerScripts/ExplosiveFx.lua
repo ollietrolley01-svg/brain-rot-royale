@@ -2,8 +2,12 @@
 -- ProjectileClient and HitSplatClient call in here; tools/throwables_gallery.lua renders frozen
 -- frames of each.
 --
---   ExplosiveFx.Explosion(position, normal, kind, radius)   a rocket, 40mm or frag going off
---   ExplosiveFx.Impact(position, normal)                     a round that only hits (no blast)
+--   ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
+--                                                            a rocket, 40mm or frag going off; a
+--                                                            silly gun's weaponId draws its themed
+--                                                            blast instead (SillyExplosionFx)
+--   ExplosiveFx.Impact(position, normal, weaponId)           a round that only hits (no blast)
+--   ExplosiveFx.ThemeCue(weaponId)                           the themed blast's Sfx key, or nil
 --   ExplosiveFx.Cloud(position, spec, elapsed)               a smoke cloud `elapsed` seconds into
 --                                                            its life; returns its handle
 --   ExplosiveFx.Splat(limb, position, normal, options)       a hit mark on a body part in the firing
@@ -36,6 +40,8 @@ local SoundService = game:GetService("SoundService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Ballistics = require(Shared:WaitForChild("Ballistics"))
 local SoundConfig = require(Shared:WaitForChild("SoundConfig"))
+-- The silly guns' own blasts (confetti, coffee, coins...): same radius, drawn in a theme.
+local SillyExplosionFx = require(script.Parent:WaitForChild("SillyExplosionFx"))
 
 local ExplosiveFx = {}
 
@@ -579,14 +585,23 @@ local function findSurface(position, normal, r)
 	return nil, nil, nil
 end
 
+-- What SillyExplosionFx builds with: the same parts, emitters and loop as every other effect here,
+-- so Advance steps it, Paused freezes it for the gallery and Clear takes it down.
+local sillyApi = { part = part, emitter = emitter, add = add, destroyParts = destroyParts, surfaceFrame = surfaceFrame, texture = TEXTURE }
+
 -- The blast: a white flash and its light, a cluster of fireballs that swell, rise and darken to
 -- smoke, a shock ring on the surface it hit, dust rolling out along it, sparks, embers, chunks of
 -- ground, a column of smoke rising after, and a scorch left behind. The fireballs, flash, shell and
 -- particles are at `position`; the ring, dust and scorch lie on the surface findSurface chose.
-function ExplosiveFx.Explosion(position, normal, kind, radius)
+function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 	local spec = KIND[kind] or KIND.rocket
 	local r = math.max(3, (radius or 12) * spec.scale)
 	local ground, groundNormal, surfacePart = findSurface(position, normal, r)
+	local theme = SillyExplosionFx.ThemeFor(weaponId)
+	if theme then
+		SillyExplosionFx.Blast(sillyApi, theme, position, groundNormal or normal or UP, radius or 12, ground)
+		return
+	end
 	local onSurface = ground ~= nil
 	local up = groundNormal or normal or UP
 	ground = ground or position
@@ -784,8 +799,12 @@ function ExplosiveFx.Explosion(position, normal, kind, radius)
 end
 
 -- A round with no blast landing: a small flash, sparks and a puff.
-function ExplosiveFx.Impact(position, normal)
-	ExplosiveFx.Explosion(position, normal, "impact", 4)
+function ExplosiveFx.Impact(position, normal, weaponId)
+	ExplosiveFx.Explosion(position, normal, "impact", 4, weaponId)
+end
+
+function ExplosiveFx.ThemeCue(weaponId)
+	return SillyExplosionFx.Cue(weaponId)
 end
 
 --------------------------------------------------------------------------------
