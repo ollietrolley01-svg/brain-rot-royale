@@ -46,6 +46,7 @@ local PlaytimeService = require(Modules:WaitForChild("PlaytimeService"))
 local ProgressionService = require(Modules:WaitForChild("ProgressionService"))
 local QuestService = require(Modules:WaitForChild("QuestService"))
 local RateLimit = require(Modules:WaitForChild("RateLimit"))
+local TeamPicker = require(Modules:WaitForChild("TeamPicker"))
 local RewardService = require(Modules:WaitForChild("RewardService"))
 local ShowcaseService = require(Modules:WaitForChild("ShowcaseService"))
 local StateSync = require(Modules:WaitForChild("StateSync"))
@@ -617,6 +618,14 @@ end)
 Remotes.Event("ChooseDrop").OnServerEvent:Connect(function(player, x, z)
 	RateLimit.Latest(player, "ChooseDrop", { x = x, z = z }, function(latest)
 		MatchService.ChooseDrop(player, latest.x, latest.z)
+	end)
+end)
+
+-- Picking a side in the team picker. TeamPicker validates the side, the balance cap and the timing
+-- (a pick after the window has closed is refused as stale, so a queued Latest cannot land late).
+Remotes.Event("PickTeam").OnServerEvent:Connect(function(player, team)
+	RateLimit.Latest(player, "PickTeam", team, function(latest)
+		TeamPicker.Pick(player, latest)
 	end)
 end)
 
