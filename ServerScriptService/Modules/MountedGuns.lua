@@ -424,6 +424,9 @@ local function breakGun(model, attacker)
 	flash.DestroyJointRadiusPercent = 0
 	flash.ExplosionType = Enum.ExplosionType.NoCraters
 	flash.Position = model:GetPivot().Position + Vector3.new(0, 3.5, 0)
+	-- Heard as a fuel-and-metal blast (ProjectileClient hears a tagged Explosion; Sfx.Blast).
+	flash:SetAttribute("BlastCue", "ExplosionBarrel")
+	flash:SetAttribute("BlastRadius", 8)
 	flash.Parent = workspace
 	local smoke = Instance.new("Smoke")
 	smoke.Color = Color3.fromRGB(40, 38, 36)
