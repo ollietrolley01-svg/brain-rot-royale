@@ -1524,11 +1524,16 @@ local function firstEmptySlot(loadout)
 	return nil
 end
 
--- Holding a slot. Cancels a reload or a use in progress on whatever was held before.
-local function selectSlot(player, loadout, index)
+-- Ends a reload in progress: its timer finds the token has moved on and never lands.
+local function cancelReload(player, loadout)
 	loadout.reloading = false
 	if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 	loadout.reloadToken += 1
+end
+
+-- Holding a slot. Cancels a reload or a use in progress on whatever was held before.
+local function selectSlot(player, loadout, index)
+	cancelReload(player, loadout)
 	loadout.useToken += 1
 	loadout.using = nil
 	loadout.equipped = index
@@ -1917,6 +1922,16 @@ function WeaponService.Reload(player)
 		if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 		WeaponService.Push(player)
 	end)
+end
+
+-- Ends the reload in progress, if any, without changing what is held: the same cancel a slot switch
+-- makes. For a caller that has just filled the magazine itself (the range's retake), where Equip does
+-- nothing because the slot is already in hand. The caller pushes.
+function WeaponService.CancelReload(player)
+	local loadout = loadouts[player]
+	if loadout and loadout.reloading then
+		cancelReload(player, loadout)
+	end
 end
 
 --------------------------------------------------------------------------------
