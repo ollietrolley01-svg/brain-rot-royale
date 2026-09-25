@@ -69,7 +69,7 @@ LOOK_ONLY = {
 }
 LOOK_LINE = re.compile(
     r"^\s*$|^\s*--|Remotes|FireAllClients|^\s*(position|normal|kind|radius|weaponId) = |^\s*\}\)$|^\s*end$"
-    r"|flash|fireball|light\b|Fireball|blast\.|scorch|smoke|Explosion|TweenService:Create|:Play\(\)|Debris:AddItem|task\.delay"
+    r"|flash|fireball|light\b|Fireball|blast\.|scorch|smoke|Explosion|TweenService:Create|:Play\(\)|:SetAttribute\(.Blast(Cue|Radius).|Debris:AddItem|task\.delay"
     r"|local chassis = entry\.rig and entry\.rig\.chassis|if chassis and chassis\.Parent then")
 
 
@@ -246,7 +246,7 @@ def check(srcs, base):
         FX: [(fx, r"local theme = SillyExplosionFx\.ThemeFor\(weaponId\)\n\tlocal look = theme and SillyExplosionFx\.LookFor\(theme, position\) or NO_LOOK"),
              (fx, r"local host = hostFor\(kind, theme and look or nil\)")],
         CLIENT: [(client, r"ExplosiveFx\.Explosion\(position, normal, BLAST_LOOK\[kind\] or \"frag\", radius, info\.weaponId\)"),
-                 (client, r"local cue = ExplosiveFx\.ThemeCue\(info\.weaponId\) or BLAST_CUE\[kind\]"),
+                 (client, r"local cue = ExplosiveFx\.ThemeCue\(info\.weaponId\) or WEAPON_CUE\[info\.weaponId\] or BLAST_CUE\[kind\]"),
                  (client, r"ExplosiveFx\.Impact\([^\n]*, info\.weaponId\)")],
         SERVICE: [(service, r"broadcast\(\"detonate\", \{[^}]*weaponId = blast\.weaponId,"),
                   (service, r"broadcast\(\"impact\", \{[^}]*weaponId = entry\.weaponId \}\)")],
