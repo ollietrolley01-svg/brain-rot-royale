@@ -554,7 +554,12 @@ local function crackTree(rng, specs, s, g, reach, opts)
 			end
 			local nu = branch.u + math.cos(heading) * step
 			local nv = branch.v + math.sin(heading) * step
+			-- A segment's stage is where it ENDS, but a run's first segment shows from the first hit:
+			-- steps longer than reach[0] (rock, cracked lava) left the first hit with no crack at all.
 			local stage = stageAt(reach, branch.travelled + step)
+			if stage and branch.depth == 0 and branch.travelled == 0 then
+				stage = 0
+			end
 			if not stage then
 				break
 			end
@@ -1060,7 +1065,8 @@ function LOOKS.Salt(rng, specs, s, g, c)
 end
 
 -- ICE: struck ice crazes white: a crushed white bruise at the hit, straight white fractures shooting
--- out, and translucent fracture planes set down INTO the ice at angles; at 25% a piece gone.
+-- out, and translucent fracture planes prised up OUT of it at angles (tilted into an opaque part they
+-- were buried and never seen); at 25% a piece gone.
 local function iceLook(rng, specs, s, g, c, big)
 	local reach = reachOf(big and { 0.6, 1.8, 3.2, 4.8 } or { 0.3, 1.0, 1.9, 3.0 }, g.scale)
 	local white = rgb(244, 250, 255)
@@ -1071,7 +1077,7 @@ local function iceLook(rng, specs, s, g, c, big)
 			local u, v = near(rng, s, (0.3 + stage * 0.4) * g.scale)
 			local a = rng:NextNumber(0, math.pi * 2)
 			local plane = addHinged(specs, stage, g, u, v, math.cos(a), math.sin(a), rng:NextNumber(0.6, 1.2) * g.scale, rng:NextNumber(0.4, 0.8), 0.02,
-				-rng:NextNumber(0.5, 0.9), c:Lerp(WHITE, 0.7), M.Glass, { name = "CrackPlane" })
+				rng:NextNumber(0.35, 0.7), c:Lerp(WHITE, 0.7), M.Glass, { name = "CrackPlane" })
 			if plane then
 				plane.transparency = 0.5
 			end
@@ -1731,9 +1737,11 @@ function LOOKS.CeramicTiles(rng, specs, s, g, c)
 		local u, v = tu + ou, tv
 		addBox(specs, stage, g, u, v, Vector3.new(tile * 0.94, tile * 0.94, 0.02), 0, LIFT, adhesive, M.Concrete, nil,
 			{ name = "CrackTileGone", detach = { size = Vector3.new(tile * 0.9, tile * 0.9, 0.08), color = c, kind = "tile", life = 2.5 } })
+		-- The ridges are flat boxes, not crack lines: by stage 2 the star and the grout have used up the
+		-- site's PER_SITE_LINES, so as lines they were never drawn.
 		for r = -2, 2 do
-			addLine(specs, stage, g, u - tile * 0.42, v + r * 0.18, u + tile * 0.42, v + r * 0.18, 0.03, adhesive:Lerp(BLACK, 0.3), nil,
-				{ name = "CrackTrowel", lift = LIFT + 0.02, widen = false, flat = true, lod = 2 })
+			addBox(specs, stage, g, u, v + r * 0.18, Vector3.new(tile * 0.84, 0.03, 0.01), 0, LIFT + 0.02, adhesive:Lerp(BLACK, 0.3), SMOOTH, nil,
+				{ name = "CrackTrowel", lod = 2 })
 		end
 	end
 	for i = -3, 3 do
@@ -1751,7 +1759,7 @@ function LOOKS.CeramicTiles(rng, specs, s, g, c)
 	end
 end
 
--- CLAY ROOF TILES: the tiles near the hit crack, SLIP down their course (sliding) and lift, dark gaps
+-- CLAY ROOF TILES: the tiles near the hit crack, then SLIP down their course (sliding) and lift, dark gaps
 -- opening above them onto the batten; at 25% one slides right off (flying off down the slope).
 function LOOKS.ClayRoofTiles(rng, specs, s, g, c)
 	local w, h = 1, 1.2
@@ -1763,7 +1771,9 @@ function LOOKS.ClayRoofTiles(rng, specs, s, g, c)
 		addBox(specs, stage, g, u, v + h * 0.4, Vector3.new(w * 0.9, 0.22, 0.02), 0, LIFT, gap, SMOOTH, nil, { name = "CrackBatten" })
 		addBox(specs, stage, g, u, v - 0.18, Vector3.new(w * 0.92, h * 0.9, 0.16), 0, LIFT, c:Lerp(BLACK, 0.08), M.ClayRoofTiles, nil,
 			{ name = "CrackSlipped", slide = Vector3.new(0, 0.3, -0.1), pop = 1 })
-		addLine(specs, stage, g, u - w * 0.3, v + h * 0.2, u + w * 0.2, v - h * 0.3, 0.035, c:Lerp(BLACK, 0.6), nil, { name = "CrackTileCrack", lift = LIFT + 0.18 })
+		-- A tile cracks a stage before it slips, so the first hit (stage 0) shows the hit tile cracked.
+		addLine(specs, math.max(stage - 1, 0), g, u - w * 0.3, v + h * 0.2, u + w * 0.2, v - h * 0.3, 0.035, c:Lerp(BLACK, 0.6), nil,
+			{ name = "CrackTileCrack", lift = LIFT + 0.18 })
 	end
 	addBox(specs, 3, g, tu, tv, Vector3.new(w * 0.95, h * 0.95, 0.02), 0, LIFT + 0.17, gap, SMOOTH, nil,
 		{ name = "CrackTileGone", detach = { size = Vector3.new(w * 0.9, 0.2, h * 0.9), color = c, kind = "tile", life = 3 } })
