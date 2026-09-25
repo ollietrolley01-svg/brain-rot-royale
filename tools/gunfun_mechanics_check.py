@@ -165,6 +165,8 @@ CombatService.DealDamage = function(attacker, victim, amount, weaponId, headshot
 end
 CombatService.InRadius = function() return RADIUS_LIST or {} end
 local combatantsInRadius = CombatService.InRadius
+-- Nobody here rides a vehicle (VehicleCover: no cover to apply).
+VehicleCover = { SeatOf = function() return nil end }
 LagCompensation = { Raycast = function(origin, vector, params, rewindTo) return worldRaycast(origin, vector, params) end }
 PIERCE_TARGETS = 2
 local chunk = assert(load(block .. "\nreturn { firePellet = firePellet, applySpread = applySpread }", "=CombatBlock", "t",
