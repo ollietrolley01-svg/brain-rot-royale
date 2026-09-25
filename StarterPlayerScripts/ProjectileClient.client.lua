@@ -580,14 +580,6 @@ local function onDetonate(info)
 	end
 end
 
--- A mine or a fuel barrel (HazardService) goes off as a bare Explosion instance; the server tags it
--- with its cue and radius so it is heard like any other blast.
-workspace.ChildAdded:Connect(function(child)
-	if child:IsA("Explosion") and type(child:GetAttribute("BlastCue")) == "string" then
-		Sfx.Blast(child:GetAttribute("BlastCue"), child.Position, nil, child:GetAttribute("BlastRadius"))
-	end
-end)
-
 -- A vehicle wrecked in sight goes up: its fuel lights (VehicleWreckFx sees the wreck happen).
 VehicleWreckFx.OnWreck = function(model)
 	local chassis = model:FindFirstChild("Chassis")

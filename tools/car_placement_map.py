@@ -312,21 +312,25 @@ I.GetPivot = function(inst)
 	end
 	return inst.CFrame or CFrame.new()
 end
--- Turned corners, in world axes.
+-- Turned to the PrimaryPart (else the pivot), as Roblox's is: a box in world axes put a turned car's
+-- middle off its own (a SahurVan in an angled bay 0.5 along off its stall), where the game's is not.
 I.GetBoundingBox = function(model)
+	local primary = model.PrimaryPart
+	local frame = primary and primary.CFrame or model:GetPivot()
 	local low, high
 	for _, d in ipairs(model:GetDescendants()) do
 		if d:IsA("BasePart") then
 			local s = d.Size / 2
 			for _, sx in ipairs({ -1, 1 }) do for _, sy in ipairs({ -1, 1 }) do for _, sz in ipairs({ -1, 1 }) do
-				local p = d.CFrame * Vector3.new(sx * s.X, sy * s.Y, sz * s.Z)
+				local p = frame:PointToObjectSpace(d.CFrame * Vector3.new(sx * s.X, sy * s.Y, sz * s.Z))
 				low = low and low:Min(p) or p
 				high = high and high:Max(p) or p
 			end end end
 		end
 	end
 	if not low then return CFrame.new(), Vector3.new(0, 0, 0) end
-	return CFrame.new((low + high) / 2), high - low
+	local centre = frame * ((low + high) / 2)
+	return frame.Rotation + centre, high - low
 end
 I.GetExtentsSize = function(model) local _, size = model:GetBoundingBox() return size end
 I.ScaleTo = function() end

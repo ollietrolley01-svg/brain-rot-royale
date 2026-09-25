@@ -516,8 +516,9 @@ end
 -- A car park tree, from the map's own palette: a palm on sand, a slim pine on bare ground or rock, a
 -- broadleaf on grass. Standing on its island's soil at y, its trunk a little way into it. Its crown is
 -- held high (over TREE_CLEAR) or kept within the island, so a car in the stall beside it, the tallest
--- being an armed van at 10.3, never has a branch through its roof.
-local TREE_CLEAR = 11
+-- being an armed van at 10.9 since the ride lift (52a5608; it was 10.3), never has a branch through its
+-- roof. A broadleaf's crown starts TREE_CLEAR - 0.9 over the soil: 11.6 at the lowest.
+local TREE_CLEAR = 12.5
 local function islandTree(lot, x, z, y, group)
 	local opts = { collide = true, group = group, shadow = true }
 	if lot.terrain == Enum.Material.Sand then

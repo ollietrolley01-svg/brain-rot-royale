@@ -82,11 +82,13 @@ for _, id in ipairs(Pack.Order) do
  check(loadout.reloading, id .. " reload begins")
  Range.Fire(player, target.Position)
  check(slot.mag == before - 1 and shots == priorShots + 1, id .. " blocks fire while reloading")
- -- Cancel this test reload with a fresh rack loadout, then test misses.
- check(Range.Give(player, id), id .. " replace during reload")
+ -- Retaking the gun in hand tops it up and cancels this test reload (#117: the range keeps its
+ -- loadout, so this is a retake, not a fresh one), then test misses.
+ check(Range.Give(player, id), id .. " retake during reload")
  task.wait(0.6)
  loadout = Weapons.Get(player)
  _, slot = Weapons.GetEquipped(player)
+ check(not loadout.reloading and slot.mag == def.magSize, id .. " retake ends the reload and fills the magazine")
  loadout.lastShotAt = -100
  Range.Fire(player, head.Position + Vector3.new(0, 100, 0))
  check(shots == priorShots + 2 and #ends == (def.pellets or 1), id .. " miss still broadcasts")

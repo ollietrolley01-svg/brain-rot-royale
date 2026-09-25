@@ -2301,7 +2301,10 @@ function BotNav.DriveControl(drive, dt, now)
 		drive.turnSide = side
 	end
 	if turning then
-		if math.abs(alpha) < math.rad(70) or now > turning.untilTime or cap <= 1 then
+		-- Round far enough once the arc to it is one the steering lock can drive forward: a car with a
+		-- wide lock (TralalaGT) let off at 70 degrees looped wide off the road on full lock.
+		local reachable = math.abs(alpha) < math.rad(70) and math.abs(wheel) <= h.steerLow
+		if reachable or math.abs(alpha) < math.rad(25) or now > turning.untilTime or cap <= 1 then
 			drive.turning = nil
 		else
 			drive.wantedSpeed = cap

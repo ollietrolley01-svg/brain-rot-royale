@@ -73,6 +73,10 @@ V3.__eq = function(a, b) return a.X == b.X and a.Y == b.Y and a.Z == b.Z end
 V3.__tostring = function(v) return string.format("%.3f, %.3f, %.3f", v.X, v.Y, v.Z) end
 function V3.Cross(a, b) return vec(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X) end
 function V3.Dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+function V3.Min(a, b) return vec(math.min(a.X, b.X), math.min(a.Y, b.Y), math.min(a.Z, b.Z)) end
+function V3.Max(a, b) return vec(math.max(a.X, b.X), math.max(a.Y, b.Y), math.max(a.Z, b.Z)) end
+function V3.Abs(a) return vec(math.abs(a.X), math.abs(a.Y), math.abs(a.Z)) end
+function V3.Lerp(a, b, t) return a + (b - a) * t end
 Vector3 = { new = function(x, y, z) return vec(x or 0, y or 0, z or 0) end }
 Vector3.zero = vec(0, 0, 0)
 Vector3.xAxis, Vector3.yAxis, Vector3.zAxis = vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1)
@@ -187,13 +191,19 @@ function Inst.IsDescendantOf() return false end
 function Inst.GetFullName(i) return i.Name end
 function Inst.Destroy(i) i.Parent = nil end
 function Inst.PivotTo() end
+-- Signals nothing here fires (DestructibleService caches per part until it is Destroying).
+Inst.Destroying = { Connect = function() return { Disconnect = function() end } end }
+Inst.AncestryChanged = Inst.Destroying
 function Inst.SetAttribute(i, k, v) rawget(i, "attrs")[k] = v end
 function Inst.GetAttribute(i, k) return rawget(i, "attrs")[k] end
 function Inst.GetAttributes(i) local t = {}; for k, v in pairs(rawget(i, "attrs")) do t[k] = v end; return t end
 Instance = { new = function(c) return setmetatable({ props = { ClassName = c, Shape = Enum.PartType.Block, Transparency = 0 }, kids = {}, attrs = {} }, Inst) end }
 
 local shared = { WaitForChild = function(_, name) return name end }
-game = { GetService = function() return { WaitForChild = function() return shared end, AddTag = function() end } end }
+local quietSignal = { Connect = function() return { Disconnect = function() end } end, Wait = function() return 0 end }
+game = { GetService = function() return { WaitForChild = function() return shared end, AddTag = function() end,
+    Heartbeat = quietSignal, Stepped = quietSignal, IsRunning = function() return false end,
+    IsServer = function() return true end, IsClient = function() return false end } end }
 function require(name) return MODULES[name] end
 
 function dumpModel(model)
