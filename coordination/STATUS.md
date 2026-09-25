@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 01:48 (EDT).
+Last updated: 2026-09-25 02:01 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -39,6 +39,9 @@ report it in the mailbox and don't edit.
   rider cover, `CombatClient.client.lua` round count, `VehicleWeaponClient.client.lua` fire gate, the hitreg tools)
   and `pc/mounted-guns-powerful` (`MountedGunData.lua`, `VehicleWeaponData.lua`, `mounted_guns_check.py`,
   `vehicle_ttk_check.py`: Oliver wants the ground and car guns very powerful)
+  and `pc/ttk-plus-25` (stacked on the guns branch: `MatchConfig.CombatDamageScale` 0.92 -> 0.736, so every
+  kill of a player, bot, vehicle or mounted gun takes 25% longer; companion caps x0.8; the TTK bands in
+  `vehicle_ttk_check`, `mounted_guns_check` and `companion_ability_check` x1.25)
 - Bots: `BotService.lua`, `BotGunner.lua` (new), `BotDriveTactics.lua`, `MountedGun*`
 - Team modes: `ModeTeams.lua`, `TeamBattleground.lua`, `MatchConfig.lua`
 - Lobby, roundabouts, interiors, wall durability, shed loot (the `pc/*` names on the branch list)
