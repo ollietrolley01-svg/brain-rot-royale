@@ -91,6 +91,25 @@ function blockedBy(a, b)
     end
     return nil
 end
+function reachableEdges(roads, gate)
+    local adjacency = {}
+    for _, e in ipairs(roads.edges) do
+        adjacency[e.a] = adjacency[e.a] or {}
+        adjacency[e.b] = adjacency[e.b] or {}
+        table.insert(adjacency[e.a], e)
+        table.insert(adjacency[e.b], e)
+    end
+    local seen, queue, out = { [gate] = true }, { gate }, {}
+    while #queue > 0 do
+        local n = table.remove(queue)
+        for _, e in ipairs(adjacency[n] or {}) do
+            table.insert(out, e)
+            local m = e.a == n and e.b or e.a
+            if not seen[m] then seen[m] = true; table.insert(queue, m) end
+        end
+    end
+    return out
+end
 function reachable(roads, gate)
     local adjacency = {}
     for _, e in ipairs(roads.edges) do
@@ -112,8 +131,12 @@ end
 """
 
 # Bases: (x, z, heading in degrees from +X): round the middle, facing it, as ModeTeams puts them.
-BASES = [(420 * math.cos(math.radians(a)), 420 * math.sin(math.radians(a)), a + 180) for a in range(0, 360, 30)]
-ARENA = 230.0
+# (Off the roads out of the middle: ModeTeams never builds a compound over a road, SiteCost.)
+BASES = [(440 * math.cos(math.radians(a)), 440 * math.sin(math.radians(a)), a + 180) for a in range(15, 360, 30)]
+# The battleground's apron (its roads end there, at the gateways) and the ring the access roads keep
+# out of, as ModeTeams sets it: the apron and 10 more.
+APRON = 250.0
+ARENA = APRON + 10
 # Gentle grades (Oliver): the steepest an access road may climb, whatever the module says.
 GRADE = 0.12
 # Oliver: gentle crests and sags -- no pitch change over about 3 degrees between stretches, no step over
@@ -124,9 +147,20 @@ JOIN_STEP = 0.05
 SPEED, GRAVITY, CLEARANCE, WHEELBASE = 90.0, 196.2, 0.9, 0.62
 
 MAY_FAIL = 2
+# The arena's gateways (finished road ends at its apron) on the roads out of the middle, and how far the
+# two teams' ways there may differ.
+GATEWAYS = [(-250.0, 0.0), (250.0, 0.0), (0.0, -250.0), (0.0, 250.0)]
+FAIR = 0.10
+GATEWAY_RADIUS = APRON
+# The yard's bays (local x, z, nose direction), BotService's straight lane out along the nose, and how
+# much of a bot's way to its gateway must be on the base road and the gateway's road.
+BAYS = [(10.5, -30, (0, -1)), (25.5, -30, (0, -1)), (40.5, -30, (0, -1)), (55.5, -30, (0, -1)),
+        (35.5, 14, (1, 0)), (35.5, 29, (1, 0)), (35.5, 44, (1, 0))]
+BASE_LANE = 40
+FOLLOW = 0.80
 
 
-def run(root, edits=None, log=print):
+def run(root, edits=None, log=print, botnav_edits=None):
     src = TBR.sources(root)
     roads_src = (Path(root) / "ServerScriptService/Modules/TeamBaseRoads.lua").read_text(encoding="utf-8")
     for old, new in edits or []:
@@ -138,6 +172,17 @@ def run(root, edits=None, log=print):
     lua.execute(SETUP)
     mod = lua.execute(TBR.luau_to_lua(roads_src))
     g = lua.globals()
+    # The real BotNav (its DriveRoute is what a bot at the wheel plans with), in team_battleground_check's mock.
+    from team_battleground_check import BOTNAV_MOCK
+    from car_placement_luau import luau_to_lua as luau_continue
+    botnav_src = (Path(root) / "ServerScriptService/Modules/BotNav.lua").read_text(encoding="utf-8")
+    for old, new in botnav_edits or []:
+        if old not in botnav_src:
+            return ["plant anchor not found: " + old[:60]]
+        botnav_src = botnav_src.replace(old, new, 1)
+    lua.execute(BOTNAV_MOCK)
+    g.botnavWorld(lambda *a: None, lambda *a: 0)
+    botnav = lua.execute(luau_continue(botnav_src))
     from team_base_ruins_modeteams_check import vehicle_extents
     sizes = vehicle_extents(root)
     vw = max(v[0] for v in sizes.values()) / 2 + 1.0
@@ -332,6 +377,156 @@ def run(root, edits=None, log=print):
         log("  note " + line)
     if len(unlinked) > MAY_FAIL:
         problems += unlinked
+    # THE ARENA. Mirrored pairs of bases (as ModeTeams puts them: opposite, facing the middle), each
+    # routed onto the road of an arena gateway (the finished road ends at the apron, GATEWAYS), the fairer
+    # pair chosen by the real ChooseFair: both teams reach a gateway through roads.edges, and their ways
+    # there (access road + the map road on to the gateway) differ by no more than FAIR.
+    gateways = lua.table_from([g.Vector3.new(x, 0, z) for x, z in GATEWAYS])
+    fair_worst = 0.0
+    route_shares = []
+    for bx, bz, deg in BASES[: len(BASES) // 2]:
+        name = "pair at (%d, %d)" % (bx, bz)
+        net = g.makeNetwork(g.hills)
+        mod.CutAtArena(net, g.Vector3.new(0, 0, 0), GATEWAY_RADIUS - 1)
+        targets = mod.GatewayTargets(net, gateways, g.Vector3.new(0, 0, 0))
+        options = []
+        frames = []
+        for sign in (1, -1):
+            x, z, h = sign * bx, sign * bz, math.radians(deg + (0 if sign == 1 else 180))
+            heading = g.Vector3.new(math.cos(h), 0, math.sin(h))
+            frame = g.CFrame.lookAt(g.Vector3.new(x, 0, z), g.Vector3.new(x + heading.X, 0, z + heading.Z))
+            front = g.mul(frame, g.Vector3.new(33, 0, -57.8))
+            east = g.mul(frame, g.Vector3.new(70.8, 0, 29))
+            gates = lua.table_from([lua.table_from({"position": front, "heading": frame.LookVector}),
+                                    lua.table_from({"position": east, "heading": frame.RightVector})])
+            avoid = lua.table_from([lua.table_from({"centre": g.Vector3.new(0, 0, 0), "radius": ARENA, "name": "battleground"})])
+            boxes = lua.table_from([lua.table_from({"frame": frame, "halfX": 71, "halfZ": 59})])
+            frames.append(frame)
+            mine = []
+            for gi in range(1, len(GATEWAYS) + 1):
+                these = [t for t in targets.values() if t.gateway == gi]
+                if not these:
+                    continue
+                opts = lua.table_from({"avoid": avoid, "blocked": g.blockedBy, "boxes": boxes, "groundAt": g.hills,
+                                       "startY": lua.table_from([g.hills(front.X, front.Z), g.hills(east.X, east.Z)]),
+                                       "targets": lua.table_from(these)})
+                got = mod.Plan(gates, None, net, opts)
+                plan = got[0] if isinstance(got, tuple) else got
+                if plan is not None:
+                    mine.append(plan)
+            if not mine:
+                # No gateway road in reach: onto the nearest road, and on along the network (as ModeTeams).
+                opts = lua.table_from({"avoid": avoid, "blocked": g.blockedBy, "boxes": boxes, "groundAt": g.hills,
+                                       "startY": lua.table_from([g.hills(front.X, front.Z), g.hills(east.X, east.Z)])})
+                got = mod.Plan(gates, None, net, opts)
+                plan = got[0] if isinstance(got, tuple) else got
+                if plan is not None:
+                    got = mod.DistanceToGateway(net, plan, gateways)
+                    on, gi = got if isinstance(got, tuple) else (got, None)
+                    if on is not None:
+                        plan.total, plan.gateway = plan.length + on, gi
+                        mine.append(plan)
+            options.append(mine)
+        if not options[0] or not options[1]:
+            problems.append("%s: a team has no way to an arena gateway" % name)
+            continue
+        got = mod.ChooseFair(lua.table_from(options[0]), lua.table_from(options[1]), FAIR)
+        chosen, gap = (got if isinstance(got, tuple) else (got, None))
+        gap = gap or 0.0
+        fair_worst = max(fair_worst, gap)
+        if gap > FAIR:
+            problems.append("%s: the teams' ways to the arena differ by %.0f%%" % (name, gap * 100))
+        for team in (1, 2):
+            plan = chosen[team]
+            heights = plan.heights
+            got = mod.Register(net, plan, heights)
+            undo, gate, junction = got
+            # The gateway on a reached edge.
+            gx, gz = GATEWAYS[plan.gateway - 1]
+            reach = g.reachableEdges(net, gate)
+            ok = False
+            for e in reach.values():
+                ax, az, bx2, bz2 = e["from"].X, e["from"].Z, e["to"].X, e["to"].Z
+                L2 = (bx2 - ax) ** 2 + (bz2 - az) ** 2
+                t = max(0.0, min(1.0, ((gx - ax) * (bx2 - ax) + (gz - az) * (bz2 - az)) / max(L2, 1e-9)))
+                if math.hypot(ax + (bx2 - ax) * t - gx, az + (bz2 - az) * t - gz) < half:
+                    ok = True
+                    break
+            if not ok:
+                problems.append("%s: team %d's gate does not reach its arena gateway through roads.edges" % (name, team))
+        # BOTS: the real BotNav.DriveRoute, roads preferred (BotService: a base vehicle out of its bay in a
+        # team mode), from the end of each bay's drive-out lane (BotService's BASE_LANE along its nose) to
+        # the team's gateway and to the arena's middle: the way follows the access road and the gateway's
+        # road for at least FOLLOW of its length, and never runs inside the apron before the gateway.
+        for team in (1, 2):
+            plan = chosen[team]
+            frame = frames[team - 1]
+            gx, gz = GATEWAYS[plan.gateway - 1]
+            road_pts = [(p.X, p.Z) for p in plan.points.values()]
+            ex, ez = plan.edge["from"].X, plan.edge["from"].Z
+            fx, fz = plan.edge["to"].X, plan.edge["to"].Z
+
+            open_edges = [(e["from"].X, e["from"].Z, e["to"].X, e["to"].Z) for e in net.edges.values() if not e.blocked]
+
+            def on_road(x, z):
+                # Any open road: the access road, the gateway's road, or the map's roads on to it.
+                for ax, az, bx3, bz3 in open_edges:
+                    L2 = (bx3 - ax) ** 2 + (bz3 - az) ** 2
+                    t = max(0.0, min(1.0, ((x - ax) * (bx3 - ax) + (z - az) * (bz3 - az)) / max(L2, 1e-9)))
+                    if math.hypot(ax + (bx3 - ax) * t - x, az + (bz3 - az) * t - z) < half + 3:
+                        return True
+                if any(math.hypot(x - a[0], z - a[1]) < half + 3 for a in road_pts):
+                    return True
+                for i in range(1, len(road_pts)):
+                    ax, az = road_pts[i - 1]
+                    bx3, bz3 = road_pts[i]
+                    L2 = (bx3 - ax) ** 2 + (bz3 - az) ** 2
+                    t = max(0.0, min(1.0, ((x - ax) * (bx3 - ax) + (z - az) * (bz3 - az)) / max(L2, 1e-9)))
+                    if math.hypot(ax + (bx3 - ax) * t - x, az + (bz3 - az) * t - z) < half + 3:
+                        return True
+                L2 = (fx - ex) ** 2 + (fz - ez) ** 2
+                t = max(0.0, min(1.0, ((x - ex) * (fx - ex) + (z - ez) * (fz - ez)) / max(L2, 1e-9)))
+                return math.hypot(ex + (fx - ex) * t - x, ez + (fz - ez) * t - z) < half + 3
+            for bay_x, bay_z, look in BAYS:
+                bay = g.mul(frame, g.Vector3.new(bay_x, 0, bay_z))
+                nose = g.mul(frame, g.Vector3.new(bay_x + look[0], 0, bay_z + look[1]))
+                d = (nose.X - bay.X, nose.Z - bay.Z)
+                start = g.Vector3.new(bay.X + d[0] * BASE_LANE, 0, bay.Z + d[1] * BASE_LANE)
+                # On to the access road as a bot does (the real DriveVia, as ModeTeams.BaseDriveVia calls it).
+                via = [p for p in mod.DriveVia(frame, plan, g.Vector3.new(d[0], 0, d[1]), g.Vector3.new(67 + 16, 0, -55 - 16)).values()]
+                begin = via[-1] if via else start
+                for goal_name, goal in (("its gateway", (gx, gz)), ("the arena's middle", (0.0, 0.0))):
+                    got = botnav.DriveRoute(net, begin, g.Vector3.new(goal[0], 0, goal[1]), None, True)
+                    # Measured from where it has left its compound (its lane and the way round to the road).
+                    pts_ = [begin] + [p for p in got[0].values()]
+                    xs = [(p.X, p.Z) for p in pts_]
+                    total = followed = 0.0
+                    inside = None
+                    for i in range(1, len(xs)):
+                        L = math.dist(xs[i - 1], xs[i])
+                        steps = max(1, int(L / 2))
+                        for k in range(steps):
+                            t = (k + 0.5) / steps
+                            x = xs[i - 1][0] + (xs[i][0] - xs[i - 1][0]) * t
+                            z = xs[i - 1][1] + (xs[i][1] - xs[i - 1][1]) * t
+                            total += L / steps
+                            if on_road(x, z):
+                                followed += L / steps
+                            if math.hypot(x, z) < APRON - 1 and inside is None                                     and min(math.hypot(xs[i - 1][0] - qx, xs[i - 1][1] - qz) for qx, qz in GATEWAYS) > 30:
+                                inside = (x, z)
+                    share = followed / max(total, 1e-9)
+                    route_shares.append(share)
+                    if goal_name == "its gateway" and share < FOLLOW:
+                        problems.append("%s: team %d's bot from bay (%d, %d) follows the base road for %.0f%% of its way to %s"
+                                        % (name, team, bay_x, bay_z, share * 100, goal_name))
+                    if goal_name == "the arena's middle" and inside is not None:
+                        problems.append("%s: team %d's bot from bay (%d, %d) cuts into the arena at (%.0f, %.0f), not through its gateway"
+                                        % (name, team, bay_x, bay_z, inside[0], inside[1]))
+    log("  arena: %d mirrored pairs routed to gateways, worst difference %.1f%% (limit %.0f%%)"
+        % (len(BASES) // 2, fair_worst * 100, FAIR * 100))
+    if route_shares:
+        log("  bots: %d BotNav routes from the bays, the least on the base roads %.0f%% (limit %.0f%% to the gateway)"
+            % (len(route_shares), min(route_shares) * 100, FOLLOW * 100))
     if stats:
         log("  worst over all roads: grade %.3f, pitch change %.2f deg, join step %.3f, belly %.2f of %.2f, crest %.2f g"
             % (tuple(max(x[k] for x in stats) for k in range(3)) + (max(x[3] for x in stats), CLEARANCE, max(x[4] for x in stats))))
@@ -340,6 +535,10 @@ def run(root, edits=None, log=print):
 
 
 PLANTS = [
+    ("a broken link near the gateway", [("local added = { first, second }", "local added = { second }")]),
+    ("an unfair pair", [("local fair, wasFair = gap <= share, bestGap <= share", "local fair, wasFair = true, true")]),
+    ("a wrong cost: the arena's middle too far to end a road trip",
+     [], [("local DRIVE_ROAD_JOIN_PREFERRED = 400", "local DRIVE_ROAD_JOIN_PREFERRED = 0")]),
     ("a missing link", [("\t\ttable.insert(added, newEdge(chain, node, \"up\" .. i, \"down\" .. i))",
                          "\t\tnewEdge(chain, node, \"up\" .. i, \"down\" .. i)")]),
     ("through the battleground", [("for _, disc in ipairs(options.avoid or {}) do", "for _, disc in ipairs({}) do")]),
@@ -363,8 +562,9 @@ def main(argv):
     ok = not problems
     if "--plant" in argv:
         caught = 0
-        for label, edits in PLANTS:
-            found = run(root, edits, log=lambda *_: None)
+        for plant in PLANTS:
+            label, edits = plant[0], plant[1]
+            found = run(root, edits, log=lambda *_: None, botnav_edits=plant[2] if len(plant) > 2 else None)
             hit = bool(found) and not any("anchor not found" in f for f in found)
             caught += hit
             print("%s  %s  (%s)" % ("CAUGHT" if hit else "MISSED", label, found[0] if found else "no failure"))

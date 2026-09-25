@@ -4,6 +4,8 @@
 -- map never has one.
 --
 --   TeamBaseRoads.Plan(start, heading, roads, options)  -> plan | nil, why     pure: no instances
+--   TeamBaseRoads.GatewayTargets(roads, gateways, centre) -> targets           the arena gateways' roads
+--   TeamBaseRoads.CutAtArena(roads, centre, radius)       -> undo              no bot route through the arena
 --   TeamBaseRoads.Profile(plan, groundAt, startY)        -> heights            pure
 --   TeamBaseRoads.ShapeGround(terrain, plan, heights)    -> columns changed    cut and fill to the road
 --   TeamBaseRoads.Build(plan, heights, parent)           -> model              the road
@@ -107,7 +109,7 @@ local function inBox(p, boxes)
 end
 
 -- One candidate route to `edge` from `start` heading `heading` (flat unit vectors), or nil and why.
-local function routeTo(start, heading, edge, roads, options, shift, tension)
+local function routeTo(start, heading, edge, roads, options, shift, tension, target)
 	local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
 	local along = b - a
 	local length = along.Magnitude
@@ -116,7 +118,15 @@ local function routeTo(start, heading, edge, roads, options, shift, tension)
 	end
 	local dir = along / length
 	local lead = start + heading * LEAD
-	local t = math.clamp((lead - a):Dot(dir) + (shift or 0), END_CLEAR + HALF, length - END_CLEAR - HALF)
+	-- A target (an arena gateway's road) limits where on the edge the junction may go.
+	local lo, hi = END_CLEAR + HALF, length - END_CLEAR - HALF
+	if target then
+		lo, hi = math.max(lo, target.lo), math.min(hi, target.hi)
+		if hi < lo then
+			return nil, "no room on the gateway's road"
+		end
+	end
+	local t = math.clamp((lead - a):Dot(dir) + (shift or 0), lo, hi)
 	local centre = a + dir * t
 	local normal = Vector3.new(-dir.Z, 0, dir.X)
 	if (lead - centre):Dot(normal) < 0 then
@@ -202,7 +212,10 @@ local function routeTo(start, heading, edge, roads, options, shift, tension)
 			return nil, "through a compound"
 		end
 	end
-	return { points = path, edge = edge, along = t, join = join, centre = centre, normal = normal, length = total }
+	-- The whole way to the arena: this road, then along the map road to the gateway (when there is one).
+	local to = target and math.abs(t - target.at) or 0
+	return { points = path, edge = edge, along = t, join = join, centre = centre, normal = normal, length = total,
+		total = total + to, gateway = target and target.gateway, alongRoad = to }
 end
 
 -- What options.blocked says about a whole route: nil when every stretch is clear.
@@ -223,6 +236,234 @@ end
 local SHIFTS = { 0, -45, 45, -100, 100, -170, 170, -250, 250 }
 local TENSIONS = { 0.42, 0.28, 0.6, 0.8 }
 
+-- The arena's gateways as targets for Plan: for each gateway point (a finished road end at the
+-- battleground's apron), every road edge it lies on, with the stretch of that edge OUTSIDE the gateway
+-- (away from `centre`, GATEWAY_CLEAR on) where a junction may go, and where along the edge the gateway
+-- is (so a route's total runs on to it).
+local GATEWAY_CLEAR = 30
+function TeamBaseRoads.GatewayTargets(roads, gateways, centre)
+	local out = {}
+	local c = flat(centre)
+	for gi, gateway in ipairs(gateways) do
+		local g = flat(gateway)
+		for _, edge in ipairs(roads.edges) do
+			if not edge.access and not edge.blocked then
+				local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
+				local length = (b - a).Magnitude
+				if length > 1 and distanceToSegment(g, a, b) < HALF + 3 then
+					local at = (g - a):Dot((b - a) / length)
+					-- The end further from the middle is outward.
+					if (b - c).Magnitude >= (a - c).Magnitude then
+						table.insert(out, { edge = edge, gateway = gi, at = at, lo = at + GATEWAY_CLEAR, hi = length })
+					else
+						table.insert(out, { edge = edge, gateway = gi, at = at, lo = 0, hi = at - GATEWAY_CLEAR })
+					end
+				end
+			end
+		end
+	end
+	return out
+end
+
+-- The roads the battleground cut (TeamBattleground ends every road at its apron, RoadEnd from the
+-- middle, but the road DATA runs on through the arena): each edge crossing the circle is split where it
+-- crosses (a node there -- the gateway), the inside part closed (edge.blocked, as a broken road is), so
+-- no bot route runs through the apron and walls. Returns the undo.
+function TeamBaseRoads.CutAtArena(roads, centre, radius)
+	local c = flat(centre)
+	local added, removed, closed = {}, {}, {}
+	local original = table.clone(roads.edges)
+	for _, edge in ipairs(original) do
+		if not edge.blocked then
+			local a, b = flat(edge.a.position), flat(edge.b.position)
+			local ia, ib = (a - c).Magnitude < radius, (b - c).Magnitude < radius
+			if ia and ib then
+				edge.blocked = true
+				table.insert(closed, edge)
+			elseif ia ~= ib or distanceToSegment(c, a, b) < radius then
+				-- Where the segment crosses the circle (the crossings nearest each outside end).
+				local d = b - a
+				local A = d:Dot(d)
+				local B = 2 * (a - c):Dot(d)
+				local C = (a - c):Dot(a - c) - radius * radius
+				local disc = B * B - 4 * A * C
+				if disc > 0 then
+					local r = math.sqrt(disc)
+					local t0, t1 = (-B - r) / (2 * A), (-B + r) / (2 * A)
+					local cuts = {}
+					if t0 > 0.001 and t0 < 0.999 then
+						table.insert(cuts, t0)
+					end
+					if t1 > 0.001 and t1 < 0.999 then
+						table.insert(cuts, t1)
+					end
+					if #cuts > 0 then
+						local armA, armB
+						for name, e in pairs(edge.a.arms) do
+							if e == edge then
+								armA = name
+							end
+						end
+						for name, e in pairs(edge.b.arms) do
+							if e == edge then
+								armB = name
+							end
+						end
+						local chain = { edge.a }
+						local ts = { 0 }
+						for _, t in ipairs(cuts) do
+							table.insert(chain, { position = Vector3.new(a.X + d.X * t, 0, a.Z + d.Z * t), arms = {}, gateway = true })
+							table.insert(ts, t)
+						end
+						table.insert(chain, edge.b)
+						table.insert(ts, 1)
+						local pieces = {}
+						for k = 1, #chain - 1 do
+							local p, q = chain[k], chain[k + 1]
+							local piece = { a = p, b = q, from = p.position, to = q.position, road = edge.road, dir = edge.dir,
+								length = (flat(q.position) - flat(p.position)).Magnitude, arena = true }
+							local mid = a + d * ((ts[k] + ts[k + 1]) / 2)
+							piece.blocked = (mid - c).Magnitude < radius or nil
+							p.arms[k == 1 and (armA or "arenaA") or ("arena" .. k)] = piece
+							q.arms[k + 1 == #chain and (armB or "arenaB") or ("arenaBack" .. k)] = piece
+							table.insert(pieces, piece)
+						end
+						local index = table.find(roads.edges, edge)
+						if index then
+							table.remove(roads.edges, index)
+						end
+						table.insert(removed, { edge = edge, armA = armA, armB = armB })
+						for _, piece in ipairs(pieces) do
+							table.insert(roads.edges, piece)
+							table.insert(added, piece)
+						end
+					end
+				end
+			end
+		end
+	end
+	return function()
+		for _, piece in ipairs(added) do
+			local index = table.find(roads.edges, piece)
+			if index then
+				table.remove(roads.edges, index)
+			end
+		end
+		for _, r in ipairs(removed) do
+			table.insert(roads.edges, r.edge)
+			if r.armA then
+				r.edge.a.arms[r.armA] = r.edge
+			end
+			if r.armB then
+				r.edge.b.arms[r.armB] = r.edge
+			end
+		end
+		for _, edge in ipairs(closed) do
+			edge.blocked = nil
+		end
+	end
+end
+
+-- How far a route that joins the network ANYWHERE drives on along the map's roads to its nearest arena
+-- gateway: Dijkstra over roads.edges from the junction (both ways along the joined edge), to the point
+-- on an edge where a gateway lies. Returns the distance and the gateway's index, or nil.
+function TeamBaseRoads.DistanceToGateway(roads, plan, gateways)
+	local edge = plan.edge
+	local dist, done = {}, {}
+	local adjacency = {}
+	for _, e in ipairs(roads.edges) do
+		if not e.blocked then
+			adjacency[e.a] = adjacency[e.a] or {}
+			adjacency[e.b] = adjacency[e.b] or {}
+			table.insert(adjacency[e.a], e)
+			table.insert(adjacency[e.b], e)
+		end
+	end
+	local function gatewayOn(e)
+		local a, b = flat(e.from or e.a.position), flat(e.to or e.b.position)
+		local out = {}
+		for gi, g in ipairs(gateways) do
+			if distanceToSegment(flat(g), a, b) < HALF + 3 then
+				table.insert(out, { gi = gi, along = (flat(g) - a):Dot((b - a).Unit) })
+			end
+		end
+		return out
+	end
+	local best, bestGate = math.huge, nil
+	-- On the joined edge itself.
+	for _, hit in ipairs(gatewayOn(edge)) do
+		local d = math.abs(hit.along - plan.along)
+		if d < best then
+			best, bestGate = d, hit.gi
+		end
+	end
+	dist[edge.a] = plan.along
+	dist[edge.b] = (edge.length or (flat(edge.b.position) - flat(edge.a.position)).Magnitude) - plan.along
+	while true do
+		local node, nd = nil, math.huge
+		for n, d in pairs(dist) do
+			if not done[n] and d < nd then
+				node, nd = n, d
+			end
+		end
+		if not node or nd >= best then
+			break
+		end
+		done[node] = true
+		for _, e in ipairs(adjacency[node] or {}) do
+			local length = e.length or (flat(e.b.position) - flat(e.a.position)).Magnitude
+			for _, hit in ipairs(gatewayOn(e)) do
+				local d = nd + (e.a == node and hit.along or (length - hit.along))
+				if d < best then
+					best, bestGate = d, hit.gi
+				end
+			end
+			local other = e.a == node and e.b or e.a
+			if not done[other] and nd + length < (dist[other] or math.huge) then
+				dist[other] = nd + length
+			end
+		end
+	end
+	if not bestGate then
+		return nil
+	end
+	return best, bestGate
+end
+
+-- Where a base vehicle leaving its bay goes, after its straight lane out, to reach the access road:
+-- nothing when its lane already leaves by the gate the road starts at; else round the compound's
+-- nearest front corner (outside it, `corner` local) to the road's start. `frame` is the compound's,
+-- `look` the vehicle's nose (flat), `gateLook` the heading the road left its gate with. Flat points.
+function TeamBaseRoads.DriveVia(frame, plan, look, corner)
+	local gateLook = flat(plan.heading or frame.LookVector).Unit
+	if flat(look).Unit:Dot(gateLook) > 0.7 then
+		return {}
+	end
+	local start = plan.points[1]
+	return { flat(frame * corner), flat(start + gateLook * 12) }
+end
+
+-- The fairest pair of routes, one from each team's list of options (each with .total): the shortest
+-- longer way of the pairs within `share` of each other, else the pair that differs least. Returns
+-- { route1, route2 } and the pair's difference as a share of the longer.
+function TeamBaseRoads.ChooseFair(first, second, share)
+	local chosen, bestLong, bestGap = {}, math.huge, math.huge
+	for _, p1 in ipairs(first) do
+		for _, p2 in ipairs(second) do
+			local long = math.max(p1.total, p2.total)
+			local gap = math.abs(p1.total - p2.total) / math.max(long, 1)
+			local fair, wasFair = gap <= share, bestGap <= share
+			if (fair and (not wasFair or long < bestLong)) or (not fair and not wasFair and gap < bestGap) then
+				chosen, bestLong, bestGap = { p1, p2 }, long, gap
+			end
+		end
+	end
+	if not chosen[1] then
+		return { first[1], second[1] }, nil
+	end
+	return chosen, bestGap
+end
+
 -- The shortest acceptable route from `start` (the end of the gate's ramp) out along `heading` to any
 -- road edge. options: avoid = { { centre, radius, name } }, blocked(a, b) -> why | nil.
 -- `start` may be a list of { position, heading } (a compound's gates): the best route out of any.
@@ -236,10 +477,18 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 	for gateIndex, gate in ipairs(starts) do
 		local from, dir = flat(gate.position), flat(gate.heading).Unit
 		local ranked = {}
-		for _, edge in ipairs(roads.edges) do
-			if not edge.blocked and not (edge.bridges and #edge.bridges > 0) then
-				local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
-				table.insert(ranked, { edge = edge, d = distanceToSegment(from, a, b) })
+		if options.targets then
+			-- Only the arena gateways' roads, outside their gateways (TeamBaseRoads.GatewayTargets).
+			for _, target in ipairs(options.targets) do
+				local a, b = flat(target.edge.from or target.edge.a.position), flat(target.edge.to or target.edge.b.position)
+				table.insert(ranked, { edge = target.edge, target = target, d = distanceToSegment(from, a, b) })
+			end
+		else
+			for _, edge in ipairs(roads.edges) do
+				if not edge.blocked and not (edge.bridges and #edge.bridges > 0) then
+					local a, b = flat(edge.from or edge.a.position), flat(edge.to or edge.b.position)
+					table.insert(ranked, { edge = edge, d = distanceToSegment(from, a, b) })
+				end
 			end
 		end
 		table.sort(ranked, function(p, q)
@@ -248,7 +497,7 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 		for index = 1, math.min(#ranked, 24) do
 			for _, shift in ipairs(SHIFTS) do
 				for _, tension in ipairs(TENSIONS) do
-					local route, reason = routeTo(from, dir, ranked[index].edge, roads, options, shift, tension)
+					local route, reason = routeTo(from, dir, ranked[index].edge, roads, options, shift, tension, ranked[index].target)
 					if route then
 						route.gate, route.heading = gateIndex, dir
 						table.insert(found, route)
@@ -261,7 +510,7 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 	end
 	-- The shortest first; only those are asked about what stands in the way (a query per stretch).
 	table.sort(found, function(p, q)
-		return p.length < q.length
+		return p.total < q.total
 	end)
 	for _, route in ipairs(found) do
 		local why = blockedRoute(route, options)

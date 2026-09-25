@@ -1154,6 +1154,7 @@ local DRIVE_LANE = 3.5            -- studs right of a road's centre line
 local DRIVE_OFFROAD_COST = 1.6    -- a stud across country is worth this many studs of road (slower, and less known)
 local DRIVE_ROAD_JOIN = 130       -- the network is worth joining only this close to the start and the goal
 local DRIVE_ROAD_MIN = 60         -- ...and only for at least this much road
+local DRIVE_ROAD_JOIN_PREFERRED = 400 -- the goal's side of that, roads preferred: anywhere in the arena, past a gateway
 local DRIVE_BRIDGE_CLEAR = 30     -- studs past a bridge's end a route joins or leaves the road (lined up before it)
 local DRIVE_CRUISE = 0.86         -- share of top speed a bot cruises at on a road
 local DRIVE_OFFROAD_CRUISE = 0.62 -- ...and across country, where the next tree is only four looks away
@@ -1317,7 +1318,9 @@ function BotNav.DriveRoute(roads, from, goal, bounds, preferRoads)
 	end
 	local entry, entryEdge, entryGap = nearestOnNetwork(roads, from)
 	local exit, exitEdge, exitGap = nearestOnNetwork(roads, goal)
-	if not entry or not exit or entryGap > DRIVE_ROAD_JOIN or exitGap > DRIVE_ROAD_JOIN then
+	-- Roads preferred (a team base's vehicle), a goal in the arena past a gateway may lie further off.
+	local exitJoin = preferRoads and DRIVE_ROAD_JOIN_PREFERRED or DRIVE_ROAD_JOIN
+	if not entry or not exit or entryGap > DRIVE_ROAD_JOIN or exitGap > exitJoin then
 		return direct, directFlags, false
 	end
 	local function inside(p)

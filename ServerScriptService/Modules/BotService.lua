@@ -4244,9 +4244,12 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 	end
 	local route = ride.route
 	if not route then
-		route = { lane = ride.lane }
+		-- A base vehicle driven out of its bay in a team mode takes the roads (its base's access road to
+		-- the arena's gateway, TeamBaseRoads) rather than the straight line across country.
+		route = { lane = ride.lane, laneVia = ride.laneVia, preferRoads = (ride.lane ~= nil and Vehicles.teamsActive()) or nil }
 		ride.route = route
 		ride.lane = nil
+		ride.laneVia = nil
 	end
 	route.roads = Vehicles.roads
 	route.bounds = Vehicles.driveBounds()
@@ -4357,6 +4360,11 @@ function Vehicles.startRide(bot, role, seat, purpose, now)
 			local look = flat(chassis.CFrame.LookVector)
 			if look.Magnitude > 0.1 then
 				ride.lane = flat(chassis.Position) + look.Unit * VEHICLE.BASE_LANE
+				-- Then on to the base's access road, round the compound if its lane leaves by the other gate.
+				if teams.BaseDriveVia then
+					local ok, via = pcall(teams.BaseDriveVia, chassis.Position, look.Unit)
+					ride.laneVia = ok and via and #via > 0 and via or nil
+				end
 			end
 		end
 		if purpose == "trip" and Vehicles.teamsActive() then

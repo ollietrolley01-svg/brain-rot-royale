@@ -527,6 +527,30 @@ local function itemSpan(item)
 	return ok and math.max(size.X, size.Z) or math.huge
 end
 
+-- The arena's gateways: the finished road ends at the battleground's apron (TeamBattleground's
+-- RoadEnds, each marked by its StopLine), as flat points.
+local function arenaGateways()
+	local out = {}
+	local built = ModeTeams.Battleground and ModeTeams.Battleground()
+	local ends = built and built.roadEnds
+	for _, roadEnd in ipairs(ends and ends:GetChildren() or {}) do
+		if roadEnd.Name == "RoadEnd" then
+			for _, part in ipairs(roadEnd:GetDescendants()) do
+				if part.Name == "StopLine" and part:IsA("BasePart") then
+					table.insert(out, Vector3.new(part.Position.X, 0, part.Position.Z))
+					break
+				end
+			end
+		end
+	end
+	return out
+end
+ModeTeams.ArenaGateways = arenaGateways
+-- The two teams' ways to the arena may differ by this share of the longer at most (Oliver: "mirror-fair
+-- so both teams get equal road distance").
+local FAIR_SHARE = 0.1
+ModeTeams.AccessFairShare = FAIR_SHARE
+
 function ModeTeams.BuildAccessRoads(mapInfo)
 	ModeTeams.UnregisterAccessRoads()
 	local roads = mapInfo and mapInfo.roads
@@ -545,62 +569,137 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
 	params.FilterDescendantsInstances = { map }
-	for team = 1, GameModes.TeamCount do
-		local ruin = ruins[team]
-		if ruin and not ruin.accessRoad then
-			local clear = {}
-			-- What stands in a stretch of the way: nil when it is clear or can be cleared, else why not.
-			local function blocked(a, b)
-				local mid = (a + b) / 2
-				local length = (b - a).Magnitude
-				if length < 0.1 then
-					return nil
-				end
-				local ground = terrainAt(mid.X, mid.Z) or ruin.height
-				local frame = CFrame.lookAt(Vector3.new(mid.X, ground + 7, mid.Z), Vector3.new(b.X, ground + 7, b.Z))
-				for _, part in ipairs(workspace:GetPartBoundsInBox(frame, Vector3.new(ACCESS_CLEAR * 2, 16, length), params)) do
-					local item = mapItemOf(part, map)
-					local top = item and item.Parent
-					if item and not (top and keep[top.Name]) and item ~= ruin.model and not item:IsDescendantOf(ruin.model) then
-						if string.sub(item.Name, 1, 8) == "TeamBase" or itemSpan(item) > TeamBaseRuins.ClearableSpan then
-							return item.Name
-						end
+	local function groundAt(x, z)
+		return terrainAt(x, z)
+	end
+	-- What stands in a stretch of `ruin`'s way: nil when it is clear or can be cleared (then put in
+	-- `clear`), else why not.
+	local function blocker(ruin, clear)
+		return function(a, b)
+			local mid = (a + b) / 2
+			local length = (b - a).Magnitude
+			if length < 0.1 then
+				return nil
+			end
+			local ground = terrainAt(mid.X, mid.Z) or ruin.height
+			local frame = CFrame.lookAt(Vector3.new(mid.X, ground + 7, mid.Z), Vector3.new(b.X, ground + 7, b.Z))
+			for _, part in ipairs(workspace:GetPartBoundsInBox(frame, Vector3.new(ACCESS_CLEAR * 2, 16, length), params)) do
+				local item = mapItemOf(part, map)
+				local top = item and item.Parent
+				if item and not (top and keep[top.Name]) and item ~= ruin.model and not item:IsDescendantOf(ruin.model) then
+					if string.sub(item.Name, 1, 8) == "TeamBase" or item.Name == "TeamBattleground" or itemSpan(item) > TeamBaseRuins.ClearableSpan then
+						return item.Name
+					end
+					if clear then
 						clear[item] = true
 					end
 				end
-				return nil
 			end
-			-- Out of the gatehouse or the east gate, whichever makes the shorter road.
+			return nil
+		end
+	end
+	-- The road data inside the battleground's apron closed (its roads are cut there), so no bot drives
+	-- through the apron and walls; the gateways become the network's ends.
+	local gateways = arenaGateways()
+	if #gateways > 0 then
+		table.insert(accessUndo, (TeamBaseRoads.CutAtArena(roads, arenaCentre, (ModeTeams.ArenaReach or 200) - 1)))
+	end
+	-- Each team's best way to each arena gateway (onto that gateway's road, outside it, then along it),
+	-- or -- no gateways -- to the nearest road.
+	local targets = #gateways > 0 and TeamBaseRoads.GatewayTargets(roads, gateways, arenaCentre) or nil
+	local options = {}
+	for team = 1, GameModes.TeamCount do
+		local ruin = ruins[team]
+		options[team] = {}
+		if ruin then
 			local gates = {
 				{ position = ruin.frame * TeamBaseRuins.GateOut, heading = ruin.frame.LookVector },
 				{ position = ruin.frame * TeamBaseRuins.GateOutEast, heading = ruin.frame.RightVector },
 			}
-			local function groundAt(x, z)
-				return terrainAt(x, z)
+			local base = { avoid = avoid, boxes = boxes, blocked = blocker(ruin), groundAt = groundAt, startY = ruin.height }
+			if targets then
+				for gi = 1, #gateways do
+					local mine = {}
+					for _, target in ipairs(targets) do
+						if target.gateway == gi then
+							table.insert(mine, target)
+						end
+					end
+					if #mine > 0 then
+						base.targets = mine
+						local plan, why = TeamBaseRoads.Plan(gates, nil, roads, base)
+						if plan then
+							table.insert(options[team], plan)
+						else
+							ruin.accessWhy = why
+						end
+					end
+				end
 			end
-			local plan, why = TeamBaseRoads.Plan(gates, nil, roads,
-				{ avoid = avoid, boxes = boxes, blocked = blocked, groundAt = groundAt, startY = ruin.height })
-			if not plan then
-				ruin.accessWhy = why
-				warn("ModeTeams: team " .. team .. "'s base has no access road: " .. tostring(why))
-			else
-				-- Only what is in the chosen way goes.
-				table.clear(clear)
-				for i = 2, #plan.points do
-					blocked(plan.points[i - 1], plan.points[i])
+			if #options[team] == 0 then
+				-- No gateway reachable: at least onto the map's roads, which run on to the arena.
+				base.targets = nil
+				local plan, why = TeamBaseRoads.Plan(gates, nil, roads, base)
+				if plan then
+					-- On along the map's roads to the nearest gateway, for the fairness sum.
+					local on, gi = nil, nil
+					if #gateways > 0 then
+						on, gi = TeamBaseRoads.DistanceToGateway(roads, plan, gateways)
+					end
+					plan.total, plan.gateway = plan.length + (on or 0), gi
+					table.insert(options[team], plan)
+				else
+					ruin.accessWhy = why
+					warn("ModeTeams: team " .. team .. "'s base has no access road: " .. tostring(why))
 				end
-				for item in pairs(clear) do
-					item:Destroy()
-				end
-				local heights = plan.heights or TeamBaseRoads.Profile(plan, groundAt, ruin.height)
-				TeamBaseRoads.SurfaceLift = MapTerrain.SurfaceLift or TeamBaseRoads.SurfaceLift
-				pcall(TeamBaseRoads.ShapeGround, workspace.Terrain, plan, heights)
-				ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model)
-				ruin.accessPlan = plan
-				table.insert(accessUndo, (TeamBaseRoads.Register(roads, plan, heights)))
 			end
 		end
 	end
+	local chosen, gap = TeamBaseRoads.ChooseFair(options[1] or {}, options[2] or {}, FAIR_SHARE)
+	if gap and gap > FAIR_SHARE then
+		warn(string.format("ModeTeams: the bases' ways to the arena differ by %.0f%% (no fairer pair)", gap * 100))
+	end
+	for team = 1, GameModes.TeamCount do
+		local ruin, plan = ruins[team], chosen[team]
+		if ruin and plan and not ruin.accessRoad then
+			-- Only what is in the chosen way goes.
+			local clear = {}
+			local check = blocker(ruin, clear)
+			for i = 2, #plan.points do
+				check(plan.points[i - 1], plan.points[i])
+			end
+			for item in pairs(clear) do
+				item:Destroy()
+			end
+			local heights = plan.heights or TeamBaseRoads.Profile(plan, groundAt, ruin.height)
+			TeamBaseRoads.SurfaceLift = MapTerrain.SurfaceLift or TeamBaseRoads.SurfaceLift
+			pcall(TeamBaseRoads.ShapeGround, workspace.Terrain, plan, heights)
+			ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model)
+			ruin.accessPlan = plan
+			ruin.accessGateway = plan.gateway and gateways[plan.gateway] or nil
+			table.insert(accessUndo, (TeamBaseRoads.Register(roads, plan, heights)))
+		end
+	end
+end
+
+-- The points a base vehicle leaving its bay at `position` (nose `look`) drives through after its lane
+-- to reach its base's access road (TeamBaseRoads.DriveVia), or nil when it is in no compound or there
+-- is no road. BotService hands them to the drive after the lane.
+function ModeTeams.BaseDriveVia(position, look)
+	for _, ruin in pairs(ruins) do
+		local plan = ruin.accessPlan
+		if plan then
+			local l = ruin.frame:PointToObjectSpace(position)
+			if math.abs(l.X) <= TeamBaseRuins.Footprint.X / 2 and math.abs(l.Z) <= TeamBaseRuins.Footprint.Z / 2 then
+				local lanes = TeamBaseRuins.Lanes
+				-- The front corner on the east side, past both gates' ramps.
+				local corner = Vector3.new(TeamBaseRuins.Footprint.X / 2 + 16, 0, -TeamBaseRuins.Footprint.Z / 2 - 16)
+				local _ = lanes
+				return TeamBaseRoads.DriveVia(ruin.frame, plan, look, corner)
+			end
+		end
+	end
+	return nil
 end
 
 -- The team's compound (model, pads, chestSpots, vehicleBays, lootSpots), or nil.
