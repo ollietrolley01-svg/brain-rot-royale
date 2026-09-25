@@ -695,6 +695,8 @@ def remote_checks(repo, weapons_source=None, guns_source=None):
         fail(problems, "L3 the mount prompt has no per-player cooldown before it sits anyone")
     if m and not re.search(r"MountReach", m.group(1)):
         fail(problems, "L3 the mount prompt does not check the player is near the seat")
+    if not re.search(r'VehicleWeaponReload"\)\.OnServerEvent:Connect\(function\(player\)\s*if not RateLimit\.Take\(player, "Reload"\)', vw):
+        fail(problems, "L3 the belt-change remote (VehicleWeaponReload) is not held to RateLimit Reload")
     if 'OnServerEvent' in mg:
         fail(problems, "L3 MountedGuns listens to a remote of its own (the prompt is the only way on)")
     return problems
@@ -782,6 +784,94 @@ def rotation_checks(repo, source=None, verbose=True):
 
 
 # ---------------------------------------------------------------------------------------------------
+# PHONE AND PAD (Oliver 09-24: "make sure the whole game is phone and xbox compatible")
+# ---------------------------------------------------------------------------------------------------
+
+# Screens: (label, width, height, touch, left/right safe inset). The Roblox jump button: 70 px at (w-95,
+# h-90) on a small screen (shorter side under 500), 120 px at (w-170, h-210) otherwise.
+DEVICES = [("phone 667x375", 667, 375, True, 0), ("phone notch 812x375", 812, 375, True, 44),
+           ("phone 896x414", 896, 414, True, 44), ("tablet 1024x768", 1024, 768, True, 0),
+           ("xbox 1920x1080", 1920, 1080, False, 0)]
+BUTTON = 70  # a ContextActionService touch button
+PAD_KEYS = {"fire": "ButtonR2", "aim": "ButtonL2", "reload": "ButtonX", "leave": "ButtonB"}
+
+
+def udim2(text):
+    m = re.search(r"UDim2\.new\(\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\s*\)", text)
+    return tuple(float(g) for g in m.groups()) if m else None
+
+
+def input_checks(repo, client_source=None, weapon_source=None, verbose=True):
+    problems = []
+    mc = client_source or (Path(repo) / "StarterPlayerScripts/MountedGunClient.client.lua").read_text(encoding="utf-8")
+    vc = weapon_source or (Path(repo) / "StarterPlayerScripts/VehicleWeaponClient.client.lua").read_text(encoding="utf-8")
+    turret = re.search(r'elseif want == "turret" then(.*?)\n\tend', vc, re.S)
+    turret = turret.group(1) if turret else ""
+    fire = re.search(r'BindAction\("BRR_VehicleFire"[^\n]*', turret)
+    aim = re.search(r'BindAction\("BRR_GunnerAim"[^\n]*', turret)
+    reload = re.search(r"reload = \{[^\n]*\n[^\n]*keys = \{([^}]*)\}", mc)
+    leave = re.search(r"leave = \{[^\n]*\n[^\n]*keys = \{([^}]*)\}", mc)
+    found = {"fire": fire and fire.group(0), "aim": aim and aim.group(0), "reload": reload and reload.group(1),
+             "leave": leave and leave.group(1)}
+    for what, key in PAD_KEYS.items():
+        if not found[what] or key not in found[what]:
+            fail(problems, f"I1 the gunner's {what} is not on the pad's {key}")
+    for what in ("fire", "aim"):
+        if found[what] and ", true," not in found[what]:
+            fail(problems, f"I1 the gunner's {what} has no touch button")
+    if mc.count("BindActionAtPriority(GUNNER_BUTTONS.") != 2 or mc.count(", true, Enum.ContextActionPriority") < 2:
+        fail(problems, "I1 RELOAD / LEAVE are not both bound with a touch button")
+    # Touch buttons: FIRE and AIM (VehicleWeaponClient), RELOAD and LEAVE (MountedGunClient).
+    buttons = {}
+    for name, src, pat in (("FIRE", vc, r'SetPosition\("BRR_VehicleFire", [^\n]*?(UDim2\.new\([^)]*\))'),
+                           ("AIM", vc, r'SetPosition\("BRR_GunnerAim", (UDim2\.new\([^)]*\))'),
+                           ("RELOAD", mc, r'reload = \{[^\n]*position = (UDim2\.new\([^)]*\))'),
+                           ("LEAVE", mc, r'leave = \{[^\n]*position = (UDim2\.new\([^)]*\))')):
+        m = re.search(pat, src)
+        if not m:
+            fail(problems, f"I2 no touch position for {name}")
+        else:
+            buttons[name] = udim2(m.group(1))
+    panel = udim2(re.search(r"TOUCH_PANEL = \{[^\n]*position = (UDim2\.new\([^)]*\))", mc).group(1)) \
+        if re.search(r"TOUCH_PANEL = \{[^\n]*position = (UDim2\.new\([^)]*\))", mc) else None
+    sizes = [int(s) for s in re.findall(r"TextSize = (\d+)", mc)]
+    if not sizes or min(sizes) < 12:
+        fail(problems, f"I3 the gunner's HUD text is {min(sizes) if sizes else '?'} px (at least 12 on a phone)")
+    for label, w, h, touch, inset in DEVICES:
+        if not touch:
+            continue
+        # The touch controls live inside the safe area: lay them out on its width, then shift by the inset.
+        full = w
+        w = w - 2 * inset
+        rects = {}
+        for name, u in buttons.items():
+            x, y = u[0] * w + u[1], u[2] * h + u[3]
+            rects[name] = (x, y, x + BUTTON, y + BUTTON)
+        small = min(w, h) < 500
+        jump = 70 if small else 120
+        rects["JUMP"] = (w - (95 if small else 170), h - (90 if small else 210)) + ()
+        rects["JUMP"] = (rects["JUMP"][0], rects["JUMP"][1], rects["JUMP"][0] + jump, rects["JUMP"][1] + jump)
+        if panel:
+            px = panel[0] * w + panel[1] - 120
+            py = panel[2] * h + panel[3] + 36  # below the top bar (the inset is not ignored on a phone)
+            rects["HUD"] = (px, py, px + 240, py + 46)
+        rects = {k: (r[0] + inset, r[1], r[2] + inset, r[3]) for k, r in rects.items()}
+        names = sorted(rects)
+        for i, a in enumerate(names):
+            ra = rects[a]
+            if ra[0] < inset or ra[2] > full - inset or ra[1] < 36 or ra[3] > h:
+                fail(problems, f"I2 {label}: {a} is off the safe area {tuple(round(v) for v in ra)}")
+            for b in names[i + 1:]:
+                rb = rects[b]
+                if ra[0] < rb[2] and rb[0] < ra[2] and ra[1] < rb[3] and rb[1] < ra[3]:
+                    fail(problems, f"I2 {label}: {a} overlaps {b}")
+    if verbose:
+        print(f"  pad: {', '.join(f'{k} {v}' for k, v in PAD_KEYS.items())}; touch buttons {sorted(buttons)} + jump + HUD "
+              f"on {sum(1 for d in DEVICES if d[3])} touch screens; HUD text {min(sizes) if sizes else '?'}+ px")
+    return problems
+
+
+# ---------------------------------------------------------------------------------------------------
 # PLANTED FAULTS
 # ---------------------------------------------------------------------------------------------------
 
@@ -835,6 +925,18 @@ def planted(repo):
         ("a snapping turret", lambda: rotation_checks(repo, gunner.replace(
             "\tlocal left = math.min(dt, 0.1)\n", "\tdo return target, 0 end\n\tlocal left = math.min(dt, 0.1)\n", 1), verbose=False), "R1"),
     ]
+    client = (root / "StarterPlayerScripts/MountedGunClient.client.lua").read_text(encoding="utf-8")
+    faults += [
+        ("RELOAD's touch button on top of FIRE", lambda: input_checks(repo, client.replace(
+            'title = "RELOAD", position = UDim2.new(1, -250, 1, -280)', 'title = "RELOAD", position = UDim2.new(1, -100, 1, -270)'),
+            verbose=False), "I2"),
+        ("the leave button off the pad's B", lambda: input_checks(repo, client.replace(
+            "keys = { Enum.KeyCode.ButtonB }", "keys = { Enum.KeyCode.ButtonY }"), verbose=False), "I1"),
+        ("phone HUD text shrunk to 10 px", lambda: input_checks(repo, client.replace(
+            "info.TextSize = 12", "info.TextSize = 10"), verbose=False), "I3"),
+        ("the belt-change remote's rate limit taken out", lambda: remote_checks(repo, weapons_source=weapons.replace(
+            'if not RateLimit.Take(player, "Reload") then', 'if false then')), "L3"),
+    ]
     ok = True
     for label, run, code in faults:
         try:
@@ -864,6 +966,8 @@ def main():
     problems += remote_checks(repo)
     print("ROTATION")
     problems += rotation_checks(repo)
+    print("PHONE AND PAD")
+    problems += input_checks(repo)
     for p in problems:
         print("  FAIL " + p)
     status = 0 if not problems else 1

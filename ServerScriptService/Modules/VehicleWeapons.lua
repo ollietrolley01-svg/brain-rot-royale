@@ -427,6 +427,28 @@ function VehicleWeapons.Fire(token, aimPoint)
 	return true
 end
 
+-- A belt change: the part-used belt is dropped and the mount reloads from its infinite pool (AmmoAt's
+-- recharge, after its delay), as it would from dry. Not while overheated or already full. -> ok
+function VehicleWeapons.Reload(token)
+	if not CombatService.IsEnabled() or token == nil or not Combatants.IsAlive(token) then
+		return false
+	end
+	local vehicle, spec, _, _, mount = VehicleWeapons.DrivenBy(token)
+	if not vehicle or vehicle:GetAttribute("Wrecked") then
+		return false
+	end
+	local now = VehicleWeapons.Now()
+	local state = stateFor(vehicle, spec, mount)
+	local ammo = VehicleWeaponData.AmmoAt(spec, state.ammo, state.firedAt, now)
+	if state.hot or ammo >= spec.magazine then
+		return false
+	end
+	state.ammo = 0
+	state.firedAt = now
+	publish(vehicle, mount, state)
+	return true
+end
+
 -- Swings the mount toward `aimPoint` without firing, so everyone sees where it's pointing.
 function VehicleWeapons.Aim(token, aimPoint)
 	if not SafeValue.Vector3(aimPoint) then
@@ -664,6 +686,14 @@ function VehicleWeapons.Start()
 		end
 		bucket.tokens -= 1
 		VehicleWeapons.Aim(player, aimPoint)
+	end)
+
+	-- A belt change on demand (X on a pad, RELOAD on a phone, R): Reload below. The hand gun's Reload budget.
+	Remotes.Event("VehicleWeaponReload").OnServerEvent:Connect(function(player)
+		if not RateLimit.Take(player, "Reload") then
+			return
+		end
+		VehicleWeapons.Reload(player)
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)

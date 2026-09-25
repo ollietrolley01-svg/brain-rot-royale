@@ -315,11 +315,13 @@ local function setBound(want)
 		ContextActionService:BindAction("BRR_VehicleFire", onFire, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonR1)
 		ContextActionService:BindAction("BRR_GunnerAim", onAimSight, true, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL2)
 		ContextActionService:SetTitle("BRR_GunnerAim", "AIM")
-		ContextActionService:SetPosition("BRR_GunnerAim", UDim2.new(1, -250, 1, -180))
+		-- The gunner's row (FIRE, AIM, then MountedGunClient's RELOAD, LEAVE) sits above the jump button, which
+		-- is 120 px tall on a tablet (tools/mounted_guns_check.py lays them out on phone and tablet sizes).
+		ContextActionService:SetPosition("BRR_GunnerAim", UDim2.new(1, -170, 1, -280))
 	end
 	if want then
 		ContextActionService:SetTitle("BRR_VehicleFire", "FIRE")
-		ContextActionService:SetPosition("BRR_VehicleFire", UDim2.new(1, -140, 1, -180))
+		ContextActionService:SetPosition("BRR_VehicleFire", want == "turret" and UDim2.new(1, -90, 1, -280) or UDim2.new(1, -140, 1, -180))
 	end
 end
 

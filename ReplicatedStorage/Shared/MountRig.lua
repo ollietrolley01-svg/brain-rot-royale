@@ -114,6 +114,36 @@ local function reach(joints, upperTorso, side, target)
 	wrist.Transform = CFrame.Angles(0, 0, side * math.rad(8))
 end
 
+-- GETTING ON. Sitting teleports the body to the seat; Blend makes it a move. Where each character stood a
+-- moment ago is noted (NoteStanding, sampled by MountedGunClient for everyone on foot), and for BLEND_TIME
+-- after they first appear in a gun's seat the body is shown on its way from there to the grips.
+MountRig.BlendTime = 0.35
+local standing = setmetatable({}, { __mode = "k" }) -- character -> CFrame; a cache of where they stood
+local blends = setmetatable({}, { __mode = "k" }) -- character -> { seat, from, at }
+
+function MountRig.NoteStanding(character, cframe)
+	standing[character] = cframe
+	blends[character] = nil
+end
+
+-- `want` is the world turn the body is to be given (applied about its root, as VehicleClient's turn is);
+-- `rootWorld` the HumanoidRootPart's frame; `seat` the gun's seat. Returns the turn to use this frame.
+function MountRig.Blend(character, want, rootWorld, seat)
+	local blend = blends[character]
+	if not blend or blend.seat ~= seat then
+		local from = standing[character]
+		blend = { seat = seat, from = from, at = os.clock() }
+		blends[character] = blend
+	end
+	local t = blend.from and (os.clock() - blend.at) / MountRig.BlendTime or 1
+	if t >= 1 then
+		return want
+	end
+	t = t * t * (3 - 2 * t)
+	local seated = want * rootWorld
+	return blend.from:Lerp(seated, t) * rootWorld:Inverse()
+end
+
 -- Both arms to the grips. `joints` maps Motor6D names to the rider's joints (the pose and the root turn
 -- already set this frame). `rightTarget` (optional, world) sends the right hand elsewhere: the ammo can
 -- while the gun reloads or cools. Returns true when both reached for a grip.

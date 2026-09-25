@@ -23,6 +23,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
+local ContextActionService = game:GetService("ContextActionService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
@@ -49,7 +51,6 @@ local TAG = "ArmedVehicle"
 local ATTR = VehicleWeaponData.Attributes.turret
 local POSE_DISTANCE = 160
 local FX_DISTANCE = 180
-local BLEND_TIME = 0.35
 local HOT = Color3.fromRGB(255, 118, 40)
 
 -- PURE BEGIN
@@ -252,9 +253,6 @@ local function jointsFor(character)
 	return joints
 end
 
--- Where each nearby character's root stood a moment ago, so getting on blends from there.
-local lastRoot = setmetatable({}, { __mode = "k" })
-local blends = setmetatable({}, { __mode = "k" }) -- character -> { from = CFrame, at = clock }
 
 local function poseGunner(model, s, dt)
 	local seat = model:FindFirstChild("GunnerSeat")
@@ -285,27 +283,10 @@ local function poseGunner(model, s, dt)
 	local pitchAngle = pitchJoint.Transform:ToEulerAnglesXYZ()
 	local lean = restPitch * CFrame.Angles(pitchAngle * 0.45, 0, 0) * restPitch:Inverse()
 	local want = lean * turn
-	-- Getting on: from where they stood to the grips.
-	if s.rider ~= character then
-		s.rider = character
-		local before = lastRoot[character]
-		if before then
-			blends[character] = { from = before, at = os.clock() }
-		end
-	end
+	-- Getting on: from where they stood to the grips (MountRig.Blend, shared with the vehicles' gunners).
+	s.rider = character
 	local frame = root.Part0.CFrame * root.C0
-	local blend = blends[character]
-	if blend then
-		local t = (os.clock() - blend.at) / BLEND_TIME
-		if t >= 1 then
-			blends[character] = nil
-		else
-			t = t * t * (3 - 2 * t)
-			local seated = want * root.Part0.CFrame
-			local shown = blend.from:Lerp(seated, t)
-			want = shown * root.Part0.CFrame:Inverse()
-		end
-	end
+	want = MountRig.Blend(character, want, root.Part0.CFrame, seat)
 	root.Transform = frame:Inverse() * want * frame
 	-- The hands on the grips (MountRig: the same reach the vehicles' gunners use); while the gun reloads or
 	-- cools the right hand works the can, rocking as it changes the belt.
@@ -380,8 +361,19 @@ gui.DisplayOrder = 4
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local panel = Instance.new("Frame")
-panel.AnchorPoint = Vector2.new(0.5, 1)
-panel.Position = UDim2.new(0.5, 0, 1, -96)
+-- Bottom middle on a desktop; on a touch screen along the top, clear of the thumbs' buttons (FIRE, AIM,
+-- RELOAD, LEAVE sit bottom right) and inside the safe area (IgnoreGuiInset is off on a phone).
+local TOUCH_PANEL = { anchor = Vector2.new(0.5, 0), position = UDim2.new(0.5, 0, 0, 8) }
+local DESKTOP_PANEL = { anchor = Vector2.new(0.5, 1), position = UDim2.new(0.5, 0, 1, -96) }
+local function placePanel()
+	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local spot = touch and TOUCH_PANEL or DESKTOP_PANEL
+	panel.AnchorPoint = spot.anchor
+	panel.Position = spot.position
+	gui.IgnoreGuiInset = not touch
+end
+placePanel()
+UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(placePanel)
 panel.Size = UDim2.fromOffset(240, 46)
 panel.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 panel.BackgroundTransparency = 0.35
@@ -420,7 +412,7 @@ info.BackgroundTransparency = 1
 info.Position = UDim2.fromOffset(12, 28)
 info.Size = UDim2.new(1, -24, 0, 16)
 info.Font = Enum.Font.GothamBold
-info.TextSize = 11
+info.TextSize = 12
 info.TextColor3 = Color3.fromRGB(190, 196, 208)
 info.TextXAlignment = Enum.TextXAlignment.Left
 info.Parent = panel
@@ -477,6 +469,64 @@ end
 -- Loop
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- The gunner's buttons (phone and pad). VehicleWeaponClient binds FIRE (left mouse, RT, R1, a touch
+-- button) and AIM (right mouse, LT, a touch button); these are the other two, for every gun seat --
+-- an emplacement's or a vehicle's turret: RELOAD (R, X, a touch button) changes the belt, LEAVE (B, a
+-- touch button; Space jumps off as ever) gets off. Touch buttons sit in a row above FIRE and AIM.
+-- The gun's own "Man the gun" prompt is hidden from its gunner, so B only ever means LEAVE.
+--------------------------------------------------------------------------------
+
+local GUNNER_BUTTONS = {
+	reload = { action = "BRR_GunReload", title = "RELOAD", position = UDim2.new(1, -250, 1, -280),
+		keys = { Enum.KeyCode.R, Enum.KeyCode.ButtonX } },
+	leave = { action = "BRR_GunLeave", title = "LEAVE", position = UDim2.new(1, -330, 1, -280),
+		keys = { Enum.KeyCode.ButtonB } },
+}
+local reloadRemote = Remotes.Event("VehicleWeaponReload")
+local boundTo = nil
+local hiddenPrompt = nil
+
+local function bindGunner(model)
+	if model == boundTo then
+		return
+	end
+	boundTo = model
+	ContextActionService:UnbindAction(GUNNER_BUTTONS.reload.action)
+	ContextActionService:UnbindAction(GUNNER_BUTTONS.leave.action)
+	if hiddenPrompt then
+		hiddenPrompt.Enabled = true
+		hiddenPrompt = nil
+	end
+	if not model then
+		return
+	end
+	local prompt = model:FindFirstChild("GunnerPrompt", true)
+	if prompt and prompt.Enabled then
+		prompt.Enabled = false
+		hiddenPrompt = prompt
+	end
+	ContextActionService:BindActionAtPriority(GUNNER_BUTTONS.reload.action, function(_, state)
+		if state == Enum.UserInputState.Begin then
+			reloadRemote:FireServer()
+		end
+		return Enum.ContextActionResult.Sink
+	end, true, Enum.ContextActionPriority.High.Value, table.unpack(GUNNER_BUTTONS.reload.keys))
+	ContextActionService:BindActionAtPriority(GUNNER_BUTTONS.leave.action, function(_, state)
+		if state == Enum.UserInputState.Begin then
+			local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				humanoid.Jump = true
+			end
+		end
+		return Enum.ContextActionResult.Sink
+	end, true, Enum.ContextActionPriority.High.Value, table.unpack(GUNNER_BUTTONS.leave.keys))
+	for _, b in pairs(GUNNER_BUTTONS) do
+		ContextActionService:SetTitle(b.action, b.title)
+		pcall(ContextActionService.SetPosition, ContextActionService, b.action, b.position)
+	end
+end
+
 local sampleAt = 0
 RunService.Stepped:Connect(function(_, dt)
 	local now = workspace:GetServerTimeNow()
@@ -519,12 +569,13 @@ RunService.Stepped:Connect(function(_, dt)
 				end
 			end
 			local seat = model:FindFirstChild("GunnerSeat")
-			if s.kind ~= "vehicle" and seat and seat.Occupant and seat.Occupant.Parent == player.Character then
+			if seat and seat.Occupant and seat.Occupant.Parent == player.Character then
 				mine = model
 			end
 		end
 	end
-	if mine then
+	bindGunner(mine)
+	if mine and guns[mine].kind ~= "vehicle" then
 		showHud(mine, guns[mine])
 	else
 		gui.Enabled = false
@@ -538,7 +589,7 @@ RunService.Stepped:Connect(function(_, dt)
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			if root and humanoid and not humanoid.SeatPart then
-				lastRoot[character] = root.CFrame
+				MountRig.NoteStanding(character, root.CFrame)
 			end
 		end
 	end

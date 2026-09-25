@@ -61,6 +61,20 @@ Pure.Kick = {
 Pure.MouseDegrees = 0.22
 Pure.StickDegrees = 150
 Pure.TouchDegrees = 0.3
+-- The stick's response: past a dead zone, the deflection to the power StickCurve; held hard over for
+-- StickRampTime seconds it turns StickRamp times as fast.
+Pure.StickDeadZone = 0.12
+Pure.StickCurve = 1.8
+Pure.StickRamp = 1.6
+Pure.StickRampTime = 0.5
+function Pure.stickCurve(v)
+	local m = math.abs(v)
+	if m < Pure.StickDeadZone then
+		return 0
+	end
+	m = (m - Pure.StickDeadZone) / (1 - Pure.StickDeadZone)
+	return (v > 0 and 1 or -1) * math.min(1, m) ^ Pure.StickCurve
+end
 
 -- Whether a spec lobs its round (the mortar): a grenade that can't fire below level.
 function Pure.lobs(spec)
@@ -457,8 +471,13 @@ function GunnerView:look(dt)
 		self.wantYaw -= delta.X * Pure.MouseDegrees * scale
 		self.wantPitch -= delta.Y * Pure.MouseDegrees * scale
 	end
-	self.wantYaw -= self.stick.X * Pure.StickDegrees * scale * dt
-	self.wantPitch += self.stick.Y * Pure.StickDegrees * scale * dt
+	-- The stick on a curve (fine near the middle, full speed at the edge) and a ramp that builds while it is
+	-- held over, so a small correction is precise and a long swing still gets there.
+	local held = self.stick.Magnitude > 0.85
+	self.stickHeld = held and math.min(1, (self.stickHeld or 0) + dt / Pure.StickRampTime) or 0
+	local boost = 1 + (Pure.StickRamp - 1) * self.stickHeld
+	self.wantYaw -= Pure.stickCurve(self.stick.X) * Pure.StickDegrees * boost * scale * dt
+	self.wantPitch += Pure.stickCurve(self.stick.Y) * Pure.StickDegrees * boost * scale * dt
 	self.wantYaw -= self.touch.X * Pure.TouchDegrees * scale
 	self.wantPitch -= self.touch.Y * Pure.TouchDegrees * scale
 	self.touch = Vector2.zero

@@ -720,6 +720,11 @@ local function poseRiders(model, focusDistance)
 					local restYaw = yawJoint.Part0.CFrame * yawJoint.C0
 					local turn = restYaw * yawJoint.Transform * restYaw:Inverse()
 					local frame = root.Part0.CFrame * root.C0
+					-- Getting on is a move to the gun, not a jump (MountRig.Blend, as at an emplacement).
+					local okBlend, Rig = pcall(require, ReplicatedStorage.Shared.MountRig)
+					if okBlend then
+						turn = Rig.Blend(character, turn, root.Part0.CFrame, seat)
+					end
 					root.Transform = frame:Inverse() * turn * frame
 				end
 				-- The gunner's hands on the gun's grips, the way an emplacement's gunner holds theirs (MountRig).

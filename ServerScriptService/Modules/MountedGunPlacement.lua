@@ -60,13 +60,13 @@ Pure.Params = {
 	ArcHalf = 60,
 	FireRays = 9,
 	FireMinClear = 60,
-	CoverReach = 12,
+	CoverReach = 15,
 	CoverMin = 1,
 	FlankDistance = 40,
 	FlankStepLength = 4,
 	FlankStep = 3.2,
 	Facings = 8,
-	MaxCandidates = 420,
+	MaxCandidates = 520,
 }
 
 local function flatDist(a, b)
@@ -347,7 +347,7 @@ function Pure.Candidates(ctx, P)
 		local len = flatDist(a, b)
 		if len > 120 then
 			local ux, uz = (b[1] - a[1]) / len, (b[3] - a[3]) / len
-			for _, t in ipairs({ 0.33, 0.66 }) do
+			for _, t in ipairs({ 0.25, 0.5, 0.75 }) do
 				for _, side in ipairs({ -1, 1 }) do
 					add(a[1] + (b[1] - a[1]) * t - uz * 28 * side, a[3] + (b[3] - a[3]) * t + ux * 28 * side, "road")
 				end
@@ -355,9 +355,11 @@ function Pure.Candidates(ctx, P)
 		end
 	end
 	for _, t in ipairs(ctx.towns or {}) do
-		for i = 0, 7 do
-			local dx, dz = dirOf(i * 45 + 22.5)
-			add(t[1] + dx * (t.ring or 150), t[3] + dz * (t.ring or 150), "town")
+		for ring, r in ipairs({ 120, 160, 210 }) do
+			for i = 0, 7 do
+				local dx, dz = dirOf(i * 45 + ring * 15)
+				add(t[1] + dx * r, t[3] + dz * r, "town")
+			end
 		end
 	end
 	return out
