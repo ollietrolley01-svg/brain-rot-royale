@@ -1,4 +1,6 @@
-"""Behaviour check for the team-mode spawn kit (#114 a: the popup barricade), without Studio.
+"""Behaviour check for the team-mode spawn kit, without Studio: #114 a (a popup defense) and Oliver's
+2026-09-25 kit -- 2 of each of 2 random explosives, 2 smoke bombs, 2 random portable defenses, full
+shield.
 
 Runs the real ReplicatedStorage/Shared/GameModes.lua and ItemData.lua and the real
 ModeTeams.GrantLoadout (cut out of ServerScriptService/Modules/ModeTeams.lua) in lupa, with
@@ -55,6 +57,7 @@ local GameModes = load("GameModes")
 local ItemData = load("ItemData")
 local SLOTS = 8
 local slots = {}
+shield = 0
 local WeaponService = {
     Reset = function() for i = 1, SLOTS do slots[i] = nil end end,
     GiveWeapon = function(_, id)
@@ -82,23 +85,35 @@ local WeaponService = {
         return amount - left
     end,
     Get = function() return { slots = slots } end,
+    SetShield = function(_, value) shield = math.min(value, 100) end,
 }
 local ModeTeams = { RollGreenWeapon = function() return "GreenGun" end }
 local env = setmetatable({ ModeTeams = ModeTeams, WeaponService = WeaponService, GameModes = GameModes,
     ItemData = ItemData }, { __index = _G })
 assert(load_chunk(sources.Grant, "GrantLoadout", "t", env))()
-local weapon, stacks = ModeTeams.GrantLoadout({})
-local out = { weapon = weapon, stacks = stacks, used = 0, slotsUsed = GameModes.Loadout.slotsUsed, carried = {} }
-for i = 1, SLOTS do
-    local s = slots[i]
-    if s then
-        out.used = out.used + 1
-        local item = ItemData.Get(s.id)
-        table.insert(out.carried, { id = s.id, count = s.count, kind = item and item.kind or s.kind,
-            issued = s.issued == true })
+local lives = {}
+math.randomseed(7)
+for life = 1, 60 do
+    shield = 0
+    local weapon, stacks = ModeTeams.GrantLoadout({})
+    local out = { weapon = weapon, stacks = stacks, used = 0, slotsUsed = GameModes.Loadout.slotsUsed, carried = {},
+        shield = shield }
+    for i = 1, SLOTS do
+        local s = slots[i]
+        if s then
+            out.used = out.used + 1
+            local item = ItemData.Get(s.id)
+            table.insert(out.carried, { id = s.id, count = s.count, kind = item and item.kind or s.kind,
+                issued = s.issued == true, stack = item and item.stack or 0 })
+        end
     end
+    lives[life] = out
 end
-return out
+local pools = {}
+for i, pool in ipairs(GameModes.Loadout.pools) do
+    pools[i] = { ids = pool.ids, kinds = pool.kinds, count = pool.count }
+end
+return lives, pools
 """
 
 
@@ -106,29 +121,66 @@ def run(sources):
     lua = LuaRuntime(unpack_returned_tuples=True)
     lua.globals().load_chunk = lua.eval("load")
     table = lua.table_from({k: v for k, v in sources.items() if isinstance(v, str)})
-    out = lua.execute(HARNESS, table)
-    carried = [dict(c) for c in out["carried"].values()]
-    return out, carried
+    lives, pools = lua.execute(HARNESS, table)
+    out = []
+    for life in lives.values():
+        d = dict(life)
+        d["carried"] = [dict(c) for c in life["carried"].values()]
+        out.append(d)
+    pools = [{"ids": list(p["ids"].values()), "kinds": p["kinds"], "count": p["count"]} for p in pools.values()]
+    return out, pools
+
+
+EXPLOSIVES = {"CookedCoconut", "ClingyCrumpet", "RotMine"}
+DEFENSES = {"RotBarricade", "PopupBunker", "BrainrotFortress"}
 
 
 def checks(sources):
-    out, carried = run(sources)
-    defenses = [c for c in carried if c["kind"] == "defense"]
-    barricades = [c for c in carried if c["id"] == "RotBarricade"]
+    lives, pools = run(sources)
+    bad = {k: [] for k in ("smoke", "explosives", "defenses", "counts", "landed", "slots", "room", "issued", "shield")}
+    seen = {"explosives": set(), "defenses": set()}
+    for n, life in enumerate(lives):
+        carried = life["carried"]
+        ids = {}
+        for c in carried:
+            ids[c["id"]] = ids.get(c["id"], 0) + c["count"]
+        if ids.get("LowkeyLatte", 0) != 2:
+            bad["smoke"].append(f"life {n}: {ids.get('LowkeyLatte', 0)} smoke")
+        for key, group in (("explosives", EXPLOSIVES), ("defenses", DEFENSES)):
+            kinds = [i for i in ids if i in group]
+            seen[key].update(kinds)
+            if len(kinds) != 2:
+                bad[key].append(f"life {n}: {kinds}")
+        for c in carried:
+            if c["id"] in EXPLOSIVES | DEFENSES and c["count"] != min(2, c["stack"]):
+                bad["counts"].append(f"life {n}: {c['id']} x{c['count']}")
+        if life["stacks"] != len(sources["_listed"]) + sum(p["kinds"] for p in pools):
+            bad["landed"].append(f"life {n}: {life['stacks']} stacks")
+        if life["used"] != life["slotsUsed"]:
+            bad["slots"].append(f"life {n}: carried {life['used']}, GameModes says {life['slotsUsed']}")
+        if life["used"] > 7:
+            bad["room"].append(f"life {n}: {life['used']} of 8")
+        if not all(c["issued"] for c in carried):
+            bad["issued"].append(f"life {n}")
+        if life["shield"] < 100:
+            bad["shield"].append(f"life {n}: shield {life['shield']}")
+    first = lambda k: bad[k][0] if bad[k] else "all 60 lives"
     results = [
-        ("the kit carries a Rot Barricade", len(barricades) == 1 and barricades[0]["count"] >= 1,
-         f"{barricades}"),
-        ("the barricade is a usable defense (ItemData kind 'defense')", len(defenses) >= 1,
-         f"defense slots: {defenses}"),
-        ("every listed kit item landed (none silently skipped)",
-         out["stacks"] == len(sources["_listed"]), f"{out['stacks']} stacks of {len(sources['_listed'])} listed"),
-        ("slotsUsed matches what was carried", out["used"] == out["slotsUsed"],
-         f"carried {out['used']} slots, GameModes says {out['slotsUsed']}"),
-        ("room left to loot (at least 2 of 8 slots free)", out["used"] <= 6, f"{out['used']} of 8 used"),
-        ("the whole kit is tagged issued (so a death does not drop it)", all(c["issued"] for c in carried),
-         f"{[c['id'] for c in carried if not c['issued']]} untagged"),
+        ("2 smoke bombs every life", not bad["smoke"], first("smoke")),
+        ("exactly 2 different explosive kinds every life", not bad["explosives"], first("explosives")),
+        ("exactly 2 different portable defense kinds every life", not bad["defenses"], first("defenses")),
+        ("2 of each rolled kind (capped by its stack)", not bad["counts"], first("counts")),
+        ("every explosive kind comes up over 60 lives (really random)", seen["explosives"] == EXPLOSIVES,
+         f"seen {sorted(seen['explosives'])}"),
+        ("every defense kind comes up over 60 lives (really random)", seen["defenses"] == DEFENSES,
+         f"seen {sorted(seen['defenses'])}"),
+        ("every kit item landed (none silently skipped)", not bad["landed"], first("landed")),
+        ("slotsUsed matches what was carried", not bad["slots"], first("slots")),
+        ("room left to loot (at least 1 of 8 slots free)", not bad["room"], first("room")),
+        ("the whole kit is tagged issued (so a death does not drop it)", not bad["issued"], first("issued")),
+        ("spawns with full shield", not bad["shield"], first("shield")),
     ]
-    return results, carried
+    return results, lives[0]["carried"]
 
 
 def listed(gamemodes_src):
@@ -150,14 +202,19 @@ def sources_for(root, gamemodes=None, itemdata=None, grant=None):
 
 def plants(root):
     gm = read(root, "ReplicatedStorage", "Shared", "GameModes.lua")
-    items = read(root, "ReplicatedStorage", "Shared", "ItemData.lua")
-    yield "barricade dropped from the kit", sources_for(root, gamemodes=gm.replace('\t\t{ id = "RotBarricade", count = 1 },\n', ""))
-    yield "barricade id typo (ItemData.Get nil, skipped)", sources_for(root, gamemodes=gm.replace('id = "RotBarricade"', 'id = "RotBarricde"'))
-    yield "kit overfills the bag so the barricade is truncated", sources_for(root, gamemodes=gm.replace(
-        '\t\t{ id = "Bandage", count = 3 },', '\t\t{ id = "Bandage", count = 3 },\n' + '\t\t{ id = "MedKit", count = 1 },\n' * 3))
-    yield "barricade no longer a defense item", sources_for(root, itemdata=items.replace(
-        'name = "Rot Barricade",\n\t\tkind = "defense"', 'name = "Rot Barricade",\n\t\tkind = "heal"'))
-    yield "GrantLoadout stops tagging the kit issued", sources_for(root, grant=grant_source(root).replace("slot.issued = true", "slot.issued = false"))
+    grant = grant_source(root)
+    yield "smoke dropped to 1", sources_for(root, gamemodes=gm.replace('{ id = "LowkeyLatte", count = 2 }', '{ id = "LowkeyLatte", count = 1 }'))
+    yield "one explosive kind instead of two", sources_for(root, gamemodes=gm.replace(
+        '"RotMine" }, kinds = 2', '"RotMine" }, kinds = 1'))
+    yield "defense pool loses a kind (never rolled)", sources_for(root, gamemodes=gm.replace(
+        '"RotBarricade", "PopupBunker", "BrainrotFortress" }', '"RotBarricade", "PopupBunker" }'))
+    yield "roll can repeat the same kind", sources_for(root, gamemodes=gm.replace(
+        "local id = table.remove(left, random(#left))", "local id = left[random(#left)]"))
+    yield "defense id typo (ItemData.Get nil, skipped)", sources_for(root, gamemodes=gm.replace('"PopupBunker"', '"PopupBunkr"'))
+    yield "no full shield", sources_for(root, grant=grant.replace("WeaponService.SetShield(player, math.huge)", "WeaponService.SetShield(player, 0)"))
+    yield "GrantLoadout stops tagging the kit issued", sources_for(root, grant=grant.replace("slot.issued = true", "slot.issued = false"))
+    yield "kit overfills the bag", sources_for(root, gamemodes=gm.replace(
+        '{ id = "Bandage", count = 3 },', '{ id = "Bandage", count = 3 },\n\t\t{ id = "MedKit", count = 1 },'))
 
 
 def main():
