@@ -372,12 +372,18 @@ end
 -- and vehicle mounts alike, so spawn protection ends the moment its holder opens fire.
 CombatService.OnShot = nil
 
-function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity)
+-- `source`, optional: "mount" for a vehicle's or a mounted gun's shot (VehicleWeapons), so clients
+-- give it a mount's report. A bot's shot sends the bot's character in that place instead, so a client
+-- finds the gun it is holding rather than guessing from whatever head is nearest the muzzle.
+function CombatService.BroadcastShot(shooterToken, origin, endPoints, rarity, source)
 	if CombatService.OnShot then
 		pcall(CombatService.OnShot, shooterToken)
 	end
 	local shooterPlayer = Combatants.IsPlayer(shooterToken) and shooterToken or nil
-	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity)
+	if source == nil and Combatants.IsBot(shooterToken) then
+		source = shooterToken.character
+	end
+	shotFired:FireAllClients(shooterPlayer, origin, endPoints, rarity, false, source)
 end
 
 -- The rest of a shot that did not come out of the muzzle: a ricochet leaving a wall. Clients draw its tracer

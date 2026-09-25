@@ -578,7 +578,7 @@ local CASE = {
 
 GunFx.IgnoreList = {}
 
--- Called with (position, kind) the first time a spent case hits something, for its tink. Set by
+-- Called with (position, kind, material) the first time a spent case hits something, for its tink. Set by
 -- CombatClient; nil means silent.
 GunFx.OnCasingLand = nil
 
@@ -841,7 +841,7 @@ RunService.Heartbeat:Connect(function(dt)
 					if entry.casing and not entry.landed then
 						entry.landed = true
 						if GunFx.OnCasingLand then
-							GunFx.OnCasingLand(hit.Position, entry.casing)
+							GunFx.OnCasingLand(hit.Position, entry.casing, hit.Material)
 						end
 					end
 					local normal = hit.Normal
