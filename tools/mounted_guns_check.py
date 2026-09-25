@@ -235,6 +235,137 @@ def pure_block(text, name):
 
 
 # ---------------------------------------------------------------------------------------------------
+# BOTS (ServerScriptService/Modules/BotGunner.lua's PURE block; BotService wiring by its source)
+# ---------------------------------------------------------------------------------------------------
+
+def bots_checks(repo, source=None, verbose=True, tactics=True):
+    from lupa import LuaRuntime
+    problems = []
+    root = Path(repo)
+    text = source or (root / "ServerScriptService/Modules/BotGunner.lua").read_text(encoding="utf-8")
+    lua = LuaRuntime(unpack_returned_tuples=True)
+    lua.execute(PRELUDE)
+    pure = lua.execute(luau(pure_block(text, "BotGunner.lua")) + "\nreturn Pure\n")
+    P = pure.Params
+    t = lua.table
+    hmg = weapon_of(repo, "hmg")
+
+    def gun(gid, x, z, fx=1.0, fz=0.0, **kw):
+        g = dict(id=gid, x=x, z=z, fx=fx, fz=fz, yawLimit=hmg["yawLimit"], range=450)
+        g.update(kw)
+        return t(**g)
+
+    def keyed(d):
+        out = t()
+        for k, v in d.items():
+            out[k] = v
+        return out
+
+    def pick(guns, **bot):
+        b = dict(x=0, z=0, now=100, health=1, gunCount=12)
+        b.update(bot)
+        if "foes" in b:
+            b["foes"] = t(*[t(**f) for f in b["foes"]])
+        for k in ("cooldowns", "manned"):
+            if k in b:
+                b[k] = keyed(b[k])
+        for k in ("home", "away"):
+            if k in b:
+                b[k] = t(**b[k])
+        got, why = tup(pure.pick(t(**b), t(*guns)), 2)
+        return (got.id if got else None), why
+
+    foe_front = [dict(x=120, z=0)]
+    # B1 a good gun is taken; a broken, locked or manned one never; nor one with nothing in its arc
+    got, why = pick([gun("good", 20, 0)], foes=foe_front)
+    if got != "good":
+        fail(problems, f"BT1 a free gun 20 studs off with an enemy in its arc was not taken ({why})")
+    for label, kw in (("broken", dict(broken=True)), ("locked", dict(locked=True)), ("manned", dict(manned=True))):
+        got, _ = pick([gun("bad", 10, 0, **kw)], foes=foe_front)
+        if got:
+            fail(problems, f"BT1 a {label} gun was taken")
+    got, _ = pick([gun("far", 60, 0)], foes=foe_front)
+    if got:
+        fail(problems, f"BT1 a gun past SeekRange ({P.SeekRange}) was taken")
+    got, _ = pick([gun("away", 20, 0, fx=-1.0)], foes=foe_front)
+    if got:
+        fail(problems, "BT1 a gun facing away from every known enemy was taken (battle royale)")
+    got, _ = pick([gun("lane", 20, 0, fx=-1.0, covers=True)], teamMode=True, team=1)
+    if got != "lane":
+        fail(problems, "BT1 a team mode's battleground gun (covers) was not taken with no enemy seen")
+    # B2 the caps: per team in a team mode, a share of the guns in a battle royale
+    cap_br = pure.cap(False, 12)
+    got, why = pick([gun("good", 20, 0)], foes=foe_front, manned={"all": cap_br})
+    if got or why != "cap":
+        fail(problems, f"BT2 a bot took a gun with its side at the cap ({cap_br} of 12 manned): {why}")
+    got, _ = pick([gun("good", 20, 0, covers=True)], teamMode=True, team=1, manned={1: P.TeamCap})
+    if got:
+        fail(problems, f"BT2 a team-mode bot took a gun with {P.TeamCap} of its team's already manned")
+    got, _ = pick([gun("good", 20, 0, covers=True)], teamMode=True, team=1, manned={2: P.TeamCap})
+    if got != "good":
+        fail(problems, "BT2 the other team's manned guns counted against this team's cap")
+    if not (1 <= cap_br <= 4 and P.TeamCap <= 4):
+        fail(problems, f"BT2 caps too loose: {cap_br} of 12 in a battle royale, {P.TeamCap} a team")
+    # B3 the cooldown on a gun it left, and own half first
+    got, _ = pick([gun("left", 20, 0)], foes=foe_front, cooldowns={"left": 130})
+    if got:
+        fail(problems, "BT3 a bot took the gun it left again inside the cooldown")
+    got, _ = pick([gun("theirs", 10, 0, covers=True), gun("mine", -20, 0, fx=-1.0, covers=True)],
+                  teamMode=True, team=1, home=dict(x=-300, z=0), away=dict(x=300, z=0))
+    if got != "mine":
+        fail(problems, "BT3 a team-mode bot took the gun on the enemy's half over one on its own")
+    # B4 getting off: idle, flanked (shot from the side or back, an enemy close behind), broken, hurt;
+    # staying while a target was in the arc lately or an enemy is close in front (the shield's side)
+    g = gun("on", 0, 0)
+    cases = [
+        ("idle", dict(now=100, arcTargetAt=100 - P.IdleLeave - 1), "idle"),
+        ("shot from behind", dict(now=100, arcTargetAt=99, hitFrom=t(x=-40, z=0, at=99.5)), "flanked"),
+        ("shot from the side", dict(now=100, arcTargetAt=99, hitFrom=t(x=0, z=40, at=99.5)), "flanked"),
+        ("an enemy close behind", dict(now=100, arcTargetAt=99, foes=t(t(x=-10, z=2))), "flanked"),
+        ("hurt", dict(now=100, arcTargetAt=99, health=0.2), "hurt"),
+        ("busy shooting", dict(now=100, arcTargetAt=95), None),
+        ("shot from the front", dict(now=100, arcTargetAt=99, hitFrom=t(x=60, z=5, at=99.5)), None),
+        ("an enemy close in front", dict(now=100, arcTargetAt=99, foes=t(t(x=10, z=1))), None),
+        ("an old hit from behind", dict(now=100, arcTargetAt=99, hitFrom=t(x=-40, z=0, at=90)), None),
+    ]
+    for label, s_, want in cases:
+        got = pure.leave(g, t(**s_))
+        if got != want:
+            fail(problems, f"BT4 {label}: wanted {want or 'stay'}, got {got or 'stay'}")
+    if pure.leave(gun("wreck", 0, 0, broken=True), t(now=100, arcTargetAt=100)) != "broken":
+        fail(problems, "BT4 a bot stayed on a broken gun")
+    # B5 the wiring: BotService asks BotGunner to pick and to leave, keeps its cooldown, and hands the
+    # manned guns to the driving tactics; BotSit holds a bot to the prompt's mount cooldown
+    service = (root / "ServerScriptService/Modules/BotService.lua").read_text(encoding="utf-8")
+    guns_src = (root / "ServerScriptService/Modules/MountedGuns.lua").read_text(encoding="utf-8")
+    for needle, what in (("BotGunner.Choose(", "picks guns through BotGunner"), ("BotGunner.Leave(", "asks BotGunner when to get off"),
+                         ("BotGunner.Left(", "starts the cooldown on leaving"), ("BotGunner.Threats(", "hands manned guns to the driving tactics")):
+        if needle not in service:
+            fail(problems, f"BT5 BotService no longer {what}")
+    sit = guns_src[guns_src.index("function MountedGuns.BotSit"):]
+    sit = sit[:sit.index("\nend\n")]
+    if "MountCooldown" not in sit:
+        fail(problems, "BT5 MountedGuns.BotSit skips the prompt's mount cooldown")
+    # B6 a driving bot keeps out of a manned gun's field of fire (the real tactics layer and car physics)
+    if tactics:
+        import bot_driving_tactics_check as T
+        threat = pure.threat(t(x=1350, z=-1400, fx=0, fz=-1, yawLimit=hmg["yawLimit"], range=450))
+        tl = T.load(open(T.TACTICS, encoding="utf-8").read())
+        tl.globals().MOUNTED_GUN = tl.table_from(dict(x=threat.x, z=threat.z, fx=threat.fx, fz=threat.fz,
+                                                      arc=math.degrees(math.acos(threat.cosArc)), range=threat.range))
+        r = T.run(tl, "mountedgun", True)
+        for p in T.judge("gun", r):
+            fail(problems, f"BT6 a car past a manned HMG: {p}")
+        if verbose:
+            print(f"  car past a manned HMG (arc +-{math.degrees(math.acos(threat.cosArc)):.0f}, range {threat.range:g}): "
+                  f"{r['gunTime']:.1f} s in its fire, reached {bool(r['reached'])}")
+    if verbose:
+        print(f"  caps: {cap_br} of 12 guns (battle royale), {P.TeamCap} a team; seek {P.SeekRange}, idle {P.IdleLeave} s, "
+              f"flank {P.FlankBehind} studs / shield +-{P.ShieldHalf}, cooldown {P.Cooldown} s")
+    return problems
+
+
+# ---------------------------------------------------------------------------------------------------
 # BALANCE
 # ---------------------------------------------------------------------------------------------------
 
@@ -980,6 +1111,7 @@ def planted(repo):
             "\tlocal left = math.min(dt, 0.1)\n", "\tdo return target, 0 end\n\tlocal left = math.min(dt, 0.1)\n", 1), verbose=False), "R1"),
     ]
     client = (root / "StarterPlayerScripts/MountedGunClient.client.lua").read_text(encoding="utf-8")
+    bots = (root / "ServerScriptService/Modules/BotGunner.lua").read_text(encoding="utf-8")
     faults += [
         ("RELOAD's touch button on top of FIRE", lambda: input_checks(repo, client.replace(
             'title = "RELOAD", position = UDim2.new(1, -250, 1, -280)', 'title = "RELOAD", position = UDim2.new(1, -100, 1, -270)'),
@@ -988,6 +1120,11 @@ def planted(repo):
             "keys = { Enum.KeyCode.ButtonB }", "keys = { Enum.KeyCode.ButtonY }"), verbose=False), "I1"),
         ("phone HUD text shrunk to 10 px", lambda: input_checks(repo, client.replace(
             "info.TextSize = 12", "info.TextSize = 10"), verbose=False), "I3"),
+        ("no cap on bots manning guns", lambda: bots_checks(repo, bots.replace(
+            ">= Pure.cap(bot.teamMode, bot.gunCount or #guns, P) then", ">= math.huge then"), verbose=False, tactics=False), "BT2"),
+        ("bots never getting off a gun", lambda: bots_checks(repo, bots.replace(
+            "function Pure.leave(gun, s, P)\n\tP = P or Pure.Params\n", "function Pure.leave(gun, s, P)\n\tdo return nil end\n"),
+            verbose=False, tactics=False), "BT4"),
         ("the belt-change remote's rate limit taken out", lambda: remote_checks(repo, weapons_source=weapons.replace(
             'if not RateLimit.Take(player, "Reload") then', 'if false then')), "L3"),
     ]
@@ -1022,6 +1159,8 @@ def main():
     problems += rotation_checks(repo)
     print("PHONE AND PAD")
     problems += input_checks(repo)
+    print("BOTS")
+    problems += bots_checks(repo)
     for p in problems:
         print("  FAIL " + p)
     status = 0 if not problems else 1

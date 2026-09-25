@@ -380,6 +380,13 @@ function tactic(name, modelId, g, after)
 		addGun(1350, -1400, V(0, 0, -1), 50, 180, 0.08)
 		car = makeVehicle(modelId, g, 1000, -1500, east)
 		policy = begin(car, V(1750, 0, -1500), after)
+	elseif name == "mountedgun" then
+		-- A manned stationary gun as BotService hands it over (BotGunner.Threats, set by
+		-- tools/mounted_guns_check.py's BOTS section in MOUNTED_GUN): its own facing, arc and range.
+		local m = MOUNTED_GUN
+		addGun(m.x, m.z, V(m.fx, 0, m.fz), m.arc, m.range, 0.08)
+		car = makeVehicle(modelId, g, 1000, -1500, east)
+		policy = begin(car, V(1750, 0, -1500), after)
 	elseif name == "broadside" then
 		addEnemy(1180, -1500, { dps = 0.01 })
 		addEnemy(1190, -1470, { dps = 0.01 })
