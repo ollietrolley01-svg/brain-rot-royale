@@ -9,3 +9,5 @@ Cut from main `d1e4f73`. Mailbox only.
   vehicle seams (`task/vehicle-seams`) and the phone/Xbox pass (`task/device-compat`).
 - `coordination/messages/2026-09-25-1642-bimjom-device-compat-questions.md`: five calls for Oliver from the phone/Xbox
   pass (PR #64), led by the 7-button touch cap that leaves a phone gunner unable to fire.
+- `coordination/messages/2026-09-25-1715-bimjom-vehicle-runtime-check-red-on-main.md`: vehicle_models_runtime_check is red
+  on main (10 wheel/arch faults at full steer), found during the seams work (PR #65).
