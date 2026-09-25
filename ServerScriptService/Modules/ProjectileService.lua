@@ -178,10 +178,27 @@ local function combatantOf(instance)
 	return nil, nil
 end
 
+-- A body a round flies on through: a team-mate of its owner, by the mode's friendly-fire veto (the one
+-- DealDamage asks), the way a bullet has since efccfa5 (Oliver, 2026-09-25). A round used to burst on
+-- the team-mate in front, shielding the enemy behind and catching the shooter in their own blast. nil
+-- veto (the battle royale) and anything thrown: nothing passes, as before. Returns the body's model.
+local function mateInTheWay(entry, instance)
+	if entry.thrown or not CombatService.DamageVeto then
+		return nil
+	end
+	local owner = creditable(entry.owner)
+	local token, model = combatantOf(instance)
+	if owner == nil or token == nil or token == owner then
+		return nil
+	end
+	return CombatService.DamageVeto(owner, token, entry.weaponId) and model or nil
+end
+
 -- A sweep from `origin` along `displacement` that returns the first thing that stops this projectile:
 -- { Instance, Position, Normal, Distance }. Glass breaks and is swept past. Anything non-solid that
--- isn't a body (trigger volumes, invisible markers) is swept past too. Thrown things also pass through
--- companions; rounds are soaked by them the way bullets are.
+-- isn't a body (trigger volumes, invisible markers) is swept past too, and so is a round owner's
+-- team-mate (mateInTheWay). Thrown things also pass through companions; rounds are soaked by them the
+-- way bullets are.
 local function sweep(entry, origin, radius, displacement)
 	local length = displacement.Magnitude
 	if length < 1e-5 then
@@ -197,11 +214,14 @@ local function sweep(entry, origin, radius, displacement)
 		end
 		local instance = result.Instance
 		local at = travelled + result.Distance
+		local mate = mateInTheWay(entry, instance)
 		if CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(instance) then
 			if CombatService.DamageDestructible then
 				CombatService.DamageDestructible(creditable(entry.owner), instance, 1, entry.lastFrom or origin)
 			end
 			ignore(entry, instance)
+		elseif mate then
+			ignore(entry, mate)
 		elseif CombatService.CompanionFromPart and CombatService.CompanionFromPart(instance) then
 			if entry.thrown then
 				ignore(entry, CombatService.CompanionFromPart(instance))
