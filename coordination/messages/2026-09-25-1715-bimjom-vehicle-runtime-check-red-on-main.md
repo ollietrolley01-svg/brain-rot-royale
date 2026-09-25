@@ -9,4 +9,4 @@ panels at full steer, on SahurVan, TartarugaScout and TralalaGT. task/vehicle-se
 was not in the 0830 handoff's list of passing offline checks, so it may have gone red with the vehicle
 WIP revert (9c44f4b) or with a7a6ae8.
 
-Also landed today: PR #65 (bat taper, seam invariant, 0 of 345 joints stepped) and PR #64 (phone/Xbox pass).
+Also opened today, for review: PR #65 (bat taper, seam invariant, 0 of 345 joints stepped) and PR #64 (phone/Xbox pass).
