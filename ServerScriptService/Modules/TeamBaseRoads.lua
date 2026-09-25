@@ -17,8 +17,9 @@
 -- runs into something that cannot be cleared. The best of what is left is the shortest.
 --
 -- THE HEIGHTS. The ground along the route, smoothed, held to MAX_GRADE, pinned to the gate's ramp at
--- one end and to the road's own surface at the other. The ground under the carriageway and its
--- shoulders is then written flat to those heights (a cutting or an embankment), so the slabs lie on it.
+-- one end and to the road's own surface at the other, and never under the ground across its width: the
+-- road is laid ON the terrain, thick slabs reaching down into it. (Carving the ground with FillBlock was
+-- tried: the voxels round a partly filled cell up and buried the asphalt, measured in Studio.)
 --
 -- THE SURFACE. A run of asphalt slabs whose TOP edges meet at every sample (a change of grade is a
 -- crease, as RoadNetwork builds its roads), a joint disc under each crease a hair lower filling the
@@ -205,8 +206,8 @@ end
 
 -- Where along an edge the junction may go (from the lead's own square-on point) and how hard the
 -- curve pulls: more than one of each is tried, so a road the plain curve cannot reach is still found.
-local SHIFTS = { 0, -45, 45, -100, 100 }
-local TENSIONS = { 0.42, 0.28, 0.6 }
+local SHIFTS = { 0, -45, 45, -100, 100, -170, 170, -250, 250 }
+local TENSIONS = { 0.42, 0.28, 0.6, 0.8 }
 
 -- The shortest acceptable route from `start` (the end of the gate's ramp) out along `heading` to any
 -- road edge. options: avoid = { { centre, radius, name } }, blocked(a, b) -> why | nil.
@@ -250,6 +251,19 @@ function TeamBaseRoads.Plan(start, heading, roads, options)
 	end)
 	for _, route in ipairs(found) do
 		local why = blockedRoute(route, options)
+		-- With the ground to hand (options.groundAt, options.startY per gate), a route whose profile
+		-- cannot keep to the grade over it (the ground climbs too hard at an end) is passed over too.
+		if not why and options.groundAt then
+			local startY = type(options.startY) == "table" and options.startY[route.gate] or options.startY
+			route.heights = TeamBaseRoads.Profile(route, options.groundAt, startY or 0)
+			for i = 2, #route.points do
+				local d = (route.points[i] - route.points[i - 1]).Magnitude
+				if math.abs(route.heights[i] - route.heights[i - 1]) > d * MAX_GRADE + 0.05 then
+					why = "too steep for the ground"
+					break
+				end
+			end
+		end
 		if not why then
 			return route
 		end
@@ -308,6 +322,33 @@ function TeamBaseRoads.Profile(plan, groundAt, startY)
 		end
 	end
 	heights[1], heights[n] = startY, endY
+	-- Never under the ground: the surface over the highest ground across the carriageway (the road is
+	-- laid ON the terrain, its thick slabs reaching down into it; nothing is carved). Raised only, and
+	-- the grade kept by raising the low side, so it still climbs no steeper than MAX_GRADE.
+	if groundAt then
+		local floor = {}
+		for i = 2, n - 1 do
+			local along = (points[i + 1] - points[i - 1]).Unit
+			local right = Vector3.new(-along.Z, 0, along.X)
+			local top = -math.huge
+			for _, s in ipairs({ -(HALF - 0.5), 0, HALF - 0.5 }) do
+				local q = points[i] + right * s
+				top = math.max(top, groundAt(q.X, q.Z) or -math.huge)
+			end
+			floor[i] = top - TeamBaseRoads.Lift + 0.1
+			heights[i] = math.max(heights[i], floor[i])
+		end
+		for _ = 1, 4 do
+			for i = 2, n - 1 do
+				local d = (points[i] - points[i - 1]).Magnitude * MAX_GRADE
+				heights[i] = math.max(heights[i], heights[i - 1] - d)
+			end
+			for i = n - 1, 2, -1 do
+				local d = (points[i + 1] - points[i]).Magnitude * MAX_GRADE
+				heights[i] = math.max(heights[i], heights[i + 1] - d)
+			end
+		end
+	end
 	return heights
 end
 
@@ -324,8 +365,8 @@ function TeamBaseRoads.Build(plan, heights, parent, terrain)
 	local model = Instance.new("Model")
 	model.Name = "AccessRoad"
 	local lift = TeamBaseRoads.Lift
-	-- Thick enough to reach down past the ground written under it (voxels round the surface a little).
-	local thick = 2.2
+	-- Thick enough that where the road rides over a dip its sides reach down into the ground.
+	local thick = 3.2
 	local points = plan.points
 	local tops = {}
 	for i, p in ipairs(points) do
@@ -371,7 +412,7 @@ function TeamBaseRoads.Build(plan, heights, parent, terrain)
 		dashRun += length
 		local _ = up
 		-- The ground under it: dead flat to the road's ground across the carriageway and shoulders.
-		if terrain then
+		if terrain and TeamBaseRoads.Carve then
 			local mid = (points[i - 1] + points[i]) / 2
 			local h = (heights[i - 1] + heights[i]) / 2
 			local flatFrame = CFrame.lookAt(Vector3.new(mid.X, h, mid.Z), Vector3.new(points[i].X, h, points[i].Z))

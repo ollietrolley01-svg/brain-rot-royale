@@ -575,7 +575,11 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 				{ position = ruin.frame * TeamBaseRuins.GateOut, heading = ruin.frame.LookVector },
 				{ position = ruin.frame * TeamBaseRuins.GateOutEast, heading = ruin.frame.RightVector },
 			}
-			local plan, why = TeamBaseRoads.Plan(gates, nil, roads, { avoid = avoid, boxes = boxes, blocked = blocked })
+			local function groundAt(x, z)
+				return terrainAt(x, z)
+			end
+			local plan, why = TeamBaseRoads.Plan(gates, nil, roads,
+				{ avoid = avoid, boxes = boxes, blocked = blocked, groundAt = groundAt, startY = ruin.height })
 			if not plan then
 				ruin.accessWhy = why
 				warn("ModeTeams: team " .. team .. "'s base has no access road: " .. tostring(why))
@@ -588,9 +592,7 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 				for item in pairs(clear) do
 					item:Destroy()
 				end
-				local heights = TeamBaseRoads.Profile(plan, function(x, z)
-					return terrainAt(x, z)
-				end, ruin.height)
+				local heights = plan.heights or TeamBaseRoads.Profile(plan, groundAt, ruin.height)
 				ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model, workspace.Terrain)
 				ruin.accessPlan = plan
 				table.insert(accessUndo, (TeamBaseRoads.Register(roads, plan, heights)))
