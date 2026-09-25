@@ -57,12 +57,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import team_base_ruins_check as TBR  # noqa: E402
 from vehicle_models_axis_check import luau_to_lua  # noqa: E402
+# BotNav uses Luau's `continue`; this converter turns it into a goto.
+from car_placement_luau import luau_to_lua as luau_to_lua_continue  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
 
-BUDGET = (900, 1620)
-RADIUS = 126.0
-EXTENT = 132.0
+BUDGET = (900, 3000)
+RADIUS = 172.0
+EXTENT = 178.0
 GRID = 0.5
 STEP = 1.5
 # A body: its radius and height, how steep the stairs round it may climb, and the steepest surface it
@@ -72,7 +74,7 @@ BOT = dict(radius=2.5, height=6.0, slope=math.tan(math.radians(55)), floorNormal
 BOT_DROP = 14.0
 EYE = 5.2
 LANE_SIGHT = {"left": (-110, -50), "centre": (-36, 36), "right": (50, 110)}
-SIGHT_LIMIT = 80.0
+SIGHT_LIMIT = 90.0  # 80 on the 126 disc; the lanes are 1.37x longer on the 172 one
 COVER_REACH, COVER_HIGH, COVER_GAP = 6.0, 2.4, 15.0
 CAR_HALF, CAR_LOW, CAR_HIGH = 6.0, 0.7, 8.0
 HILL_RADIUS, HILL_SPREAD = 28.0, 0.55
@@ -81,6 +83,25 @@ TOUCH = 0.12
 SEED = 20260924
 
 EXTRA = r"""
+do
+    -- DestructibleService now hooks RunService.Heartbeat and asks Players at load: give every service
+    -- the mock hands out a signal that never fires and an empty player list.
+    local base = game.GetService
+    -- CollectionService records its tags, so the emplacement check can see them.
+    TAGS = {}
+    local collection = {
+        AddTag = function(_, instance, tag) TAGS[instance] = TAGS[instance] or {}; TAGS[instance][tag] = true end,
+        HasTag = function(_, instance, tag) return TAGS[instance] ~= nil and TAGS[instance][tag] == true end,
+    }
+    game.GetService = function(self, name)
+        if name == "CollectionService" then return collection end
+        local service = base(self, name)
+        service.Heartbeat = service.Heartbeat or { Connect = function() return { Disconnect = function() end } end }
+        service.GetPlayers = service.GetPlayers or function() return {} end
+        service.GetPlayerFromCharacter = service.GetPlayerFromCharacter or function() return nil end
+        return service
+    end
+end
 table.clone = function(t) local c = {} for k, v in pairs(t) do c[k] = v end return c end
 do
     -- Clone: the properties and attributes, no children (what ClearSite's street cutting needs).
@@ -97,7 +118,25 @@ do
                 return copy
             end
         end
+        if k == "Destroying" then
+            -- DestructibleService's opt-out caches drop an entry when its instance goes.
+            return { Connect = function() return { Disconnect = function() end } end }
+        end
         return previous(i, k)
+    end
+end
+do
+    -- Vector3:Min/Max (DestructibleService's "is it a small thing" bounds).
+    local meta = getmetatable(Vector3.new(0, 0, 0))
+    local previous = meta.__index
+    local function pick(f)
+        return function(a, b) return Vector3.new(f(a.X, b.X), f(a.Y, b.Y), f(a.Z, b.Z)) end
+    end
+    local extra = { Min = pick(math.min), Max = pick(math.max) }
+    meta.__index = function(v, k)
+        if extra[k] then return extra[k] end
+        if type(previous) == "function" then return previous(v, k) end
+        return previous[k]
     end
 end
 function dumpAll(model)
@@ -115,6 +154,13 @@ function dumpAll(model)
                 tostring(p:GetAttribute("Destructible")), p:GetAttribute("DestructibleHealth") or 0,
                 table.concat(names, "/"), col.R or 0, col.G or 0, col.B or 0, tostring(p.Material) })
         end
+    end
+    return out
+end
+function taggedIn(model, tag)
+    local out = {}
+    for _, p in ipairs(model:GetDescendants()) do
+        if TAGS[p] and TAGS[p][tag] then table.insert(out, p.Name) end
     end
     return out
 end
@@ -222,6 +268,10 @@ def read_info(rt, info):
         p = power[i]
         b = p.box
         out["power"].append({"name": p.name, "point": vec(p.point), "box": (b[1], b[2], b[3], b[4]), "minY": p.minY})
+    out["emplacements"] = []
+    emps = info.emplacements
+    for i in range(1, len(emps) + 1):
+        out["emplacements"].append({"name": emps[i].name, "covers": emps[i].covers})
     zips = info.zips
     for i in range(1, len(zips) + 1):
         z = zips[i]
@@ -1156,6 +1206,7 @@ def check_ziplines(walk, cols, info, log):
     return problems
 
 
+DESTRUCT_WHOLE_LIMIT = 0
 NEVER_TOPS = {"Keep", "Gatehouse", "Pit", "Gantry", "Bridge", "Crane", "SahurColossus", "RotKiosk", "Middle", "Paving"}
 MUST_BREAK = {"Wall", "Sandbag", "Crate", "Container", "Barrier", "Tyre", "Drum", "WreckBody", "StallCounter", "StallPost",
               "SignPost", "RotColaMachine", "BrazierBowl", "Hedgehog"}
@@ -1172,6 +1223,7 @@ def check_destruct(rt, model, parts, log):
     problems = []
     breakable = 0
     must = 0
+    whole = []
     names_never = {"Foundation", "Paving", "GalleryFloor", "KeepStair", "KeepRamp", "KeepBalcony", "ScaffoldDeck", "ScaffoldStair",
                    "PitRim", "BermStep", "RimStair", "GateWalk", "GateTower", "GateStair", "GantryDeck", "GantryStair", "BridgeDeck",
                    "BridgePier", "KeepWall", "Plinth"}
@@ -1188,8 +1240,12 @@ def check_destruct(rt, model, parts, log):
             must += 1
             if not can:
                 problems.append("destruct: %s (%s) does not break" % (part.Name, "/".join(reversed(chain))))
-        if can and (part.Name in names_never or (NEVER_TOPS & set(chain) and not isinstance(part.GetAttribute(part, "Destructible"), str))):
-            problems.append("destruct: %s (%s) breaks, and must not" % (part.Name, "/".join(reversed(chain))))
+        # Oliver 2026-09-24: EVERYTHING breaks but spawns, the lobby, the storm and the map edges, so
+        # the keep, the pit, the gantry, the bridge, every floor and stair break too (DestructibleService
+        # ignores Destructible=false now). A solid piece that cannot is a fault, unless the service
+        # itself calls it ground (a wide thin slab) or it is buried where no one can see it.
+        if not can and part.CanCollide and part.Transparency < 1:
+            whole.append("%s (%s)" % (part.Name, "/".join(reversed(chain))))
     pools = {}
     for p in parts:
         if ":" in p["tag"]:
@@ -1202,10 +1258,212 @@ def check_destruct(rt, model, parts, log):
         parents = {m["path"] for m in members}
         if len(parents) > 1:
             problems.append("destruct: pool %s is split across %s (a pool is one parent's children)" % (tag, sorted(parents)))
-    log("destruct: %d parts examined, %d breakable, %d that must break, %d tagged pools" % (len(live), breakable, must, len(pools)))
+    log("destruct: %d parts examined, %d breakable, %d that must break, %d tagged pools; %d solid pieces kept whole%s"
+        % (len(live), breakable, must, len(pools), len(whole), (" (e.g. %s)" % ", ".join(whole[:4])) if whole else ""))
+    if len(whole) > DESTRUCT_WHOLE_LIMIT:
+        problems.append("destruct: %d solid pieces never break (limit %d), e.g. %s" % (len(whole), DESTRUCT_WHOLE_LIMIT, ", ".join(whole[:6])))
     if must < 100:
         problems.append("destruct: only %d breakable pieces found to check" % must)
     model.Parent = None
+    return problems
+
+
+# ------------------------------------------------------------------------------------------------
+# Gun emplacements
+# ------------------------------------------------------------------------------------------------
+
+EMPLACEMENTS = (8, 12)
+BASE_DISTANCE = 432.0  # ModeTeams: BASE_FRACTION 0.72 of an arena radius of at least 600
+GUN_REACH = 160.0      # how far down a lane a gun's line is counted
+LANE_SHARE = 0.4       # the most of any one lane a gun may see
+LANE_END = 25.0        # the stretch inside each team's way in that no gun may see from closer than NEAR_END
+NEAR_END = 100.0
+
+
+def clear_rays(cols, eye, targets, step=0.4, start=0.8, chunk=600):
+    """For each target, whether the straight line from `eye` to it is clear of every solid in the
+    columns (sampled every `step`; outside the columns' extent nothing is known, so nothing blocks)."""
+    eye = np.asarray(eye, float)
+    targets = np.asarray(targets, float).reshape(-1, 3)
+    out = np.ones(len(targets), bool)
+    lim = -cols.x0 - 0.5
+    for a in range(0, len(targets), chunk):
+        T = targets[a:a + chunk]
+        D = T - eye
+        L = np.linalg.norm(D, axis=1)
+        M = max(2, int(math.ceil(L.max() / step)))
+        s = np.linspace(0, 1, M)[None, :]
+        t = s * L[:, None]
+        valid = (t >= start) & (t <= L[:, None] - 0.3)
+        px = eye[0] + D[:, 0, None] * s
+        py = eye[1] + D[:, 1, None] * s
+        pz = eye[2] + D[:, 2, None] * s
+        valid &= (np.abs(px) <= lim) & (np.abs(pz) <= lim)
+        i = np.clip(np.rint((px - cols.x0) / cols.grid).astype(int), 0, cols.n - 1)
+        k = np.clip(np.rint((pz - cols.z0) / cols.grid).astype(int), 0, cols.n - 1)
+        hit = np.zeros(i.shape, bool)
+        for layer in range(cols.K):
+            lo, hi = cols.LO[layer, i, k], cols.HI[layer, i, k]
+            hit |= (lo <= py) & (hi >= py)
+        out[a:a + chunk] = ~(hit & valid).any(axis=1)
+    return out
+
+
+def in_arc(base, look, points, arc):
+    d = np.asarray(points, float)[:, [0, 2]] - np.array([base[0], base[2]])
+    n = np.linalg.norm(d, axis=1)
+    f = np.array([look[0], look[2]])
+    f = f / np.linalg.norm(f)
+    cos = (d @ f) / np.maximum(n, 1e-9)
+    return cos >= math.cos(math.radians(arc / 2)) - 1e-9
+
+
+def spawn_targets(side):
+    out = [(x, y, side * BASE_DISTANCE) for x in (-60, -30, 0, 30, 60) for y in (2.0, 5.0)]
+    out += [(x, y, side * (BASE_DISTANCE - 40)) for x in (-40, 0, 40) for y in (2.0, 5.0)]
+    return out
+
+
+def lanes_of(info):
+    """Each lane whole, team 1's way in to team 2's: the two halves' routes joined, and the cut."""
+    out = {}
+    for name, pts in info["routes"].items():
+        if name.endswith("S") and name[:-1] + "N" in info["routes"]:
+            south, north = pts, info["routes"][name[:-1] + "N"]
+            out[name[:-1]] = south + list(reversed(north))
+    out["Cut"] = lane_polyline(info)
+    return out
+
+
+def emplacement_rows(parts):
+    return [p for p in parts if p["name"] == "GunEmplacement"]
+
+
+def check_emplacements(rt, model, parts, cols, walk, info, log, arc=None, eye=None):
+    """The gun emplacements: 8..12, the same number a half and each the other's reflection, tagged,
+    invisible and non-colliding; each on a flat floor both teams can walk to, with room round it,
+    cover beside or behind the gunner, neither base in any line from the gunner's eye, a real field
+    of fire onto the lanes but none of a lane's way in and no more than LANE_SHARE of any lane, and
+    a way in for the other team that the gun cannot see."""
+    problems = []
+    arc = arc or float(rt.bg.GunArc)
+    eye_up = eye or float(rt.bg.GunEye)
+    emps = emplacement_rows(parts)
+    tagged = list(rt.lua.globals().taggedIn(model, rt.bg.EmplacementTag).values())
+    if len(tagged) != len(emps) or any(n != "GunEmplacement" for n in tagged):
+        problems.append("emplacements: %d parts, %d tagged %s" % (len(emps), len(tagged), rt.bg.EmplacementTag))
+    if not EMPLACEMENTS[0] <= len(emps) <= EMPLACEMENTS[1]:
+        problems.append("emplacements: %d, want %d..%d" % (len(emps), *EMPLACEMENTS))
+    if len(info.get("emplacements", [])) != len(emps):
+        problems.append("emplacements: info lists %d, %d built" % (len(info.get("emplacements", [])), len(emps)))
+    one = [p for p in emps if p["pos"][2] < -0.5]
+    two = [p for p in emps if p["pos"][2] > 0.5]
+    if len(one) != len(two) or len(one) + len(two) != len(emps):
+        problems.append("emplacements: %d in team 1's half, %d in team 2's, %d on the mirror"
+                        % (len(one), len(two), len(emps) - len(one) - len(two)))
+    for p in emps:
+        x, y, z = p["pos"]
+        if p["collide"] or p["query"] or p["transparency"] < 1:
+            problems.append("emplacement at (%.1f, %.1f, %.1f): not invisible and non-colliding" % (x, y, z))
+        look = tuple(-c for c in p["axes"][2])
+        twin = [q for q in emps if math.dist(q["pos"], (x, y, -z)) < 0.05
+                and math.dist(tuple(-c for c in q["axes"][2]), (look[0], look[1], -look[2])) < 1e-3]
+        if not twin:
+            problems.append("emplacement at (%.1f, %.1f, %.1f): no mirror twin" % (x, y, z))
+    d = {s: walk.bfs(entries(walk, s)) for s in (-1, 1)}
+    rows = []
+    lane_pts = {name: polyline_samples(pts, 1.0) for name, pts in lanes_of(info).items()}
+    for p in emps:
+        x, y, z = p["pos"]
+        look = tuple(-c for c in p["axes"][2])
+        where = "emplacement at (%.1f, %.1f, %.1f)" % (x, y, z)
+        e = (x, y + eye_up, z)
+        # On a floor: a flat top under the base and a stud either side, and a body can stand by it
+        # and get there from both ends.
+        for dx, dz in ((0, 0), (0.9, 0), (-0.9, 0), (0, 0.9), (0, -0.9)):
+            i, k = cols.cell(x + dx, z + dz)
+            tops = cols.HI[:, i, k]
+            ok = np.isfinite(tops) & (tops >= y - 0.25) & (tops <= y + 0.1) & (cols.NY[:, i, k] >= 0.95)
+            if not ok.any():
+                problems.append(where + ": no floor under it at (%.1f, %.1f)" % (x + dx, z + dz))
+                break
+        near = walk.near(x, y, z, reach=3.0, rise=1.0)
+        if not near or not all(any(d[s][n] >= 0 for n in near) for s in (-1, 1)):
+            problems.append(where + ": nowhere to stand by it that both teams can walk to")
+        # Room for the gun and its gunner: nothing solid within 2.2 of it, from the floor to 5.5 up.
+        i0, k0 = cols.cell(x, z)
+        r = int(math.ceil(2.2 / cols.grid))
+        crowded = False
+        for di in range(-r, r + 1):
+            for dk in range(-r, r + 1):
+                if math.hypot(di, dk) * cols.grid > 2.2:
+                    continue
+                lo, hi = cols.LO[:, i0 + di, k0 + dk], cols.HI[:, i0 + di, k0 + dk]
+                if ((lo < y + 5.5) & (hi > y + 0.3)).any():
+                    crowded = True
+        if crowded:
+            problems.append(where + ": something solid within 2.2 of the gun")
+        # Cover beside or behind the gunner: of 13 directions round the back half, how many meet
+        # something within 4.5 at both 1 and 2 studs up.
+        fx, fz = look[0], look[2]
+        n = math.hypot(fx, fz)
+        fx, fz = fx / n, fz / n
+        covered = 0
+        for a in range(13):
+            ang = math.radians(90 + a * 15)
+            dx, dz = fx * math.cos(ang) - fz * math.sin(ang), fx * math.sin(ang) + fz * math.cos(ang)
+            both = True
+            for up in (1.0, 2.0):
+                if clear_rays(cols, (x, y + up, z), [(x + dx * 4.5, y + up, z + dz * 4.5)], step=0.25, start=0.3)[0]:
+                    both = False
+            covered += both
+        if covered < 4:
+            problems.append(where + ": no cover beside or behind the gunner (%d of 13 ways covered)" % covered)
+        # Neither team's base in any line from the gunner's eye.
+        for side in (-1, 1):
+            if clear_rays(cols, e, spawn_targets(side)).any():
+                problems.append(where + ": sees team %d's base" % (1 if side < 0 else 2))
+        # Its field of fire: the lanes in its arc, within reach, that it can see.
+        total, longest, shares = 0, 0.0, []
+        for name, pts in lane_pts.items():
+            P = np.array(pts, float)
+            dist = np.hypot(P[:, 0] - x, P[:, 2] - z)
+            cand = in_arc((x, y, z), look, P, arc) & (dist <= GUN_REACH) & (dist > 2)
+            vis = np.zeros(len(P), bool)
+            if cand.any():
+                vis[cand] = clear_rays(cols, e, P[cand] + np.array([0, 3.0, 0]))
+            total += int(vis.sum())
+            if vis.any():
+                longest = max(longest, float(dist[vis].max()))
+            share = vis.mean()
+            if share > 0:
+                shares.append("%s %.0f%%" % (name, 100 * share))
+            if share > LANE_SHARE:
+                problems.append(where + ": sees %.0f%% of the %s lane" % (100 * share, name))
+            ends = int(LANE_END)
+            near_end = vis & (dist <= NEAR_END)
+            if near_end[:ends].any() or near_end[-ends:].any():
+                problems.append(where + ": sees into the %s lane's way in" % name)
+        if total < 12 or longest < 35:
+            problems.append(where + ": no real field of fire (%d lane points seen, the furthest %.0f)" % (total, longest))
+        # A covered way in for the other team: from its end of the disc to the gun, never through a
+        # place the gun (in its arc, within 40) can see.
+        enemy = 1 if z < 0 else -1
+        sel = np.nonzero((np.abs(walk.node_x - x) <= 40) & (np.abs(walk.node_z - z) <= 40))[0]
+        pts = np.stack([walk.node_x[sel], walk.node_y[sel], walk.node_z[sel]], axis=1)
+        cand = in_arc((x, y, z), look, pts, arc) & (np.hypot(pts[:, 0] - x, pts[:, 2] - z) > 3.5)
+        banned = np.zeros(walk.count, bool)
+        if cand.any():
+            vis = clear_rays(cols, e, pts[cand] + np.array([0, 2.6, 0]))
+            banned[sel[cand][vis]] = True
+        goal = walk.near(x, y, z, reach=3.5, rise=1.2)
+        reach = walk.bfs(entries(walk, enemy), banned=banned)
+        if not any(reach[g] >= 0 for g in goal):
+            problems.append(where + ": no covered way in for the other team")
+        facing_s = "+X" if fx > 0.7 else "-X" if fx < -0.7 else "+Z" if fz > 0.7 else "-Z"
+        rows.append("(%.0f, %.1f, %.0f) %s sees %d lane pts to %.0f [%s]" % (x, y, z, facing_s, total, longest, " ".join(shares)))
+    log("emplacements: %d (%d a half), %d tagged; team 1's half: %s" % (len(emps), len(one), len(tagged),
+                                                                       "; ".join(r for r, p in zip(rows, emps) if p["pos"][2] < 0)))
     return problems
 
 
@@ -1294,10 +1552,10 @@ function smoke(BG, mode)
     end
     -- A road that only passes by, 137 west of the middle at its nearest (clear of the disc and its
     -- margin): kept whole, but its lamp on the arena's side of it (133 out, in the apron) goes.
-    local road = part("RoadSurface", roads, Vector3.new(18, 0.8, 300), CFrame.new(centre + Vector3.new(-146, 0, 0)))
-    local innerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-133.2, 7, 20)))
+    local road = part("RoadSurface", roads, Vector3.new(18, 0.8, 300), CFrame.new(centre + Vector3.new(-200, 0, 0)))
+    local innerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-187.2, 7, 20)))
     innerLamp:SetAttribute("Destructible", "Lamp:D8")
-    local outerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-158.8, 7, -20)))
+    local outerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-212.8, 7, -20)))
     outerLamp:SetAttribute("Destructible", "Lamp:D9")
     local vehicles = inst("Model", "Vehicles", map)
     local car = inst("Model", "Car", vehicles)
@@ -1312,7 +1570,7 @@ function smoke(BG, mode)
     part("Trunk", tree, Vector3.new(2, 14, 2), CFrame.new(centre + Vector3.new(90, 7, -70)))
     local base = inst("Model", "TeamBase1", map)
     rawget(base, "props").Extents = Vector3.new(90, 20, 90)
-    part("Wall", base, Vector3.new(10, 8, 1), CFrame.new(centre + Vector3.new(0, 4, -135)))
+    part("Wall", base, Vector3.new(10, 8, 1), CFrame.new(centre + Vector3.new(0, 4, -260)))
     local loot = inst("Folder", "Loot", ws)
     local pickup = part("GroundWeapon", loot, Vector3.new(2, 1, 2), CFrame.new(centre + Vector3.new(10, 0.5, 10)))
     function ws:GetPartBoundsInBox() local list = {} for _, p in ipairs(all) do if p.Parent then table.insert(list, p) end end return list end
@@ -1644,7 +1902,7 @@ def check_botnav(src, parts, info, log, hints=True):
         return sum(1 for b in boxes if abs(b[0][0] - x) < 40 and abs(b[0][2] - z) < 40 and TBR.obb_overlap(b, probe))
 
     lua.globals().botnavWorld(cast, around)
-    botnav = lua.execute(luau_to_lua(src["botnav"]))
+    botnav = lua.execute(luau_to_lua_continue(src["botnav"]))
     cover = [tuple(c) for c in info["cover"]]
     if hints:
         def near(ox, oy, oz, radius):
@@ -1710,6 +1968,7 @@ def run(src, log, deep=True):
     problems += check_vehicles(cols, info, log)
     problems += check_loot(walk, cols, parts, info, log)
     problems += check_ziplines(walk, cols, info, log)
+    problems += check_emplacements(rt, model, parts, cols, walk, info, log)
     problems += check_destruct(rt, model, parts, log)
     if deep:
         again = Runtime(src)
@@ -1801,6 +2060,7 @@ def run_only(src, names, log=lambda *_: None):
         "loot": lambda: check_loot(walk(), cols(), parts, info, log),
         "ziplines": lambda: check_ziplines(walk(), cols(), info, log),
         "destruct": lambda: check_destruct(rt, model, parts, log),
+        "emplacements": lambda: check_emplacements(rt, model, parts, cols(), walk(), info, log),
         "seed": seed,
         "build": lambda: check_build(src, log),
         "botnav": lambda: check_botnav(src, parts, info, log)[0],
@@ -1853,7 +2113,7 @@ PLANTS = [
     ("the colossus's pedestal gone", "bg",
      [('local pedestal = folder(court, "ColossusPedestal", true)', 'local pedestal = Instance.new("Model")')], ["sightlines"], "centre"),
     ("the entry's dragon's teeth gone", "bg",
-     [("\tteeth(entry, 3.2, -116, 2)\n\tteeth(entry, -6.4, -104, 2)\n\tteeth(entry, 3.2, -94, 2)\n", "")], ["cover"], "cover"),
+     [("\tteeth(entry, 3.2, -116, 2)\n\tteeth(entry, 3.2, -94, 2)\n", "")], ["cover"], "cover"),
     ("objective A off the mirror", "bg",
      [("TeamBattleground.ObjectivesLocal = { Vector3.new(0, KF, 0),", "TeamBattleground.ObjectivesLocal = { Vector3.new(0, KF, -3),")],
      ["objectives"], "objective"),
@@ -1867,21 +2127,36 @@ PLANTS = [
     ("the best loot in the safest spot", "bg",
      [('lootSpot("KeepHall", -15.5, KF, -6.5, "heal")', 'lootSpot("KeepHall", -15.5, KF, -6.5, "weapon", "Legendary")')], ["loot"], "Legendary"),
     ("zipline masts cut down", "bg", [("local ZIP_TOP = GAL + 9.6", "local ZIP_TOP = GAL + 3")], ["ziplines"], "zip"),
-    # (A string tag is what DestructibleService breaks, and it never breaks a part named Paving,
-    # Foundation, Plinth, Deck... whatever it carries: so the plants are on the pieces it does not
-    # protect by name, which only this file's flags keep standing.)
-    ("the keep's ramp tagged to break", "bg",
-     [('CFrame.new(25, GAL / 2, -19.5), STONE, MAT.Cobblestone, { class = "WedgePart", tag = false })',
-       'CFrame.new(25, GAL / 2, -19.5), STONE, MAT.Cobblestone, { class = "WedgePart", tag = "Ramp" })')],
-     ["destruct"], "break"),
-    ("the gallery floor tagged to break", "bg",
-     [('box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, NEVER)',
-       'box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID, STONE_DARK, MAT.Cobblestone, { tag = "Floor", health = 100 })')],
-     ["destruct"], "break"),
+    # Everything breaks now (DestructibleService is opt-out): the plants give a piece a name the
+    # service keeps whole (a spawn's), which only this check's "kept whole" count sees.
+    ("the keep's ramp kept whole", "bg",
+     [('put(keep, "KeepRamp",', 'put(keep, "SpawnRamp",')], ["destruct"], "never break"),
+    ("the gallery floor kept whole", "bg",
+     [('box(keep, "GalleryFloor", -20, 20, GAL - 1, GAL, -20, -VOID,', 'box(keep, "StormFloor", -20, 20, GAL - 1, GAL, -20, -VOID,')],
+     ["destruct"], "never break"),
+    # The gun emplacements: a bad spot of each kind, and the check rejects it.
+    ("a gun that sees its own team's way in", "bg",
+     [('box(gate, "Hoarding", -13, 0.4, GATE_TOP, GATE_TOP + 5.4,', 'box(gate, "Hoarding", -13, 0.4, GATE_TOP, GATE_TOP + 0.8,')],
+     ["emplacements"], "base"),
+    ("a gun down the centre lane", "bg",
+     [("\tlocal ground = folder(entry, \"Paving\", true)\n",
+       "\tlocal ground = folder(entry, \"Paving\", true)\n\templacement(entry, \"Lane\", facing(0, 0, -150, 0, 0), \"the whole lane\")\n")],
+     ["emplacements"], "emplacement"),
+    ("a gun in mid-air", "bg",
+     [("local frame = facing(-89.8, ROOF, -61, -60, -61)", "local frame = facing(-89.8, ROOF + 3, -61, -60, -61)")], ["emplacements"], "no floor"),
+    ("a gun in one half only", "bg",
+     [('emplacement(sb, "SignalBox", frame, "west lane, tram approach")',
+       'if not B.mirror then emplacement(sb, "SignalBox", frame, "west lane, tram approach") end')], ["emplacements"], "emplacement"),
+    ("a gun in a merlon", "bg",
+     [("local bayGun = facing(-6.4, GATE_TOP, -62.6, -6.4, 0)", "local bayGun = facing(-1.5, GATE_TOP, -66, -1.5, 0)")],
+     ["emplacements"], "solid within"),
+    ("guns with no mantlets", "bg", [("\tif sides ~= false then\n", "\tif false then\n")], ["emplacements"], "emplacement"),
+    ("a gun nobody can get round", "bg", [("TeamBattleground.GunArc = 110", "TeamBattleground.GunArc = 359")], ["emplacements"], "covered way"),
+    ("guns untagged", "bg", [("\tCollectionService:AddTag(part, TeamBattleground.EmplacementTag)\n", "")], ["emplacements"], "tagged"),
     ("unseeded wear", "bg", [("B.rng = Random.new(seed or 1)", "B.rng = Random.new((seed or 1) + math.random(1, 100000))")], ["seed"], "seed"),
     ("over budget", "bg",
      [('\tlocal middle = folder(root, "Middle", true)\n',
-       '\tlocal middle = folder(root, "Middle", true)\n\tfor i = 1, 60 do box(middle, "Junk", -0.5, 0.5, 0, 1, 150 + i * 2, 151 + i * 2, STONE, MAT.Slate, NEVER) end\n')],
+       '\tlocal middle = folder(root, "Middle", true)\n\tfor i = 1, 800 do box(middle, "Junk", -0.5, 0.5, 0, 1, 150 + i * 2, 151 + i * 2, STONE, MAT.Slate, NEVER) end\n')],
      ["budget"], "budget"),
     ("the site not cleared", "bg", [("local _, _, _, roadEnds = TeamBattleground.ClearSite(site, map)", "local roadEnds = nil")], ["build"], "build"),
     ("roads left running through", "bg",

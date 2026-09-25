@@ -16,11 +16,19 @@ ModeKingOfTheHill, in tools/objective_zone_check.py's harness, handed a battlegr
   * a mode without teams builds none;
   * King of the Hill puts its two objectives exactly on the battleground's, and falls back to its own
     sites when there is no battleground (or it gives fewer than two).
+  * NOT IN BATTLE ROYALE (Oliver 2026-09-24: "make sure the team bases and battleground don't spawn in
+    the battle royale games either"): a battle royale, then a team match, then a battle royale again
+    on the same server -- neither battle royale has any of the battleground in the world, its gun
+    emplacements included (a BR match runs ModeTeams.Setup, if anything ever does, with a mode that
+    has no teams); and by source: only ModeTeams requires TeamBattleground, it builds it only for a
+    mode with teams, GameMode's battle royale StartWorld never touches ModeTeams, and GameMode's
+    stopWorld tears the team match down.
 
     python3 tools/team_battleground_modeteams_check.py .            the checks
     python3 tools/team_battleground_modeteams_check.py . --plant    and the planted faults
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -49,6 +57,9 @@ TeamBattleground = {
         if R.fieldMode == "refuse" then return nil, "river" end
         local model = R.newInst("Model", "TeamBattleground")
         model.Parent = mapInfo.map
+        -- One of its gun emplacements, as the real one carries (inside the model: it goes with it).
+        local gun = R.newInst("Part", "GunEmplacement")
+        gun.Parent = model
         local function at(x, y, z) return (frame * CFrame.new(Vector3.new(x, y, z))).p end
         local info = { model = model, objectives = { at(0, 0.8, 0), at(-84, 0.3, 0) }, cover = { at(10, 0, 0) } }
         R.lastField = info
@@ -145,6 +156,97 @@ M.Teardown()
 return out
 """
 
+BR_CHECKS = r"""
+local R, M = _R, ModeTeams
+local out = {}
+local function fail(msg) table.insert(out, msg) end
+local map = R.newInst("Model", "Map")
+map.Parent = workspace
+local info = { dropSpots = { Vector3.new(-30, 0, 60) }, radius = 900, map = map }
+-- Anything of the battleground left anywhere in the world: the model, or a gun emplacement.
+local function leftovers(label)
+    local found = {}
+    local function walk(node)
+        for _, child in ipairs(node:GetChildren()) do
+            if child.Name == "TeamBattleground" or child.Name == "GunEmplacement" then table.insert(found, child.Name) end
+            walk(child)
+        end
+    end
+    walk(workspace)
+    if #found > 0 then fail(label .. ": " .. #found .. " battleground pieces in the world (" .. found[1] .. ")") end
+    if M.Battleground() ~= nil then fail(label .. ": ModeTeams.Battleground() answers") end
+end
+-- A battle royale: GameMode.BattleRoyale's StartWorld only starts the storm, so ModeTeams is not
+-- called at all -- and were it ever, it would be with a mode with no teams.
+local function battleRoyale(label)
+    local before = #R.fields
+    leftovers(label .. " (before)")
+    M.Setup({ id = "BattleRoyale", teams = false }, info)
+    leftovers(label)
+    if #R.fields ~= before then fail(label .. ": a battleground was built") end
+    M.Teardown()
+end
+M.Teardown()
+battleRoyale("the first battle royale")
+M.Setup({ id = "TeamDeathmatch", teams = true }, info)
+local field = M.Battleground()
+if not (field and field.model and field.model.Parent) then fail("the team match between them has no battleground") end
+-- GameMode's stopWorld: ModeTeams.Teardown (asserted by source below).
+M.Teardown()
+battleRoyale("the battle royale after a team match")
+return out
+"""
+
+
+def isolation(root, overrides=None):
+    """The battleground only ever comes from a team mode, read off the sources."""
+    overrides = overrides or {}
+    base = Path(root) / "ServerScriptService"
+
+    def text(rel):
+        return overrides.get(rel) or (Path(root) / rel).read_text(encoding="utf-8")
+    fails = []
+    for path in sorted(base.rglob("*.lua")):
+        rel = path.relative_to(root).as_posix()
+        if rel.endswith("/ModeTeams.lua") or rel.endswith("/TeamBattleground.lua"):
+            continue
+        src = text(rel)
+        if re.search(r"require\([^)]*TeamBattleground", src) or re.search(r"TeamBattleground\.(Build|Layout)\(", src):
+            fails.append("%s builds or requires TeamBattleground (only ModeTeams may)" % rel)
+    for rel in overrides:
+        if rel not in {path.relative_to(root).as_posix() for path in base.rglob("*.lua")}:
+            fails.append("override for a file that is not there: " + rel)
+    mt = text("ServerScriptService/Modules/ModeTeams.lua")
+    if "local withRuins = TeamBaseRuins ~= nil and currentMode ~= nil and currentMode.teams == true" not in mt:
+        fails.append("ModeTeams: the compounds and battleground no longer hang on the mode having teams")
+    calls = [m.start() for m in re.finditer(r"(?<!function )ModeTeams\.BuildBattleground\(", mt)]
+    guarded = [c for c in calls if mt.rfind("\tif withRuins then\n", 0, c) > mt.rfind("\n\tend\n", 0, c)]
+    if len(calls) != 1 or len(guarded) != 1:
+        fails.append("ModeTeams: BuildBattleground called %d times, %d of them under `if withRuins`" % (len(calls), len(guarded)))
+    gm = text("ServerScriptService/Modules/GameMode.lua")
+    a = gm.find("GameMode.BattleRoyale = setmetatable({")
+    b = gm.find("}, { __index = GameModes.Modes.BattleRoyale })", a)
+    if a < 0 or b < 0:
+        fails.append("GameMode: the battle royale's behaviour table is not where it was")
+    elif re.search(r"ModeTeams|Battleground|TeamBaseRuins", gm[a:b]):
+        fails.append("GameMode: the battle royale's StartWorld/StopWorld touch ModeTeams")
+    a = gm.find("local function stopWorld()")
+    b = gm.find("\nend\n", a)
+    if a < 0 or "ModeTeams.Teardown()" not in gm[a:b]:
+        fails.append("GameMode: stopWorld does not tear the team match down (ModeTeams.Teardown)")
+    return fails
+
+
+STATIC_PLANTS = [
+    ("the battle royale builds the arena", "ServerScriptService/Modules/GameMode.lua",
+     "\tStartWorld = function(mapInfo)\n\t\tStormService.Start(mapInfo.radius)\n",
+     "\tStartWorld = function(mapInfo)\n\t\tStormService.Start(mapInfo.radius)\n\t\tModeTeams.BuildBattleground(mapInfo, 0, 1)\n"),
+    ("stopWorld leaves the arena up", "ServerScriptService/Modules/GameMode.lua",
+     "\tModeTeams.Teardown()\n\tStormService.Stop()\n", "\tStormService.Stop()\n"),
+    ("shared map generation builds it", "ServerScriptService/Modules/MapGenerator.lua",
+     "\n", '\nlocal TeamBattleground = require(script.Parent:WaitForChild("TeamBattleground"))\n'),
+]
+
 PLANTS = [
     ("hook removed from Setup", ("\t\tModeTeams.BuildBattleground(mapInfo, axis, ruinSeed)", "\t\tlocal _ = 0")),
     ("a seed of its own", ("\t\tModeTeams.BuildBattleground(mapInfo, axis, ruinSeed)",
@@ -165,6 +267,8 @@ PLANTS = [
     # teams" alone changes nothing, the other guard holds. These two have no second guard.)
     ("refusal not warned", ('warn("ModeTeams: no battleground: "', '(function() end)("ModeTeams: no battleground: "')),
     ("Clear forgets to destroy", ("\t\tTeamBattleground.Destroy(battleground)\n", "\n")),
+    ("built in a battle royale too", ("\tif withRuins then\n\t\tModeTeams.BuildBattleground(mapInfo, axis, ruinSeed)",
+                                      "\tif true then\n\t\tModeTeams.BuildBattleground(mapInfo, axis, ruinSeed or 1)")),
 ]
 
 
@@ -201,6 +305,7 @@ def run(root, plant=None, seeds=6):
         try:
             lua.execute(chunk)
             checks = list(lua.execute(CHECKS).values())
+            checks += list(lua.execute(BR_CHECKS).values())
         except Exception as error:  # a crash is a failure, never a pass
             checks = ["crashed: %s" % str(error).splitlines()[0]]
         failures += ["seed %d: %s" % (seed, line) for line in checks]
@@ -263,6 +368,11 @@ def main(argv):
     for line in failures[:20]:
         print("  FAIL " + line)
     print("team_battleground_modeteams_check: 6 matches, %d failures" % len(failures))
+    iso = isolation(ROOT)
+    for line in iso:
+        print("  FAIL " + line)
+    print("team_battleground_modeteams_check battle royale isolation (sources): %d failures" % len(iso))
+    failures += iso
     kf = koth_checks(koth)
     for line in kf:
         print("  FAIL " + line)
@@ -270,7 +380,13 @@ def main(argv):
     ok = not failures and not kf
     if "--plant" in argv:
         caught = 0
-        total = len(PLANTS) + len(KOTH_PLANTS)
+        total = len(PLANTS) + len(KOTH_PLANTS) + len(STATIC_PLANTS)
+        for label, rel, old, new in STATIC_PLANTS:
+            src = (Path(ROOT) / rel).read_text(encoding="utf-8")
+            found = isolation(ROOT, {rel: src.replace(old, new, 1)}) if old in src else ["plant anchor not found"]
+            hit = bool(found) and found != ["plant anchor not found"]
+            caught += hit
+            print("%s  %s  (%s)" % ("CAUGHT" if hit else "MISSED", label, found[0] if found else "no failure"))
         for label, plant in PLANTS:
             found = run(ROOT, plant, seeds=2)
             hit = bool(found) and not any("anchor not found" in f for f in found)

@@ -1887,7 +1887,9 @@ function WeaponService.Reload(player)
 	if not loadout or not def or loadout.reloading then
 		return
 	end
-	if slot.mag >= def.magSize or slot.reserve <= 0 then
+	-- Infinite ammo pool (Oliver, 2026-09-24: there are no ammo items): a reload always fills the magazine,
+	-- and `reserve` is never spent. Only a full magazine refuses a reload.
+	if slot.mag >= def.magSize then
 		return
 	end
 
@@ -1910,10 +1912,7 @@ function WeaponService.Reload(player)
 		if loadout.slots[loadout.equipped] ~= slot then
 			return
 		end
-		local needed = def.magSize - slot.mag
-		local moved = math.min(needed, slot.reserve)
-		slot.mag += moved
-		slot.reserve -= moved
+		slot.mag = def.magSize
 		loadout.reloading = false
 		if player.Character then player.Character:SetAttribute("Reloading", nil) end -- #13: the third-person reload pose ends
 		WeaponService.Push(player)
