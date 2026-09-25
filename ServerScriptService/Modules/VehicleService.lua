@@ -92,6 +92,21 @@ local RIGHT_EMPTY_AFTER = 6.0
 -- A parked vehicle that has settled is stepped this many times less often.
 local REST_AFTER = 2.0
 local REST_EVERY = 8
+-- The rest hold (see releaseRest/holdRest): how firmly, and what wakes it.
+local EMPTY_STEP_MAX = 1 / 20     -- s: the longest frame an empty vehicle's forces are sized for
+local REST_CALM_SPEED = 1.0      -- studs/s across the ground: slower than this is parked, not going
+local REST_CALM_SPIN = 3.0       -- rad/s (cars only)
+local REST_HOLD_AFTER = 0.6      -- s parked with every wheel down before it is held
+local REST_WAKE_GROUND = 0.6     -- studs further from the ground under it than when held: its support went
+local REST_FORCE_SHARE = 1.5     -- of its weight: a ramming car beats it, a player can't
+local REST_RESPONSIVENESS = 40
+local REST_SETTLE = 3.0          -- s of physics at most being eased onto the rest pose, when only a shove wakes it
+local REST_WAKE_SHOVE = 1.5      -- studs off the rest pose while settling
+local REST_WAKE_SPEED = 1.0      -- studs/s
+local REST_WAKE_SPIN = 0.5       -- rad/s
+local REST_WAKE_DRIFT = 0.25     -- studs off the held pose, or further from the ground than when held
+local REST_GROUND_REACH = 12     -- studs: the ray down that finds what it stands on
+local REST_GROUND_EVERY = 0.5    -- s between those rays
 
 -- Blasts: raw damage to a velocity change at the centre, falling off linearly to the radius. 100
 -- damage throws a car about ten studs up and twenty-odd across.
@@ -266,7 +281,210 @@ local function botHeld(entry, seat)
 	return character ~= nil and Players:GetPlayerFromCharacter(character) == nil and Combatants.FromCharacter(character) ~= nil
 end
 
+-- The rest hold (Oliver 09-24: "the cars bounce around and are unstable until someone starts driving
+-- them"). The dynamics size each frame's forces for the frame before, so a server hitch (a map being
+-- built, a match starting) sized a parked car's springs for a quarter of a second: it sagged and was
+-- thrown back up, and the old rest (step one frame in eight, holding stale forces between) woke on the
+-- motion and did it again. A parked bike's stand lean fought the parked brake's zeroed spin every frame
+-- and shook at 8 rad/s without ever counting as settled. An empty vehicle that has stopped with all
+-- its wheels down for REST_HOLD_AFTER (or is new) is now taken off the dynamics altogether: its weight
+-- is carried at its centre (the Downforce actuator, turned upward), an AlignPosition and an
+-- AlignOrientation hold it at its ride height on the ground under it (worked out from its wheels'
+-- rays, so a car still bouncing is eased onto it), and nothing is stepped until it wakes. Their force is finite
+-- (REST_FORCE_SHARE of its weight), so a ramming vehicle still shoves it and a walking player does not;
+-- being shoved, sat in, shot, blasted or losing the ground under it wakes it at once.
+local function releaseRest(entry)
+	local hold = entry.restHold
+	if hold then
+		entry.restHold = nil
+		hold.position.Enabled = false
+		hold.orientation.Enabled = false
+		local rig = entry.rig
+		if rig.downforce then
+			rig.downforce.Force = Vector3.zero
+		end
+		if rig.balance then
+			rig.balance.Enabled = true
+		end
+	end
+	entry.restFor = 0
+	entry.calmFor = 0
+end
+
+-- Whether an empty vehicle may be held: "going" (moving across the ground, or a car spinning) says no
+-- and starts the count again; otherwise it counts while every wheel is on the ground. Bouncing on its
+-- springs is not asked about -- that is what the hold ends -- and nor is a bike's parked shake.
+local function allGrounded(rig)
+	if not rig.wheels or #rig.wheels == 0 then
+		return false
+	end
+	for _, wheel in ipairs(rig.wheels) do
+		if not wheel.grounded then
+			return false
+		end
+	end
+	return true
+end
+
+local function going(entry)
+	local chassis = entry.rig.chassis
+	local v = chassis.AssemblyLinearVelocity
+	return Vector3.new(v.X, 0, v.Z).Magnitude > REST_CALM_SPEED
+		or (not entry.rig.bike and chassis.AssemblyAngularVelocity.Magnitude > REST_CALM_SPIN)
+end
+
+local function holdRest(entry)
+	local rig = entry.rig
+	local chassis = rig.chassis
+	local below = workspace:Raycast(chassis.Position, Vector3.new(0, -REST_GROUND_REACH, 0), entry.groundParams)
+	if not below or not rig.downforce then
+		return false
+	end
+	-- Where it rests: every wheel at its built ride height (each spring's preload carries its share of
+	-- the weight exactly there), square to the ground under its wheels, and a bike at its stand lean.
+	-- From the wheels that reach the ground: turned square to it, the ones that don't come down to it.
+	local sink, up, reached = 0, Vector3.zero, 0
+	for _, wheel in ipairs(rig.wheels) do
+		if wheel.grounded then
+			sink += (wheel.compression or rig.handling.travelDown) - rig.handling.travelDown
+			up += wheel.normal or Vector3.yAxis
+			reached += 1
+		end
+	end
+	if reached == 0 then
+		return false
+	end
+	sink /= reached
+	up = up.Magnitude > 0.1 and up.Unit or Vector3.yAxis
+	local cf = chassis.CFrame
+	local look = cf.LookVector - up * cf.LookVector:Dot(up)
+	look = look.Magnitude > 0.05 and look.Unit or cf.LookVector
+	if rig.bike then
+		up = CFrame.fromAxisAngle(look, rig.lean or 0):VectorToWorldSpace(up)
+	end
+	local right = look:Cross(up).Unit
+	local target = CFrame.fromMatrix(chassis.Position + cf.UpVector * sink, right, right:Cross(look), -look)
+
+	local parts = entry.restParts
+	if not parts then
+		local attachment = Instance.new("Attachment")
+		attachment.Name = "RestHold"
+		attachment.Parent = chassis
+		local position = Instance.new("AlignPosition")
+		position.Name = "RestHoldPosition"
+		position.Mode = Enum.PositionAlignmentMode.OneAttachment
+		position.Attachment0 = attachment
+		position.Responsiveness = REST_RESPONSIVENESS
+		position.Enabled = false
+		position.Parent = chassis
+		local orientation = Instance.new("AlignOrientation")
+		orientation.Name = "RestHoldOrientation"
+		orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		orientation.Attachment0 = attachment
+		orientation.Responsiveness = REST_RESPONSIVENESS
+		orientation.Enabled = false
+		orientation.Parent = chassis
+		parts = { position = position, orientation = orientation }
+		entry.restParts = parts
+	end
+	local mass = chassis.AssemblyMass
+	local weight = mass * workspace.Gravity
+	local size = chassis.Size
+	VehicleDynamics.Idle(rig)
+	rig.downforce.Force = Vector3.new(0, weight, 0)
+	if rig.balance then
+		rig.balance.Enabled = false
+	end
+	parts.position.MaxForce = weight * REST_FORCE_SHARE
+	parts.orientation.MaxTorque = weight * REST_FORCE_SHARE * math.max(size.X, size.Z) * 0.5
+	parts.position.Position = target.Position
+	parts.orientation.CFrame = target
+	parts.position.Enabled = true
+	parts.orientation.Enabled = true
+	entry.restCount = (entry.restCount or 0) + 1
+	entry.restHold = { position = parts.position, orientation = parts.orientation, at = target, since = 0,
+		ground = below.Distance + sink, checkIn = REST_GROUND_EVERY }
+	return true
+end
+
+-- True while a held vehicle should stay held. Until it has been eased onto its rest pose only a big
+-- shove counts (its own settling motion is not a wake); after that, any real movement does. Why it
+-- last woke is kept on the entry (`restWoke`) for tools/parked_vehicle_rest_probe.lua.
+local function restHolds(entry, dt)
+	local hold = entry.restHold
+	local chassis = entry.rig.chassis
+	local off = (chassis.Position - hold.at.Position).Magnitude
+	local woke = nil
+	if not hold.settled then
+		local _, turned = (hold.at:Inverse() * chassis.CFrame):ToAxisAngle()
+		-- Physics time, not wall time: a frame of a few seconds (a map being built) simulates far less.
+		hold.since += math.min(dt, 1 / 30)
+		if off > REST_WAKE_SHOVE then
+			woke = "shove"
+		elseif (off < 0.05 and math.abs(turned) < math.rad(0.5)) or hold.since > REST_SETTLE then
+			hold.settled = true
+		end
+	elseif chassis.AssemblyLinearVelocity.Magnitude > REST_WAKE_SPEED then
+		woke = "speed"
+	elseif chassis.AssemblyAngularVelocity.Magnitude > REST_WAKE_SPIN then
+		woke = "spin"
+	elseif off > REST_WAKE_DRIFT then
+		woke = "drift"
+	end
+	hold.checkIn -= dt
+	if not woke and hold.checkIn <= 0 then
+		hold.checkIn = REST_GROUND_EVERY
+		-- The ground it stood on is still there (destruction, a crater, a slab knocked away).
+		local below = workspace:Raycast(chassis.Position, Vector3.new(0, -REST_GROUND_REACH, 0), entry.groundParams)
+		if not below or below.Distance > hold.ground + REST_WAKE_GROUND then
+			woke = "ground"
+		end
+	end
+	if woke then
+		entry.restWoke = woke
+		return false
+	end
+	return true
+end
+
+-- Parked where it stands, now: one parked step finds the ground under each wheel, and the hold eases
+-- it onto its ride height there. A new vehicle stands on a measured spot, so it starts this way; it
+-- used to be simulated from its first frame, and vehicles are made while a map is being built, the one
+-- time the server's frames are longest (see releaseRest).
+local function parkWhereItStands(entry)
+	releaseRest(entry)
+	if entry.hooks or not entry.rig.wheels or #entry.rig.wheels == 0 or entry.noRestHold then
+		return
+	end
+	local ok, err = pcall(VehicleDynamics.Step, entry.rig, { throttle = 0, steer = 0, parked = true }, 1 / 60)
+	local reached = 0
+	for _, wheel in ipairs(entry.rig.wheels) do
+		reached += wheel.grounded and 1 or 0
+	end
+	-- Half its wheels on the ground is enough to know the ground: a car set down level on a slope has
+	-- one axle hanging until it is turned to the slope, which is what the hold does.
+	if not ok then
+		warn("VehicleService: parking step failed: " .. tostring(err))
+	elseif reached * 2 >= #entry.rig.wheels and not going(entry) and holdRest(entry) then
+		-- Put straight onto its rest pose (it was made a little above it), not eased there.
+		local model, chassis = entry.model, entry.rig.chassis
+		model:PivotTo(entry.restHold.at * chassis.CFrame:ToObjectSpace(model:GetPivot()))
+		chassis.AssemblyLinearVelocity = Vector3.zero
+		chassis.AssemblyAngularVelocity = Vector3.zero
+	end
+end
+
+-- Never lets a failure here take down what is making the vehicle (a map being built, a car park being
+-- filled): at worst the vehicle is simply not held, and rests the old way.
+local function parkNow(entry)
+	local ok, err = pcall(parkWhereItStands, entry)
+	if not ok then
+		warn("VehicleService: parking failed: " .. tostring(err))
+	end
+end
+
 local function onSeatChanged(entry, seat)
+	releaseRest(entry)
 	local previous = entry.occupants[seat]
 	local current = seat.Occupant
 
@@ -673,6 +891,7 @@ local function damageVehicle(entry, amount)
 	if amount <= 0 or entry.wrecked or entry.health <= 0 then
 		return
 	end
+	releaseRest(entry)
 	entry.health = math.max(0, entry.health - amount)
 	entry.model:SetAttribute("VehicleHealth", entry.health)
 	if entry.health <= 0 then
@@ -1181,6 +1400,8 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 	table.insert(active, entry)
 	byModel[model] = entry
 
+	parkNow(entry)
+
 	entry.prompts[seat] = drivePrompt
 	for index, prompt in ipairs(ridePrompts) do
 		entry.prompts[passengers[index]] = prompt
@@ -1236,6 +1457,12 @@ local function updateOwnership(entry, now)
 			entry.rig.chassis:SetNetworkOwner(wantPlayer)
 		end)
 		entry.owner = ok and want or false
+		-- A call that failed (a base-yard car is anchored for its first 1.5 s, and an anchored part
+		-- can't be given an owner) is tried again next step. It used to be dropped, which left the
+		-- car on the engine's automatic choice -- the nearest player -- for good.
+		entry.ownerDirty = not ok and not entry.noOwnerRetry
+		-- Read by tools/parked_vehicle_rest_probe.lua: the server really did take an empty vehicle's physics.
+		entry.ownerPinned = ok and wantPlayer == nil
 		entry.model:SetAttribute("ServerControl", (entry.driverPlayer ~= nil and not entry.owner) or nil)
 		-- The honesty checks start fresh from wherever the vehicle is when a driver takes over.
 		entry.lastPosition = entry.rig.chassis.Position
@@ -1312,9 +1539,28 @@ end
 
 local function step(entry, dt, now)
 	local rig = entry.rig
+	-- An empty vehicle's physics is the server's. The engine hands an assembly back to its automatic
+	-- choice (the nearest player) whenever the assembly changes -- a weld made or broken, a part
+	-- knocked off -- and a parked car simulated by a passing client and corrected by the server
+	-- jitters. Checked now and then, and put back.
+	if not entry.owner and not entry.ownerDirty and not entry.noOwnerGuard then
+		entry.ownerCheckIn = (entry.ownerCheckIn or 0) - dt
+		if entry.ownerCheckIn <= 0 then
+			entry.ownerCheckIn = 1
+			local ok, auto = pcall(function()
+				return rig.chassis:GetNetworkOwnershipAuto()
+			end)
+			if ok and auto then
+				pcall(function()
+					rig.chassis:SetNetworkOwner(nil)
+				end)
+			end
+		end
+	end
 	updateOwnership(entry, now)
 
 	if entry.owner then
+		releaseRest(entry)
 		-- The driver's client simulates. Keep the server's copy of the forces quiet so nothing stale
 		-- applies the moment ownership comes back.
 		if not entry.idled then
@@ -1352,6 +1598,25 @@ local function step(entry, dt, now)
 	-- weaker than its weight, wake (it moved), bounce back up at full rate, settle, and do it again --
 	-- the "parked cars jitter" bob. A car at rest only needs the forces that hold it where it is.
 	if not occupant and next(entry.occupants) == nil then
+		-- Held at rest (holdRest): nothing to step until something wakes it.
+		if entry.restHold then
+			if restHolds(entry, dt) then
+				return
+			end
+			releaseRest(entry)
+		end
+		-- `noRestHold` is a test switch (tools/parked_vehicle_rest_probe.lua plants it as a fault): it
+		-- leaves only the old one-step-in-eight rest below, which is what bounced.
+		if not entry.noRestHold and not entry.wrecked then
+			if going(entry) then
+				entry.calmFor = 0
+			elseif allGrounded(rig) then
+				entry.calmFor = (entry.calmFor or 0) + dt
+			end
+			if (entry.calmFor or 0) > REST_HOLD_AFTER and holdRest(entry) then
+				return
+			end
+		end
 		local resting = chassis.AssemblyLinearVelocity.Magnitude < 0.3 and chassis.AssemblyAngularVelocity.Magnitude < 0.3
 		entry.restFor = resting and entry.restFor + dt or 0
 		if entry.restFor > REST_AFTER then
@@ -1378,7 +1643,10 @@ local function step(entry, dt, now)
 	else
 		input = { throttle = 0, steer = 0, parked = true }
 	end
-	local telemetry = VehicleDynamics.Step(rig, input, dt)
+	-- An empty vehicle's forces are sized for at most EMPTY_STEP_MAX. On a long server frame (a map being
+	-- built) the engine simulates far less than the frame's length, so springs softened for all of it
+	-- let a parked car drop and then threw it back up.
+	local telemetry = VehicleDynamics.Step(rig, input, occupant and dt or math.min(dt, EMPTY_STEP_MAX))
 	checkCollisionDamage(entry, Vector3.new(chassis.AssemblyLinearVelocity.X, 0, chassis.AssemblyLinearVelocity.Z).Magnitude, now, dt)
 
 	if telemetry.flippedFor > (occupant and RIGHT_OCCUPIED_AFTER or RIGHT_EMPTY_AFTER) then
@@ -1571,6 +1839,8 @@ function VehicleService.ParkInTowns(parent, map, wanted, rng, share)
 						{ rng = roll, exact = true }) -- the bay's footing was just checked (critic C4)
 					if model then
 						centreModel(model, (bay.cf * CFrame.new(0, 0, roll:NextNumber(-BAY_JITTER, BAY_JITTER))).Position)
+						-- Moved after it was parked: parked again where it now stands.
+						VehicleService.Repark(model)
 						lot.town:SetAttribute("ParkingBayTaken_" .. bay.index, true)
 						table.insert(lot.taken, bay.cf.Position)
 						lot.used += 1
@@ -1614,7 +1884,7 @@ function VehicleService.ApplyBlast(centre, radius, damage)
 				local speed = strength * falloff * (entry.info.kind == "bike" and BLAST_BIKE_SCALE or 1)
 				local mass = chassis.AssemblyMass
 				entry.serverHoldUntil = now + BLAST_HOLD
-				entry.restFor = 0
+				releaseRest(entry)
 				updateOwnership(entry, now)
 				chassis:ApplyImpulse((away * 0.55 + Vector3.new(0, 0.85, 0)).Unit * speed * mass)
 				if away.Magnitude > 0 then
@@ -1623,6 +1893,24 @@ function VehicleService.ApplyBlast(centre, radius, damage)
 				end
 			end
 		end
+	end
+end
+
+-- Takes a parked vehicle off its rest hold (see releaseRest), for anything that moves or breaks it
+-- without going through a seat, a hit or a blast. It rests again once it is calm.
+function VehicleService.Wake(model)
+	local entry = byModel[model]
+	if entry then
+		releaseRest(entry)
+	end
+end
+
+-- Parks a vehicle again where it now stands, for whatever moved it after it was made (ParkInTowns
+-- centring it in its bay).
+function VehicleService.Repark(model)
+	local entry = byModel[model]
+	if entry then
+		parkNow(entry)
 	end
 end
 

@@ -1078,60 +1078,326 @@ end
 local function benchFacing(parent, position, target)
 	local look = CFrame.lookAt(position, Vector3.new(target.X, position.Y, target.Z))
 	local wood = Color3.fromRGB(140, 98, 60)
+	currentName = "Bench"
 	makePart(parent, Vector3.new(6, 0.5, 2), look * CFrame.new(0, 2.1, 0), wood, Enum.Material.WoodPlanks)
-	makePart(parent, Vector3.new(6, 1.8, 0.4), look * CFrame.new(0, 3.3, 0.9), wood, Enum.Material.WoodPlanks)
+	-- The back rests on the seat (it stood 0.05 clear of it).
+	makePart(parent, Vector3.new(6, 1.8, 0.4), look * CFrame.new(0, 3.2, 0.9), wood, Enum.Material.WoodPlanks)
 	for _, x in ipairs({ -2.5, 2.5 }) do
 		makePart(parent, Vector3.new(0.4, 2, 1.8), look * CFrame.new(x, 1, 0), METAL_DARK, Enum.Material.Metal)
 	end
+	currentName = "Part"
 end
 
--- The town square: paving, a two-tier fountain with animated spray, benches around it and
--- planters at the corners. Returns loot spots — heals by the fountain, guns at the edges and
--- a movement item on the far side.
--- `statueDef`, when given, puts a giant statue of that brainrot in the fountain's upper bowl in
--- place of the spray.
-function MapDecor.Plaza(parent, center, groundHeightAt, statueDef)
-	local y = groundHeightAt(center.X, center.Z)
-	local c = Vector3.new(center.X, y, center.Z)
-	local marble = Color3.fromRGB(226, 222, 214)
-	local water = Color3.fromRGB(70, 170, 220)
+--------------------------------------------------------------------------------
+-- The roundabout at the middle of every town (Oliver 09-24: "make high quality roundabouts around the
+-- fountain at the center of the towns ... make it look good and natural like it's always been there").
+--
+-- Laid out in plan round the town centre O:
+--   island     a raised round island, radius `island`: a low mountable kerb, a ring of granite setts
+--              (the truck apron), a taller inner kerb, a planted bed, and the town's fountain on a
+--              paved plinth in the middle
+--   ring       the circulating carriageway from `island` to `outer`, wide enough for the longest
+--              vehicle to go round
+--   approaches the four streets (E, N, W, S) start `approach` out, and between them and the ring the
+--              kerb curves away on a fillet of radius `fillet` tangent to both the street's kerb line
+--              and the ring's outer kerb, so the kerb line runs street, curve, ring with no corner
+--   splitters  a raised island on each approach's centre line from the ring to the street, with a
+--              keep-right bollard at its nose and a give-way sign
+-- Traffic drives on the right, so it goes round anticlockwise seen from above (decreasing angle
+-- atan2(z, x)) and enters on the approach's right-hand side (v < 0 in an arm's own frame, where
+-- u runs out along the arm and v is its left).
+--
+-- Everything drivable is one fan of flat triangles from O out to the outline (ring, fillets and street
+-- ends): the outline is star-shaped from O for every size here, so the fan tiles it exactly, each
+-- triangle's edges shared with its neighbours and never a face in the same plane as another. The
+-- kerbs and pavements round the outline are bands of pieces whose road-side edges are exactly the
+-- fan's outline edges. The island stands on the fan (hidden under it) rather than cut out of it.
+-- Surfaces don't collide and don't take raycasts, like the streets; the island, fountain, posts and
+-- lamps do.
+--------------------------------------------------------------------------------
 
-	-- Paving to the square's edge, where the streets butt against it at the same height, round a
-	-- raised square of cobbles in the middle: four strips framing the cobbles rather than one slab
-	-- under them, so the two never share any volume.
-	currentName = "Paving"
-	local paving = Color3.fromRGB(196, 190, 176)
-	-- From a little under the ground, so nothing standing at ground level shares the paving's
-	-- underside.
-	for _, side in ipairs({ -1, 1 }) do
-		clutter(makePart(parent, Vector3.new(50, 0.46, 10), CFrame.new(c + Vector3.new(0, 0.17, side * 20)), paving, Enum.Material.Pavement))
-		clutter(makePart(parent, Vector3.new(10, 0.46, 30), CFrame.new(c + Vector3.new(side * 20, 0.17, 0)), paving, Enum.Material.Pavement))
+-- Sizes by class, modelled on a real single-lane town roundabout: the raised island's radius, the
+-- overrun apron of setts round it (long vehicles' rear wheels run up on it), the asphalt ring's width,
+-- the approach fillet's radius and the splitter's half-width at the ring. The ring is sized for the
+-- biggest vehicle, not the average car: the Sahur Van is 9 wide with its mirrors, and the ring is that
+-- plus 4 (tools/roundabout_check.py, geometry); the Camelo Carrier (17.6 long) goes all the way round
+-- with its body off the island kerb and inside the outer kerb.
+local ROUNDABOUT_SIZES = {
+	small = { island = 12.5, apron = 4, lane = 13, fillet = 20, splitter = 1.2 },
+	medium = { island = 14.5, apron = 4, lane = 13, fillet = 22, splitter = 1.2 },
+	large = { island = 17, apron = 4.5, lane = 13, fillet = 26, splitter = 1.3 },
+}
+-- A village's roundabout is small, a city's large; every other kind of town is medium.
+local ROUNDABOUT_CLASS = { rural = "small", neighbourhood = "small", downtown = "large", industrial = "large" }
+MapDecor.RoundaboutSizes = ROUNDABOUT_SIZES
+MapDecor.RoundaboutClass = ROUNDABOUT_CLASS
+-- Parts one roundabout may use, fountain and furniture included (tools/roundabout_check.py).
+MapDecor.RoundaboutBudget = 1250
+-- The fountain's basin plinth, which the island has to hold with a planted ring round it.
+local PLINTH_RADIUS = 10.8
+-- Arms by the angle they leave O at (atan2(z, x)), in the order the outline walks them.
+local ARM_ANGLE = { E = 0, N = math.pi / 2, W = math.pi, S = 3 * math.pi / 2 }
+local ARM_ORDER = { "E", "N", "W", "S" }
+MapDecor.RoundaboutArms = ARM_ORDER
+
+-- The layout for a town of `kind` whose streets are `streetHalf` either side of their centre line
+-- with `sidewalk` of kerb and pavement beyond. `approach` is where the streets start (MapGenerator
+-- lays them from there), `reach` how far from O anything of the roundabout goes.
+function MapDecor.RoundaboutSpec(kind, streetHalf, sidewalk)
+	local class = ROUNDABOUT_CLASS[kind] or "medium"
+	local size = ROUNDABOUT_SIZES[class]
+	local island, fillet = size.island, size.fillet
+	local outer = island + size.apron + size.lane
+	local h = streetHalf
+	-- The fillet's centre is (approach, h + fillet) in an arm's frame: `fillet` off the kerb line and
+	-- `outer + fillet` from O, so it touches both.
+	local approach = math.sqrt((outer + fillet) ^ 2 - (h + fillet) ^ 2)
+	return {
+		class = class,
+		island = island,
+		outer = outer,
+		lane = size.lane,
+		fillet = fillet,
+		half = h,
+		sidewalk = sidewalk,
+		approach = approach,
+		-- Half the angle an approach's mouth spans at O, between the two fillets' tangent points.
+		mouth = math.atan2(h + fillet, approach),
+		splitter = size.splitter,
+		apron = size.apron,
+		reach = math.sqrt(approach * approach + (h + sidewalk) ^ 2),
+		-- The circulating path's radius, down the middle of the ring.
+		circulate = island + size.apron + size.lane / 2,
+		-- The apron's outer edge, where the asphalt starts.
+		apronOuter = island + size.apron,
+	}
+end
+
+-- An arm's frame: `u` out along it from O, `v` to its left (anticlockwise).
+local function armPoint(centre, angle, u, v)
+	local c, s = math.cos(angle), math.sin(angle)
+	return Vector3.new(centre.X + c * u - s * v, centre.Y, centre.Z + s * u + c * v)
+end
+
+local function polar(centre, angle, radius, y)
+	return Vector3.new(centre.X + math.cos(angle) * radius, y or centre.Y, centre.Z + math.sin(angle) * radius)
+end
+
+-- Evenly split angles from a0 to a1, no step over `maxStep`.
+local function angleSteps(a0, a1, maxStep)
+	local count = math.max(1, math.ceil(math.abs(a1 - a0) / maxStep - 1e-9))
+	local list = {}
+	for index = 0, count do
+		table.insert(list, a0 + (a1 - a0) * index / count)
 	end
-	currentName = "Cobbles"
-	clutter(makePart(parent, Vector3.new(30, 0.52, 30), CFrame.new(c + Vector3.new(0, 0.2, 0)), Color3.fromRGB(150, 146, 138),
-		Enum.Material.Cobblestone))
+	return list
+end
 
+-- The drivable outline, walked round O by increasing angle, and the kerb runs along it. Each run is
+-- { centre, angles, radius, outward }: the kerb's road-side edge is the chord polygon at `radius` round
+-- `centre` through `angles`; `outward` says the kerb and pavement lie outside that circle (the ring)
+-- rather than inside it (a fillet, whose centre is off the road).
+function MapDecor.RoundaboutOutline(spec, centre)
+	local L, h, rf, ro, phi = spec.approach, spec.half, spec.fillet, spec.outer, spec.mouth
+	local vertices, runs = {}, {}
+	local function add(p)
+		local last = vertices[#vertices]
+		if not last or (Vector3.new(p.X - last.X, 0, p.Z - last.Z)).Magnitude > 1e-4 then
+			table.insert(vertices, p)
+		end
+	end
+	for index, name in ipairs(ARM_ORDER) do
+		local theta = ARM_ANGLE[name]
+		-- The right-hand fillet (as the traffic arriving sees it), from the ring to the street's kerb.
+		local fMinus = armPoint(centre, theta, L, -(h + rf))
+		local minus = {}
+		for _, beta in ipairs(angleSteps(math.pi - phi, math.pi / 2, math.rad(10))) do
+			table.insert(minus, theta + beta)
+			add(polar(fMinus, theta + beta, rf))
+		end
+		table.insert(runs, { centre = fMinus, angles = minus, radius = rf, outward = false, arm = name, side = -1 })
+		-- The street's end, across its asphalt, is the one edge from here to the other fillet: a vertex on
+		-- the centre line would put two pieces' shared edge right down it.
+		-- The left-hand fillet, from the street's kerb back to the ring.
+		local fPlus = armPoint(centre, theta, L, h + rf)
+		local plus = {}
+		for _, beta in ipairs(angleSteps(-math.pi / 2, -(math.pi - phi), math.rad(10))) do
+			table.insert(plus, theta + beta)
+			add(polar(fPlus, theta + beta, rf))
+		end
+		table.insert(runs, { centre = fPlus, angles = plus, radius = rf, outward = false, arm = name, side = 1 })
+		-- The ring's outer kerb on to the next arm.
+		local ring = {}
+		for _, angle in ipairs(angleSteps(theta + phi, theta + math.pi / 2 - phi, math.rad(8))) do
+			table.insert(ring, angle)
+			add(polar(centre, angle, ro))
+		end
+		table.insert(runs, { centre = centre, angles = ring, radius = ro, outward = true, gap = index })
+	end
+	-- The walk ends where it began (the first fillet's first point is the last ring's last).
+	local first, last = vertices[1], vertices[#vertices]
+	if (Vector3.new(first.X - last.X, 0, first.Z - last.Z)).Magnitude < 1e-4 then
+		table.remove(vertices)
+	end
+	return vertices, runs
+end
+
+-- Claims the roundabout's ground in `space` before the town's buildings go up: the ring and its pavement,
+-- each approach, and each fillet's pavement (which curves out behind the street's building line).
+function MapDecor.RoundaboutClaim(space, spec, centre)
+	local c = Vector3.new(centre.X, 0, centre.Z)
+	space:AddCircle(c.X, c.Z, spec.outer + spec.sidewalk + 0.5)
+	local _, runs = MapDecor.RoundaboutOutline(spec, c)
+	for _, run in ipairs(runs) do
+		if not run.outward then
+			for _, angle in ipairs(angleSteps(run.angles[1], run.angles[#run.angles], 3 / run.radius)) do
+				local at = polar(run.centre, angle, run.radius - spec.sidewalk / 2)
+				space:AddCircle(at.X, at.Z, spec.sidewalk / 2 + 0.6)
+			end
+		end
+	end
+	for _, name in ipairs(ARM_ORDER) do
+		local theta = ARM_ANGLE[name]
+		local mid = armPoint(c, theta, (spec.outer + spec.approach) / 2, 0)
+		space:AddRect(mid.X, mid.Z, (spec.approach - spec.outer) / 2 + 1, spec.half + spec.sidewalk, -theta)
+		-- The corner's bench (or vendor) and flower bed; the flag's spot between them stays free for
+		-- TownThemes, which asks.
+		local alpha = theta + math.pi / 4
+		local corner0 = spec.outer + spec.sidewalk
+		local bench = polar(c, alpha, corner0 + 2.4)
+		-- The same `across` as MapDecor.Roundabout's corners.
+		local across = Vector3.new(-math.sin(alpha), 0, math.cos(alpha))
+		for _, hand in ipairs({ -1, 1 }) do
+			local at = bench + across * (hand * 1.9)
+			space:AddCircle(at.X, at.Z, 1.3)
+		end
+		if name == "S" then
+			local vendor = polar(c, alpha, corner0 + 3.2) + across * 4.6
+			space:AddCircle(vendor.X, vendor.Z, 3.2)
+		else
+			local bin = bench + across * 4.2
+			space:AddCircle(bin.X, bin.Z, 1.4)
+		end
+		local bed = polar(c, alpha, corner0 + 8.8)
+		space:AddCircle(bed.X, bed.Z, 3)
+	end
+end
+
+-- Any flat triangle `a`, `b`, `c` (their Y ignored) from `y0` to `y1`: the two right-angled wedges
+-- either side of the altitude onto its longest side, which always lands inside that side.
+local function flatTriangle(parent, a, b, c, y0, y1, color, material)
+	local points = { Vector3.new(a.X, 0, a.Z), Vector3.new(b.X, 0, b.Z), Vector3.new(c.X, 0, c.Z) }
+	local longest, at = -1, 1
+	for index = 1, 3 do
+		local d = (points[index % 3 + 1] - points[index]).Magnitude
+		if d > longest then
+			longest, at = d, index
+		end
+	end
+	local p, q, r = points[at], points[at % 3 + 1], points[(at + 1) % 3 + 1]
+	if longest < 0.02 then
+		return {}
+	end
+	local u = (q - p) / longest
+	local along = (r - p):Dot(u)
+	local foot = p + u * along
+	local altitude = (r - foot).Magnitude
+	if altitude < 0.005 then
+		return {}
+	end
+	local v = (r - foot) / altitude
+	local lift = Vector3.new(0, (y0 + y1) / 2, 0)
+	local made = {}
+	if along > 0.005 then
+		table.insert(made, triangle(parent, foot + lift, u, v, -1, 1, along, altitude, y1 - y0, color, material))
+	end
+	if longest - along > 0.005 then
+		table.insert(made, triangle(parent, foot + lift, u, v, 1, 1, longest - along, altitude, y1 - y0, color, material))
+	end
+	return made
+end
+
+-- One piece of an annular band round `centre` between angles a0 and a1 and radii r0 < r1, from y0 to
+-- y1: a rectangle on the inner chord and a wedge either side out to the outer chord, so its radial
+-- edges lie exactly on the radii at a0 and a1 (RoadNetwork's curveBand, round any centre).
+local function bandPiece(parent, centre, a0, a1, r0, r1, y0, y1, color, material)
+	local mid = (a0 + a1) / 2
+	local delta = math.abs(a1 - a0) / 2
+	local cosD, sinD = math.cos(delta), math.sin(delta)
+	local out = Vector3.new(math.cos(mid), 0, math.sin(mid))
+	local side = Vector3.new(-math.sin(mid), 0, math.cos(mid))
+	local base = Vector3.new(centre.X, (y0 + y1) / 2, centre.Z)
+	local middle = base + out * ((r0 + r1) / 2 * cosD)
+	local made = { makePart(parent, Vector3.new(2 * r0 * sinD, y1 - y0, (r1 - r0) * cosD), CFrame.lookAt(middle, middle + out), color, material) }
+	if (r1 - r0) * sinD > 0.005 then
+		local corner = base + out * (r1 * cosD)
+		for _, hand in ipairs({ 1, -1 }) do
+			table.insert(made, triangle(parent, corner + side * (hand * r0 * sinD), out, side, -1, hand, (r1 - r0) * cosD, (r1 - r0) * sinD,
+				y1 - y0, color, material))
+		end
+	end
+	return made
+end
+
+-- An upright disc (a Cylinder part turned on end) of `radius` from y0 to y1.
+local function disc(parent, centre, radius, y0, y1, color, material)
+	return makePart(parent, Vector3.new(y1 - y0, radius * 2, radius * 2),
+		CFrame.new(centre.X, (y0 + y1) / 2, centre.Z) * CFrame.Angles(0, 0, math.pi / 2), color, material, Enum.PartType.Cylinder)
+end
+
+local function jitter(rng, color, amount)
+	local d = rng:NextNumber(-amount, amount) / 255
+	return Color3.new(math.clamp(color.R + d, 0, 1), math.clamp(color.G + d, 0, 1), math.clamp(color.B + d, 0, 1))
+end
+
+-- A bar from `a` to `b` (world points), `width` wide and `depth` deep, its depth along `normal`.
+local function bar(parent, a, b, width, depth, normal, color, material)
+	local length = (b - a).Magnitude
+	local look = CFrame.lookAt((a + b) / 2, b, normal)
+	return makePart(parent, Vector3.new(width, depth, length), look, color, material)
+end
+
+-- The fountain, standing on `base`: a twelve-sided marble basin with a coping, a tiled floor under
+-- the water, the column and the upper bowl with its spray (or the town's statue in the bowl).
+local MARBLE = Color3.fromRGB(226, 222, 214)
+local WATER = Color3.fromRGB(70, 170, 220)
+local function fountain(parent, base, statueDef, rng)
+	local y = base.Y
+	local centre = Vector3.new(base.X, 0, base.Z)
 	currentName = "FountainWall"
-	for index = 0, 7 do
-		local angle = index / 8 * math.pi * 2
-		makePart(parent, Vector3.new(7.4, 2.2, 1.4),
-			CFrame.new(c + Vector3.new(0, 1.1, 0)) * CFrame.Angles(0, angle, 0) * CFrame.new(0, 0, 8.6), marble, Enum.Material.Marble)
+	for index = 0, 11 do
+		local a0, a1 = index / 12 * math.pi * 2, (index + 1) / 12 * math.pi * 2
+		bandPiece(parent, centre, a0, a1, 8.0, 9.4, y - 0.1, y + 1.9, jitter(rng, MARBLE, 5), Enum.Material.Marble)
+		currentName = "FountainCoping"
+		bandPiece(parent, centre, a0, a1, 7.75, 9.65, y + 1.8, y + 2.15, MARBLE, Enum.Material.Marble)
+		currentName = "FountainWall"
 	end
+	currentName = "FountainFloor"
+	disc(parent, centre, 8.05, y - 0.1, y + 0.12, Color3.fromRGB(64, 128, 138), Enum.Material.Slate)
 	currentName = "FountainPool"
-	local pool = clutter(makePart(parent, Vector3.new(1.2, 17, 17),
-		CFrame.new(c + Vector3.new(0, 1.2, 0)) * CFrame.Angles(0, 0, math.pi / 2), water, Enum.Material.Glass, Enum.PartType.Cylinder))
-	pool.Transparency = 0.25
-
+	local pool = clutter(disc(parent, centre, 8.1, y + 0.3, y + 1.55, WATER, Enum.Material.Glass))
+	pool.Transparency = 0.3
 	currentName = "FountainColumn"
-	column(parent, 5, 2, c, marble, Enum.Material.Marble)
+	column(parent, 5, 2, Vector3.new(base.X, y, base.Z), MARBLE, Enum.Material.Marble)
 	currentName = "FountainBowl"
-	makePart(parent, Vector3.new(0.8, 7, 7), CFrame.new(c + Vector3.new(0, 5.2, 0)) * CFrame.Angles(0, 0, math.pi / 2), marble,
+	makePart(parent, Vector3.new(0.8, 7, 7), CFrame.new(base + Vector3.new(0, 5.2, 0)) * CFrame.Angles(0, 0, math.pi / 2), MARBLE,
 		Enum.Material.Marble, Enum.PartType.Cylinder)
-	local bowl = clutter(makePart(parent, Vector3.new(0.3, 6, 6),
-		CFrame.new(c + Vector3.new(0, 5.55, 0)) * CFrame.Angles(0, 0, math.pi / 2), water, Enum.Material.Glass, Enum.PartType.Cylinder))
+	local bowl = clutter(makePart(parent, Vector3.new(0.3, 6, 6), CFrame.new(base + Vector3.new(0, 5.55, 0)) * CFrame.Angles(0, 0, math.pi / 2),
+		WATER, Enum.Material.Glass, Enum.PartType.Cylinder))
 	bowl.Transparency = 0.2
+	-- Four low jets round the column, rising and falling out of the pool.
+	currentName = "FountainJet"
+	for index = 0, 3 do
+		local angle = index / 4 * math.pi * 2 + math.pi / 4
+		local jet = clutter(makePart(parent, Vector3.new(0.7, 0.7, 0.7), CFrame.new(polar(centre, angle, 4.6, y + 1.9)),
+			Color3.fromRGB(180, 235, 255), Enum.Material.Neon, Enum.PartType.Ball))
+		jet.Transparency = 0.25
+		jet:SetAttribute("BobHeight", 0.3)
+		jet:SetAttribute("BobSpeed", 2.5 + index * 0.4)
+		jet:SetAttribute("BobPhase", index * 1.3)
+		CollectionService:AddTag(jet, "AmbientBob")
+	end
 	currentName = "Part"
-
 	if statueDef then
 		-- The town's patron brainrot, well over life size, standing in the upper bowl.
 		local scale = 2.6
@@ -1139,14 +1405,14 @@ function MapDecor.Plaza(parent, center, groundHeightAt, statueDef)
 		local metrics = BrainrotModels.Metrics(statueDef)
 		local statue = BrainrotModels.Build(statueDef, {
 			scale = scale,
-			cframe = CFrame.new(c + Vector3.new(0, 5.6 - metrics.bottom * scale * size, 0))
-				* CFrame.Angles(0, math.random() * math.pi * 2, 0),
+			cframe = CFrame.new(base + Vector3.new(0, 5.6 - metrics.bottom * scale * size, 0)) * CFrame.Angles(0, rng:NextNumber() * math.pi * 2, 0),
 		})
 		statue.Name = "Statue"
 		statue.Parent = parent
 	else
 		for index, size in ipairs({ 1.4, 1.0, 0.6 }) do
-			local spray = clutter(makePart(parent, Vector3.new(size, size, size), CFrame.new(c + Vector3.new(0, 5.5 + index * 1.05, 0)),
+			currentName = "FountainSpray"
+			local spray = clutter(makePart(parent, Vector3.new(size, size, size), CFrame.new(base + Vector3.new(0, 5.5 + index * 1.05, 0)),
 				Color3.fromRGB(180, 235, 255), Enum.Material.Neon, Enum.PartType.Ball))
 			spray.Transparency = 0.2
 			spray:SetAttribute("BobHeight", 0.35)
@@ -1154,22 +1420,646 @@ function MapDecor.Plaza(parent, center, groundHeightAt, statueDef)
 			spray:SetAttribute("BobPhase", index)
 			CollectionService:AddTag(spray, "AmbientBob")
 		end
+		currentName = "Part"
+	end
+end
+
+-- A sign board shaped as an inverted triangle (give way), its top edge `width` across at `top`, facing
+-- `facing`: a red triangle with a white one inset in front of it.
+local function giveWaySign(parent, foot, facing, height)
+	local right = Vector3.new(-facing.Z, 0, facing.X)
+	currentName = "SignPost"
+	column(parent, height, 0.25, foot - Vector3.new(0, 0.2, 0), Color3.fromRGB(150, 152, 156), Enum.Material.Metal)
+	local topCentre = foot + Vector3.new(0, height + 0.1, 0) + facing * 0.16
+	currentName = "GiveWaySign"
+	for _, layer in ipairs({ { 1.2, 1.9, 0, Color3.fromRGB(200, 30, 36) }, { 0.8, 1.26, 0.09, Color3.fromRGB(244, 244, 240) } }) do
+		local half, drop, ahead, color = layer[1], layer[2], layer[3], layer[4]
+		local corner = topCentre + facing * ahead - Vector3.new(0, (1.9 - drop) * 0.45, 0)
+		for _, hand in ipairs({ 1, -1 }) do
+			clutter(triangle(parent, corner, right, Vector3.new(0, -1, 0), hand, 1, half, drop, 0.12, color, Enum.Material.SmoothPlastic))
+		end
+	end
+	currentName = "Part"
+end
+giveWaySign = grouped("Sign", giveWaySign)
+
+-- A keep-right bollard: a white post with a lit blue disc on top, an arrow down to the right as the
+-- oncoming driver sees it.
+local function keepRightBollard(parent, foot, facing)
+	local right = Vector3.new(-facing.Z, 0, facing.X)
+	-- The driver faces -facing, so their right is -right.
+	currentName = "Bollard"
+	column(parent, 2.0, 0.6, foot - Vector3.new(0, 0.1, 0), Color3.fromRGB(236, 236, 230), Enum.Material.SmoothPlastic)
+	local centre = foot + Vector3.new(0, 2.6, 0)
+	currentName = "BollardSign"
+	-- The disc and its arrow don't collide: only the post stands in a car's way, over the splitter.
+	local sign = clutter(makePart(parent, Vector3.new(0.14, 1.2, 1.2), CFrame.lookAt(centre, centre + facing) * CFrame.Angles(0, math.pi / 2, 0),
+		Color3.fromRGB(30, 80, 190), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder))
+	local glow = Instance.new("PointLight")
+	glow.Color = Color3.fromRGB(150, 190, 255)
+	glow.Range = 6
+	glow.Brightness = 0.6
+	glow.Parent = sign
+	currentName = "BollardArrow"
+	local front = centre + facing * 0.09
+	local tip = front - right * 0.32 - Vector3.new(0, 0.32, 0)
+	local tail = front + right * 0.32 + Vector3.new(0, 0.32, 0)
+	clutter(bar(parent, tail, tip, 0.16, 0.06, facing, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic))
+	clutter(bar(parent, tip, tip + Vector3.new(0, 0.36, 0), 0.16, 0.06, facing, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic))
+	clutter(bar(parent, tip, tip + right * 0.36, 0.16, 0.06, facing, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic))
+	currentName = "Part"
+end
+keepRightBollard = grouped("Sign", keepRightBollard)
+
+-- The blue roundabout sign: a disc with three white arrows chasing round it (anticlockwise, the way the
+-- traffic goes), `centre` its middle, facing `facing`. Doesn't collide; takes shots.
+local function roundaboutDisc(parent, centre, facing)
+	currentName = "RoundaboutSign"
+	local disc = makePart(parent, Vector3.new(0.1, 1.5, 1.5), CFrame.lookAt(centre, centre + facing) * CFrame.Angles(0, math.pi / 2, 0),
+		Color3.fromRGB(28, 84, 196), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
+	disc.CanCollide = false
+	local right = Vector3.new(-facing.Z, 0, facing.X)
+	local front = centre + facing * 0.07
+	currentName = "RoundaboutArrow"
+	for index = 0, 2 do
+		local a = index / 3 * math.pi * 2
+		local p0 = front + (right * math.cos(a) + Vector3.yAxis * math.sin(a)) * 0.45
+		local a1 = a + 1.4
+		local p1 = front + (right * math.cos(a1) + Vector3.yAxis * math.sin(a1)) * 0.45
+		clutter(bar(parent, p0, p1, 0.14, 0.05, facing, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic))
+		local tangent = (right * -math.sin(a1) + Vector3.yAxis * math.cos(a1))
+		local outward = (right * math.cos(a1) + Vector3.yAxis * math.sin(a1))
+		clutter(bar(parent, p1, p1 - tangent * 0.2 + outward * 0.18, 0.12, 0.05, facing, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic))
+		clutter(bar(parent, p1, p1 - tangent * 0.2 - outward * 0.18, 0.12, 0.05, facing, Color3.new(1, 1, 1), Enum.Material.SmoothPlastic))
+	end
+	currentName = "Part"
+	return disc
+end
+
+-- A warning triangle (point up, red rim, white face) with the roundabout symbol, on its own post on the
+-- pavement before an entry, facing the traffic arriving.
+local function warningSign(parent, foot, facing)
+	local right = Vector3.new(-facing.Z, 0, facing.X)
+	currentName = "SignPost"
+	column(parent, 5.1, 0.25, foot - Vector3.new(0, 0.2, 0), Color3.fromRGB(150, 152, 156), Enum.Material.Metal)
+	local apex = foot + Vector3.new(0, 6.2, 0) + facing * 0.16
+	currentName = "WarningSign"
+	for _, layer in ipairs({ { 1.2, 2.0, 0, Color3.fromRGB(200, 30, 36) }, { 0.78, 1.3, 0.09, Color3.fromRGB(244, 244, 240) } }) do
+		local half, drop, ahead, color = layer[1], layer[2], layer[3], layer[4]
+		-- A right triangle each side of the altitude, the right angle at the middle of the base.
+		local baseMid = apex + facing * ahead - Vector3.new(0, 2.0 - (2.0 - drop) * 0.45, 0)
+		for _, hand in ipairs({ 1, -1 }) do
+			clutter(triangle(parent, baseMid, right, Vector3.yAxis, hand, 1, half, drop, 0.12, color, Enum.Material.SmoothPlastic))
+		end
+	end
+	currentName = "WarningSymbol"
+	local centre = apex - Vector3.new(0, 1.25, 0) + facing * 0.155
+	for index = 0, 2 do
+		local a = index / 3 * math.pi * 2
+		local p0 = centre + (right * math.cos(a) + Vector3.yAxis * math.sin(a)) * 0.3
+		local p1 = centre + (right * math.cos(a + 1.5) + Vector3.yAxis * math.sin(a + 1.5)) * 0.3
+		clutter(bar(parent, p0, p1, 0.1, 0.04, facing, Color3.fromRGB(24, 24, 28), Enum.Material.SmoothPlastic))
+	end
+	currentName = "Part"
+end
+warningSign = grouped("Sign", warningSign)
+
+-- A chevron board on the island facing an entry: white, three black chevrons pointing the way the
+-- traffic goes round (to the entering driver's right).
+local function chevronBoard(parent, foot, facing)
+	local right = Vector3.new(-facing.Z, 0, facing.X)
+	local driverRight = -right
+	currentName = "SignPost"
+	for _, x in ipairs({ -2.1, 2.1 }) do
+		column(parent, 3.3, 0.25, foot + right * x - Vector3.new(0, 0.3, 0), Color3.fromRGB(150, 152, 156), Enum.Material.Metal)
+	end
+	local centre = foot + Vector3.new(0, 2.3, 0) + facing * 0.18
+	currentName = "ChevronBoard"
+	makePart(parent, Vector3.new(5.6, 1.4, 0.16), CFrame.lookAt(centre, centre + facing), Color3.fromRGB(244, 244, 240), Enum.Material.SmoothPlastic)
+	currentName = "Chevron"
+	local front = centre + facing * 0.09
+	for index = -1, 1 do
+		local nose = front + driverRight * (index * 1.6 + 0.45)
+		for _, up in ipairs({ 1, -1 }) do
+			local back = nose - driverRight * 0.55 + Vector3.new(0, up * 0.52, 0)
+			bar(parent, back, nose, 0.32, 0.05, facing, Color3.fromRGB(24, 24, 28), Enum.Material.SmoothPlastic)
+		end
+	end
+	currentName = "Part"
+end
+chevronBoard = grouped("Sign", chevronBoard)
+
+-- A street lamp for the ring in the town's colours: a plinth, the post with a collar in the town's
+-- accent, an arm out over the road, a lit lantern, and a hanging basket of flowers.
+local function ringLamp(parent, foot, facing, accent, flowers)
+	currentName = "LampBase"
+	column(parent, 1.1, 1.1, foot - Vector3.new(0, 0.1, 0), METAL_DARK, Enum.Material.Metal)
+	currentName = "LampPost"
+	column(parent, 13.4, 0.55, foot + Vector3.new(0, 0.9, 0), METAL_DARK, Enum.Material.Metal)
+	currentName = "LampCollar"
+	column(parent, 0.5, 0.75, foot + Vector3.new(0, 3.2, 0), accent, Enum.Material.Metal)
+	local top = foot + Vector3.new(0, 13.9, 0)
+	local look = CFrame.lookAt(top, top + facing)
+	currentName = "LampArm"
+	makePart(parent, Vector3.new(0.3, 0.3, 3.6), look * CFrame.new(0, 0, -1.6), METAL_DARK, Enum.Material.Metal)
+	currentName = "LampHood"
+	makePart(parent, Vector3.new(1.9, 0.35, 1.5), look * CFrame.new(0, -0.1, -3.4), accent, Enum.Material.Metal)
+	currentName = "Lamp"
+	local lamp = clutter(makePart(parent, Vector3.new(1.5, 0.35, 1.1), look * CFrame.new(0, -0.44, -3.4), LAMP_GLOW, Enum.Material.Neon))
+	local light = Instance.new("PointLight")
+	light.Color = LAMP_GLOW
+	light.Range = 26
+	light.Brightness = 1.4
+	light.Parent = lamp
+	currentName = "BasketBracket"
+	makePart(parent, Vector3.new(0.18, 0.18, 1.2), look * CFrame.new(0, -6.2, 0.75), METAL_DARK, Enum.Material.Metal)
+	currentName = "FlowerBasket"
+	clutter(makePart(parent, Vector3.new(1.5, 1.2, 1.5), look * CFrame.new(0, -6.8, 1.5), flowers, Enum.Material.Grass, Enum.PartType.Ball))
+	currentName = "Part"
+end
+ringLamp = grouped("Lamp", ringLamp)
+
+-- A zebra crossing's beacon: a black-and-white pole with an amber globe, lit.
+local function beacon(parent, foot)
+	currentName = "BeaconPole"
+	column(parent, 7.2, 0.36, foot - Vector3.new(0, 0.1, 0), Color3.fromRGB(240, 240, 236), Enum.Material.SmoothPlastic)
+	currentName = "BeaconBand"
+	for index = 0, 2 do
+		column(parent, 0.7, 0.4, foot + Vector3.new(0, 1.2 + index * 1.9, 0), Color3.fromRGB(26, 26, 28), Enum.Material.SmoothPlastic)
+	end
+	currentName = "BeaconGlobe"
+	local globe = makePart(parent, Vector3.new(1.1, 1.1, 1.1), CFrame.new(foot + Vector3.new(0, 7.55, 0)), Color3.fromRGB(255, 170, 40),
+		Enum.Material.Neon, Enum.PartType.Ball)
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 170, 60)
+	light.Range = 9
+	light.Brightness = 0.8
+	light.Parent = globe
+	currentName = "Part"
+end
+beacon = grouped("Beacon", beacon)
+
+-- A round bed of flowers on a corner of the roundabout: a low stone edge, soil, and flowers.
+local function flowerBed(parent, centre, rng, colors)
+	currentName = "BedEdge"
+	disc(parent, centre, 2.6, centre.Y - 0.1, centre.Y + 0.55, Color3.fromRGB(168, 160, 146), Enum.Material.Slate)
+	currentName = "BedSoil"
+	disc(parent, centre, 2.2, centre.Y + 0.2, centre.Y + 0.62, Color3.fromRGB(86, 62, 44), Enum.Material.Ground)
+	currentName = "Shrub"
+	clutter(makePart(parent, Vector3.new(2.2, 1.9, 2.2), CFrame.new(centre + Vector3.new(0, 1.2, 0)), Color3.fromRGB(62, 116, 56),
+		Enum.Material.Grass, Enum.PartType.Ball))
+	currentName = "Flowers"
+	for index = 0, 4 do
+		local angle = index / 5 * math.pi * 2 + rng:NextNumber(0, 0.6)
+		clutter(makePart(parent, Vector3.new(0.9, 0.7, 0.9), CFrame.new(polar(centre, angle, 1.55, centre.Y + 0.8)), colors[index % #colors + 1],
+			Enum.Material.SmoothPlastic, Enum.PartType.Ball))
+	end
+	currentName = "Part"
+end
+flowerBed = grouped("Planter", flowerBed)
+
+-- A small tree for a big island: a trunk and two rounds of leaves.
+local function islandTree(parent, foot, rng)
+	currentName = "TreeTrunk"
+	column(parent, 5.2, 0.7, foot - Vector3.new(0, 0.3, 0), Color3.fromRGB(104, 78, 56), Enum.Material.Wood)
+	currentName = "TreeLeaves"
+	local green = Color3.fromRGB(70 + rng:NextInteger(-8, 8), 128 + rng:NextInteger(-10, 10), 58)
+	makePart(parent, Vector3.new(4.4, 3.6, 4.4), CFrame.new(foot + Vector3.new(0, 5.6, 0)), green, Enum.Material.Grass, Enum.PartType.Ball)
+	makePart(parent, Vector3.new(3.0, 2.6, 3.0), CFrame.new(foot + Vector3.new(0.5, 7.2, -0.3)), green, Enum.Material.Grass, Enum.PartType.Ball)
+	currentName = "Part"
+end
+islandTree = grouped("Tree", islandTree)
+
+MapDecor.RoundaboutPieces = {
+	surface = { RingAsphalt = true },
+	marks = { GiveWay = true, GiveWayTriangle = true, EdgeLine = true, RingArrow = true, Drain = true, DrainChannel = true, Manhole = true,
+		Tactile = true },
+}
+
+local KERB_TOP, PAVEMENT_TOP = 0.5, 0.35
+local ROUNDABOUT_MARK = Color3.fromRGB(238, 236, 228)
+
+-- The whole roundabout round `center` (its Y ignored: surfaces stand on the town's ground at 0, like the
+-- streets), laid out by `spec` (MapDecor.RoundaboutSpec). `options`: statueDef, accent and trim
+-- (the town's colours), groundHeightAt, space (corner furniture claims its spots). Returns the model and
+-- loot spots { heal, weapon, item }.
+function MapDecor.Roundabout(parent, center, spec, options)
+	options = options or {}
+	local model = Instance.new("Model")
+	model.Name = "Roundabout"
+	model.Parent = parent
+	local c = Vector3.new(center.X, 0, center.Z)
+	local rng = Random.new((math.floor(center.X * 31 + center.Z * 17) % 2147483000) + 7)
+	local lift = MapDecor.RoadLift
+	local ri, ro, rf, L, h = spec.island, spec.outer, spec.fillet, spec.approach, spec.half
+	local sidewalk = spec.sidewalk
+	local accent = options.accent or Color3.fromRGB(40, 90, 60)
+	local trim = options.trim or Color3.fromRGB(220, 190, 90)
+	local blooms = { accent, trim, Color3.fromRGB(255, 96, 140), Color3.fromRGB(255, 214, 70), Color3.fromRGB(245, 245, 245) }
+	for key, value in pairs({ Class = spec.class, Island = ri, Outer = ro, Fillet = rf, Approach = L, StreetHalf = h, Sidewalk = sidewalk,
+		Circulate = spec.circulate, Splitter = spec.splitter, ApronOuter = spec.apronOuter }) do
+		model:SetAttribute(key, value)
+	end
+	model:SetAttribute("Center", c)
+
+	-- The carriageway: one fan from O to the outline.
+	local vertices, runs = MapDecor.RoundaboutOutline(spec, c)
+	currentName = "RingAsphalt"
+	for index = 1, #vertices do
+		local a, b = vertices[index], vertices[index % #vertices + 1]
+		for _, wedge in ipairs(flatTriangle(model, c, a, b, 0, lift, MapDecor.AsphaltColor, Enum.Material.Asphalt)) do
+			clutter(wedge)
+		end
 	end
 
-	for index = 0, 3 do
-		local angle = index / 4 * math.pi * 2 + math.pi / 4
-		benchFacing(parent, c + Vector3.new(math.cos(angle) * 15, MapDecor.CobblesTop, math.sin(angle) * 15), c)
-	end
-	for _, corner in ipairs({ Vector3.new(19, 0, 19), Vector3.new(-19, 0, 19), Vector3.new(19, 0, -19), Vector3.new(-19, 0, -19) }) do
-		planter(parent, c + corner + Vector3.new(0, MapDecor.PavingTop, 0), 0)
+	-- Kerbs and pavements round the outline, their road-side edges on the fan's.
+	for _, run in ipairs(runs) do
+		for index = 1, #run.angles - 1 do
+			local a0, a1 = run.angles[index], run.angles[index + 1]
+			local kerb0, kerb1, walk0, walk1
+			if run.outward then
+				kerb0, kerb1, walk0, walk1 = run.radius, run.radius + KERB, run.radius + KERB, run.radius + sidewalk
+			else
+				kerb0, kerb1, walk0, walk1 = run.radius - KERB, run.radius, run.radius - sidewalk, run.radius - KERB
+			end
+			currentName = "Kerb"
+			for _, piece in ipairs(bandPiece(model, run.centre, a0, a1, kerb0, kerb1, -0.06, KERB_TOP, jitter(rng, KERB_COLOR, 6), Enum.Material.Concrete)) do
+				clutter(piece)
+			end
+			currentName = "Pavement"
+			for _, piece in ipairs(bandPiece(model, run.centre, a0, a1, walk0, walk1, -0.06, PAVEMENT_TOP, PAVEMENT_COLOR, Enum.Material.Pavement)) do
+				clutter(piece)
+			end
+		end
 	end
 
-	return {
-		-- Just outside the fountain's wall, whose ring of segments reaches 10 studs out at its corners.
-		heal = { c + Vector3.new(12, MapDecor.CobblesTop, 0), c + Vector3.new(-12, MapDecor.CobblesTop, 0) },
-		weapon = { c + Vector3.new(0, 0.4, 20), c + Vector3.new(20, 0.4, 0) },
-		item = { c + Vector3.new(0, 0.4, -20) },
-	}
+	-- The solid white edge line 1.3 in from the outer kerb (the gully grates sit in the channel outside it), round the ring and on round each fillet to
+	-- the street, broken only across the mouths: chords of its own circle, each trimmed so neighbours
+	-- meet at their inside corners rather than overlap.
+	for _, run in ipairs(runs) do
+		local radius = run.outward and run.radius - 1.3 or run.radius + 1.3
+		for index = 1, #run.angles - 1 do
+			local a0, a1 = run.angles[index], run.angles[index + 1]
+			local p0, p1 = polar(run.centre, a0, radius, lift + MapDecor.MarkRaise / 2), polar(run.centre, a1, radius, lift + MapDecor.MarkRaise / 2)
+			local trim = 0.25 * math.abs(math.tan((a1 - a0) / 2)) + 0.005
+			local length = (p1 - p0).Magnitude - 2 * trim
+			if length > 0.05 then
+				currentName = "EdgeLine"
+				clutter(makePart(model, Vector3.new(0.5, MapDecor.MarkRaise, length), CFrame.lookAt((p0 + p1) / 2, p1), ROUNDABOUT_MARK, Enum.Material.SmoothPlastic))
+			end
+		end
+	end
+
+	-- The island, stood on the fan: the overrun apron of dark setts (a hair proud of the road, mountable,
+	-- not colliding, like every kerb here), the island's raised kerb, the grass bed and the fountain's
+	-- plinth, each a disc standing prouder than the one round it.
+	local bedRadius = ri - 0.7
+	currentName = "IslandApron"
+	clutter(disc(model, c, spec.apronOuter, 0.2, lift + 0.06, Color3.fromRGB(96, 90, 86), Enum.Material.Cobblestone))
+	currentName = "IslandKerb"
+	disc(model, c, ri, -0.06, 0.62, KERB_COLOR, Enum.Material.Concrete)
+	currentName = "IslandBed"
+	disc(model, c, bedRadius, 0.3, 0.95, Color3.fromRGB(84, 128, 60), Enum.Material.Grass)
+	currentName = "FountainPlinth"
+	disc(model, c, PLINTH_RADIUS, 0.5, 1.2, Color3.fromRGB(206, 200, 188), Enum.Material.Pavement)
+	fountain(model, c + Vector3.new(0, 1.2, 0), options.statueDef, rng)
+	-- Low stone bollards round the island's edge, between the chevron boards: nothing tall.
+	currentName = "IslandBollard"
+	for index = 0, 7 do
+		column(model, 1.3, 0.6, polar(c, index / 8 * math.pi * 2 + math.pi / 8, ri - 0.45, 0.4), Color3.fromRGB(196, 192, 182), Enum.Material.Granite)
+	end
+
+	-- Planting round the plinth: shrubs and clumps of flowers in the bed, and on a big island four
+	-- small trees on the diagonals.
+	local plantRadius = (PLINTH_RADIUS + bedRadius) / 2
+	local clumps = math.floor(plantRadius * 1.1)
+	for index = 0, clumps - 1 do
+		local angle = (index + rng:NextNumber(-0.25, 0.25)) / clumps * math.pi * 2
+		local shrub = index % 3 == 0
+		currentName = shrub and "Shrub" or "Flowers"
+		local size = shrub and rng:NextNumber(1.3, 1.8) or rng:NextNumber(0.9, 1.3)
+		clutter(makePart(model, Vector3.new(size, size * 0.8, size), CFrame.new(polar(c, angle, plantRadius + rng:NextNumber(-0.2, 0.2), 1.0 + size * 0.2)),
+			shrub and Color3.fromRGB(58, 108 + rng:NextInteger(-8, 8), 52) or blooms[rng:NextInteger(1, #blooms)],
+			shrub and Enum.Material.Grass or Enum.Material.SmoothPlastic, Enum.PartType.Ball))
+	end
+	if spec.class == "large" then
+		for index = 0, 3 do
+			islandTree(model, polar(c, index / 4 * math.pi * 2 + math.pi / 4, plantRadius, 0.95), rng)
+		end
+	end
+	-- Weeds come up between the setts, and moss on the kerb.
+	currentName = "Weed"
+	for _ = 1, 5 do
+		clutter(makePart(model, Vector3.new(0.5, 0.3, 0.5), CFrame.new(polar(c, rng:NextNumber(0, math.pi * 2), ri + 0.4, lift + 0.06)),
+			Color3.fromRGB(96, 136, 62), Enum.Material.Grass, Enum.PartType.Ball))
+	end
+	currentName = "Moss"
+	for _ = 1, 3 do
+		local angle = rng:NextNumber(0, math.pi * 2)
+		local at = polar(c, angle, ri - 0.35, 0.635)
+		clutter(makePart(model, Vector3.new(0.4, 0.03, rng:NextNumber(0.8, 1.6)), CFrame.lookAt(at, at + Vector3.new(-math.sin(angle), 0, math.cos(angle))),
+			Color3.fromRGB(88, 118, 60), Enum.Material.Grass))
+	end
+
+	local markTop = lift + MapDecor.MarkRaise
+	local function mark(size, cframe, color, name)
+		currentName = name
+		local part = clutter(makePart(model, size, cframe, color or ROUNDABOUT_MARK, Enum.Material.SmoothPlastic))
+		return part
+	end
+	-- A flat marking bar at radius `radius` round O, centred on `angle`, `length` along the ring.
+	local function arcMark(angle, radius, length, width, name, transparency)
+		local at = polar(c, angle, radius, lift + MapDecor.MarkRaise / 2)
+		local along = Vector3.new(-math.sin(angle), 0, math.cos(angle))
+		local part = mark(Vector3.new(width, MapDecor.MarkRaise, length), CFrame.lookAt(at, at + along), nil, name)
+		part.Transparency = transparency or 0
+		return part
+	end
+
+	for _, name in ipairs(ARM_ORDER) do
+		local theta = ARM_ANGLE[name]
+		local out = Vector3.new(math.cos(theta), 0, math.sin(theta))
+		local fMinus = armPoint(c, theta, L, -(h + rf))
+		-- The arm-relative angle (negative, on the entry side) at `radius` where the ring's edge gets
+		-- within `clear` of the entry's kerb.
+		local function entryLimit(radius, clear)
+			local alpha = -math.asin(math.min(1, (spec.splitter + 0.45) / radius))
+			while alpha > -spec.mouth * 1.5 do
+				local p = polar(c, theta + alpha, radius)
+				if (Vector3.new(p.X - fMinus.X, 0, p.Z - fMinus.Z)).Magnitude < rf + clear then
+					return alpha
+				end
+				alpha -= 0.005
+			end
+			return alpha
+		end
+
+		-- The splitter island: a raised kerb from the ring to the street, tapering to a nose, topped
+		-- with setts (grass on the bigger ones), and a keep-right bollard at the nose.
+		local s = spec.splitter
+		-- A teardrop: it stops 6 short of the street, where a long vehicle leaving needs the middle of the road.
+		local u0, u1 = ro + 1.2, L - 6
+		local p1, p2, p3, p4 = armPoint(c, theta, u0, -s), armPoint(c, theta, u0, s), armPoint(c, theta, u1, 0.45), armPoint(c, theta, u1, -0.45)
+		currentName = "SplitterKerb"
+		for _, tri in ipairs({ { p1, p2, p3 }, { p1, p3, p4 } }) do
+			for _, wedge in ipairs(flatTriangle(model, tri[1], tri[2], tri[3], -0.06, 0.62, KERB_COLOR, Enum.Material.Concrete)) do
+				clutter(wedge)
+			end
+		end
+		currentName = "SplitterTop"
+		local grassy = spec.class ~= "small"
+		for _, wedge in ipairs(flatTriangle(model, armPoint(c, theta, u0 + 0.55, -(s - 0.6)), armPoint(c, theta, u0 + 0.55, s - 0.6),
+			armPoint(c, theta, u1 - 1.6, 0), 0.3, 0.66, grassy and Color3.fromRGB(92, 132, 64) or Color3.fromRGB(150, 128, 112),
+			grassy and Enum.Material.Grass or Enum.Material.Cobblestone)) do
+			clutter(wedge)
+		end
+		-- What stands on the splitter doesn't collide (like the splitter's own kerb, and every kerb): a
+		-- 9-wide van fills its lane beside it. It still takes shots.
+		local before = #model:GetChildren()
+		keepRightBollard(model, armPoint(c, theta, u1 - 0.9, 0) + Vector3.new(0, 0.62, 0), out)
+		giveWaySign(model, armPoint(c, theta, u0 + 1.0, 0) + Vector3.new(0, 0.62, 0), out, 3.6)
+		local children = model:GetChildren()
+		for index = before + 1, #children do
+			if children[index]:IsA("BasePart") then
+				children[index].CanCollide = false
+				children[index].CanTouch = false
+			end
+		end
+		-- And one on the pavement on the entry's right, where the street meets the fillet: the kerb runs
+		-- almost straight there, so the board stands square to the traffic and clear of the kerb.
+		do
+			local u = L - 1
+			local mid = (rf - sidewalk + rf - KERB) / 2
+			local v = -(h + rf) + math.sqrt(mid * mid - 1)
+			local foot = armPoint(c, theta, u, v) + Vector3.new(0, PAVEMENT_TOP, 0)
+			giveWaySign(model, foot, out, 3.8)
+			roundaboutDisc(model, foot + Vector3.new(0, 1.1, 0) + out * 0.2, out)
+			-- The warning triangle a little way back up the street, on the same side.
+			warningSign(model, armPoint(c, theta, L + 7, -(h + sidewalk - 1.4)) + Vector3.new(0, PAVEMENT_TOP, 0), out)
+		end
+		-- The zebra's kerbs come down to the road either side (MapDecor.Street laid it 2.8 into the street).
+		for _, side in ipairs({ -1, 1 }) do
+			MapDecor.DropKerb(parent, armPoint(c, theta, L + 2.8, side * (h + KERB / 2)), Vector3.new(-math.sin(theta), 0, math.cos(theta)), 1.8, 3)
+		end
+
+		-- Give way: a double broken line across the entry along the ring's edge, then a row of shark's
+		-- teeth pointing back at the arriving traffic. Worn: a dash or tooth now and then paler.
+		for _, row in ipairs({ 0.75, 1.45 }) do
+			local radius = ro + row
+			-- Up to the edge line (1.3 in from the kerb, half a stud wide), not over it.
+			local a0, a1 = -math.asin((s + 0.45) / radius), entryLimit(radius, 1.7)
+			local span = (a0 - a1) * radius
+			local dashes = math.max(1, math.floor((span + 0.6) / 1.6))
+			local step = (a0 - a1) / dashes
+			for index = 0, dashes - 1 do
+				arcMark(theta + a0 - step * (index + 0.5), radius, math.min(1.0, math.abs(step) * radius - 0.3), 0.35, "GiveWay",
+					rng:NextNumber() < 0.2 and rng:NextNumber(0.25, 0.45) or 0)
+			end
+		end
+		-- The "give way" triangle painted on the entry lane a car's length back: an outline, its point
+		-- toward the arriving driver.
+		do
+			local uBase = ro + 5.5
+			local fillEdge = -(h + rf) + math.sqrt(math.max(0, rf * rf - (uBase - L) ^ 2))
+			local vMid = (fillEdge + (-(s + 0.3))) / 2
+			local b1, b2 = armPoint(c, theta, uBase, vMid - 1.3), armPoint(c, theta, uBase, vMid + 1.3)
+			local tip = armPoint(c, theta, uBase + 6, vMid)
+			local y = lift + MapDecor.MarkRaise / 2
+			local worn = rng:NextNumber() < 0.3 and 0.3 or 0.05
+			for _, edge in ipairs({ { b1, b2 }, { b2, tip }, { tip, b1 } }) do
+				local a, b = Vector3.new(edge[1].X, y, edge[1].Z), Vector3.new(edge[2].X, y, edge[2].Z)
+				local along = (b - a).Unit
+				-- Trimmed at the corners so no two bars share any of their faces: the long sides stop well
+				-- short of the narrow point, where they would cross.
+				local atTip = edge[1] == tip and 1.2 or 0.2
+				local toTip = edge[2] == tip and 1.2 or 0.2
+				a, b = a + along * atTip, b - along * toTip
+				mark(Vector3.new(0.3, MapDecor.MarkRaise, (b - a).Magnitude), CFrame.lookAt((a + b) / 2, b), nil, "GiveWayTriangle").Transparency = worn
+			end
+		end
+		-- A chevron board on the island facing the entry.
+		chevronBoard(model, polar(c, theta, (PLINTH_RADIUS + bedRadius) / 2 + 0.1, 0.95), out)
+		-- An arrow on the ring just past the entry, pointing the way round.
+		do
+			local alpha = theta - spec.mouth * 0.75
+			local radius = spec.circulate
+			local ahead = Vector3.new(math.sin(alpha), 0, -math.cos(alpha))
+			local at = polar(c, alpha, radius, lift + MapDecor.MarkRaise / 2)
+			mark(Vector3.new(0.55, MapDecor.MarkRaise, 3.4), CFrame.lookAt(at, at + ahead), nil, "RingArrow")
+			local headBase = at + ahead * 1.7
+			local sideways = Vector3.new(-ahead.Z, 0, ahead.X)
+			currentName = "RingArrow"
+			for _, wedge in ipairs(flatTriangle(model, headBase + sideways * 0.9, headBase - sideways * 0.9, headBase + ahead * 1.7, lift, markTop,
+				ROUNDABOUT_MARK, Enum.Material.SmoothPlastic)) do
+				clutter(wedge)
+			end
+		end
+		-- The zebra's beacons and tactile paving on the pavements either side of the street.
+		for _, side in ipairs({ -1, 1 }) do
+			beacon(model, armPoint(c, theta, L + 0.9, side * (h + sidewalk - 1.2)) + Vector3.new(0, PAVEMENT_TOP, 0))
+			currentName = "Tactile"
+			local at = armPoint(c, theta, L + 2.8, side * (h + KERB + 1.0)) + Vector3.new(0, PAVEMENT_TOP + 0.015, 0)
+			clutter(makePart(model, Vector3.new(1.8, 0.03, 3.4), CFrame.lookAt(at, at + out), Color3.fromRGB(196, 150, 104), Enum.Material.Pebble))
+		end
+	end
+
+	-- Drainage: gully grates in the channel against the kerb and a manhole cover, drawn flush on the road
+	-- (a SurfaceGui on an invisible plate whose top is 0.01 over the asphalt) rather than built as thin
+	-- parts: ZFight.Fix pushes any visible face within 0.055 of the road's top up to 0.06 clear of it,
+	-- which stood every thin detail proud of the road as a step. Hidden plates are left alone.
+	local function roadDecal(name, cframe, sizeX, sizeZ)
+		currentName = name
+		local carrier = clutter(makePart(model, Vector3.new(sizeX, 0.02, sizeZ), cframe, Color3.new(0, 0, 0), Enum.Material.SmoothPlastic))
+		carrier.Transparency = 1
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = Enum.NormalId.Top
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 60
+		gui.LightInfluence = 1
+		gui.MaxDistance = 300
+		gui.Parent = carrier
+		return gui
+	end
+	local function box(parent, color, x, y, w, hgt, round)
+		local frame = Instance.new("Frame")
+		frame.BorderSizePixel = 0
+		frame.BackgroundColor3 = color
+		frame.Position = UDim2.fromScale(x, y)
+		frame.Size = UDim2.fromScale(w, hgt)
+		if round then
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0.5, 0)
+			corner.Parent = frame
+		end
+		frame.Parent = parent
+		return frame
+	end
+	-- A kerbside gully: a dished concrete channel along the kerb either side, and the grate -- a cast-iron
+	-- frame round a dark void with iron bars across it. `kerb` is a point on the kerb's road-side face,
+	-- `inward` the level direction into the road from it, `along` the kerb's direction there.
+	local function gully(kerb, inward, along)
+		-- Right-handed, with local -Z into the road (a mirrored frame turns the plate's top face down).
+		local x = along
+		if x:Cross(Vector3.yAxis):Dot(inward) > 0 then
+			x = -x
+		end
+		local base = CFrame.fromMatrix(Vector3.new(kerb.X, lift, kerb.Z), x, Vector3.yAxis)
+		local depth, length = 0.9, 1.6
+		for _, hand in ipairs({ -1, 1 }) do
+			local channel = roadDecal("DrainChannel", base * CFrame.new(hand * (length / 2 + 1.3), 0, -0.25), 2.6, 0.45)
+			local fill = box(channel, Color3.fromRGB(120, 118, 112), 0, 0, 1, 1)
+			fill.BackgroundTransparency = 0.35
+		end
+		local grate = roadDecal("Drain", base * CFrame.new(0, 0, -depth / 2 - 0.05), length, depth)
+		box(grate, Color3.fromRGB(46, 44, 42), 0, 0, 1, 1)
+		box(grate, Color3.fromRGB(8, 8, 8), 0.08, 0.14, 0.84, 0.72)
+		for k = 0, 6 do
+			box(grate, Color3.fromRGB(62, 60, 57), 0.1 + k * 0.12, 0.14, 0.055, 0.72)
+		end
+	end
+	for index, name in ipairs(ARM_ORDER) do
+		local theta = ARM_ANGLE[name]
+		local mid = theta + math.pi / 4
+		-- Round the ring's outer edge, at the middle of each gap between the arms.
+		do
+			local alpha = mid + rng:NextNumber(-0.06, 0.06)
+			gully(polar(c, alpha, ro, 0), Vector3.new(-math.cos(alpha), 0, -math.sin(alpha)), Vector3.new(-math.sin(alpha), 0, math.cos(alpha)))
+		end
+		-- On each approach, against the entry's kerb a car's length back from the give-way line.
+		do
+			local fMinus = armPoint(c, theta, L, -(h + rf))
+			local u = ro + 7
+			local beta = math.atan2(-(h + rf) + math.sqrt(math.max(0, rf * rf - (u - L) ^ 2)) - (-(h + rf)), u - L)
+			local kerb = polar(fMinus, theta + beta, rf, 0)
+			local out = Vector3.new(math.cos(theta + beta), 0, math.sin(theta + beta))
+			gully(kerb, out, Vector3.new(-out.Z, 0, out.X))
+		end
+		if index == 3 then
+			-- A cast-iron manhole cover in its frame: a rim, the lid with a raised ring and a cross of ribs,
+			-- and a pair of lifting holes.
+			local at = polar(c, mid - 0.4, spec.circulate + 1.5, lift)
+			local cover = roadDecal("Manhole", CFrame.new(at), 2.4, 2.4)
+			box(cover, Color3.fromRGB(58, 56, 54), 0, 0, 1, 1, true)
+			local lid = box(cover, Color3.fromRGB(78, 76, 72), 0.075, 0.075, 0.85, 0.85, true)
+			local ring = box(lid, Color3.fromRGB(78, 76, 72), 0.18, 0.18, 0.64, 0.64, true)
+			local stroke = Instance.new("UIStroke")
+			stroke.Color = Color3.fromRGB(52, 50, 48)
+			stroke.Thickness = 5
+			stroke.Parent = ring
+			for _, rib in ipairs({ { 0.47, 0.1, 0.06, 0.8 }, { 0.1, 0.47, 0.8, 0.06 } }) do
+				box(lid, Color3.fromRGB(60, 58, 55), rib[1], rib[2], rib[3], rib[4])
+			end
+			for _, x in ipairs({ 0.22, 0.72 }) do
+				box(lid, Color3.fromRGB(14, 14, 14), x, 0.45, 0.06, 0.1, true)
+			end
+		end
+		currentName = "Tuft"
+		for _ = 1, 4 do
+			local alpha = mid + rng:NextNumber(-0.5, 0.5) * (math.pi / 2 - 2 * spec.mouth)
+			local size = rng:NextNumber(0.6, 1.1)
+			clutter(makePart(model, Vector3.new(size, size * 0.7, size), CFrame.new(polar(c, alpha, ro + sidewalk + size * 0.55, 0)),
+				Color3.fromRGB(90 + rng:NextInteger(-10, 10), 132, 60), Enum.Material.Grass, Enum.PartType.Ball))
+		end
+	end
+
+	-- The corners between the arms: a lamp on the ring's pavement, and on the ground behind it a bench
+	-- facing the fountain with a bin, and a flower bed. The south-east corner has the Rot Vendor instead
+	-- of the bench (MapGenerator builds it at the spot returned).
+	local groundAt = options.groundHeightAt or function()
+		return 0
+	end
+	local space = options.space
+	local spots = { heal = {}, weapon = {}, item = {} }
+	local vendorAt = nil
+	local corner0 = ro + sidewalk
+	for index, name in ipairs(ARM_ORDER) do
+		local alpha = ARM_ANGLE[name] + math.pi / 4
+		local inward = Vector3.new(-math.cos(alpha), 0, -math.sin(alpha))
+		local lampAngles = { alpha }
+		if spec.class == "large" then
+			lampAngles = { alpha - 0.14, alpha + 0.14 }
+		end
+		for _, angle in ipairs(lampAngles) do
+			ringLamp(model, polar(c, angle, ro + KERB + 1.6, PAVEMENT_TOP), Vector3.new(-math.cos(angle), 0, -math.sin(angle)), accent, blooms[rng:NextInteger(1, 3)])
+		end
+		local benchAt = polar(c, alpha, corner0 + 2.4, 0)
+		benchAt = Vector3.new(benchAt.X, groundAt(benchAt.X, benchAt.Z), benchAt.Z)
+		local across = Vector3.new(inward.Z, 0, -inward.X)
+		if name == "S" then
+			-- S's corner is at 315 degrees (+x, -z), where the old square had its vendor: beside the
+			-- flag rather than in front of it.
+			vendorAt = polar(c, alpha, corner0 + 3.2, 0) + across * 4.6
+			vendorAt = Vector3.new(vendorAt.X, groundAt(vendorAt.X, vendorAt.Z), vendorAt.Z)
+			if space then
+				space:AddCircle(vendorAt.X, vendorAt.Z, 3.2)
+			end
+		else
+			benchFacing(model, benchAt, c)
+			local binAt = benchAt + across * 4.2
+			bin(model, binAt)
+			if space then
+				for _, hand in ipairs({ -1, 1 }) do
+					space:AddCircle(benchAt.X + across.X * hand * 1.9, benchAt.Z + across.Z * hand * 1.9, 1.3)
+				end
+				space:AddCircle(binAt.X, binAt.Z, 1.4)
+			end
+		end
+		local bedAt = polar(c, alpha, corner0 + 8.8, 0)
+		bedAt = Vector3.new(bedAt.X, groundAt(bedAt.X, bedAt.Z), bedAt.Z)
+		flowerBed(model, bedAt, rng, blooms)
+		if space then
+			space:AddCircle(bedAt.X, bedAt.Z, 2.8)
+		end
+		-- Loot on the ring's pavement, clear of the lamp.
+		table.insert(index % 2 == 1 and spots.weapon or spots.item, polar(c, alpha + 3.6 / (ro + 3), ro + 3, PAVEMENT_TOP + 0.05))
+	end
+	for _, angle in ipairs({ 0.4, math.pi + 0.4 }) do
+		table.insert(spots.heal, polar(c, angle, (PLINTH_RADIUS + bedRadius) / 2, 0.95))
+	end
+	currentName = "Part"
+	-- Where TownThemes stands the town's flags: on the corners, behind the benches.
+	model:SetAttribute("FlagRadius", corner0 + 5.0)
+	return model, spots, vendorAt
 end
 
 -- A fenced crop field: tilled soil, rows of crops and a post-and-rail fence. The rails don't

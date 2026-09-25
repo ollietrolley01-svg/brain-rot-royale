@@ -41,6 +41,13 @@ clients. Checks, each with a planted fault aimed at the invariant rather than at
      MAX_PIECES pieces, PER_SITE_CAP per site, MAX_TRICKLES dust emitters, MAX_BITS flying bits (all
      gone after their life); nothing drawn past DROP_BEYOND.
      plant: the MAX_BUILT cap removed
+  O  NO GHOSTING (Oliver 09-24: "make walls not slowly turn clear before they break"). Every part
+     material, hit to 22.5% (stage 3) and left to animate and flicker: the part's Transparency and
+     LocalTransparencyModifier never move, and every mark drawn over an opaque part is opaque
+     (Transparency 0) at every sample, so no part of the face ever shows through. Only a
+     see-through part (glass, ice, glacier, force field) may carry see-through marks.
+     plants: the old translucent marks (crack lines, soot, dead patches at their look's
+             transparency); the old neon flicker (dead patches blinking to 0.85)
   G  GLASS. A pane shatters at one touch and never fades first; the GlassShatter record carries the
      impact point; GlassFxClient draws a spiderweb from it on the pane's plane, gone after WEB_TIME
      when the shards fly.
@@ -293,9 +300,12 @@ end
 -- A wall in hits of 1% (100 health), a wall in hits landing exactly on 75/50/25 (4 x 25).
 local house = Instance.new("Model"); house.Name = "House_S"; house.Parent = H.map
 local a = H.part(house, "Wall", Vector3.new(10, 8, 1), CFrame.new(0, 4, 400), M.Concrete)
-walk("wall in 1% hits", a, a, 100, 1)
+-- (A named Wall's health is WALL_HEALTH by its material: concrete 420, brick 300.)
+local aMax = DS.NamedHealth(a)
+walk("wall in 1% hits", a, a, aMax, aMax / 100)
 local b = H.part(house, "Wall", Vector3.new(10, 8, 1), CFrame.new(20, 4, 400), M.Brick)
-walk("wall in 25% hits", b, b, 100, 25)
+local bMax = DS.NamedHealth(b)
+walk("wall in 25% hits", b, b, bMax, bMax / 4)
 -- A Model pool: the stage is on the Model, not on its parts.
 local car = Instance.new("Model"); car.Name = "ParkedCar"; car.Parent = H.map
 car:SetAttribute("DestructibleHealth", 200)
@@ -869,6 +879,66 @@ SIGNATURES = {
 GENERIC = {"CrackLine", "CrackLip", "CrackShade", "CrackHair", "CrackChip", "CrackStick", "CrackPlate", "CrackDent"}
 
 
+# ---------------------------------------------------------------------------------------------
+# O: no ghosting: the host never loses opacity, and nothing over an opaque host is see-through
+
+OPAQUE_LUA = r'''
+local DS, H, mock, CF, names = ...
+local out = { parts = 0, pieces = 0, samples = 0, seeThroughHosts = 0 }
+local CLEAR_HOST = { Glass = true, Ice = true, Glacier = true, ForceField = true }
+for index, name in ipairs(names) do
+    local material = Enum.Material[name]
+    local cf = CFrame.new(index * 40, 6, 3000)
+    local part = H.part(H.map, "Part", Vector3.new(12, 10, 1), cf, material)
+    part:SetAttribute("DestructibleHealth", 400)
+    workspace.CurrentCamera.CFrame = CFrame.new(cf * Vector3.new(0, 0, -25))
+    local t0, l0 = part.Transparency, part.LocalTransparencyModifier
+    local clearHost = CLEAR_HOST[name] == true
+    if clearHost then out.seeThroughHosts += 1 end
+    out.parts += 1
+    local function sample(when)
+        out.samples += 1
+        if part.Transparency ~= t0 or part.LocalTransparencyModifier ~= l0 then
+            H.fail("O", string.format("%s %s: the part went T %.2f / LTM %.2f", name, when, part.Transparency, part.LocalTransparencyModifier))
+        end
+        local record = CF.tracked[part]
+        if clearHost or not record then return end
+        local animating = {}
+        for _, a in ipairs(CF.anims) do if not a.started then animating[a.piece] = true end end
+        for _, piece in ipairs(record.pieces) do
+            if piece.Parent and not animating[piece] and piece.Transparency > 1e-6 then
+                H.fail("O", string.format("%s %s: mark %s drawn see-through (%.2f) over an opaque part", name, when, piece.Name, piece.Transparency))
+                return
+            end
+        end
+    end
+    local from = cf * Vector3.new(2.2, 1.1, -30)
+    for stage, amount in ipairs({ 20, 90, 100, 100 }) do
+        DS.Damage(part, amount, nil, from + Vector3.new(stage, 0, 0))
+        H.deliver()
+        for tick = 1, 14 do
+            mock.advance(0.1)
+            sample("at hit " .. stage)
+        end
+    end
+    local record = CF.tracked[part]
+    out.pieces += record and #record.pieces or 0
+end
+return out
+'''
+
+
+def run_opaque(crack_faults=(), quiet=False):
+    w, h, ds, cf = world(crack_faults=crack_faults)
+    out = w.run(OPAQUE_LUA, ds, h, w.mock, cf, w.lua.table_from(MATERIALS))
+    fs = fails_of(h, "O")
+    if not quiet:
+        print("    %d materials to stage 3 (%d see-through ones allowed see-through marks), %d marks, %d samples"
+              % (out["parts"], out["seeThroughHosts"], out["pieces"], out["samples"]))
+        check(not fs and out["pieces"] > 0, "O  no part or mark over it loses opacity before the break%s" % (": " + fs[0] if fs else ""))
+    return fs
+
+
 def run_materials(crack_faults=(), quiet=False):
     w, h, ds, cf = world(crack_faults=crack_faults)
     sigs = w.lua.table_from({k: w.lua.table_from(v) for k, v in SIGNATURES.items()})
@@ -1071,6 +1141,8 @@ def main():
     run_lod()
     print("K: caps")
     run_caps()
+    print("O: no ghosting")
+    run_opaque()
     print("G: glass")
     run_glass()
 
@@ -1079,9 +1151,14 @@ def main():
                "\t\t\tmember.Color = base:Lerp(tint[1], tint[2] * stage)\n\t\t\tmember.Transparency = math.min(1, member.Transparency + 0.25)\n")
     client_fade = ("\t\trecord.built = true\n\t\ttotals.built += 1\n",
                    "\t\trecord.built = true\n\t\ttotals.built += 1\n\t\tpart.LocalTransparencyModifier = 0.25 * math.max(record.stage, 1)\n")
+    mark_opaque = "\t\treturn spec.transparency or 0\n\tend\n\treturn 0\nend\n"
+    mark_clear = "\t\treturn spec.transparency or 0\n\tend\n\treturn spec.transparency or 0\nend\n"
     plants = [
         ("F the old fade, server side", lambda: (run_fade([ds_fade], quiet=True))),
         ("F a fade on the client (LocalTransparencyModifier)", lambda: (run_fade((), [client_fade], quiet=True))),
+        ("O the old translucent marks over an opaque part", lambda: run_opaque([(mark_opaque, mark_clear)], quiet=True)),
+        ("O the old neon flicker (dead patches blinking to 0.85)", lambda: run_opaque([("f.piece.Color = rng:NextNumber() < 0.22 and f.lit or f.dead",
+                                                                                         "f.piece.Transparency = rng:NextNumber() < 0.22 and 0.85 or 0")], quiet=True)),
         ("S thresholds taken as < instead of <=", lambda: (run_stage([("\t\tif fraction <= at then\n", "\t\tif fraction < at then\n")], quiet=True))),
         ("S per-part site cap removed", lambda: (run_stage([("\tif #list >= MAX_SITES_PER_PART or entry.siteCount >= MAX_SITES_PER_POOL then\n",
                                                                "\tif false then\n")], quiet=True))),

@@ -374,6 +374,164 @@ local function groundSlabs()
 	end
 end
 
+-- HOLES THE RULES CAN'T SEE (Oliver 2026-09-24: "some parts on the map are still indestructible").
+-- Explain answers for a part that is asked about; these are the ways a part is never asked, or is
+-- asked and still can't go:
+--   unhittable     collides but CanQuery is off: bullets and blasts (raycasts and GetPartBoundsInRadius)
+--                  never find it, so it only goes if something it hangs on does
+--   orphan trim    neither collides nor takes a ray, is visible, and is neither a member of a pool
+--                  (tagged or a compact thing) nor touching a sibling that takes it along
+--                  (dropDressing walks the part's own siblings): nothing ever takes it down
+--   loose          unanchored in a match root with no pool (vehicles and debris have their own)
+--   outside        solid anchored parts straight under workspace outside the match roots (not the
+--                  Lobby, not the pickups in workspace.Loot, which are loot, not the map)
+-- Counts by category with at most 5 example groups each. `COVERAGE FAIL` if any category but the
+-- allowed ones has anything in it.
+local CARRIES = { Wall = true, Floor = true, Roof = true, Gable = true, Parapet = true, Stair = true, Balcony = true }
+local ATTACH, SCAN = 0.35, 800
+-- Outside the roots on purpose: the lobby; loot (pickups, chests, supply crates: loot, not the map);
+-- what players deploy and build (their own health); client fx.
+local OUTSIDE_OK = { Lobby = true, Loot = true, SupplyDrops = true, Deployables = true, Defenses = true, Companions = true,
+	CrackFx = true, BreakFx = true, Effects = true }
+
+local function tagged(part)
+	local node = part
+	while node and node ~= workspace do
+		if type(node:GetAttribute("Destructible")) == "string" or node:GetAttribute("DestructibleHealth") then
+			return true
+		end
+		node = node.Parent
+	end
+	return false
+end
+
+local function holes(label)
+	local cats = { unhittable = {}, ["orphan trim"] = {}, loose = {}, outside = {} }
+	local cover, coverSample = 0, {}
+	local counts = { unhittable = 0, ["orphan trim"] = 0, loose = 0, outside = 0 }
+	local function note(cat, part, root)
+		counts[cat] += 1
+		local g = (root and labelOf(part, root) or part.Parent and part.Parent.Name or "?") .. " :: " .. part.Name
+		cats[cat][g] = (cats[cat][g] or 0) + 1
+	end
+	local box = OverlapParams.new()
+	box.FilterType = Enum.RaycastFilterType.Include
+	for name in pairs(roots) do
+		local root = workspace:FindFirstChild(name)
+		box.FilterDescendantsInstances = { root }
+		for _, part in ipairs(root and root:GetDescendants() or {}) do
+			if part:IsA("BasePart") then
+				if not part.Anchored then
+					local model = part:FindFirstAncestorOfClass("Model")
+					if not (model and (model:GetAttribute("VehicleId") or model:GetAttribute("Vehicle") or model:FindFirstChildOfClass("VehicleSeat")))
+						and not tagged(part) and not part:FindFirstAncestorOfClass("Tool") then
+						note("loose", part, root)
+					end
+				elseif part.CanCollide and not part.CanQuery then
+					note("unhittable", part, root)
+				elseif not part.CanCollide and not part.CanQuery and part.Transparency < 0.9 and not tagged(part) then
+					local goes = false
+					local parent = part.Parent
+					local siblings = parent and #parent:GetChildren() or 0
+					local near = workspace:GetPartBoundsInBox(part.CFrame, part.Size + Vector3.new(ATTACH, ATTACH, ATTACH) * 2, box)
+					for _, other in ipairs(near) do
+						if other ~= part and other.CanCollide and other.Anchored then
+							local status, _, key = explain(other)
+							if status == "breakable" then
+								if typeof(key) == "Instance" and key:IsA("Model") and part:IsDescendantOf(key) then
+									goes = true
+								elseif other.Parent == parent and (siblings <= SCAN or CARRIES[other.Name]) then
+									goes = true
+								end
+							end
+							if goes then
+								break
+							end
+						end
+					end
+					if not goes then
+						if DS.IsCover and DS.IsCover(part) and DS.ClearCoverInRadius then
+							-- Loose cover: a blast takes it, and so does the break of what it lies on.
+							cover += 1
+							if cover % 97 == 1 and #coverSample < 80 then
+								table.insert(coverSample, part)
+							end
+						else
+							note("orphan trim", part, root)
+						end
+					end
+				end
+			end
+		end
+	end
+	for _, child in ipairs(workspace:GetChildren()) do
+		if not roots[child.Name] and not OUTSIDE_OK[child.Name] and child ~= workspace.Terrain and not child:IsA("Camera") then
+			for _, d in ipairs(child:IsA("BasePart") and { child } or child:GetDescendants()) do
+				if d:IsA("BasePart") and d.Anchored and (d.CanCollide or d.CanQuery) and not game:GetService("Players"):GetPlayerFromCharacter(d:FindFirstAncestorOfClass("Model")) then
+					note("outside", d, nil)
+				end
+			end
+		end
+	end
+	local bad = 0
+	for _, cat in ipairs({ "unhittable", "orphan trim", "loose", "outside" }) do
+		bad += counts[cat]
+		local list = {}
+		for g, n in pairs(cats[cat]) do
+			table.insert(list, { g = g, n = n })
+		end
+		table.sort(list, function(a, b)
+			return a.n > b.n
+		end)
+		local shown = {}
+		for i = 1, math.min(5, #list) do
+			table.insert(shown, list[i].g .. " x" .. list[i].n)
+		end
+		out("  holes %-12s %5d  %s%s", cat, counts[cat], table.concat(shown, ", "), #list > 5 and (", +" .. (#list - 5) .. " groups") or "")
+	end
+	-- Loose cover really goes: a small blast on each sampled piece.
+	local sampled, cleared = 0, 0
+	for _, part in ipairs(coverSample) do
+		if part.Parent then
+			sampled += 1
+			DS.ClearCoverInRadius(part.Position, 1)
+			if not part.Parent then
+				cleared += 1
+			end
+		end
+	end
+	out("  loose cover %5d  (goes in a blast or with what it lies on): a blast on %d sampled pieces cleared %d", cover, sampled, cleared)
+	if sampled > 0 and cleared < sampled * 0.8 then
+		bad += sampled - cleared
+		out("  PROBLEM loose cover a blast did not clear: %d of %d", sampled - cleared, sampled)
+	end
+	out("%s holes: %d parts no damage can take down%s", label, bad, bad > 0 and "  COVERAGE FAIL" or "")
+	return counts, bad
+end
+
+-- The audit's own planted faults: a wall nobody can hit (CanQuery off) in the Map, and a solid part
+-- dropped straight under workspace, outside every root. Both must show up as holes.
+local function plantedHoles()
+	local map = workspace:FindFirstChild("Map")
+	local plantWall = Instance.new("Part")
+	plantWall.Name = "PlantedUnhittableWall"
+	plantWall.Anchored, plantWall.CanCollide, plantWall.CanQuery = true, true, false
+	plantWall.Size, plantWall.CFrame = Vector3.new(12, 10, 1), CFrame.new(0, 900, 0)
+	plantWall.Parent = map
+	local stray = Instance.new("Part")
+	stray.Name = "PlantedStrayPart"
+	stray.Anchored = true
+	stray.Size, stray.CFrame = Vector3.new(4, 4, 4), CFrame.new(0, 920, 0)
+	stray.Parent = workspace
+	local before = holes("planted")
+	plantWall:Destroy()
+	stray:Destroy()
+	local _, after = holes("planted removed")
+	out("planted holes: unhittable wall %s, stray part outside the roots %s",
+		before.unhittable > 0 and "caught" or "MISSED", before.outside > 0 and "caught" or "MISSED")
+	return after
+end
+
 local ok, err = pcall(function()
 	for index, spec in ipairs(MAPS) do
 		math.randomseed(spec.seed)
@@ -394,7 +552,9 @@ local ok, err = pcall(function()
 			task.wait(0.5)
 			out("%s built in %.1f s", spec.id, os.clock() - started)
 			local _, pools = audit(spec.id)
+			holes(spec.id)
 			if index == #MAPS then
+				plantedHoles()
 				otherRoots()
 				groundSlabs()
 				floatingAfterBreaks(pools)

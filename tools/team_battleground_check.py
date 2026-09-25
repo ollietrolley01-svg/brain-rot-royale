@@ -1467,6 +1467,117 @@ def check_emplacements(rt, model, parts, cols, walk, info, log, arc=None, eye=No
     return problems
 
 
+ZONE_BELOW, ZONE_HEIGHT = 6.0, 22.0  # ObjectiveZone.Below / DefaultHeight
+ZONE_ENTRANCES = 3        # distinct ways into each capture area, one of them high
+ZONE_HIGH = 4.0           # a high way in crosses the boundary this far over the objective's floor
+ZONE_COVER = (4, 4)       # cover spots inside the ring, and within ZONE_EDGE outside it
+ZONE_EDGE = 8.0
+ZONE_MARKS = 7            # of 12 30-degree sectors round each ring, how many carry its marks at least (the
+                          # keep's corners, its ramp and scaffold stair stand across the rest of A's)
+ZONE_TIME = 0.03          # the two teams' walk to a zone may differ by this share
+
+
+def check_zones(rt, parts, cols, walk, info, log):
+    """The objective capture areas, the ring KOTH's capture radius draws round each objective: marked
+    out on the floor (CaptureRing marks round it), cover inside it and at its edge, at least three
+    separate ways in from the walk graph (one of them high), none of which alone keeps either team
+    out, no spawn in sight of its middle, no gun emplacement that sees its middle, and both teams
+    the same walk from their end of the arena."""
+    problems = []
+    R = HILL_RADIUS
+    arc = float(rt.bg.GunArc)
+    emps = emplacement_rows(parts)
+    x, y, z = walk.node_x, walk.node_y, walk.node_z
+    d = {s: walk.bfs(entries(walk, s)) for s in (-1, 1)}
+    notes = []
+    for name, o in zip("AB", info["objectives"]):
+        where = "zone %s" % name
+        # The ring's marks: on the ring (within 1.2 of R, flat), round most of it.
+        sectors = set()
+        for p in parts:
+            if p["name"] == "CaptureRing":
+                px, _, pz = p["pos"]
+                r = math.hypot(px - o[0], pz - o[2])
+                if abs(r - R) <= 1.2:
+                    sectors.add(int((math.degrees(math.atan2(pz - o[2], px - o[0])) % 360) // 30))
+        if len(sectors) < ZONE_MARKS:
+            problems.append("%s: its ring is marked in %d of 12 sectors, want %d" % (where, len(sectors), ZONE_MARKS))
+        # Cover: the cover spots inside the ring, and just outside it.
+        flat = [math.hypot(c[0] - o[0], c[2] - o[2]) for c in info["cover"]]
+        inner = sum(1 for f in flat if f <= R)
+        edge = sum(1 for f in flat if R < f <= R + ZONE_EDGE)
+        if inner < ZONE_COVER[0] or edge < ZONE_COVER[1]:
+            problems.append("%s: %d cover spots inside, %d at its edge, want %d and %d" % (where, inner, edge, *ZONE_COVER))
+        # The ways in: walk edges from just outside the ring (within ZONE_EDGE) to inside it, their
+        # inner ends grouped where they touch (within 2); a way in is a group at least 3 wide.
+        fr = np.hypot(x - o[0], z - o[2])
+        dy = y - o[1]
+        inside = (fr <= R) & (dy >= -ZONE_BELOW) & (dy <= ZONE_HEIGHT)
+        outside = ~inside & (fr <= R + ZONE_EDGE)
+        cross = inside[walk.dst] & outside[walk.src]
+        gates = np.unique(walk.dst[cross])
+        root = {int(g): int(g) for g in gates}
+
+        def find(a):
+            while root[a] != a:
+                root[a] = root[root[a]]
+                a = root[a]
+            return a
+        pts = np.stack([x[gates], y[gates], z[gates]], axis=1)
+        for i in range(len(gates)):
+            near = np.nonzero(np.linalg.norm(pts[i + 1:] - pts[i], axis=1) <= 2.0)[0]
+            for j in near:
+                root[find(int(gates[i]))] = find(int(gates[i + 1 + j]))
+        groups = {}
+        for g in gates:
+            groups.setdefault(find(int(g)), []).append(int(g))
+        ways = []
+        for members in groups.values():
+            m = np.array(members)
+            span = np.max(np.linalg.norm(pts[np.searchsorted(gates, m)][:, None] - pts[np.searchsorted(gates, m)][None], axis=2))
+            if span >= 3.0:
+                ways.append(m)
+        high = [m for m in ways if float(np.mean(y[m])) >= o[1] + ZONE_HIGH]
+        if len(ways) < ZONE_ENTRANCES or not high:
+            problems.append("%s: %d ways in (%d high), want %d with one high" % (where, len(ways), len(high), ZONE_ENTRANCES))
+        # No one way in keeps a team out: each team still reaches the middle with any one of them shut.
+        middle = walk.near(o[0], o[1], o[2], reach=6.0, rise=1.0)
+        for s in (-1, 1):
+            if not any(d[s][n] >= 0 for n in middle):
+                problems.append("%s: team %d cannot walk to its middle" % (where, 1 if s < 0 else 2))
+                continue
+            for m in ways:
+                banned = np.zeros(walk.count, bool)
+                banned[m] = True
+                dd = walk.bfs(entries(walk, s), banned=banned)
+                if not any(dd[n] >= 0 for n in middle):
+                    problems.append("%s: one way in (at %.0f, %.1f, %.0f) is team %d's only way to its middle"
+                                    % (where, float(np.mean(x[m])), float(np.mean(y[m])), float(np.mean(z[m])), 1 if s < 0 else 2))
+                    break
+        # The same walk for both teams (the depth of the walk graph's search to the middle: time).
+        t = [min((d[s][n] for n in middle if d[s][n] >= 0), default=-1) for s in (-1, 1)]
+        if min(t) > 0 and abs(t[0] - t[1]) > ZONE_TIME * max(t):
+            problems.append("%s: team 1 walks %d steps to it, team 2 %d" % (where, t[0], t[1]))
+        # No spawn in sight of its middle, no gun emplacement seeing its middle.
+        eyes = [(o[0] + dx, o[1] + 5.2, o[2] + dz) for dx, dz in ((0, 0), (6, 0), (-6, 0), (0, 6), (0, -6))]
+        for s in (-1, 1):
+            for e in eyes:
+                if clear_rays(cols, e, spawn_targets(s)).any():
+                    problems.append("%s: team %d's spawn in sight from (%.0f, %.1f, %.0f)" % (where, 1 if s < 0 else 2, *e))
+                    break
+        for p in emps:
+            ex, ey, ez = p["pos"]
+            gun = (ex, ey + float(rt.bg.GunEye), ez)
+            look = tuple(-c for c in p["axes"][2])
+            spots = [(o[0] + dx, o[1] + 1.5, o[2] + dz) for dx in (-4, 0, 4) for dz in (-4, 0, 4)]
+            spots = [q for q, ok in zip(spots, in_arc(gun, look, spots, arc)) if ok]
+            if spots and clear_rays(cols, gun, spots).any():
+                problems.append("%s: the emplacement at (%.1f, %.1f, %.1f) sees its middle" % (where, ex, ey, ez))
+        notes.append("%s %d ways in (%d high), cover %d+%d, ring %d/12, walk %s" % (name, len(ways), len(high), inner, edge, len(sectors), t))
+    log("zones: " + "; ".join(notes) + ", %d problems" % len(problems))
+    return problems
+
+
 def check_zfight(rt, model, log):
     return TBR.check_zfight(rt, model, log)
 
@@ -1513,13 +1624,13 @@ function smoke(BG, mode)
     local far = inst("Model", "Building", town)
     rawget(far, "props").Extents = Vector3.new(30, 20, 24)
     part("Wall", far, Vector3.new(30, 12, 1), CFrame.new(centre + Vector3.new(400, 6, 0)))
-    -- THE ROADS. A town street along X straight through the middle, 420 long, as MapDecor.Street lays
+    -- THE ROADS. A town street along X straight through the middle, 600 long, as MapDecor.Street lays
     -- it: asphalt, a kerb and a pavement each side, dashes down the middle, every piece non-queryable.
     local function clutter(p) p.CanQuery = false p.CanCollide = false return p end
-    local street = clutter(part("Asphalt", town, Vector3.new(420, 0.4, 18), CFrame.new(centre + Vector3.new(0, 0.2, 12))))
+    local street = clutter(part("Asphalt", town, Vector3.new(600, 0.4, 18), CFrame.new(centre + Vector3.new(0, 0.2, 12))))
     for _, side in ipairs({ -1, 1 }) do
-        clutter(part("Kerb", town, Vector3.new(420, 0.56, 0.8), CFrame.new(centre + Vector3.new(0, 0.22, 12 + side * 9.4))))
-        clutter(part("Pavement", town, Vector3.new(420, 0.41, 4.2), CFrame.new(centre + Vector3.new(0, 0.145, 12 + side * 11.9))))
+        clutter(part("Kerb", town, Vector3.new(600, 0.56, 0.8), CFrame.new(centre + Vector3.new(0, 0.22, 12 + side * 9.4))))
+        clutter(part("Pavement", town, Vector3.new(600, 0.41, 4.2), CFrame.new(centre + Vector3.new(0, 0.145, 12 + side * 11.9))))
     end
     for k = -11, 11 do
         clutter(part("Dash", town, Vector3.new(6, 0.07, 0.6), CFrame.new(centre + Vector3.new(k * 18 + 2, 0.435, 12))))
@@ -1552,11 +1663,65 @@ function smoke(BG, mode)
     end
     -- A road that only passes by, 137 west of the middle at its nearest (clear of the disc and its
     -- margin): kept whole, but its lamp on the arena's side of it (133 out, in the apron) goes.
-    local road = part("RoadSurface", roads, Vector3.new(18, 0.8, 300), CFrame.new(centre + Vector3.new(-200, 0, 0)))
+    local road = part("RoadSurface", roads, Vector3.new(18, 0.8, 600), CFrame.new(centre + Vector3.new(-200, 0, 0)))
     local innerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-187.2, 7, 20)))
     innerLamp:SetAttribute("Destructible", "Lamp:D8")
     local outerLamp = part("LampPost", roads, Vector3.new(14, 0.7, 0.7), CFrame.new(centre + Vector3.new(-212.8, 7, -20)))
     outerLamp:SetAttribute("Destructible", "Lamp:D9")
+    -- A road out of the square's south mouth as RoadNetwork lays one: straight to 186 out in slabs
+    -- shorter than the road is wide (as it lays them on a grade, each along its LookVector), then a bend
+    -- (its Curve model: a block and two wedges a piece, edge chords) turning west to run on 216 south,
+    -- the bend crossing the apron's edge. Cut at a joint of the bend and finished there.
+    for k = 0, 5 do
+        local z0 = -144 - k * 7
+        local at = centre + Vector3.new(0, 0, z0 - 3.5)
+        part("RoadSurface", roads, Vector3.new(18, 0.8, 7), CFrame.lookAt(at, at + Vector3.new(0, 0, -1)))
+    end
+    local bend = inst("Model", "Curve", roads)
+    do
+        local cx, cz, R, sweep, count = -30, -186, 30, -math.pi / 2, 9
+        local step, delta = sweep / count, math.abs(sweep / count) / 2
+        for index = 1, count do
+            local mid = step * (index - 0.5)
+            local o = Vector3.new(math.cos(mid), 0, math.sin(mid))
+            local side = Vector3.new(-math.sin(mid), 0, math.cos(mid))
+            local at = centre + Vector3.new(cx, 0, cz) + o * (R * math.cos(delta))
+            part("RoadCurve", bend, Vector3.new(2 * (R - 9) * math.sin(delta), 0.8, 18 * math.cos(delta)), CFrame.lookAt(at, at + o))
+            for _, hand in ipairs({ -1, 1 }) do
+                local w = Instance.new("WedgePart")
+                w.Name = "RoadCurve"
+                w.Parent = bend
+                w.Size = Vector3.new(0.8, 18 * math.sin(delta), 18 * math.cos(delta))
+                local wat = centre + Vector3.new(cx, 0, cz) + o * (R * math.cos(delta) + 4) + side * (hand * R * math.sin(delta))
+                w.CFrame = CFrame.lookAt(wat, wat + o)
+                table.insert(all, w)
+            end
+            for _, edge in ipairs({ -1, 1 }) do
+                local r = R + edge * 8.2
+                local a0, a1 = step * (index - 1), step * index
+                local from = centre + Vector3.new(cx + math.cos(a0) * r, 0.435, cz + math.sin(a0) * r)
+                local to = centre + Vector3.new(cx + math.cos(a1) * r, 0.435, cz + math.sin(a1) * r)
+                part("RoadEdge", bend, Vector3.new(0.4, 0.07, (to - from).Magnitude - 0.1), CFrame.lookAt((from + to) / 2, to))
+            end
+        end
+    end
+    -- A road coming in from the north-east, 60 east of the middle, stopping 150 out, laid in slabs 7
+    -- long and 18 wide: it crosses the apron's edge 191 out and is ended there like any other.
+    local slabRoad = {}
+    for k = 0, 15 do
+        local at = centre + Vector3.new(60, 0, 150 + k * 7 + 3.5)
+        table.insert(slabRoad, part("RoadSurface", roads, Vector3.new(18, 0.8, 7), CFrame.lookAt(at, at + Vector3.new(0, 0, 1))))
+    end
+    -- A road heading in from the east 91..109 south of the middle, stopping 182 east (204 out, short of the
+    -- apron's edge, the junction it ran into gone with the site): drawn on to the edge and ended there.
+    local stubAt = centre + Vector3.new(241, 0, -100)
+    local stubRoad = part("RoadSurface", roads, Vector3.new(18, 0.8, 118), CFrame.lookAt(stubAt, stubAt + Vector3.new(1, 0, 0)))
+    -- A road ending 1.6 past the cut (196 out here) (the bend it runs on into is not a straight: nothing more of it
+    -- is a stretch), 60 west of the middle going north: still ended at the cut.
+    local shortAt = centre + Vector3.new(-60, 0, 196 + 0.8)
+    local shortRoad = part("RoadSurface", roads, Vector3.new(18, 0.8, 1.6), CFrame.lookAt(shortAt, shortAt + Vector3.new(0, 0, 1)))
+    local westAt = centre + Vector3.new(-180, 0, -216)
+    local westRoad = part("RoadSurface", roads, Vector3.new(18, 0.8, 300), CFrame.lookAt(westAt, westAt + Vector3.new(-1, 0, 0)))
     local vehicles = inst("Model", "Vehicles", map)
     local car = inst("Model", "Car", vehicles)
     rawget(car, "props").Extents = Vector3.new(9, 6, 17)
@@ -1617,7 +1782,7 @@ function smoke(BG, mode)
     if not theme.Parent then fail("the town's whole themes group went") end
     if not tower.Parent then fail("a landmark too big to clear was removed") end
     if not road.Parent then fail("a road passing by, clear of the disc, was removed") end
-    if road.Size.Z ~= 300 then fail("a road passing by, clear of the disc, was cut") end
+    if road.Size.Z ~= 600 then fail("a road passing by, clear of the disc, was cut") end
     if innerLamp.Parent then fail("a road's lamp standing in the apron was left") end
     if not outerLamp.Parent then fail("a road's lamp on the far side of it went") end
     if junction.Parent then fail("the square's crossroads (non-queryable) was left in the disc") end
@@ -1665,7 +1830,7 @@ function smoke(BG, mode)
         if not asphalt then fail("the street's asphalt is gone on the " .. (side > 0 and "east" or "west")) else
             if asphalt[2] < BG.RoadEnd - 1e-6 or asphalt[2] > BG.RoadEnd + 4 then
                 fail(("the street ends %.2f from the middle, want %.0f..%.0f"):format(asphalt[2], BG.RoadEnd, BG.RoadEnd + 4)) end
-            if math.abs(asphalt[3] - 210) > 0.05 then fail("the street lost its far end") end
+            if math.abs(asphalt[3] - 300) > 0.05 then fail("the street lost its far end") end
             for _, e in ipairs(list) do
                 local want = asphalt[2] + (e[1] == "Pavement" and 0.8 or 0)
                 if math.abs(e[2] - want) > 0.02 then fail(("the street's %s ends at %.2f, not square with its asphalt (%.2f)"):format(e[1], e[2], want)) end
@@ -1699,11 +1864,21 @@ function smoke(BG, mode)
                 end
                 if pillars ~= 2 or beams ~= 1 or signs ~= 1 then fail(("a road end has %d pillars, %d beams, %d signs"):format(pillars, beams, signs)) end
                 if beamBottom < 12 then fail(("a gateway's beam is %.1f over the road, under the tallest vehicle and its margin"):format(beamBottom)) end
-                if e:GetAttribute("RoadAxis") == "x" and kerbs ~= 2 then fail("the street's end has " .. kerbs .. " kerbs across its pavements, want 2") end
+                local line = e:FindFirstChild("StopLine", true)
+                local onStreet = line and math.abs(line.CFrame.p.Z - (centre.Z + 12)) < 1
+                if onStreet and kerbs ~= 2 then fail("the street's end has " .. kerbs .. " kerbs across its pavements, want 2") end
             end
         end
     end
-    if count ~= 3 then fail(count .. " finished road ends, want 3 (the street's two and the north road's)") end
+    if count ~= 7 then fail(count .. " finished road ends, want 7 (the street's two, the north road's, the south road's bend, the slab road's, the stub's, the short road's)") end
+    local stubInner = stubRoad.Parent and (stubRoad.CFrame.p.X - stubRoad.Size.Z / 2 - centre.X)
+    if not stubInner or stubInner > 180.01 or stubInner < 176 then fail("the road stopping short in the east was not drawn on to the apron's edge (" .. tostring(stubInner) .. ")") end
+    if not westRoad.Parent or westRoad.Size.Z ~= 300 then fail("the road on from the south bend was cut or removed") end
+    -- The audit tools/team_battleground_roadends_probe.lua runs on every real map: at least 2 finished
+    -- ends, and no road left stopping short on open ground within 60 of the apron's edge.
+    local finished, open = roadEndAudit(map, centre, BG.RoadEnd, 60, roadEnds)
+    if finished < 2 then fail(finished .. " finished road ends by the audit, want at least 2") end
+    for _, line in ipairs(open) do fail("a road stops short: " .. line) end
     -- Nothing of the battleground on a road: no part's plan overlaps a road piece's.
     local overlaps = 0
     for _, p in ipairs(info.model:GetDescendants()) do
@@ -1752,11 +1927,18 @@ end
 """
 
 
+def road_audit_source():
+    """The road-end audit, shared with tools/team_battleground_roadends_probe.lua (between its markers)."""
+    text = (Path(__file__).resolve().parent / "team_battleground_roadends_probe.lua").read_text(encoding="utf-8")
+    return text[text.index("-- AUDIT BEGIN"):text.index("-- AUDIT END")]
+
+
 def check_build(src, log):
     problems = []
     for mode in ("flat", "pad", "flatstand", "bumpy", "river"):
         rt = Runtime(src)
         rt.lua.execute(SMOKE)
+        rt.lua.globals().roadEndAudit = rt.lua.execute(road_audit_source() + "\nreturn roadEndAudit")
         found = rt.lua.globals().smoke(rt.bg, mode)
         problems += ["build (%s): %s" % (mode, found[i]) for i in range(1, len(found) + 1)]
     log("build: on a mock town (levelled, the pad-level retry, flat enough to stand as it is, too rough, a river), %d problems"
@@ -1969,6 +2151,7 @@ def run(src, log, deep=True):
     problems += check_loot(walk, cols, parts, info, log)
     problems += check_ziplines(walk, cols, info, log)
     problems += check_emplacements(rt, model, parts, cols, walk, info, log)
+    problems += check_zones(rt, parts, cols, walk, info, log)
     problems += check_destruct(rt, model, parts, log)
     if deep:
         again = Runtime(src)
@@ -2061,6 +2244,7 @@ def run_only(src, names, log=lambda *_: None):
         "ziplines": lambda: check_ziplines(walk(), cols(), info, log),
         "destruct": lambda: check_destruct(rt, model, parts, log),
         "emplacements": lambda: check_emplacements(rt, model, parts, cols(), walk(), info, log),
+        "zones": lambda: check_zones(rt, parts, cols(), walk(), info, log),
         "seed": seed,
         "build": lambda: check_build(src, log),
         "botnav": lambda: check_botnav(src, parts, info, log)[0],
@@ -2158,9 +2342,21 @@ PLANTS = [
      [('\tlocal middle = folder(root, "Middle", true)\n',
        '\tlocal middle = folder(root, "Middle", true)\n\tfor i = 1, 800 do box(middle, "Junk", -0.5, 0.5, 0, 1, 150 + i * 2, 151 + i * 2, STONE, MAT.Slate, NEVER) end\n')],
      ["budget"], "budget"),
+    ("an objective in the open (the pit not built round it)", "bg", [("buildPit(half)", "")], ["zones"], "ways in"),
+    ("a zone reachable from only one side", "bg", [('doorway("PitCut", -76, -66, -26, -18, TILE, 40)',
+     'doorway("PitCut", -76, -66, -26, -18, TILE, 40) if B.mirror then box(pit, "Wall", -118, -44, -1, 30, -31, -29.5, STONE, MAT.Limestone) end')],
+     ["zones"], "zone B"),
+    ("the capture rings not marked", "bg", [("\tbuildCaptureRings(model)\n", "")], ["zones"], "ring is marked"),
+    ("a gun turned onto a zone's middle", "bg", [("facing(-52.7, RIM, -22.5, -90, -42.3)", "facing(-52.7, RIM, -22.5, -90, -22.5)")], ["zones"], "sees its middle"),
+    ("the road-end pass switched off", "bg", [("for _, spec in ipairs(ends) do", "for _, spec in ipairs({}) do"),
+     ("for _, spec in ipairs(curveEnds) do", "for _, spec in ipairs({}) do")], ["build"], "build"),
+    ("RoadNetwork's short slabs read across their road", "bg", [("local lengthwise = ROAD_SLABS[part.Name]", "local lengthwise = false")], ["build"], "build"),
+    ("a road stopping short of the edge left as it is", "bg", [("if not stopsInside and lateral < outer - 9 then", "if false then")], ["build"], "build"),
+    ("a road cut a stud or two short of its end left unfinished", "bg", [("if road.a1 > high + 0.5 then", "if road.a1 > high + 2 then"), ("if road.a0 < low - 0.5 then", "if road.a0 < low - 2 then")], ["build"], "build"),
+    ("bends not cut at a joint (left to the odd pieces' rule)", "bg", [("local found = cutCurve(curves[curve], centre, outer, keptBoxes)", "local found = nil")], ["build"], "build"),
     ("the site not cleared", "bg", [("local _, _, _, roadEnds = TeamBattleground.ClearSite(site, map)", "local roadEnds = nil")], ["build"], "build"),
     ("roads left running through", "bg",
-     [("if math.sqrt(along * along + lateral * lateral) <= TeamBattleground.RoadReach or stopsInside then", "if false then")],
+     [("if math.sqrt(along * along + lateral * lateral) <= TeamBattleground.RoadReach or stopsInside or stub then", "if false then")],
      ["build"], "inside the disc"),
     ("only what a box query sees cleared", "bg",
      [('if part:IsA("BasePart") and not part:GetAttribute("TeamBaseRuin") and not part:GetAttribute("TeamBattleground") then',

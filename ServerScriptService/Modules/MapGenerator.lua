@@ -131,7 +131,6 @@ local MAIN_STREET = 18
 local SIDE_STREET = 14
 local SIDEWALK = 5
 local SETBACK = 2
-local PLAZA_HALF = 25
 local ALLEY_MIN, ALLEY_MAX = 5, 10
 
 -- How wide the gap after a building is, by how far along the street it stands. Alleys tighten
@@ -275,12 +274,18 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	local c = Vector3.new(center.X, 0, center.Z)
 	local shape = townShape(spread)
 	local half, crossHalf = shape.half, shape.cross
+	-- The roundabout round the fountain (MapDecor.RoundaboutSpec): its size goes with the kind of town,
+	-- and the four streets start where its approaches end.
+	local hub = MapDecor.RoundaboutSpec(profile.kind, MAIN_STREET / 2, SIDEWALK)
+	local HUB = hub.approach
 	-- A street's planned end, pulled in by the kind's reach unless a road leaves along it.
 	local function reachEnd(full, fraction, mouth)
 		if mouth then
 			return full
 		end
-		return PLAZA_HALF + (full - PLAZA_HALF) * fraction
+		-- Measured from the old square's edge (25), as before the roundabout: only where the streets
+		-- start moved, not where they end (a longer street ran out over a harbour's basin).
+		return 25 + (full - 25) * fraction
 	end
 
 	-- Streets are laid out (and claimed) first; they're drawn once we know how far out the
@@ -304,7 +309,7 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	local main = {}
 	for _, name in ipairs({ "E", "W" }) do
 		local direction = name == "E" and Vector3.new(1, 0, 0) or Vector3.new(-1, 0, 0)
-		main[name] = planStreet(c + direction * PLAZA_HALF, c + direction * reachEnd(half, profile.mainReach, mouths[name]), MAIN_STREET, true)
+		main[name] = planStreet(c + direction * HUB, c + direction * reachEnd(half, profile.mainReach, mouths[name]), MAIN_STREET, true)
 	end
 	-- The cross street runs out of the square to a junction with the back street and on past it to
 	-- the edge of town, and the back street runs both ways out of that junction. The cross street is
@@ -321,7 +326,7 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 		junctions[name] = {
 			name = name,
 			center = jc,
-			inner = planStreet(c + Vector3.new(0, 0, side * PLAZA_HALF), jc - Vector3.new(0, 0, side * sideStreet / 2), MAIN_STREET, true),
+			inner = planStreet(c + Vector3.new(0, 0, side * HUB), jc - Vector3.new(0, 0, side * sideStreet / 2), MAIN_STREET, true),
 			outer = planStreet(jc + Vector3.new(0, 0, side * sideStreet / 2), c + Vector3.new(0, 0, side * math.min(crossHalf, outerEnd)), MAIN_STREET, false),
 			east = profile.backStreets ~= false and planStreet(jc + Vector3.new(MAIN_STREET / 2, 0, 0), Vector3.new(c.X + half * 0.8 * profile.mainReach, 0, jc.Z), sideStreet, false) or nil,
 			west = profile.backStreets ~= false and planStreet(jc - Vector3.new(MAIN_STREET / 2, 0, 0), Vector3.new(c.X - half * 0.8 * profile.mainReach, 0, jc.Z), sideStreet, false) or nil,
@@ -330,8 +335,8 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 		space:AddRect(jc.X, jc.Z, MAIN_STREET / 2 + SIDEWALK + 1, sideStreet / 2 + SIDEWALK + 1)
 	end
 
-	-- The square.
-	space:AddRect(c.X, c.Z, PLAZA_HALF - 1, PLAZA_HALF - 1)
+	-- The roundabout: the ring and its pavement, each approach, and the fillets' pavements.
+	MapDecor.RoundaboutClaim(space, hub, c)
 
 	-- Buildings along both sides of every street. Each street side keeps a cursor walking out from
 	-- where the street starts; taking turns round the sides spreads the town evenly, so the blocks
@@ -462,6 +467,23 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 	local closedEnd = { closed = true }
 	local function draw(street, ends)
 		local length = reach[street] or 0
+		-- A street that stops past its last building stops short of any drop in the ground (a river's
+		-- bank at the edge of town): its end, kerb and pavement included, stays on the town's flat.
+		if length > 0 and not ends.b then
+			local side = Vector3.new(-street.direction.Z, 0, street.direction.X) * (street.width / 2 + SIDEWALK)
+			local function low(at)
+				for _, offset in ipairs({ side, -side, Vector3.zero }) do
+					local g = MapGenerator.GroundHeightAt(at.X + offset.X, at.Z + offset.Z)
+					if g and g < -0.1 then
+						return true
+					end
+				end
+				return false
+			end
+			while length > 20 and (low(street.a + street.direction * (length + SIDEWALK)) or low(street.a + street.direction * length)) do
+				length -= 2
+			end
+		end
 		if length > 0 then
 			local b = street.a + street.direction * length
 			ends.b = ends.b or closedEnd
@@ -546,8 +568,20 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 		end
 	end
 
-	-- Most squares honour an Epic or Legendary brainrot with a statue in the fountain.
-	paintFootprint(c, 0, PLAZA_HALF * 2 + 2, PLAZA_HALF * 2 + 2)
+	-- Most fountains honour an Epic or Legendary brainrot with a statue in the upper bowl.
+	-- The ring painted as strips (FillBlock, like every other paint): Terrain:FillCylinder raised the
+	-- ground over the ring's asphalt and the island in the real game.
+	local paintRadius = hub.outer + SIDEWALK
+	for x = -paintRadius + 2, paintRadius - 2, 4 do
+		local half = math.sqrt(math.max(0, paintRadius * paintRadius - x * x))
+		if half > 1 then
+			paintFootprint(c + Vector3.new(x, 0, 0), 0, 4, half * 2)
+		end
+	end
+	for _, theta in ipairs({ 0, math.pi / 2, math.pi, 3 * math.pi / 2 }) do
+		local mid = c + Vector3.new(math.cos(theta), 0, math.sin(theta)) * ((hub.outer + HUB) / 2)
+		paintFootprint(mid, -theta, HUB - hub.outer + 2, MAIN_STREET + SIDEWALK * 2)
+	end
 	local statueDef = nil
 	local wantStatue = profile.statue
 	if wantStatue == nil then
@@ -557,17 +591,30 @@ local function buildTown(parent, center, preset, spread, chestSpots, lootSpots, 
 		local pool = BrainrotData.OfRarity(math.random() < 0.5 and "Legendary" or "Epic")
 		statueDef = #pool > 0 and pool[math.random(1, #pool)] or nil
 	end
-	local plaza = MapDecor.Plaza(town, center, MapGenerator.GroundHeightAt, statueDef)
+	-- The roundabout, in the town's own colours (its flag's), and what it says about itself for
+	-- anything laying out round it (bots, guns, the HUD): attributes replicate when parts stream out.
+	local theme = TownThemes.Themes and TownThemes.Themes[townName or ""]
+	local flag = theme and theme.flag
+	local _, plaza, vendorAt = MapDecor.Roundabout(town, center, hub, {
+		statueDef = statueDef,
+		accent = flag and flag.color or nil,
+		trim = flag and flag.trim or nil,
+		groundHeightAt = MapGenerator.GroundHeightAt,
+		space = space,
+	})
+	town:SetAttribute("RoundaboutIsland", hub.island)
+	town:SetAttribute("RoundaboutOuter", hub.outer)
+	town:SetAttribute("RoundaboutApproach", HUB)
 	for kind, spots in pairs(plaza) do
 		for _, spot in ipairs(spots) do
 			table.insert(lootSpots[kind], spot)
 		end
 	end
 
-	-- A Rot Vendor on the square: SahurCoins for a heal, a shield or ammo, mid-match.
-	-- Standing on the square's paving, not sunk into it.
-	local vendorAt = c + Vector3.new(21.5, MapGenerator.GroundHeightAt(c.X + 21.5, c.Z - 13.5) + MapDecor.PavingTop, -13.5)
-	VendorService.Build(town, CFrame.lookAt(vendorAt, Vector3.new(c.X, vendorAt.Y, c.Z)))
+	-- A Rot Vendor on a corner of the roundabout: SahurCoins for a heal, a shield or ammo, mid-match.
+	if vendorAt then
+		VendorService.Build(town, CFrame.lookAt(vendorAt, Vector3.new(c.X, vendorAt.Y, c.Z)))
+	end
 
 	-- Where the town's cars go (Oliver 09-24, "make all the car placements make sense"): a town parks
 	-- its cars the way its kind says (TownKinds), in its car park, on driveways by its houses, and at

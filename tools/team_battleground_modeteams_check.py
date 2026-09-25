@@ -349,6 +349,53 @@ def koth_checks(koth_src):
     return failures
 
 
+# The battleground's real capture areas: TeamBattleground laid out for several seeds at several places
+# and headings (a map puts it wherever its site is), KOTH handed its objectives, and every objective KOTH
+# builds must be the middle of one of the arena's marked capture rings (CaptureRing marks all at
+# CaptureRadius from it, in 7 of 12 sectors at least), that radius KOTH's own.
+ZONE_LAYOUTS = [(1, 0.0, 0.0, 0.0, 0.0), (2, 300.0, 4.0, -200.0, 0.6), (3, -520.0, 12.0, 80.0, 2.2), (777, 40.0, -3.0, 610.0, 4.0)]
+
+
+def koth_zone_checks(koth_src, bg_src=None):
+    import math
+    import team_battleground_check as TBC
+    failures = []
+    src = dict(TBC.sources(ROOT))
+    if bg_src is not None:
+        src["bg"] = bg_src
+    zone_src = read(ROOT, "ReplicatedStorage", "Shared", "ObjectiveZone.lua")
+    radius = float(re.search(r"ObjectiveZone\.DefaultRadius = ([\d.]+)", zone_src).group(1))
+    for seed, x, y, z, yaw in ZONE_LAYOUTS:
+        rt = TBC.Runtime(src)
+        model, info = rt.layout(seed, x, y, z, yaw)
+        if float(rt.bg.CaptureRadius) != radius:
+            failures.append("the arena's capture rings are %.1f round, KOTH captures within %.1f" % (float(rt.bg.CaptureRadius), radius))
+        objectives = rt.vecs(info.objectives)
+        marks = [p["pos"] for p in rt.dump(model) if p["name"] == "CaptureRing"]
+        got = koth_run(koth_src, objectives)
+        where = "seed %d at (%.0f, %.0f) turned %.1f" % (seed, x, z, yaw)
+        if len(got) != len(objectives):
+            failures.append("%s: KOTH built %d objectives, the battleground has %d" % (where, len(got), len(objectives)))
+        for index, centre in enumerate(got):
+            ring = [m for m in marks if abs(math.hypot(m[0] - centre[0], m[2] - centre[2]) - radius) <= 1.2
+                    and abs(m[1] - centre[1]) <= 8]
+            sectors = {int((math.degrees(math.atan2(m[2] - centre[2], m[0] - centre[0])) % 360) // 30) for m in ring}
+            if len(sectors) < 7:
+                failures.append("%s: KOTH objective %d at (%.1f, %.1f, %.1f) is not the middle of a marked capture ring "
+                                "(%d of 12 sectors)" % (where, index + 1, *centre, len(sectors)))
+    return failures
+
+
+# The zone plants: the arena's side of it (TeamBattleground's source), each must fail koth_zone_checks.
+ZONE_PLANTS = [
+    ("KOTH handed objectives off the capture areas", "ServerScriptService/Modules/TeamBattleground.lua",
+     "objectives = toWorld(frame, TeamBattleground.ObjectivesLocal),",
+     "objectives = toWorld(frame, { TeamBattleground.ObjectivesLocal[1], TeamBattleground.ObjectivesLocal[2] + Vector3.new(30, 0, 0) }),"),
+    ("the capture rings drawn at another radius", "ServerScriptService/Modules/TeamBattleground.lua",
+     "TeamBattleground.CaptureRadius = 28", "TeamBattleground.CaptureRadius = 22"),
+]
+
+
 KOTH_PLANTS = [
     ("KOTH ignores the battleground", ("if battleground and battleground.objectives and #battleground.objectives >= 2 then",
                                        "if false then")),
@@ -374,13 +421,20 @@ def main(argv):
     print("team_battleground_modeteams_check battle royale isolation (sources): %d failures" % len(iso))
     failures += iso
     kf = koth_checks(koth)
+    kf += koth_zone_checks(koth)
     for line in kf:
         print("  FAIL " + line)
     print("team_battleground_modeteams_check KOTH: %d failures" % len(kf))
     ok = not failures and not kf
     if "--plant" in argv:
         caught = 0
-        total = len(PLANTS) + len(KOTH_PLANTS) + len(STATIC_PLANTS)
+        total = len(PLANTS) + len(KOTH_PLANTS) + len(STATIC_PLANTS) + len(ZONE_PLANTS)
+        for label, rel, old, new in ZONE_PLANTS:
+            bg = (Path(ROOT) / rel).read_text(encoding="utf-8")
+            found = koth_zone_checks(koth, bg.replace(old, new, 1)) if old in bg else ["plant anchor not found"]
+            hit = bool(found) and found != ["plant anchor not found"]
+            caught += hit
+            print("%s  %s  (%s)" % ("CAUGHT" if hit else "MISSED", label, found[0] if found else "no failure"))
         for label, rel, old, new in STATIC_PLANTS:
             src = (Path(ROOT) / rel).read_text(encoding="utf-8")
             found = isolation(ROOT, {rel: src.replace(old, new, 1)}) if old in src else ["plant anchor not found"]

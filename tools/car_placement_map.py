@@ -174,6 +174,8 @@ def vehicle_source(faults):
             + "\tmodel:SetAttribute(\"HarnessModel\", info.modelId or \"?\")\n"
             + "\ttable.insert(active, model)\n\treturn model\nend\n"
             + "function VehicleService.Count() return #active end\n"
+            # ParkInTowns parks a car again after centring it in its bay; the rest hold isn't modelled here.
+            + "function VehicleService.Repark() end\n"
             + "return VehicleService\n")
 
 

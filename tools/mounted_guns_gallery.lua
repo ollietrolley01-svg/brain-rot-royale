@@ -464,7 +464,8 @@ local function vehicle(folder, modelId)
 	return model
 end
 for _, modelId in ipairs(vehicleIds) do
-	for i, from in ipairs({ Vector3.new(-6, 3, -7), Vector3.new(8, 2, 1), Vector3.new(4, 4.5, 7) }) do
+	-- Close on the gun (the whole vehicle is in the vehicle galleries): front quarter, side, rear quarter.
+	for i, from in ipairs({ Vector3.new(-3.2, 1.6, -3.8), Vector3.new(4.6, 1.1, 0.4), Vector3.new(2.4, 2.4, 4.0) }) do
 		add(string.format("veh_%s_%s", modelId, ({ "a", "b", "c" })[i]), 1, function(folder, camera)
 			stopCurrent()
 			stage(folder)
@@ -493,6 +494,12 @@ for _, modelId in ipairs(vehicleIds) do
 		end
 		current = view
 		local pitch = math.max((s.restPitch or 0) + 2, math.deg(VehicleWeaponData.PitchFloor(s, math.rad(10))))
+		if s.kind == "round" and s.pitchMin >= 0 then
+			-- A lobbing gun laid on a long landing, on a field wide enough to come down on (the stage's
+			-- own is 700 across), so its range ladder is on the ground.
+			pitch = 40
+			block(folder, Vector3.new(3000, 1, 3000), CFrame.new(ORIGIN - Vector3.new(0, 0.6, 0)), Color3.fromRGB(108, 120, 86), Enum.Material.Grass)
+		end
 		view.yaw, view.wantYaw, view.pitch, view.wantPitch = 10, 10, pitch, pitch
 		view:SetAiming(true)
 		for _ = 1, 50 do

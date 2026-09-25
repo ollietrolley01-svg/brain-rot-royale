@@ -250,6 +250,9 @@ local function sightParams(vehicle)
 	return params
 end
 
+-- The lobbing sight's range marks, studs over the ground from the gun.
+local LADDER_RANGES = { 100, 200, 300, 400, 500, 600, 700 }
+
 local function makeGui(parent)
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "GunnerSight"
@@ -336,7 +339,34 @@ local function makeGui(parent)
 		line.BorderSizePixel = 0
 		line.Parent = scope
 	end
-	return gui, { cross = cross, ring = ring, stroke = stroke, dot = dot, range = range, scope = scope }
+	-- A lobbing sight's range ladder: a short red tick and its range for each of LADDER_RANGES, laid on
+	-- the ground straight down range (placeSight puts them), drawn only aiming.
+	local ladder = {}
+	for index, r in ipairs(LADDER_RANGES) do
+		local tick = Instance.new("Frame")
+		tick.Name = "LadderTick" .. index
+		tick.AnchorPoint = Vector2.new(0.5, 0.5)
+		tick.Size = UDim2.fromOffset(16, 2)
+		tick.BackgroundColor3 = Color3.fromRGB(255, 70, 50)
+		tick.BorderSizePixel = 0
+		tick.Visible = false
+		tick.Parent = gui
+		local label = Instance.new("TextLabel")
+		label.Name = "Range"
+		label.AnchorPoint = Vector2.new(0, 0.5)
+		label.Position = UDim2.new(1, 4, 0.5, 0)
+		label.Size = UDim2.fromOffset(34, 12)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.GothamBold
+		label.TextSize = 12
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextColor3 = Color3.fromRGB(255, 120, 100)
+		label.TextStrokeTransparency = 0.5
+		label.Text = tostring(r)
+		label.Parent = tick
+		ladder[index] = tick
+	end
+	return gui, { cross = cross, ring = ring, stroke = stroke, dot = dot, range = range, scope = scope, ladder = ladder }
 end
 
 -- Starts the view on `vehicle`'s turret, or returns nil if the model carries no first-person markers
@@ -379,7 +409,7 @@ function GunnerView.Start(vehicle, spec, options)
 	-- A scope is a solid tube: looked through, its own parts (named *Sight*: the body, the lens, the eye
 	-- cup, the bracket) are hidden on this screen, or the view down it is the inside of a box.
 	self.scopeParts = {}
-	if self.sightKind == "scope" then
+	if self.sightKind == "scope" or self.sightKind == "lob" then
 		for _, part in ipairs(vehicle:GetChildren()) do
 			if part:IsA("BasePart") and string.find(part.Name, "Sight") then
 				table.insert(self.scopeParts, part)
@@ -554,9 +584,11 @@ function GunnerView:Update(dt, state)
 	local hipView = CFrame.new(hipEye.Position) * (yawFrame - yawFrame.Position) * CFrame.Angles(math.rad(lookPitch), 0, 0)
 	local sightView = pitchFrame * self.sight.CFrame
 	if self.lobs then
-		-- A mortar is laid by where its bomb comes down, not along its tube: aiming only zooms the view
-		-- (from beside the tube, the sight's own spot, the van's roof load filled the picture).
-		sightView = hipView
+		-- A mortar is laid by where its bomb comes down, not along its tube: aiming moves the eye to its
+		-- sight, beside the tube and a little over it (so the tube stays off to one side, below the middle)
+		-- and keeps looking at the landing, zoomed, with the range ladder (placeSight) drawn on the ground.
+		local at = sightView.Position + yawFrame.UpVector * 0.8
+		sightView = CFrame.new(at) * (hipView - hipView.Position)
 	end
 	local view = hipView:Lerp(sightView, Pure.smooth(self.aim))
 	if self.shake > 0 then
@@ -587,21 +619,23 @@ function GunnerView:Update(dt, state)
 	self.arms:pose(1, view, right, 0.9, parts, cframes)
 	self.arms:pose(-1, view, left, 0.9, parts, cframes)
 	workspace:BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged)
-	-- The scope's glass only when the view is right down the launcher's sight.
+	-- The scope's glass only when the view is right down the launcher's sight. A lobbing sight's own
+	-- parts go too once the eye is at it (they would sit across the view), the arms stay.
 	local scoped = self.sightKind == "scope" and self.aim > 0.9
 	self.arms:SetHidden(scoped)
-	if scoped ~= self.scopeHidden then
-		self.scopeHidden = scoped
+	local hideSight = scoped or (self.sightKind == "lob" and self.aim > 0.6)
+	if hideSight ~= self.scopeHidden then
+		self.scopeHidden = hideSight
 		for _, part in ipairs(self.scopeParts) do
-			part.LocalTransparencyModifier = scoped and 1 or 0
+			part.LocalTransparencyModifier = hideSight and 1 or 0
 		end
 	end
 	self.ui.scope.Visible = scoped
-	self:placeSight(view, impact, hit)
+	self:placeSight(view, impact, hit, origin, direction)
 	self:hideBody(true)
 end
 
-function GunnerView:placeSight(view, impact, hit)
+function GunnerView:placeSight(view, impact, hit, origin, direction)
 	local camera = self.camera
 	local screen, onScreen = camera:WorldToViewportPoint(impact)
 	local ui = self.ui
@@ -615,6 +649,23 @@ function GunnerView:placeSight(view, impact, hit)
 	local distance = (impact - view.Position).Magnitude
 	ui.range.Text = self.spec.kind == "round" and string.format("%d", math.floor(distance + 0.5)) or ""
 	ui.cross.Visible = not self.lobs
+	-- The range ladder, on the ground the bomb is coming down on, straight down range from the gun.
+	local laddered = self.lobs and self.aim > 0.6 and origin ~= nil
+	local flat = laddered and Vector3.new(direction.X, 0, direction.Z) or Vector3.zero
+	laddered = laddered and flat.Magnitude > 1e-3
+	for index, tick in ipairs(ui.ladder) do
+		local shown = false
+		if laddered then
+			local r = LADDER_RANGES[index]
+			local point = Vector3.new(origin.X, impact.Y, origin.Z) + flat.Unit * r
+			local at, visible = camera:WorldToViewportPoint(point)
+			if visible then
+				tick.Position = UDim2.fromOffset(at.X, at.Y)
+				shown = true
+			end
+		end
+		tick.Visible = shown
+	end
 end
 
 function GunnerView:Stop()

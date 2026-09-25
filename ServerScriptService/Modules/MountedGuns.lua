@@ -63,7 +63,7 @@ end
 
 -- PURE BEGIN
 -- The lifecycle, with everything it touches in `env`:
---   env.build(kind, cframe, source, matchId) -> gun     env.destroy(gun)
+--   env.build(kind, cframe, source, matchId, opts) -> gun     env.destroy(gun)
 --   env.release(gun, reason)                            put its gunner down (and clear them), if any
 --   env.choose(mapInfo) -> { { kind, cframe }, ... }    the map's spots
 --   env.emplacements() -> { spot, ... }                 the tagged parts standing now
@@ -77,12 +77,12 @@ function Life.new(env, data)
 		arenaCount = 0 }, Life)
 end
 
-function Life:add(kind, cframe, source, spot)
-	local gun = self.env.build(kind, cframe, source, self.matchId)
+function Life:add(kind, cframe, source, spot, opts)
+	local gun = self.env.build(kind, cframe, source, self.matchId, opts)
 	if not gun then
 		return nil
 	end
-	local entry = { gun = gun, kind = kind, cframe = cframe, source = source, spot = spot, matchId = self.matchId }
+	local entry = { gun = gun, kind = kind, cframe = cframe, source = source, spot = spot, matchId = self.matchId, opts = opts }
 	table.insert(self.guns, entry)
 	if spot then
 		self.bySpot[spot] = entry
@@ -103,7 +103,7 @@ function Life:start(teams, mapInfo)
 		end
 	else
 		for _, s in ipairs(self.env.choose(mapInfo) or {}) do
-			self:add(s.kind, s.cframe, "map", nil)
+			self:add(s.kind, s.cframe, "map", nil, s.details and s.details.sandbag and { flankBags = true } or nil)
 		end
 	end
 end
@@ -140,7 +140,7 @@ function Life:tick()
 	for index, entry in ipairs(self.guns) do
 		if entry.broken and entry.rebuildAt and now >= entry.rebuildAt and entry.matchId == self.matchId then
 			self.env.destroy(entry.gun)
-			local gun = self.env.build(entry.kind, entry.cframe, entry.source, self.matchId)
+			local gun = self.env.build(entry.kind, entry.cframe, entry.source, self.matchId, entry.opts)
 			local fresh = { gun = gun, kind = entry.kind, cframe = entry.cframe, source = entry.source, spot = entry.spot,
 				matchId = self.matchId }
 			self.guns[index] = fresh
@@ -326,13 +326,13 @@ local function lockFor(model, seconds)
 	end
 end
 
-local function build(kind, cframe, source)
+local function build(kind, cframe, source, _matchId, opts)
 	local spec = MountedGunData.SpecOf(kind)
 	local info = MountedGunData.Kinds[kind]
 	if not spec or not info then
 		return nil
 	end
-	local model = MountedGunModels.Build(kind, cframe)
+	local model = MountedGunModels.Build(kind, cframe, opts)
 	model.Name = "MountedGun_" .. kind
 	model:SetAttribute("VehicleModel", info.modelId)
 	model:SetAttribute("MountedGun", kind)
@@ -590,7 +590,7 @@ local function newLife()
 				end
 				table.sort(c)
 				print(string.format("[MountedGuns]   %s at (%.0f, %.0f, %.0f) %s, score %.1f, rise %.1f, covers %s", s.kind,
-					s.cframe.X, s.cframe.Y, s.cframe.Z, s.why or "?", s.score, s.details and s.details.rise or 0, table.concat(c, ", ")))
+					s.cframe.X, s.cframe.Y, s.cframe.Z, (s.why or "?") .. (s.details and s.details.sandbag and " sandbagged" or ""), s.score, s.details and s.details.rise or 0, table.concat(c, ", ")))
 			end
 			return spots
 		end,
