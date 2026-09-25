@@ -20,8 +20,8 @@
 -- you and it takes all of it, glass doesn't. Your own blasts hurt you at half strength. A blast wears
 -- down defenses and companions, sets off barrels, holes walls near its centre, shatters every pane in
 -- reach, kicks grenades lying nearby, rocks vehicles and hurts them (VehicleService.BlastDamage: the
--- explosive class, the counter to a vehicle -- VehicleArmor), and reaches someone inside an armoured
--- cabin at VehicleArmor.CabinBlast of its strength.
+-- explosive class, the counter to a vehicle -- VehicleArmor), and reaches someone riding one at their
+-- seat's share of its strength (VehicleCover.BlastShare: an armoured cabin VehicleArmor.CabinBlast).
 --
 --   ProjectileService.FireWeapon(token, weaponId, origin, aimPoint)       a launcher round (bots)
 --   ProjectileService.Throw(token, itemId, targetPosition, options)       a lob onto a spot (bots)
@@ -44,6 +44,7 @@ local Ballistics = require(Shared:WaitForChild("Ballistics"))
 local ItemData = require(Shared:WaitForChild("ItemData"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
+local VehicleCover = require(Shared:WaitForChild("VehicleCover"))
 local WeaponData = require(Shared:WaitForChild("WeaponData"))
 
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
@@ -376,10 +377,10 @@ local function explode(blast)
 			if victim.token == blast.owner then
 				amount *= SELF_SCALE
 			end
-			-- Inside an armoured cabin, the armour takes most of it (the gunner's hatch is open).
-			if VehicleService.CabinShield then
-				amount *= VehicleService.CabinShield(victim.root.Parent)
-			end
+			-- Riding a vehicle, its body takes part of it (VehicleCover: an armoured cabin most, a car's
+			-- cabin some, a bike or a truck bed next to none); the vehicle takes its own share of the blast
+			-- below (VehicleService.BlastDamage), and a wreck covers nobody.
+			amount *= VehicleCover.BlastShareFor(victim.root.Parent)
 			local taken = 0
 			-- A thrower who has left is no longer creditable (and ModeTeams has forgotten them), but the
 			-- team stamped on the round at launch still keeps friendly fire off their teammates.
