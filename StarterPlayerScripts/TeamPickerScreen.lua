@@ -650,7 +650,11 @@ function TeamPickerScreen:_paint()
 	self.autoStroke.Color = autoFocused and Role.Text or Role.Accent
 	self.autoStroke.Thickness = autoFocused and 2 or 1.5
 	local side = snap.autoSide and GameModes.Team(snap.autoSide)
-	self.autoText.Text = (onAuto and side) and ("AUTO  ·  " .. (side.short or side.name)) or "AUTO-ASSIGN"
+	if self.compact then
+		self.autoText.Text = "AUTO"
+	else
+		self.autoText.Text = (onAuto and side) and ("AUTO  ·  " .. (side.short or side.name)) or "AUTO-ASSIGN"
+	end
 	self.autoKey.Visible = self.input ~= "touch"
 end
 
