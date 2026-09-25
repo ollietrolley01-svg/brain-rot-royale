@@ -753,6 +753,9 @@ function MapGenerator.Build(mapId)
 	local plateauPlan = MapTerrain.PlanPlateaus(preset, radius, centers, townSpread, space)
 	local riverPlan = MapTerrain.PlanRiver(radius, centers, townSpread, plateauPlan, roads)
 	local roadCrossings = riverPlan and MapTerrain.RoadCrossings(riverPlan.points, roads) or {}
+	-- The hills are part of the relief's height field (smooth bells, not balls of voxels), so they
+	-- are planned, and their ground claimed, before it is written.
+	MapTerrain.PlanHills(preset, radius, centers, townSpread, space)
 
 	-- Rolling ground across the whole map, before anything at all is built on it. This is what
 	-- stops the map reading flat between features; hills and ridges then go on top of it. Towns
@@ -776,8 +779,7 @@ function MapGenerator.Build(mapId)
 	local plateaus = MapTerrain.Plateaus(terrain, ziplines, preset, radius, centers, townSpread, space, chestSpots, lootSpots,
 		MapGenerator.GroundHeightAt, plateauPlan, riverPlan)
 
-	-- Rolling ground between the towns — hills, ridges, craters, dunes on sand — kept clear of
-	-- the towns, the roads, the plateaus and the middle where the last circle lands.
+	-- The craters carved and the tall hills capped (the hills themselves went in with the relief).
 	local hillCount = MapTerrain.Hills(terrain, preset, radius, centers, townSpread, space)
 	task.wait()
 	-- Whatever the hills filled back into the roads' cuttings goes again.

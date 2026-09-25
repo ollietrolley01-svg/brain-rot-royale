@@ -52,6 +52,8 @@ local RIVER_BEACH_TOP = 1.5
 local RIVER_BANK_GENTLE = 20 -- studs of gentle bank past the beach...
 local RIVER_BANK_GENTLE_GRADE = 0.55 -- ...at this grade (about 29 degrees)
 local RIVER_BANK_GRADE = 1 -- then no steeper than 45 degrees, however high the ground
+local RIVER_BANK_EASE = 16 -- studs over which the bank's grade changes (see profile in River)
+local RIVER_BANK_ROUND = 24 -- how far the rim where a cut bank meets the ground is rounded (softMin)
 local RIVER_REACH = RIVER_BEACH_OUT + RIVER_BANK_GENTLE + 130 -- far enough to meet the highest ground
 local RIVER_BEACH = Enum.Material.Sand
 local RIVER_TOP = 148 -- above the tallest ground on a map (measured ceiling ~127)
@@ -223,10 +225,15 @@ end
 -- harness found 67 buried parts, mostly building steps sitting under their own ground.
 
 local RELIEF_FLOOR = -8 -- bottom of the band of voxels this writes; solid slab continues below
-local RELIEF_CEILING = 64 -- top of the band; the field is clamped just under it
+-- Top of the band; the field is clamped just under it. High enough for the tallest hill on the
+-- tallest relief (the hills are part of this field now: see PlanHills). Each tile only writes up
+-- to its own highest column, so the headroom costs nothing where the ground is low.
+local RELIEF_CEILING = 128
 local RELIEF_TILE = 128 -- written in tiles this wide so no single call is enormous
 
 MapTerrain.ReliefSeed = 0
+
+local hillsAt -- the hills' share of the height field; set with PlanHills below
 
 -- Wavelengths and amplitudes, and the first pass got both wrong. Perlin noise almost never
 -- reaches its own extremes -- a single octave typically lands within about a fifth of its range --
@@ -283,10 +290,18 @@ function MapTerrain.Relief(terrain, preset, radius, centers, townSpread, roads, 
 		-- water hanging in mid-air.
 		local height = reliefRaw(x, z, seed) + 14
 		if height < 0 then
-			-- A soft floor rather than a hard one: shallow hollows instead of a wide dead flat.
-			height *= 0.12
+			-- A soft floor rather than a hard one: shallow hollows instead of a wide dead flat. The
+			-- slope eases from 1 to 0.12 over a few studs of depth instead of snapping there at
+			-- zero, which left a crease along every shoreline of the hollows.
+			height *= 0.12 + 0.88 * math.exp(height / 6)
 		end
-		return math.min(height, RELIEF_CEILING - 4) * factor
+		return height * factor
+	end
+	-- The hills are in the field too (PlanHills, before this runs): smooth bells rather than balls
+	-- of voxels, so a wheel never meets a ball's rim. They keep off the towns themselves.
+	local natural = heightAt
+	heightAt = function(x, z)
+		return math.min(natural(x, z) + hillsAt(x, z), RELIEF_CEILING - 4)
 	end
 
 	MapTerrain.ResetPads(roads, material)
@@ -309,7 +324,7 @@ function MapTerrain.Relief(terrain, preset, radius, centers, townSpread, roads, 
 	end
 
 	local span = RELIEF_TILE / 4
-	local sizeY = (RELIEF_CEILING - RELIEF_FLOOR) / 4
+	local maxSizeY = (RELIEF_CEILING - RELIEF_FLOOR) / 4
 	local reach = radius * 1.16
 	local first = -math.ceil(reach / RELIEF_TILE) * RELIEF_TILE
 	local written = 0
@@ -320,24 +335,33 @@ function MapTerrain.Relief(terrain, preset, radius, centers, townSpread, roads, 
 		while z0 < reach do
 			-- The playable area is a circle; skip the corners of the square nobody reaches.
 			if flatDistance(0, 0, x0 + RELIEF_TILE / 2, z0 + RELIEF_TILE / 2) <= reach + RELIEF_TILE then
-				local materials, occupancies = {}, {}
+				-- Aimed the surface lift under the height wanted, like every other fill. The band
+				-- written stops a voxel over the tile's highest column: above that it is air already.
+				local targets, columnMaterials = {}, {}
+				local highest = RELIEF_FLOOR
 				for ix = 1, span do
 					local worldX = x0 + (ix - 0.5) * 4
-					local targets, columnMaterials = {}, {}
+					local rowTargets, rowMaterials = {}, {}
 					for iz = 1, span do
-						-- Aimed the surface lift under the height wanted, like every other fill.
 						local height, override = shapedAt(worldX, z0 + (iz - 0.5) * 4)
-						targets[iz] = height - MapTerrain.SurfaceLift
-						columnMaterials[iz] = override or material
+						rowTargets[iz] = height - MapTerrain.SurfaceLift
+						rowMaterials[iz] = override or material
+						highest = math.max(highest, rowTargets[iz])
 					end
+					targets[ix], columnMaterials[ix] = rowTargets, rowMaterials
+				end
+				local sizeY = math.min(maxSizeY, math.ceil((highest - RELIEF_FLOOR) / 4) + 1)
+				local materials, occupancies = {}, {}
+				for ix = 1, span do
+					local rowTargets, rowMaterials = targets[ix], columnMaterials[ix]
 					local columnMaterial, columnOccupancy = {}, {}
 					for iy = 1, sizeY do
 						local bottom = RELIEF_FLOOR + (iy - 1) * 4
 						local rowMaterial, rowOccupancy = {}, {}
 						for iz = 1, span do
-							local occupancy = (targets[iz] - bottom) / 4
+							local occupancy = (rowTargets[iz] - bottom) / 4
 							occupancy = occupancy < 0 and 0 or (occupancy > 1 and 1 or occupancy)
-							rowMaterial[iz] = occupancy > 0 and columnMaterials[iz] or Enum.Material.Air
+							rowMaterial[iz] = occupancy > 0 and rowMaterials[iz] or Enum.Material.Air
 							rowOccupancy[iz] = occupancy
 						end
 						columnMaterial[iy] = rowMaterial
@@ -346,7 +370,7 @@ function MapTerrain.Relief(terrain, preset, radius, centers, townSpread, roads, 
 					materials[ix] = columnMaterial
 					occupancies[ix] = columnOccupancy
 				end
-				local region = Region3.new(Vector3.new(x0, RELIEF_FLOOR, z0), Vector3.new(x0 + RELIEF_TILE, RELIEF_CEILING, z0 + RELIEF_TILE))
+				local region = Region3.new(Vector3.new(x0, RELIEF_FLOOR, z0), Vector3.new(x0 + RELIEF_TILE, RELIEF_FLOOR + sizeY * 4, z0 + RELIEF_TILE))
 				terrain:WriteVoxels(region, 4, materials, occupancies)
 				written += 1
 				if written % 6 == 0 then
@@ -365,18 +389,95 @@ end
 --------------------------------------------------------------------------------
 
 -- The rolling ground between the towns. Rather than one kind of hill everywhere: round hills of
--- many sizes; long ridges (a row of overlapping domes along a line, so they read as one hill
--- with a spine); craters — a bowl scooped out of the ground with a raised rim and a pool at the
--- bottom; and on sand, low broad dunes in drifts. Tall hills get a rock cap so the high ground
--- reads as high ground. Everything keeps off the towns, the roads and whatever is already
+-- many sizes; long ridges; craters — a bowl scooped out of the ground with a raised rim and a pool
+-- at the bottom; and on sand, low broad dunes in drifts. Tall hills get a stone cap so the high
+-- ground reads as high ground. Everything keeps off the towns, the roads and whatever is already
 -- claimed (plateaus), and away from the very middle where the last circle lands.
-function MapTerrain.Hills(terrain, preset, radius, centers, townSpread, space)
-	local material = preset.terrainMaterial
-	local sand = material == Enum.Material.Sand
-	-- Many more attempts than there used to be, and most of them small. Relief made of a handful
-	-- of big hills spread over a kilometre reads as flat everywhere you actually fight.
+--
+-- The hills used to be balls of voxels (FillBall) buried in the ground so a cap stuck out. A
+-- ball's cap meets the ground at its rim at anything up to 70 degrees, all the way round: every
+-- hill had a kerb round its foot, and a knot of mounds was a field of them, which is what vehicles
+-- were bouncing over. So the hills are now shapes in the relief's own height field (PlanHills,
+-- before Relief): a cosine bell across its footprint, level on top, level at the foot, no steeper
+-- than HILL_MAX_SLOPE and no more sharply curved than HILL_MAX_BEND anywhere, written with the relief
+-- in the same smooth fractional-occupancy pass. Only the craters are still carved (Hills, after the relief): they are
+-- meant to be holes.
+--
+-- The caps and the crater rims were Rock, as were Rot Ridge's whole ground and some paint patches.
+-- Rock draws its surface up to 1.1 studs off its voxels (RoadNetwork.SmoothMaterials has the
+-- measured table): a washboard under the wheels. They are smooth materials now (HILL_STONE).
+-- tools/ground_driveability_check.py measures the result.
+
+-- The steepest flank any hill may have (rise over run; 0.55 is about 29 degrees), and the sharpest
+-- bend: the change of slope per stud, at the crest and at the foot. A bell H tall and R in radius
+-- is at most (pi / 2) H / R steep and bends at most (pi^2 / 2) H / R^2, so its radius is at least
+-- 2.9 H, and at least sqrt(BELL_BEND * H / HILL_MAX_BEND) (a 5-stud mound spreads 44 studs, not
+-- the 18 its old ball did). 0.012 per stud is a change of slope of 0.1 over one car length.
+local HILL_MAX_SLOPE = 0.55
+local HILL_MAX_BEND = 0.012
+local BELL_SLOPE = math.pi / 2
+local BELL_BEND = math.pi * math.pi / 2
+local HILL_CELL = 64
+-- The stone on hilltops and crater rims: a smooth material (RoadNetwork.SmoothMaterials).
+local HILL_STONE = Enum.Material.Limestone
+
+local hillShapes = { list = {}, cells = {} }
+
+-- The hills' height at a point: the sum of every bell over it. 0 before PlanHills runs.
+hillsAt = function(x, z)
+	local cell = hillShapes.cells[math.floor(x / HILL_CELL) .. "," .. math.floor(z / HILL_CELL)]
+	if not cell then
+		return 0
+	end
+	local height = 0
+	for _, shape in ipairs(cell) do
+		local ox, oz = x - shape.x, z - shape.z
+		local u = (ox * shape.dx + oz * shape.dz) / shape.along
+		local v = (oz * shape.dx - ox * shape.dz) / shape.across
+		local t2 = u * u + v * v
+		if t2 < 1 then
+			height += shape.height * 0.5 * (1 + math.cos(math.pi * math.sqrt(t2)))
+		end
+	end
+	return height
+end
+
+-- The radii a bell `height` tall needs to keep under HILL_MAX_SLOPE, from the ones wanted.
+local function bellReach(height, along, across)
+	local least = math.max(BELL_SLOPE * height / HILL_MAX_SLOPE, math.sqrt(BELL_BEND * height / HILL_MAX_BEND))
+	return math.max(along, least), math.max(across or along, least)
+end
+
+local function addBell(x, z, height, along, across, yaw)
+	along, across = bellReach(height, along, across)
+	local shape = { x = x, z = z, height = height, along = along, across = across, dx = math.cos(yaw or 0), dz = math.sin(yaw or 0) }
+	table.insert(hillShapes.list, shape)
+	local reach = math.max(along, across)
+	for cx = math.floor((x - reach) / HILL_CELL), math.floor((x + reach) / HILL_CELL) do
+		for cz = math.floor((z - reach) / HILL_CELL), math.floor((z + reach) / HILL_CELL) do
+			local key = cx .. "," .. cz
+			local cell = hillShapes.cells[key]
+			if not cell then
+				cell = {}
+				hillShapes.cells[key] = cell
+			end
+			table.insert(cell, shape)
+		end
+	end
+	return shape
+end
+
+-- Where the hills go and how big, before Relief writes the ground (it adds hillsAt to its field).
+-- Sizes are the old voxel hills' real ones: a ball of radius `size` buried with its centre `sink`
+-- under the ground stood `size - sink` tall over a footprint sqrt(size^2 - sink^2) in radius.
+function MapTerrain.PlanHills(preset, radius, centers, townSpread, space)
+	hillShapes = { list = {}, cells = {} }
+	local plan = { craters = {}, caps = {}, placed = 0 }
+	MapTerrain.HillPlan = plan
+	local sand = preset.terrainMaterial == Enum.Material.Sand
+	-- Many attempts, most of them small. Relief made of a handful of big hills spread over a
+	-- kilometre reads as flat everywhere you actually fight.
 	local count = math.floor(radius / 14)
-	local placed = 0
 
 	-- `margin` is how far a feature has to stay off a town. Ridges and craters keep well clear;
 	-- low mounds only have to miss the buildings themselves, which is what lets the ground
@@ -392,68 +493,55 @@ function MapTerrain.Hills(terrain, preset, radius, centers, townSpread, space)
 		end
 		return true
 	end
+	local function ball(size, sink)
+		return size - sink, math.sqrt(math.max(1, size * size - sink * sink))
+	end
 
-	for index = 1, count do
+	for _ = 1, count do
 		local angle = math.random() * math.pi * 2
 		local distance = (0.25 + math.sqrt(math.random()) * 0.7) * radius
 		local x, z = math.cos(angle) * distance, math.sin(angle) * distance
 		local roll = math.random()
-		-- Everything here sits ON the base relief rather than on a plane at zero, so every height
-		-- below is measured from the ground actually under that spot.
-		local base = MapTerrain.ReliefAt(x, z)
 
 		if roll < 0.09 then
-			-- A crater: a bowl of air, a rim of small domes, a pool in the bottom.
+			-- A crater: carved by Hills once the relief is down.
 			local bowl = math.random(26, 44)
 			if clearAt(x, z, bowl + 12) then
-				terrain:FillBall(Vector3.new(x, base + bowl * 0.55, z), bowl, Enum.Material.Air)
-				for rim = 0, 7 do
-					local a = rim / 8 * math.pi * 2
-					local rx, rz = x + math.cos(a) * bowl * 0.95, z + math.sin(a) * bowl * 0.95
-					terrain:FillBall(Vector3.new(rx, MapTerrain.ReliefAt(rx, rz) - bowl * 0.05, rz), bowl * 0.38,
-						sand and Enum.Material.Sandstone or Enum.Material.Rock)
-				end
-				terrain:FillCylinder(CFrame.new(x, base - bowl * 0.45 + 1.5, z), 3, bowl * 0.45, Enum.Material.Water)
+				table.insert(plan.craters, { x = x, z = z, bowl = bowl })
 				space:AddCircle(x, z, bowl + 8)
-				placed += 1
+				plan.placed += 1
 			end
 		elseif roll < 0.24 then
-			-- A ridge: five domes along a line, the middle ones tallest.
+			-- A ridge: one long bell along a line, tallest in the middle.
 			local length = math.random(120, 260)
 			local yaw = math.random() * math.pi
-			local dx, dz = math.cos(yaw), math.sin(yaw)
 			local width = math.random(60, 100)
 			local height = math.random(16, 44)
-			if clearAt(x, z, length / 2 + width * 0.6) then
-				for step = -2, 2 do
-					local along = step * length / 5
-					local rise = height * (1 - (step / 3) ^ 2)
-					local sx, sz = x + dx * along, z + dz * along
-					terrain:FillBall(Vector3.new(sx, MapTerrain.ReliefAt(sx, sz) + rise - width * 0.62, sz), width, material)
+			local tall, foot = ball(width, width * 0.62 - height)
+			tall = math.min(tall, 56)
+			local along, across = bellReach(tall, length / 2 + foot, foot)
+			if clearAt(x, z, math.max(along, across)) then
+				addBell(x, z, tall, along, across, yaw)
+				if tall >= 30 then
+					table.insert(plan.caps, { x = x, z = z, reach = math.max(along, across) })
 				end
-				if height >= 30 then
-					local top = base + height
-					local region = Region3.new(Vector3.new(x - length, top - 10, z - length), Vector3.new(x + length, top + 20, z + length)):ExpandToGrid(4)
-					terrain:ReplaceMaterial(region, 4, material, sand and Enum.Material.Sandstone or Enum.Material.Rock)
-				end
-				placed += 1
+				plan.placed += 1
 			end
 		elseif sand and roll < 0.40 then
-			-- Dunes: three low, broad domes in a drift.
+			-- Dunes: three low, broad domes in a drift, running together into one.
 			local size = math.random(80, 150)
-			if clearAt(x, z, size + 40) then
+			local tall, foot = ball(size, size * 0.62 - 8)
+			local spread = bellReach(tall * 0.55, foot)
+			if clearAt(x, z, size * 0.5 + spread) then
 				for step = 0, 2 do
 					local a = angle + step * 0.5
-					local sx, sz = x + math.cos(a) * size * 0.5, z + math.sin(a) * size * 0.5
-					terrain:FillBall(Vector3.new(sx, MapTerrain.ReliefAt(sx, sz) + 8 - size * 0.62, sz), size, material)
+					addBell(x + math.cos(a) * size * 0.5, z + math.sin(a) * size * 0.5, tall * 0.55, foot)
 				end
-				placed += 1
+				plan.placed += 1
 			end
 		elseif roll < 0.78 then
 			-- A knot of low mounds: the bread and butter of the relief. Low enough to run over and
-			-- shoot across, small enough to sit near a town without swallowing it. A ball of
-			-- radius `size` buried so its top is `peak` above the ground leaves a shallow cap;
-			-- `spread` is how wide that cap comes out, which is what has to be clear.
+			-- shoot across, small enough to sit near a town without swallowing it.
 			local mounds = math.random(2, 4)
 			for step = 0, mounds - 1 do
 				local a = angle + step * (1.3 + math.random() * 0.9)
@@ -461,33 +549,68 @@ function MapTerrain.Hills(terrain, preset, radius, centers, townSpread, space)
 				local size = math.random(34, 72)
 				local peak = math.random(5, 16)
 				local mx, mz = x + math.cos(a) * away, z + math.sin(a) * away
-				local spread = math.sqrt(math.max(1, 2 * size * peak - peak * peak))
+				local _, foot = ball(size, size - peak)
+				local spread = bellReach(peak, foot)
 				if clearAt(mx, mz, spread, 18) then
-					terrain:FillBall(Vector3.new(mx, MapTerrain.ReliefAt(mx, mz) + peak - size, mz), size, material)
-					placed += 1
+					addBell(mx, mz, peak, foot)
+					plan.placed += 1
 				end
 			end
 		else
-			-- A round hill; the tall ones get a rock cap.
+			-- A round hill; the tall ones get a stone cap. The very biggest balls stood over a
+			-- hundred studs; a bell that tall would spread over a town's worth of ground, so they
+			-- top out at 56.
 			local size = math.random(60, 170)
 			local height = math.random(10, 42)
-			if clearAt(x, z, size) then
-				terrain:FillBall(Vector3.new(x, base + height - size * 0.62, z), size, material)
-				if height >= 30 then
-					local top = base + height
-					local region = Region3.new(Vector3.new(x - size, top - 8, z - size), Vector3.new(x + size, top + 20, z + size)):ExpandToGrid(4)
-					terrain:ReplaceMaterial(region, 4, material, sand and Enum.Material.Sandstone or Enum.Material.Rock)
+			local tall, foot = ball(size, size * 0.62 - height)
+			tall = math.min(tall, 56)
+			local spread = bellReach(tall, foot)
+			if clearAt(x, z, spread) then
+				addBell(x, z, tall, foot)
+				if tall >= 30 then
+					table.insert(plan.caps, { x = x, z = z, reach = spread })
 				end
-				placed += 1
+				plan.placed += 1
 			end
 		end
+	end
+	return plan.placed
+end
 
-		-- Each fill is a sizeable voxel write; spread them out so match start doesn't stall.
+-- After the relief (which already holds the hills): the craters carved and the tall hills capped.
+function MapTerrain.Hills(terrain, preset, radius, centers, townSpread, space)
+	local plan = MapTerrain.HillPlan
+	if not plan then
+		MapTerrain.PlanHills(preset, radius, centers, townSpread, space)
+		plan = MapTerrain.HillPlan
+	end
+	local material = preset.terrainMaterial
+	local stone = material == Enum.Material.Sand and Enum.Material.Sandstone or HILL_STONE
+	for index, crater in ipairs(plan.craters) do
+		-- A bowl of air, a rim of small domes, a pool in the bottom.
+		local x, z, bowl = crater.x, crater.z, crater.bowl
+		local base = MapTerrain.ReliefAt(x, z)
+		terrain:FillBall(Vector3.new(x, base + bowl * 0.55, z), bowl, Enum.Material.Air)
+		for rim = 0, 7 do
+			local a = rim / 8 * math.pi * 2
+			local rx, rz = x + math.cos(a) * bowl * 0.95, z + math.sin(a) * bowl * 0.95
+			terrain:FillBall(Vector3.new(rx, MapTerrain.ReliefAt(rx, rz) - bowl * 0.05, rz), bowl * 0.38, stone)
+		end
+		terrain:FillCylinder(CFrame.new(x, base - bowl * 0.45 + 1.5, z), 3, bowl * 0.45, Enum.Material.Water)
 		if index % 4 == 0 then
 			task.wait()
 		end
 	end
-	return placed
+	-- The top of each tall hill's own ground, 8 studs down from its summit, in stone.
+	for _, cap in ipairs(plan.caps) do
+		local top = MapTerrain.ReliefAt(cap.x, cap.z)
+		local region = Region3.new(Vector3.new(cap.x - cap.reach, top - 8, cap.z - cap.reach),
+			Vector3.new(cap.x + cap.reach, top + 20, cap.z + cap.reach)):ExpandToGrid(4)
+		terrain:ReplaceMaterial(region, 4, material, stone)
+	end
+	-- Spent: the next map plans its own. (The bells stay, for ReliefAt, until then.)
+	MapTerrain.HillPlan = nil
+	return plan.placed
 end
 
 --------------------------------------------------------------------------------
@@ -1479,11 +1602,28 @@ function MapTerrain.River(terrain, parent, preset, radius, centers, townSpread, 
 		elseif d <= RIVER_BEACH_OUT then
 			return RIVER_BEACH_TOP * smooth((d - RIVER_SHORE_OUT) / (RIVER_BEACH_OUT - RIVER_SHORE_OUT))
 		end
+		-- The bank's grade eases from the beach's level to gentle, and from gentle to steep, over
+		-- RIVER_BANK_EASE studs each rather than turning at a line: a sharp change of grade is a
+		-- kerb to anything driving along the valley.
 		local e = d - RIVER_BEACH_OUT
-		if e <= RIVER_BANK_GENTLE then
-			return RIVER_BEACH_TOP + e * RIVER_BANK_GENTLE_GRADE
+		local g1, g2, ease, gentle = RIVER_BANK_GENTLE_GRADE, RIVER_BANK_GRADE, RIVER_BANK_EASE, RIVER_BANK_GENTLE
+		if e <= ease then
+			return RIVER_BEACH_TOP + g1 * e * e / (2 * ease)
+		elseif e <= gentle then
+			return RIVER_BEACH_TOP + g1 * (e - ease / 2)
 		end
-		return RIVER_BEACH_TOP + RIVER_BANK_GENTLE * RIVER_BANK_GENTLE_GRADE + (e - RIVER_BANK_GENTLE) * RIVER_BANK_GRADE
+		local f = e - gentle
+		local base = RIVER_BEACH_TOP + g1 * (gentle - ease / 2)
+		if f <= ease then
+			return base + g1 * f + (g2 - g1) * f * f / (2 * ease)
+		end
+		return base + g1 * ease + (g2 - g1) * ease / 2 + g2 * (f - ease)
+	end
+	-- The lower of two heights, rounded over `k` studs of difference where they cross: a cut bank
+	-- meets the natural ground in a curve, not a crease.
+	local function softMin(a, b, k)
+		local h = math.max(k - math.abs(a - b), 0) / k
+		return math.min(a, b) - h * h * k / 4
 	end
 
 	-- What must not be dug out from under it: the road decks' approaches (a road keeps its own ground,
@@ -1606,7 +1746,11 @@ function MapTerrain.River(terrain, parent, preset, radius, centers, townSpread, 
 								-- Never above the profile, never down at the waterline where the land was lower.
 								target = math.min(want, math.max(ground, 0.3))
 							elseif not keptOut(x, z) then
-								target = math.min(ground, want)
+								-- The rim rounded, but never down to the beach: rounding takes up to
+								-- a quarter of its width off the rim, so it narrows on low ground.
+								local low = math.min(ground, want)
+								local round = math.clamp(4 * (low - RIVER_BEACH_TOP), 0, RIVER_BANK_ROUND)
+								target = round > 0.5 and softMin(ground, want, round) or low
 							end
 							if target then
 								local deck = nearDeck(x, z)
@@ -1779,7 +1923,7 @@ MapTerrain.Patches = {
 	TralalaTown = {
 		{ Enum.Material.Asphalt, 3, 110 },
 		{ Enum.Material.Grass, 3, 150 },
-		{ Enum.Material.Concrete, 2, 100 },
+		{ Enum.Material.Limestone, 2, 100 },
 	},
 	BombardiroBay = {
 		{ Enum.Material.Salt, 2, 170 },
@@ -1787,8 +1931,8 @@ MapTerrain.Patches = {
 		{ Enum.Material.Grass, 2, 120 },
 	},
 	RotRidge = {
-		{ Enum.Material.Basalt, 3, 140 },
-		{ Enum.Material.Slate, 3, 120 },
+		{ Enum.Material.Mud, 3, 140 },
+		{ Enum.Material.Salt, 3, 120 },
 		{ Enum.Material.Ground, 2, 130 },
 	},
 	PatapimPlains = {
@@ -1842,8 +1986,8 @@ function MapTerrain.PaintPatches(terrain, preset, radius, centers, townSpread)
 		local extent = radius * 1.2
 		local region = Region3.new(Vector3.new(-extent, snowLine, -extent), Vector3.new(extent, 90, extent)):ExpandToGrid(4)
 		terrain:ReplaceMaterial(region, 4, base, Enum.Material.Snow)
-		terrain:ReplaceMaterial(region, 4, Enum.Material.Basalt, Enum.Material.Snow)
-		terrain:ReplaceMaterial(region, 4, Enum.Material.Slate, Enum.Material.Snow)
+		terrain:ReplaceMaterial(region, 4, Enum.Material.Mud, Enum.Material.Snow)
+		terrain:ReplaceMaterial(region, 4, Enum.Material.Salt, Enum.Material.Snow)
 	end
 end
 

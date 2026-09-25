@@ -530,7 +530,7 @@ local function islandTree(lot, x, z, y, group)
 			part(lot, "PalmFrond", Vector3.new(2, 0.3, 6.2), CFrame.new(crown) * CFrame.Angles(0, a, 0) * CFrame.Angles(math.rad(-16), 0, 0)
 				* CFrame.new(0, 0, -2.8), Color3.fromRGB(68, 140, 66), Enum.Material.Grass, { group = group, shadow = true })
 		end
-	elseif lot.terrain == Enum.Material.Ground or lot.terrain == Enum.Material.Rock then
+	elseif lot.terrain == Enum.Material.Ground or lot.terrain == Enum.Material.Rock or lot.terrain == Enum.Material.Limestone then
 		post(lot, "TreeTrunk", x, z, y - 0.4, 3.2, 0.9, TRUNK, Enum.Material.Wood, opts)
 		local ty = y + 2.4
 		for _, tier in ipairs({ { 3.6, 3.4 }, { 2.9, 3.2 }, { 2, 3 }, { 1.1, 2.6 } }) do

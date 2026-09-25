@@ -1684,7 +1684,10 @@ function RoadNetwork:GroundAt(x, z, natural)
 		return road, bestDistance <= HALF + 1.5 and Enum.Material.Asphalt
 			or (bestDistance <= HALF + SHOULDER and self.shoulderMaterial or self.apronMaterial)
 	end
-	local blend = math.clamp(difference * 2.2, 8, BLEND_MAX)
+	-- Wide enough to keep the bank under about 34 degrees, and its smoothstep's bend at the top
+	-- and the foot gentle (a bend of 6 * difference / blend^2 per stud, held to 1/32): a narrow blend
+	-- over a small difference was a kerb at the roadside for anything driving off the road.
+	local blend = math.clamp(math.max(difference * 2.2, math.sqrt(192 * difference)), 8, BLEND_MAX)
 	local t = (bestDistance - inner) / blend
 	if t >= 1 then
 		return nil

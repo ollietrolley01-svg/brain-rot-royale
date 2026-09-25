@@ -67,7 +67,9 @@ MapData.Maps = {
 		radius = 880,
 		towns = 5,
 		buildingsPerTown = { 4, 8 },
-		terrainMaterial = Enum.Material.Rock,
+		-- Limestone, not Rock: Rock draws its surface up to 1.1 studs off its voxels, a washboard under
+		-- every vehicle (RoadNetwork.SmoothMaterials). Limestone is the smooth stone.
+		terrainMaterial = Enum.Material.Limestone,
 		propDensity = 1.4,
 		wallMaterials = { Enum.Material.Cobblestone, Enum.Material.Slate, Enum.Material.Concrete },
 		wallColors = {
