@@ -48,7 +48,7 @@ G.LAG = LAG
 local function newFrame()
 	return { thinks = 0, rays = 0, raysBot = 0, unbudgeted = 0, overlaps = 0, blockcasts = 0, computeStarts = 0,
 		moveTos = 0, moveTosOutsideThink = 0, hostileAsks = 0, claims = 0, samples = 0, ms = 0,
-		mockMs = 0, denied = 0, sliceRays = 0, top = {} }
+		mockMs = 0, denied = 0, sliceRays = 0, runningEvents = 0, finishedEvents = 0, eventInstr = 0, top = {} }
 end
 LAG.newFrame = newFrame
 LAG.cur = newFrame()
@@ -138,8 +138,18 @@ function LAG.hookThread(co)
 end
 
 -- Threads and Heartbeat -----------------------------------------------------------------------------
--- A fresh world for the next scenario: no threads, no Heartbeat handlers, no players.
+-- A fresh world for the next scenario: no threads, no Heartbeat handlers, no players. Route computes
+-- still in flight from the last scenario are finished first (their results are thrown away, as
+-- BotNav.Clear expects): dropped unfinished, BotNav's in-flight count never came back down, and each
+-- later scenario ran with fewer route slots than MAX_CONCURRENT_PATHS.
+local COMPUTES = {}
 function LAG.resetWorld()
+	for co in pairs(COMPUTES) do
+		if coroutine.status(co) == "suspended" then
+			pcall(coroutine.resume, co)
+		end
+	end
+	COMPUTES = {}
 	THREADS, HB, PLAYER_LIST = {}, {}, {}
 end
 task.spawn = function(fn, ...)
@@ -165,6 +175,7 @@ local function stepThreads()
 			local ok, d = coroutine.resume(t.co)
 			if not ok then
 				table.insert(SIM.errors, "thread: " .. tostring(d))
+				d = 0 -- a dead thread: its error is recorded (E1), and it is dropped below
 			end
 			t.wake = G.CLOCK + (d or 0)
 			-- The think loop suspended while a think was still running: that think yielded.
@@ -219,7 +230,10 @@ function PathfindingService.CreatePath(_, agent)
 		if LAG.pathInFlight > LAG.pathInFlightMax then
 			LAG.pathInFlightMax = LAG.pathInFlight
 		end
+		local co = coroutine.running()
+		COMPUTES[co] = true
 		coroutine.yield(LAG.pathLatency)
+		COMPUTES[co] = nil
 		LAG.pathInFlight = LAG.pathInFlight - 1
 		local a = Vector3.new(from.X, 0, from.Z)
 		local b = Vector3.new(to.X, 0, to.Z)
@@ -410,10 +424,13 @@ function workspace.GetPartBoundsInRadius(_, point, radius, params)
 	local f = LAG.cur
 	f.overlaps = f.overlaps + 1
 	local leaf = leafGame(2)
-	if leaf then
+	-- Budgeted when RaycastBudget.Spend granted it just before (the driver's WRAP sets spendGranted);
+	-- otherwise it is outside the budget, like a ray cast round it.
+	if leaf and not LAG.spendGranted then
 		local key = "GetPartBoundsInRadius " .. leaf
 		LAG.unbudgeted[key] = (LAG.unbudgeted[key] or 0) + 1
 	end
+	LAG.spendGranted = false
 	local found = {}
 	local w = SIM.pointInWall(point, radius)
 	if w then
@@ -429,6 +446,7 @@ function SIM.makeCharacter(name, position, team)
 	local c = baseMake(name, position, team)
 	c.humanoid.HipHeight = 2
 	c.humanoid.MoveDirection = Vector3.zero
+	c.humanoid.ChangeState = function() end -- the stuck ladder's hop
 	c.humanoid.FloorMaterial = "Material.Grass"
 	c.root.Size = Vector3.new(2, 2, 1)
 	c.root.Anchored = false
@@ -442,6 +460,27 @@ function SIM.makeCharacter(name, position, team)
 		end
 		list[#list + 1] = G.CLOCK
 	end
+	-- The Humanoid events BotService/BotNav listen to: Running (speed, on a change of speed),
+	-- StateChanged (the sim never leaves Running, so it never fires) and MoveToFinished (reached).
+	local function signal()
+		local s = { handlers = {} }
+		function s.Connect(self, fn)
+			self.handlers[#self.handlers + 1] = fn
+			return { Disconnect = function() end, Connected = true }
+		end
+		function s.Fire(self, ...)
+			for _, fn in ipairs(self.handlers) do
+				local ok, err = pcall(fn, ...)
+				if not ok then
+					table.insert(SIM.errors, "humanoid event: " .. tostring(err))
+				end
+			end
+		end
+		return s
+	end
+	c.humanoid.Running = signal()
+	c.humanoid.StateChanged = signal()
+	c.humanoid.MoveToFinished = signal()
 	local moveTo = c.humanoid.MoveTo
 	c.humanoid.MoveTo = function(h, p)
 		LAG.cur.moveTos = LAG.cur.moveTos + 1
@@ -449,6 +488,7 @@ function SIM.makeCharacter(name, position, team)
 			LAG.cur.moveTosOutsideThink = LAG.cur.moveTosOutsideThink + 1
 		end
 		c.moveToAt = G.CLOCK
+		c.moveToFinished = false
 		return moveTo(h, p)
 	end
 	return c
@@ -467,7 +507,10 @@ function LAG.giveTracks(bot)
 	bot.currentTrack = nil
 end
 
--- After the sim moved everyone: MoveDirection is what the Humanoid reports while walking.
+-- After the sim moved everyone: MoveDirection is what the Humanoid reports while walking. Then the
+-- Humanoid's events, as Roblox fires them after its physics step: Running when the speed changed,
+-- MoveToFinished(true) once when the walk reached its MoveTo point (the sim stops within 0.5).
+-- Handlers run outside any think; their game-code instructions are counted in LAG.eventSamples.
 function LAG.afterMove(dt)
 	for _, c in ipairs(SIM.chars) do
 		if c.alive then
@@ -478,6 +521,36 @@ function LAG.afterMove(dt)
 			c.prevPos = c.root.Position
 		end
 	end
+	LAG.inEvent = true
+	local f = LAG.cur
+	-- Every VM instruction the handlers run (the mock signal and tracks included, so an overstatement).
+	local function counted(event, ...)
+		if LAG.profile then
+			debug.sethook(function() f.eventInstr = f.eventInstr + 1 end, "", 1)
+		end
+		event:Fire(...)
+		if LAG.profile then
+			debug.sethook()
+		end
+	end
+	for _, c in ipairs(SIM.chars) do
+		if c.alive and c.humanoid.Health > 0 then
+			local h = c.humanoid
+			if #h.Running.handlers > 0 and math.abs((c.speedNow or 0) - (c.reportedSpeed or -1)) > 0.01 then
+				c.reportedSpeed = c.speedNow
+				LAG.cur.runningEvents = LAG.cur.runningEvents + 1
+				counted(h.Running, c.speedNow)
+			end
+			local t = c.walkTarget
+			if t and not c.moveToFinished
+				and Vector3.new(t.X - c.root.Position.X, 0, t.Z - c.root.Position.Z).Magnitude <= 0.5 then
+				c.moveToFinished = true
+				LAG.cur.finishedEvents = LAG.cur.finishedEvents + 1
+				counted(h.MoveToFinished, true)
+			end
+		end
+	end
+	LAG.inEvent = false
 end
 
 -- A player: a token Combatants reads as a player, standing still, not hurt by anything.

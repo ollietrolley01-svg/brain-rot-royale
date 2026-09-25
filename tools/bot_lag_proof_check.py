@@ -45,6 +45,12 @@ Checks (each is an invariant the commits claim; --plant breaks each one in a cop
       flee, dodge or storm
   C1  every living bot's physics is re-claimed at least every 1 s + one think (85c3042)
   E1  no Lua error in any think
+  M1  #99: a bot on a route doesn't stand at a waypoint it reached waiting for its next think
+      (at most 1% of route frames; BotNav's MoveToFinished continuation)
+  M2  #99: the walk/run/idle track matches the motion (at most 2% of frames off; BotService's
+      Humanoid.Running / StateChanged handlers)
+  M3  #99: those Humanoid-event handlers stay cheap (see M3_PER_EVENT / M3_FRAME_SHARE)
+  R1 also covers FindCover's room check (GetPartBoundsInRadius), which spends the ray budget.
 
 What this does NOT measure: milliseconds on a Roblox server. A lupa instruction count or a lupa
 millisecond says where the work is and how it scales with N and with packing; it is not a Roblox
@@ -153,6 +159,7 @@ function LAGSCEN.setup(opts)
     LAG.pathInFlight, LAG.pathInFlightMax, LAG.pathStarted, LAG.mockTime = 0, 0, 0, 0
     LAG.slice, LAG.sliceSpent, LAG.sliceDenied0 = 0, 0, STATS.raysDenied or 0
     LAG.profile = opts.profile
+    LAG.spendGranted = false
     LAG.errors = {}
     LAG.move = {}
     for _, band in ipairs({ "near", "far" }) do
@@ -282,6 +289,18 @@ BotNav.Pump = function(...)
     LAG.sliceDenied0 = STATS.raysDenied or 0
     return realPump(...)
 end
+-- A spatial query that isn't a ray (FindCover's room check) spends the budget through BotNav.CastSpend:
+-- a grant counts toward the slice like a granted ray, and marks the query that follows as budgeted.
+local realSpend = BotNav.CastSpend
+BotNav.CastSpend = function(priority)
+    local granted = realSpend(priority)
+    if granted then
+        LAG.grants[#LAG.grants + 1] = { slice = LAG.slice or 0, n = LAG.sliceSpent, priority = priority or "navigation" }
+        LAG.sliceSpent = LAG.sliceSpent + 1
+        LAG.spendGranted = true
+    end
+    return granted
+end
 local realDefers = BotService.LodDefers
 BotService.LodDefers = function(bot, now)
     local deferred = realDefers(bot, now)
@@ -387,7 +406,8 @@ class Harness:
             f = lag.frames[i]
             frames.append({k: f[k] for k in ("thinks", "rays", "raysBot", "unbudgeted", "overlaps", "blockcasts",
                                              "computeStarts", "moveTos", "moveTosOutsideThink", "hostileAsks",
-                                             "claims", "samples", "ms", "mockMs", "sliceRays")}
+                                             "claims", "samples", "ms", "mockMs", "sliceRays", "runningEvents",
+                                             "finishedEvents", "eventInstr")}
                           | {"top": dict(f.top.items())})
 
         def pydict(t):
@@ -485,11 +505,9 @@ def checks(results):
                          f"(> {THINK_FRAMES * LOD_SKIP} frames)")
         if not plain:
             fails.append(f"T2 {name}: no bot thought twice")
-        # R1
+        # R1 (FindCover's room check, a GetPartBoundsInRadius, counts against the budget since #99's fix)
         if r["unbudgeted"]:
-            rays = {k: v for k, v in r["unbudgeted"].items() if not k.startswith("GetPartBoundsInRadius")}
-            if rays:
-                fails.append(f"R1 {name}: rays from bot code outside the budget: {rays}")
+            fails.append(f"R1 {name}: rays / spatial queries from bot code outside the budget: {r['unbudgeted']}")
         # R2
         cap = r["frameCap"]
         share = {"combat": 1, "navigation": 0.75, "idle": 0.5}
@@ -522,6 +540,8 @@ def checks(results):
             fails.append(f"C1 {name}: {len(unclaimed)} living bots never re-claimed")
         if late:
             fails.append(f"C1 {name}: a bot went {max(g[1] for g in late):.2f} s between claims (> {limit:.2f})")
+        # M1 / M2 / M3 (#99)
+        fails += movement_fails(name, r)
     # P2 proves something only where the route queue actually filled the in-flight cap (roam-30 does).
     if "roam-30" in results and max(r["pathInFlightMax"] for r in results.values()) < MAX_IN_FLIGHT:
         fails.append(f"P2: no scenario reached {MAX_IN_FLIGHT} computes in flight (the cap was not exercised)")
@@ -529,6 +549,59 @@ def checks(results):
     s = results.get("stress-50")
     if s and not any(d > 0 for _, d in s["slices"]):
         fails.append("R2 stress-50: the lowered cap never refused a ray (the budget was not exercised)")
+    return fails
+
+
+# #99, measured on main 68bb8de before the fix (reports/bot-lag-proof.md), and the bars now:
+#   M1  a bot on a route standing at a waypoint it reached, waiting for a think: 3.1% of route frames
+#       near a player (roam-30), 27-33% under LOD (spread-N far, roam-30 far). Now at most 1% in each
+#       of those rows. (stress-50 is left out: there the budget refuses on purpose and a refused bot
+#       stands; teams-30 has too few route frames to measure.)
+#   M2  the movement track against the motion: walk/run on 25-42% of standing frames near a player,
+#       idle on 5-22% of moving frames, and on 89% under LOD (roam-30 far). Now at most 2% of each,
+#       in every scenario and band with at least 300 such frames (stress-50 included).
+#   M3  what the fix costs: the Humanoid-event handlers (Running, MoveToFinished) run outside the
+#       think, so their work is new work. At most 300 VM instructions an event on average (mocks
+#       included; a think is about 4000), and a frame's events at most 15% of that scenario's worst frame
+#       of bot work. Measured after the fix: 47-159 an event, 0.7-3.5 events a bot-second, a frame's
+#       events at most 1.3 thousand against 25-209 thousand.
+M1_ROWS = [("roam-30", "near"), ("roam-30", "far"), ("spread-15", "far"), ("spread-30", "far"), ("spread-50", "far")]
+M1_MAX = 1.0
+M1_MIN_FRAMES = 500
+M2_MAX = 2.0
+M2_MIN_FRAMES = 300
+M3_PER_EVENT = 300
+M3_FRAME_SHARE = 0.15
+
+
+def movement_fails(name, r):
+    fails = []
+    for band in ("near", "far"):
+        m = r["move"][band]
+        if (name, band) in M1_ROWS and m["routedFrames"] >= M1_MIN_FRAMES:
+            share = 100 * m["stoppedRouted"] / m["routedFrames"]
+            if share > M1_MAX:
+                fails.append(f"M1 {name} {band}: routed bots stood at a reached waypoint on {share:.1f}% of route frames "
+                             f"(> {M1_MAX}%; {m['stops']} stops)")
+        if m["stillFrames"] >= M2_MIN_FRAMES:
+            share = 100 * m["animWrongStill"] / m["stillFrames"]
+            if share > M2_MAX:
+                fails.append(f"M2 {name} {band}: walk/run track on {share:.1f}% of standing frames (> {M2_MAX}%)")
+        if m["movingFrames"] >= M2_MIN_FRAMES:
+            share = 100 * m["animWrongMoving"] / m["movingFrames"]
+            if share > M2_MAX:
+                fails.append(f"M2 {name} {band}: idle track on {share:.1f}% of moving frames (> {M2_MAX}%)")
+    frames = r["frames"]
+    events = sum(f["runningEvents"] + f["finishedEvents"] for f in frames)
+    instr = sum(f["eventInstr"] for f in frames)
+    if events and instr:  # instructions are counted only on a profiled run
+        if instr / events > M3_PER_EVENT:
+            fails.append(f"M3 {name}: {instr / events:.0f} instructions a Humanoid event (> {M3_PER_EVENT})")
+        worst_events = max(f["eventInstr"] for f in frames)
+        worst_work = max(f["samples"] for f in frames) * 1000
+        if worst_work and worst_events > M3_FRAME_SHARE * worst_work:
+            fails.append(f"M3 {name}: a frame's Humanoid events ran {worst_events} instructions, "
+                         f"> {M3_FRAME_SHARE:.0%} of the worst frame's bot work ({worst_work})")
     return fails
 
 
@@ -619,7 +692,17 @@ def report(results):
               f"{(m['stoppedRouted'] / m['stops'] * 1000 / 60) if m['stops'] else 0:.0f} ms; walk/run track while standing "
               f"{100 * m['animWrongStill'] / max(1, m['stillFrames']):.1f}% of standing frames, idle track while moving "
               f"{100 * m['animWrongMoving'] / max(1, m['movingFrames']):.1f}% of moving frames; "
-              f"MoveTo outside a think {sum(f['moveTosOutsideThink'] for f in r['frames'])}")
+              f"MoveTo outside a think (continuing a route) {sum(f['moveTosOutsideThink'] for f in r['frames'])}")
+    print("--- #99 Humanoid events (Running, MoveToFinished) outside the think; instructions include the mocks")
+    for name, r in results.items():
+        frames = r["frames"]
+        run_ev = sum(f["runningEvents"] for f in frames)
+        fin_ev = sum(f["finishedEvents"] for f in frames)
+        instr = sum(f["eventInstr"] for f in frames)
+        print(f"  {name}: Running {run_ev}, MoveToFinished {fin_ev} in {r['seconds']} s "
+              f"({(run_ev + fin_ev) / r['seconds'] / r['n']:.1f} a bot-second); {instr / max(1, run_ev + fin_ev):.0f} instr an event, "
+              f"worst frame {max(f['eventInstr'] for f in frames)} instr against a worst frame of bot work of "
+              f"{max(f['samples'] for f in frames) * 1000}")
     print("--- linear scans of the whole combatant snapshot that remain (instruction samples, self)")
     for name, r in results.items():
         scans = {k: r["samplesSelf"].get(k, 0) for k in ("modeObjective", "BotService.Loot.threatened",
@@ -665,6 +748,14 @@ PLANTS = [
      "Y1: a think yields now and then"),
     (BOTSERVICE, "\tif now - (bot.claimedAt or 0) > 1 then\n", "\tif now - (bot.claimedAt or 0) > 3 then\n",
      "C1: physics re-claimed every 3 s, not every 1 s"),
+    (BOTSERVICE, "\tif bot.movementWatched ~= humanoid then\n\t\twatchMovement(bot, humanoid)\n",
+     "\tsetMovementTrack(bot, humanoid:GetState(), humanoid.MoveDirection.Magnitude * humanoid.WalkSpeed)\n\tif false then\n",
+     "M2: the movement track picked once a think, before its move (the #99 fault)"),
+    (BOTNAV, "\t\tif reached then\n\t\t\tcontinueRoute(bot, nav, humanoid, root)\n",
+     "\t\tif false then\n\t\t\tcontinueRoute(bot, nav, humanoid, root)\n",
+     "M1: a bot stands at each waypoint until its next think (the #99 fault)"),
+    (BOTNAV, "\t\t\t\t\t\t\tif not BotNav.CastSpend(priority) then\n\t\t\t\t\t\t\t\treturn nil, nil, \"budget\"\n\t\t\t\t\t\t\tend\n",
+     "", "R1: FindCover's room check outside the ray budget"),
 ]
 
 # The scenarios each plant needs (a plant's run is a subset, for time).

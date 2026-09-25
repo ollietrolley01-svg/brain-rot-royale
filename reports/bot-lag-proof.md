@@ -262,3 +262,30 @@ reads `BotService.Stats`.
 - **Memory.** I dropped KB per frame: lupa allocates a table for every Vector3 and Luau does not.
 - `tools/perf_bot_cost.py` still passes on main (0 failures). This check adds the whole-loop view; it doesn't replace
   those slice checks.
+
+## After the #99 fix (branch `pc/bot-movement-smooth`)
+
+Findings 3, 4 and 7 are fixed in the game code, and the check now holds them as passing rows (M1, M2, and
+R1 without its old GetPartBoundsInRadius exemption), each with a planted fault: 14/14 plants caught.
+
+- **Finding 3 (animation):** `BotService` picks the walk/run/idle/fall/jump track from the Humanoid's own
+  `Running` and `StateChanged` events (the ones a player's Animate script uses), hooked up on a bot's first
+  think; the think keeps only the gun pose. Harness: the wrong track on 0.0% of standing and moving frames
+  in every scenario (was 25-42% / 5-22% near, 89% idle-while-moving under LOD). Bar: at most 2%.
+- **Finding 4 (waypoint stops):** `BotNav` continues a route on `MoveToFinished`: a bot that reached the
+  waypoint Follow handed it in its latest think walks on to the next Walk waypoint of the same route. Any
+  later think, a new route, a detour, a climb, parkour, a seat or a jump waypoint leaves it for the think.
+  Harness: 0.0% of route frames in roam-30 near/far and spread-N far (was 3.1% / 27-33%). Bar: at most 1%.
+  teams-30 still shows 3.3% on 244 route frames (route ends, which aren't continued), and stress-50 stops
+  where the budget refuses, on purpose.
+- **Finding 7:** FindCover's room check spends the ray budget (`BotNav.CastSpend`) before its
+  `GetPartBoundsInRadius`, and gives up the search as "budget" when refused, like its rays.
+- **Cost (M3):** the event handlers run outside the think: 0.7-3.5 events a bot-second, 47-159 VM
+  instructions an event including the mocks (a think is about 4000), a frame's events at most 1.3
+  thousand instructions against 25-209 thousand of bot work.
+
+Harness fixes made on the way: BotNav's in-flight route count leaked from one scenario to the next
+(computes still yielding when the world was reset never finished), so later scenarios ran with fewer
+route slots; a thread that errored crashed the scheduler (its error text used as a wait time); the mock
+Humanoid had no `ChangeState` (the stuck ladder's hop). None of this is Roblox-measured: whether Running
+fires on the server for a server-owned bot as often as assumed, and how it looks, needs Studio / a playtest.

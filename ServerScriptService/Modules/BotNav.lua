@@ -43,7 +43,7 @@ BotNav.Stats = {
 	queueWait = 0, queueWaitMax = 0, queuePeak = 0,
 	fallbackMoves = 0, pathMoves = 0, lookAheads = 0, blocked = 0,
 	jumps = 0, sidesteps = 0, hops = 0, parkour = 0, parkourFromJump = 0, abandons = 0, recovers = 0,
-	directBlocked = 0, parkourAttempts = 0, waypointsSkipped = 0, offRoute = 0,
+	directBlocked = 0, parkourAttempts = 0, waypointsSkipped = 0, offRoute = 0, waypointsChained = 0,
 }
 local STATS = BotNav.Stats
 
@@ -677,6 +677,10 @@ function BotNav.FindCover(root, character, threatPosition, radii, isAllowed, thr
 						end
 						if floor and floor.Material ~= Enum.Material.Water and floor.Normal.Y >= WALKABLE_NORMAL_Y then
 							local stand = Vector3.new(point.X, floor.Position.Y + standing, point.Z)
+							-- The room check is a spatial query like a ray: it counts against the same budget.
+							if not BotNav.CastSpend(priority) then
+								return nil, nil, "budget"
+							end
 							if #workspace:GetPartBoundsInRadius(stand, 1.2, room) == 0 then
 								routed = stand
 							end
@@ -815,6 +819,47 @@ local function catchUpRoute(bot, root)
 	end
 end
 
+-- #99: a bot on a route used to stand at each waypoint until its next think handed it the next one
+-- (Jacob's harness: 3.1% of route frames near a player, 53 ms a stop; 27-33% under LOD, 166-189 ms).
+-- On arriving it now walks straight on to the next waypoint of the same route, as the next think's
+-- Follow would have. Nothing is decided here: it only continues a route Follow handed out in the
+-- bot's latest think, and only from the waypoint it handed. Any think since then (which may have
+-- sent the bot somewhere else), a new or dropped route, a detour, a climb or a jump waypoint next
+-- leaves it standing for the think, as before. Runs on MoveToFinished, a few times a second per
+-- walking bot, not per frame.
+local function continueRoute(bot, nav, humanoid, root)
+	local waypoints = nav.waypoints
+	if bot.nav ~= nav or not waypoints or nav.climbing or nav.detour or humanoid.Health <= 0 or humanoid.SeatPart
+		or (bot.thoughtAt or 0) > (nav.handedAt or -math.huge) or bot.character:GetAttribute("Parkour") then
+		return
+	end
+	local waypoint = waypoints[nav.index]
+	local following = waypoints[nav.index + 1]
+	if not waypoint or not following or nav.moveTarget ~= waypoint.Position
+		or following.Action ~= Enum.PathWaypointAction.Walk then
+		return
+	end
+	local position = root.Position
+	if flatDistance(position, waypoint.Position) >= ADVANCE_FLAT
+		or math.abs(waypoint.Position.Y - (position.Y - footHeight(bot.character, root))) >= ADVANCE_RISE then
+		return
+	end
+	nav.index += 1
+	nav.moveTarget = following.Position
+	STATS.pathMoves += 1
+	STATS.waypointsChained += 1
+	humanoid:MoveTo(following.Position)
+end
+
+local function watchArrivals(bot, nav, humanoid, root)
+	nav.chainHumanoid = humanoid
+	humanoid.MoveToFinished:Connect(function(reached)
+		if reached then
+			continueRoute(bot, nav, humanoid, root)
+		end
+	end)
+end
+
 -- Walk the route toward `goal`. Without a route (none yet, or it failed) this walks straight at the
 -- goal when the way looks clear, which is right for short hops and the best there is while a request
 -- waits its turn; when it doesn't, it stands and sets `nav.directBlockedAt`.
@@ -900,6 +945,10 @@ function BotNav.Follow(bot, humanoid, root, goal, now, priority)
 
 	STATS.pathMoves += 1
 	nav.moveTarget = waypoint.Position
+	nav.handedAt = now
+	if nav.chainHumanoid ~= humanoid then
+		watchArrivals(bot, nav, humanoid, root)
+	end
 	humanoid:MoveTo(waypoint.Position)
 	return true
 end
