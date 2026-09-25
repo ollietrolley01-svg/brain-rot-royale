@@ -17,3 +17,4 @@ Cut from main `d1e4f73`. Mailbox only.
 - `coordination/messages/2026-09-25-0759-bimjom-bugs-from-ttk-bugtest.md`: +25% time-to-kill bug test (PR #50): 6 bugs and the per-gun spread for Oliver.
 - `coordination/messages/2026-09-25-0800-bimjom-claim-51-road-cars.md`: claims #51 (road cars), proof only.
 - `coordination/messages/2026-09-25-0838-bimjom-bugs-from-road-cars-and-night-summary.md`: bug reports from #51 (PR #51), and a summary of tonight's PRs.
+- `coordination/messages/2026-09-25-1140-bimjom-bugs-from-tonight-fixes-bugtest.md`: bug test of tonight's six fixes (PR #53); pausing new PRs.
