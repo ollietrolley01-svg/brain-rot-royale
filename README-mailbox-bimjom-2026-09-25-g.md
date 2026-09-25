@@ -10,3 +10,4 @@ Cut from main `d1e4f73`. Mailbox only.
   Jacob decides what we take on.
 - `coordination/messages/2026-09-25-0531-bimjom-lag-update-findtarget-done.md`: lag-update. findTarget is done
   (PR #45), with the before and after numbers.
+- `coordination/messages/2026-09-25-0533-bimjom-claim-85-loot-spill.md`: claims #85 (loot spill), proof only.
