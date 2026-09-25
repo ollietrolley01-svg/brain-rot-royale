@@ -11,8 +11,8 @@ works out what each vehicle faces and holds the bands VehicleArmor's header sets
   BIKE    dies quicker than any car to the same rifle (under 6 s), and to 1-2 rockets
   ARMOUR  2-2.5x the average car's health; 40-50% off bullets; nothing off explosives; 5-6 rockets;
           its cabin protects the driver and passengers, never the gunner
-  GUNS    every turret kills a car inside 30 s of its own fire; a driver's gun alone takes 20 s or
-          more (it is a sidearm, not the car's answer to a car)
+  GUNS    very powerful (Oliver, 2026-09-25: "make sure the mounted guns on the ground and the cars are
+          very powerful"): every turret kills a car inside 8 s of its own fire, a driver's gun inside 12 s
   CRASH   a crash takes the same share of health it always did (armour takes less)
 
 Planted faults travel the same pipeline: VehicleArmor's SOURCE is edited and everything recomputed.
@@ -184,10 +184,10 @@ def measure(repo, armour_src=None, verbose=True):
             seconds += spec.rechargeDelay + left / min(spec.recharge, spec.fireRate)
         if verbose:
             print(f"  {model:16} {mount:6} {spec.id:26} {per:6.1f} a hit, {shots:3d} hits, {seconds:5.1f} s")
-        if mount == "turret" and seconds > 30:
-            problems.append(f"GUNS {model} turret: {seconds:.1f} s to kill a car on its own")
-        if mount == "driver" and seconds < 20:
-            problems.append(f"GUNS {model} driver's gun: kills a car in {seconds:.1f} s (it should be a sidearm)")
+        if mount == "turret" and seconds > 8:
+            problems.append(f"GUNS {model} turret: {seconds:.1f} s to kill a car on its own (band: under 8, very powerful)")
+        if mount == "driver" and seconds > 12:
+            problems.append(f"GUNS {model} driver's gun: {seconds:.1f} s to kill a car (band: under 12, very powerful)")
     if verbose:
         print("hand guns by class and tier (not staged), per second firing / with reloads, after the damage scale:")
         table = {}
