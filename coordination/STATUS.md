@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 03:00 (EDT).
+Last updated: 2026-09-25 03:15 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -31,6 +31,7 @@ Last updated: 2026-09-25 03:00 (EDT).
 | Jacob (bimjom) | playtime proof cut to the all-time rule | `task/playtime-proof-new-rule` (PR #38) | **Done, awaiting Oliver's merge** |
 | Jacob (bimjom) | #57/#110 roadkill proof | `task/prove-roadkill` (PR #39) | **Done, awaiting Oliver's merge.** Fires for player and bot drivers. Oliver's calls (03:00 message): spawn protection removed; armour protects riders; the damage scale applies with no driver. The build machine does the fixes |
 | Jacob (bimjom) | #113/#126/#131/#99 lag: **optimize**, not just prove | `task/prove-bot-lag` | Claimed 09-25 02:22. Game-file edits allowed for lag work only (rules in the 03:00 message) |
+| Jacob (bimjom) | #117 lobby trial-guns proof | `task/prove-trial-guns` | Claimed 09-25 02:22. Dropped at 03:00, **back on at 03:15** (Oliver: "continue doing these") |
 
 ## Recently changed on main: expect these to move under you
 
@@ -59,12 +60,18 @@ report it in the mailbox and don't edit.
 before/after numbers and a check; nothing lands until Oliver merges). Bugs go in the mailbox with the
 file and line. The build machine owns the fix.
 
-## What to work on (Oliver, 2026-09-25 03:00: "just have jacob run bug tests and optimizations for lag")
+## What to work on (Oliver, 2026-09-25 03:00 and 03:15)
 
-The task list is done. **Don't pick up OLIVER_LIST rows to prove.** Only two kinds of work:
+03:00: "just have jacob run bug tests and optimizations for lag". 03:15, on proving the unproven
+rows: "continue doing these". So there are three kinds of work:
 
-1. **Lag optimizations**: #113/#126/#131 bot lag and #99 movement, claimed by Jacob.
-2. **Bug tests on current main**: run the checks and harnesses and report new bugs. Start with what
+1. **Lag optimizations**: #113/#126/#131 bot lag and #99 movement, claimed by Jacob. Do this first.
+2. **Proving "in tree, unproven" rows**: a report and a check, no game files, one PR per row. Queue:
+   1. #117 lobby trial guns change every pickup (e666c61), claimed, Jacob
+   2. #85 chests and supply drops spill loot on the ground (3441c0f, d508889)
+   3. #51 old road cars can't be destroyed (21c6199, 81c1263, d2be199)
+   4. #114 popup barricade in the team kit, two KOTH objectives (7baed01)
+3. **Bug tests on current main**: run the checks and harnesses and report new bugs. Start with what
    landed tonight: silly explosions, all-wheel drive, the +25% time-to-kill (0.736), and the build
    machine's explosive, drop-picker and roadkill fixes when they land.
 
