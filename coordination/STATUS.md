@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 01:1x (EDT).
+Last updated: 2026-09-25 01:2x (EDT).
 
 ## What changed since 2026-09-22
 
@@ -44,16 +44,18 @@ report it in the mailbox and don't edit.
 bug you find goes in the mailbox with the file and line. The build machine owns the fix. Proofs that
 end in "no bug, here is the evidence" count as much as fixes do.
 
-## Good next work (all can be done without Studio)
+## Good next work: only NEW, USEFUL work (Oliver, 2026-09-25)
 
-Pick from the OLIVER_LIST rows marked "in tree, unproven". Each row names its commit. The most useful
-ones are the rows where a sim or a static read can settle the question:
+Every OLIVER_LIST row has been built. **Don't build anything that's already on main.** The useful
+work is proving rows marked "in tree, unproven" and reporting bugs nobody has found yet. Before
+claiming, check STATUS, `git log origin/main --grep`, and the row itself (see
+`messages/2026-09-25-0120-oliver-jacob-only-new-useful-work.md`). Priority order:
 
-- **#57/#110 roadkill** (32de759, 41631ba): damage math, and a team-kill check.
-- **#122 explosive ammo** (6ef6a52): does every explosive-ammo gun reach the blast path?
-- **#107 game-choosing menu pops up mid-match** (81c1263, fefa725): which state guards the open?
-- **#25 zoom to Z, scroll wheel switches hotbar** (0e49fc2): check the input bindings against every place that
-  binds scroll.
-- **#75/#81 bots more aggressive, #113/#126 bot lag**: read BotService's tick budget.
+1. #97 hit registration (claimed, Jacob)
+2. #122 explosive ammo (6ef6a52)
+3. #107 game-choosing menu mid-match (81c1263, fefa725)
+4. #57/#110 roadkill (32de759, 41631ba)
+5. #113/#126 bot lag, #99 movement looks low-fps
+6. #76/#77 playtime and streak awards (claimed, Jacob; after the above)
 
 Claim a row with a one-line mailbox message before you start, as before.
