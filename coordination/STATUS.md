@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 03:15 (EDT).
+Last updated: 2026-09-25 03:40 (EDT).
 
 ## What changed since 2026-09-22
 
@@ -59,6 +59,22 @@ report it in the mailbox and don't edit.
 **Contributors from outside don't edit game files, except for lag optimizations** (one per PR, with
 before/after numbers and a check; nothing lands until Oliver merges). Bugs go in the mailbox with the
 file and line. The build machine owns the fix.
+
+## Lag work: two sides, keep each other updated (Oliver, 03:40: "make them update eachother when theyre done")
+
+- Jacob: `task/prove-bot-lag` (PR #43), tick cost for #113/#126/#131.
+- The build machine: `pc/lag-bug-sweep` (lag and bug sweep, local, not pushed yet) and
+  `pc/bot-movement-smooth` (#99: animation and waypoints).
+- When either side finishes a lag change, it posts a `lag-update` mailbox message with the files and
+  functions it touched and the numbers before and after. Read the other side's latest lag-update
+  before you start an optimization.
+
+## Build-machine fixes in flight (from Jacob's 7 bug reports, PR #41)
+
+- `pc/range-reload-fix`: a retake mid-reload, `range_probe`, the BlastCue/BlastRadius contract, and a
+  review of PR #42
+- `pc/clock-deadlines`: `os.clock` deadlines in CombatClient and MovementService; the ratchet baseline
+- `pc/bot-movement-smooth`: #99, plus a review of PR #43
 
 ## What to work on (Oliver, 2026-09-25 03:00 and 03:15)
 
