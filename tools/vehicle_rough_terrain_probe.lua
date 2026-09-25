@@ -455,6 +455,36 @@ connection = RunService.Stepped:Connect(function(_, dt)
 				end
 			end
 			run.lastVy = v.Y
+			-- A course run sat still for 3 s: say what's holding it -- each wheel (down, load as a share of
+			-- the car's weight, compression against full travel) and what the body's colliders touch.
+			if not run.case and seg and forward < 1 then
+				run.stallFor = (run.stallFor or 0) + dt
+				if run.stallFor > 3 and not run.stallLogged then
+					run.stallLogged = true
+					local weight = chassis.AssemblyMass * GRAVITY
+					local wheels = {}
+					for _, wheel in ipairs(rig.wheels) do
+						table.insert(wheels, string.format("%s:%s/%.2f/%.2f", wheel.name, wheel.grounded and "down" or "up",
+							wheel.load / weight, wheel.compression / (rig.handling.travelUp + rig.handling.travelDown)))
+					end
+					local touching = {}
+					for _, hull in ipairs(rig.model:GetChildren()) do
+						if hull:IsA("BasePart") and hull.CanCollide then
+							for _, other in ipairs(hull:GetTouchingParts()) do
+								if not other:IsDescendantOf(rig.model) then
+									table.insert(touching, hull.Name .. ">" .. other.Name)
+								end
+							end
+						end
+					end
+					local look = cf.LookVector
+					out("stall %s %d s=%.0f seg=%s pitch=%.0f roll=%.0f wheels=%s touching=%s", run.label, math.floor(run.share * 100 + 0.5), s, seg,
+						math.deg(math.asin(math.clamp(look.Y, -1, 1))), math.deg(math.asin(math.clamp(-cf.RightVector.Y, -1, 1))),
+						table.concat(wheels, " "), #touching > 0 and table.concat(touching, ",") or "none")
+				end
+			else
+				run.stallFor = 0
+			end
 			-- Below the course's floor (its grass base is 12 deep) is not a vehicle result: the harness put it
 			-- somewhere with no ground, so it is reported as a HARNESS error, never as "unfinished".
 			if pos.Y < -14 or math.abs(pos.X - run.x) > run.halfWidth then
