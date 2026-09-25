@@ -24,6 +24,11 @@ Invariants:
      (the group holding the Chassis-welded parts) or a car wheel (a group with a Tyre in it: a car
      wheel turns free in its arch). A bike wheel must touch its fork or swingarm. Anything else is
      a floating part, reported with the pose it first floats in.
+     A moving assembly that touches what carries it at rest must still touch it in every pose. A car
+     wheel is carried by its arch, and with a long-travel suspension (up to 1.35 studs of droop since
+     the rough-ground pass, 52a5608) a drooped tyre hangs below the arch panels it touched at rest: it
+     is still in its arch while, seen from the side, its tyre overlaps a part of that arch (its
+     ArchPanel, Lip or Well). Below the lip and the well liner it has dropped out of the arch.
   3. BuildStatic (parked cars): the same, with every part anchored where it was built.
 
 Planted faults travel the real pipeline (edited source, rebuilt):
@@ -201,6 +206,14 @@ def wheel_transforms(model, handling, steer_deg, offset, spin):
     return T
 
 
+def side_overlap(wheel_part, body_part, lateral):
+    """Whether a car wheel's part overlaps a body part seen from the side (along `lateral`, the
+    chassis's X): the wheel part is slid sideways onto the body part's centre and tested there.
+    Droop moves a wheel along its hub's Y only, so this is the rest contact with its height let go."""
+    shift = lateral * float(np.dot(np.array(body_part["pos"]) - np.array(wheel_part["pos"]), lateral))
+    return ax.overlaps(dict(wheel_part, pos=list(np.array(wheel_part["pos"]) + shift)), body_part, TOUCH)
+
+
 def contacts(parts):
     """Every touching pair (i, j), i < j, among `parts` (within TOUCH)."""
     n = len(parts)
@@ -291,6 +304,7 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True, driver_arcs=None):
                 faults.append(f"{label}/{p['name']}: parked car part not anchored")
         # 2. Poses.
         poses = [("rest", model.chassis["rest"], {})]
+        dropped = set()  # the poses with the wheels hanging below where they were built
         if how == "drive":
             h = handling[model_id]
             moved = mul(translate(40, 3, -25), mul(angles(0.1, 0.8, -0.05), model.chassis["rest"]))
@@ -299,6 +313,8 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True, driver_arcs=None):
                 for offset, what in ((h["travelUp"], "compressed"), (-h["travelDown"], "extended")):
                     poses.append((f"steer {steer:+.0f} deg, suspension {what}", model.chassis["rest"],
                                   wheel_transforms(model, h, steer, offset, math.pi / 2)))
+                    if offset < 0:
+                        dropped.add(poses[-1][0])
             # Both weapons through their arcs: the turret (30-degree steps) and the driver's gun (10).
             for names, table, step, what in ((("TurretYaw", "TurretPitch"), arcs, 30, "turret"),
                                              (("DriverGunYaw", "DriverGunPitch"), driver_arcs or {}, 10, "driver gun")):
@@ -356,6 +372,18 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True, driver_arcs=None):
                 if not (pivot["radius"] and not bike) and not any(ax.point_distance(q, x) <= TOUCH for q in up for x in line):
                     faults.append(f"{label}/{pivot['name']}: turns about an axis clear of {parent_root}'s parts (nothing there to turn on)")
         # (c) Each moving assembly that touches what carries it at rest still touches it in every pose.
+        # A car wheel hanging on its droop is let off with the side view: still in its arch, not gone.
+        lateral = model.chassis["rest"][0][:, 0]
+        arch = {}  # car wheel -> (its tyre, the parts of its arch), by index in `shown`
+        if not bike:
+            for p in model.parts:
+                if p["radius"] and p["name"] + "_Tyre" in model.by:
+                    corner = re.escape(p["name"][len("Wheel_"):])
+                    tyre = [t for t, q in enumerate(shown) if q["name"] == p["name"] + "_Tyre"]
+                    parts = [a for a, q in enumerate(shown) if roots[a] == "Chassis"
+                             and re.fullmatch(rf"(ArchPanel|Lip){corner}\d+|Well{corner}", q["name"])]
+                    if tyre and parts:
+                        arch[p["name"]] = (tyre[0], parts)
         joins = {}
         for i, j in rest_pairs:
             for x, y in ((i, j), (j, i)):
@@ -380,6 +408,9 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True, driver_arcs=None):
                 if model.by[assembly]["ring"] and any(
                         (roots[i] == assembly and roots[j] in chains[assembly]) or (roots[j] == assembly and roots[i] in chains[assembly])
                         for i, j in pairs):
+                    continue
+                if (not (needed & pairs) and what in dropped and assembly in arch
+                        and any(side_overlap(posed[arch[assembly][0]], posed[a], lateral) for a in arch[assembly][1])):
                     continue
                 if not (needed & pairs) and ("join", assembly) not in seen:
                     seen.add(("join", assembly))
@@ -464,6 +495,14 @@ def main(repo="."):
         caught = [f for f in faults if tag in f]
         print(f"plant [{label}] on {model_id}: {'CAUGHT -- ' + caught[0] if caught else 'MISSED'}")
         failed |= not caught
+    # The side view lets a drooped car wheel hang in its arch, not out of it: 2 studs of droop drop the
+    # van's tyre tops (2.9 built) below the bottom of its arch lips (1.2), and that must still be caught.
+    old, new = "travelUp = 0.8, travelDown = 1.15,", "travelUp = 0.8, travelDown = 2.0,"
+    assert sources["VehicleDynamics"].count(old) == 1, f"plant anchor missing: {old!r}"
+    faults = run(dict(sources, VehicleDynamics=sources["VehicleDynamics"].replace(old, new)), only="SahurVan", verbose=False)
+    caught = [f for f in faults if "Wheel_FL: comes away" in f]
+    print(f"plant [a wheel drooping out of its arch] on SahurVan: {'CAUGHT -- ' + caught[0] if caught else 'MISSED'}")
+    failed |= not caught
     print("vehicle_models_runtime_check: " + ("FAIL" if failed else "OK"))
     return 1 if failed else 0
 
