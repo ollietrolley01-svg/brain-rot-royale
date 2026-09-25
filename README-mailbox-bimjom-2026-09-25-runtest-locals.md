@@ -13,3 +13,5 @@ Cut from main `d1e4f73`. Mailbox only.
   on main (10 wheel/arch faults at full steer), found during the seams work (PR #65).
 - `coordination/messages/2026-09-25-1811-bimjom-claims-studio-vehicle-work.md`: claims the handoff's Studio vehicle work,
   the runtest.ps1 locals fix, the runtime-check wheel faults, and renders for PRs #64 and #65.
+- `coordination/messages/2026-09-25-1833-bimjom-unclaim-vehicle-wip-items.md`: releases the three vehicle claims (they are
+  the reverted 14eebfd WIP on pc/vehicle-rest).
