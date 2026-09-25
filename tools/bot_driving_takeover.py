@@ -187,6 +187,7 @@ Players = { GetPlayerFromCharacter = function(_, c) return playersByCharacter[c]
 game = { GetService = function(_, n)
   if n == "Players" then return Players end
   if n == "RunService" then return { Heartbeat = { Connect = function(_, fn) HEARTBEAT = fn; return {} end } } end
+  if n == "CollectionService" then return { GetTagged = function() return {} end } end
   return {}
 end }
 function makeBody(name, at)
@@ -485,7 +486,10 @@ def build(sources):
     lua.execute(BS_PRELUDE)
     lua.execute(luau(vs_section(sources[VS])).replace("local function ", "function "))
     lua.execute("MODULES.VehicleService = VehicleService; MODULES.VehicleWeapons = { GunnerSeatOf = function(m) return m:FindFirstChild('GunnerSeat') end, DrivenBy = function() return nil end, AmmoOf = function() return 40, { kind = 'hitscan', magazine = 40 } end }")
-    lua.execute(luau(bs_section(sources[BS])) + "\n_G.Vehicles = Vehicles\n_G.VEHICLE = VEHICLE\n")
+    # BotDriveTactics (where the wheel goes near enemies), whole, as BotService lazy-loads it.
+    lua.globals().MODULES.BotDriveTactics = lua.execute(luau(read("ServerScriptService/Modules/BotDriveTactics.lua")))
+    lua.execute("function hostile() return true end\nfunction flatLook() return Vector3.new(0, 0, -1) end")
+    lua.execute(luau(bs_section(sources[BS])) +"\n_G.Vehicles = Vehicles\n_G.VEHICLE = VEHICLE\n")
     lua.execute(luau(vc_rule(sources[VC])).replace("local function mayTakeOver", "function CLIENT_MAY"))
     lua.execute(SCENARIOS)
     return lua
