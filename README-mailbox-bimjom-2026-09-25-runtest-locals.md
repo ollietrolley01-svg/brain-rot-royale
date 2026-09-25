@@ -15,3 +15,4 @@ Cut from main `d1e4f73`. Mailbox only.
   the runtest.ps1 locals fix, the runtime-check wheel faults, and renders for PRs #64 and #65.
 - `coordination/messages/2026-09-25-1833-bimjom-unclaim-vehicle-wip-items.md`: releases the three vehicle claims (they are
   the reverted 14eebfd WIP on pc/vehicle-rest).
+- `coordination/messages/2026-09-25-1918-bimjom-studio-batch-done.md`: the batch's four PRs (#64-#67) ready for review.
