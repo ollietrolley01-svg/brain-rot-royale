@@ -15,15 +15,22 @@ counted where every blast in the game announces itself: ProjectileService's expl
      route has to be in REVIEWED below, with the reason; a stale REVIEWED entry fails too.
   B. Hand guns through the real CombatService.Fire, table-driven over every gun A flagged, at: an enemy,
      a wall, bare map (terrain), a vehicle's hull, a pane with open air behind, a pane with a wall behind,
-     a team-mate in front of an enemy, a team-mate alone, and the open sky. Then stepped through the real
-     ProjectileService until every round has gone off. A streak gun (`collect`) is fired `every` - 1 and
-     `every` times at a target that lives through it: no blast, then one.
+     a team-mate in front of an enemy, a team-mate alone, the open sky, and (solo) a body in front with no
+     friendly-fire veto at all, as in the battle royale. Then stepped through the real ProjectileService
+     until every round has gone off. A bullet AND a round fly on through a team-mate (efccfa5; rounds since
+     pc/explosive-followups): at the enemy behind, and a team-mate alone is the open sky. With no veto the
+     round still stops on the body, as before. A streak gun (`collect`) is fired `every` - 1 and `every`
+     times at a target that lives through it: no blast, then one.
   C. The blast's rules on the real explode(): the struck enemy and a neighbour take splash, a team-mate
      beside the enemy takes none (the mode's veto, stood in for here as "same team"), the shooter beside a
      wall they shoot takes half.
   D. Vehicle and emplacement guns through the real VehicleWeapons.Fire, every spec.
   E. Bots: BotService's own shootAt (cut from the real file) for every flagged gun a bot may hold
-     (BotService.Loot.usable, also cut from the real file). Reported, not failed: see the FINDING line.
+     (BotService.Loot.usable, also cut from the real file). A bot's hitscan HIT with explosive ammo sets off
+     one blast a pellet on the target (Oliver, 2026-09-25), a MISS none.
+  F. Many pellets: the real BulletBlast splits a multi-pellet gun's blast (damage and wall damage over the
+     pellets, a smaller radius, never under 2 studs) and leaves a one-pellet gun's alone; a test shotgun
+     (the cannon's ammo on 4 pellets, added for this run only) fired at a wall makes 4 small blasts.
 
     python tools/explosive_dispatch_check.py .            the checks
     python tools/explosive_dispatch_check.py . --plant    the planted faults; every one must be caught
@@ -221,6 +228,8 @@ elseif case == "mate+enemy" then
 	who.mate = person("Mate", 0, -15, "A"); who.enemy = person("Enemy", 0, -30, "B"); stop = -29.4
 elseif case == "mate" then
 	who.mate = person("Mate", 0, -15, "A")
+elseif case == "solo" then
+	who.other = person("Other", 0, -15, "A")
 elseif case == "splash" then
 	-- the enemy struck, an enemy 2 studs to their side, a team-mate 2 studs to the other side
 	who.enemy = person("Enemy", 0, -30, "B"); who.near = person("Near", 2.5, -30, "B"); who.mate = person("Mate", -2.5, -30, "A"); stop = -29.4
@@ -234,6 +243,8 @@ CS.DamageDestructible = function() end
 CS.VehicleFromPart = function(p) return p.vehicle and p or nil end
 CS.DamageVehicle = function(_, _, _, class, id) table.insert(W.vehicleHits, { how = class, weaponId = id }) end
 CS.DamageVeto = function(a, v) return a ~= nil and a ~= v and a.team ~= nil and a.team == v.team end
+-- solo: the battle royale hangs no veto at all (GameMode clears it), so nobody is a team-mate.
+if case == "solo" then CS.DamageVeto = nil end
 CS.SpreadFor = function() return 0 end
 CS.DamageListeners = { function(a, v, amount, weaponId) table.insert(dealt, { a = a, v = v, amount = amount, weaponId = weaponId }) end }
 CS.SetEnabled(true)
@@ -316,7 +327,7 @@ return { ok = ok, why = why, blasts = blasts }
 """
 
 BOT_SCENE = r"""
-local w, S, shootAt, defId = ...
+local w, S, shootAt, defId, roll, env = ...
 local M, W = w.M, w.W
 local V3 = M.Vector3.new
 local PS = S.PS
@@ -337,17 +348,18 @@ W.tokens[tmodel] = target
 W.humanoids[target] = M.instance("Humanoid", "Humanoid", tmodel, { Health = 100, MaxHealth = 100 })
 local hits = 0
 S.CS.DealDamage = function() hits = hits + 1 return 1 end
+env.roll.v = roll or 0.01
 w.now.t = w.now.t + 60
 shootAt(bot, target, troot, 30, model:FindFirstChild("Head"))
 for _ = 1, 480 do
 	w.now.t = w.now.t + 1 / 60
 	PS.Step(1 / 60)
 end
-local blasts = 0
+local blasts, zs = 0, {}
 for _, f in ipairs(w.recorders.fired) do
-	if f.action == "detonate" then blasts = blasts + 1 end
+	if f.action == "detonate" then blasts = blasts + 1; table.insert(zs, f.info.position.Z) end
 end
-return { blasts = blasts, hits = hits }
+return { blasts = blasts, hits = hits, zs = zs }
 """
 
 
@@ -371,6 +383,8 @@ def bot_source(tree):
 BOT_ENV = r"""
 local w, S, block = ...
 local proxy = w.proxy
+-- The dice: every roll comes out at `roll.v` (0.01, a hit; 0.99, a miss), and a ranged roll at its low end.
+local roll = { v = 0.01 }
 local env = setmetatable({
 	CombatService = S.CS,
 	MatchConfig = S.module("MatchConfig"),
@@ -383,10 +397,12 @@ local env = setmetatable({
 	STATS = setmetatable({}, { __index = function() return 0 end }),
 	ARCH = { dialsOf = function() return { burst = { 3, 3 }, restScale = 1, aimLow = false } end },
 	tick = function() return w.now.t end,
-	-- every roll a hit: the question is where a HIT goes, not how often a bot lands one
-	math = setmetatable({ random = function(a, b) if a then return a end return 0.01 end }, { __index = math }),
+	-- the question is where a hit (or a miss) goes, not how often a bot lands one
+	math = setmetatable({ random = function(a, b) if a then return a end return roll.v end }, { __index = math }),
+	roll = roll,
 }, { __index = function(_, k) local v = _G[k] if v ~= nil then return v end return proxy(k) end })
-return assert(load(block, "BotService", "t", env))()
+local shootAt, usable = assert(load(block, "BotService", "t", env))()
+return shootAt, usable, env
 """
 
 
@@ -467,7 +483,7 @@ def inventory(S):
 
 # ---------------------------------------------------------------------------------------------- B, C
 
-CASES = ["enemy", "wall", "terrain", "vehicle", "glass", "glass+wall", "mate+enemy", "mate", "sky"]
+CASES = ["enemy", "wall", "terrain", "vehicle", "glass", "glass+wall", "mate+enemy", "mate", "sky", "solo"]
 
 
 def hand_guns(lua, w, S, hand):
@@ -508,6 +524,16 @@ def hand_guns(lua, w, S, hand):
                     ok = b is not None and abs(b["z"] - r["stop"]) < 1.0 and b["radius"] == d.splashRadius
                     rows.append((ok, "%s -> %s: burst at z %s (struck face z %.1f), radius %s (splashRadius %s)"
                                  % (g["id"], case, "%.2f" % b["z"] if b else "-", r["stop"], b["radius"] if b else "-", d.splashRadius)))
+            # A round flies on through its owner's team-mate (as a bullet does since efccfa5): with an enemy
+            # behind, every round bursts where it does on the enemy alone; a team-mate alone is the open sky.
+            zs = lambda case: sorted(round(b["z"], 1) for b in results[case]["blasts"].values())
+            rows.append((zs("mate+enemy") == zs("enemy"), "%s -> mate+enemy: bursts at z %s, as at the enemy alone (z %s): the round flew on through the team-mate"
+                         % (g["id"], zs("mate+enemy"), zs("enemy"))))
+            rows.append((zs("mate") == zs("sky"), "%s -> mate: bursts at z %s, as into the open sky (z %s): the team-mate stops nothing"
+                         % (g["id"], zs("mate"), zs("sky"))))
+            # No veto (the battle royale): the body in front stops the round, as it always has (it stands at z -15).
+            rows.append((len(zs("solo")) > 0 and all(z > -20 for z in zs("solo")), "%s -> solo: bursts at z %s, on or before the body at z -15 (no veto: nobody is flown through)"
+                         % (g["id"], zs("solo"))))
     # A streak gun (`collect`): its blast is the payout for `every` hits in a row, set on the target.
     for g in sorted(hand, key=lambda g: g["id"]):
         if g["route"] != "streak":
@@ -575,7 +601,7 @@ def vehicle_guns(lua, w, S, vehicle):
 # ---------------------------------------------------------------------------------------------- E
 
 def bots(lua, w, S, tree, hand):
-    shootAt, usable = lua.execute("return function(...) " + BOT_ENV + " end")(w, S, bot_source(tree))
+    shootAt, usable, env = lua.execute("return function(...) " + BOT_ENV + " end")(w, S, bot_source(tree))
     scene = lua.execute("return function(...) " + BOT_SCENE + " end")
     rows, findings = [], []
     real_deal = S.CS.DealDamage
@@ -587,17 +613,62 @@ def bots(lua, w, S, tree, hand):
             if not usable(d):
                 rows.append((True, "bot: %s is never held by a bot (BotService.Loot.usable says no)" % g["id"]))
                 continue
-            r = pyval(scene(w, S, shootAt, g["id"]))
+            r = pyval(scene(w, S, shootAt, g["id"], 0.01, env))
             line = "bot: %s fired by a bot at a target 30 studs off, a certain hit: %d blast(s), %d damage call(s)" % (g["id"], r["blasts"], r["hits"])
             if g["route"] == "streak":
                 rows.append((True, line + " (a streak blast needs 5 hits in a row; bots never run fireAbility)"))
-            elif r["blasts"] >= 1:
-                rows.append((True, line))
+            elif g["route"] == "round":
+                rows.append((r["blasts"] >= 1, line))
             else:
-                findings.append("FINDING  " + line + " -- a bot's hitscan shot never reaches the blast")
+                # A hitscan hit: one blast a pellet on the target's face toward the bot (root z -30, half a
+                # stud back), as a player's shot (Oliver, 2026-09-25). A miss: none, like a shot into the open.
+                zs = sorted(r["zs"].values())
+                ok = r["blasts"] == g["pellets"] and all(abs(z - (-29.5)) < 0.1 for z in zs)
+                rows.append((ok, line + ", want %d at z -29.5 (the target's face; root z -30): at z %s"
+                             % (g["pellets"], ", ".join("%.2f" % z for z in zs) or "-")))
+                miss = pyval(scene(w, S, shootAt, g["id"], 0.99, env))
+                rows.append((miss["blasts"] == 0, "bot: %s fired by a bot, a certain miss: %d blast(s) (a miss blows up nothing)" % (g["id"], miss["blasts"])))
     finally:
         S.CS.DealDamage = real_deal
     return rows, findings
+
+
+# ---------------------------------------------------------------------------------------------- F
+
+PELLET_PROBE = "ExplosiveDispatchProbeShotgun"
+
+
+def pellets(lua, w, S):
+    """Many pellets, many small blasts (Oliver, 2026-09-25): the real BulletBlast on the cannon's ammo."""
+    rows = []
+    cannon = S.WD.Get("GoldenSahurCannon")
+    ammo = cannon.explosiveAmmo
+    one = S.CS.BulletBlast(cannon)
+    rows.append((one.damage == ammo.damage and one.radius == ammo.radius and one.wallDamage == ammo.wallDamage,
+                 "pellets: a one-pellet gun's blast is its ammo, untouched: damage %s, radius %s, wall %s (ammo %s, %s, %s)"
+                 % (one.damage, one.radius, one.wallDamage, ammo.damage, ammo.radius, ammo.wallDamage)))
+    probe = lua.execute("return function(def) local t = {} for k, v in pairs(def) do t[k] = v end return t end")(cannon)
+    probe.id, probe.name, probe.spread = PELLET_PROBE, "Probe Shotgun", 0
+    for n in (2, 4, 10):
+        probe.pellets = n
+        b = S.CS.BulletBlast(probe)
+        ok = (abs(b.damage * n - ammo.damage) < 1e-6 and abs(b.wallDamage * n - ammo.wallDamage) < 1e-6
+              and 2 <= b.radius < ammo.radius)
+        rows.append((ok, "pellets: %d pellets -> each blast damage %s (x%d = %s), wall %s, radius %s (ammo %s, wall %s, radius %s: split over the pellets, smaller, at least 2)"
+                     % (n, b.damage, n, b.damage * n, b.wallDamage, b.radius, ammo.damage, ammo.wallDamage, ammo.radius)))
+    probe.pellets = 4
+    S.WD.Weapons[PELLET_PROBE] = probe
+    try:
+        scene = lua.execute("return function(...) " + SCENE + " end")
+        r = pyval(scene(w, S, PELLET_PROBE, "wall"))
+    finally:
+        S.WD.Weapons[PELLET_PROBE] = None
+    small = S.CS.BulletBlast(probe).radius
+    bl = list(r["blasts"].values())
+    ok = len(bl) == 4 and all(b["radius"] == small and abs(b["z"] - r["stop"]) < 0.05 for b in bl)
+    rows.append((ok, "pellets: a 4-pellet test gun on the cannon's ammo fired at a wall: %d blast(s), radius %s, at z %s (want 4, radius %s, at the face z %.1f)"
+                 % (len(bl), ",".join(str(b["radius"]) for b in bl) or "-", ",".join("%.2f" % b["z"] for b in bl) or "-", small, r["stop"])))
+    return rows
 
 
 # ---------------------------------------------------------------------------------------------- run
@@ -612,6 +683,7 @@ def run(root, swaps=None):
     rows += vehicle_guns(lua, w, S, vehicle)
     brows, findings = bots(lua, w, S, tree, hand)
     rows += brows
+    rows += pellets(lua, w, S)
     return rows, findings, table_
 
 
@@ -645,6 +717,22 @@ PLANTS = [
     ("a bullet that flew into the open sky explodes at its range", {"CombatService": [(
         "\t\tif not result then\n\t\t\tbreak\n\t\tend\n\n\t\tendPoint = result.Position\n\t\tstopped = result\n",
         "\t\tif not result then\n\t\t\tstopped = { Position = currentOrigin + direction * (def.range - travelled), Normal = -direction }\n\t\t\tbreak\n\t\tend\n\n\t\tendPoint = result.Position\n\t\tstopped = result\n")]}),
+    # pc/explosive-followups: Oliver's three rules of 2026-09-25.
+    ("a bot's hitscan hit never sets off its explosive ammo", {"BotService": [(
+        "\t\tif CombatService.BulletBlastAt and CombatService.BulletBlast(def) then\n\t\t\tlocal back = head.Position - targetRoot.Position",
+        "\t\tif false then\n\t\t\tlocal back = head.Position - targetRoot.Position")]}),
+    ("a bot's miss blows up where it lands", {"BotService": [(
+        "\tCombatService.BroadcastShot(bot, head.Position, { endPoint }, def.rarity)\n",
+        "\tCombatService.BroadcastShot(bot, head.Position, { endPoint }, def.rarity)\n\tif not hit then CombatService.BulletBlastAt(bot, def, endPoint, Vector3.new(0, 1, 0)) end\n")]}),
+    ("a launcher round bursts on a team-mate again", {"ProjectileService": [(
+        "\t\tlocal mate = mateInTheWay(entry, instance)\n", "\t\tlocal mate = nil\n")]}),
+    ("a launcher round flies through everyone in the battle royale", {"ProjectileService": [(
+        "\treturn CombatService.DamageVeto(owner, token, entry.weaponId) and model or nil\n",
+        "\treturn model\n"), (
+        "\tif entry.thrown or not CombatService.DamageVeto then\n\t\treturn nil\n\tend\n\tlocal owner = creditable(entry.owner)",
+        "\tif entry.thrown then\n\t\treturn nil\n\tend\n\tlocal owner = creditable(entry.owner)")]}),
+    ("a multi-pellet gun's blasts are each full size", {"CombatService": [(
+        "\tif pellets > 1 then\n\t\treturn {", "\tif false then\n\t\treturn {")]}),
 ]
 
 

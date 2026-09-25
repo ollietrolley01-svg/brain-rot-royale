@@ -329,6 +329,10 @@ end
 function Combatants.IsPlayer(token)
 	return type(token) == "table" and token.isPlayer == true
 end
+-- Asked by CombatService.BroadcastShot (a bot's shot names the bot's character as its source).
+function Combatants.IsBot(token)
+	return type(token) == "table" and token.isBot == true
+end
 function Combatants.GetName(token)
 	return type(token) == "table" and token.name or nil
 end

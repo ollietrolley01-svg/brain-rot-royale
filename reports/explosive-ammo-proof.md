@@ -280,3 +280,32 @@ lua static check: 438 files, 0 findings
 
 (`tools/clock_ratchet.py .` flags `StarterPlayerScripts/MountedGunClient.client.lua` on main. That
 predates this branch and is outside this brief.)
+
+## Fixed on pc/explosive-followups
+
+Oliver's decisions of 2026-09-25, built on this branch (merged with main after `68bb8de`). Measured with
+the two checks below, outside Studio; nothing here ran in Roblox.
+
+- **A bot's cannon shell explodes (For Oliver 1).** `BotService` `shootAt`: on a HIT, after
+  `DealDamage`, the bot sets off the same blast a player's bullet does (`CombatService.BulletBlastAt`,
+  which is `bulletBlast`), one per pellet, with the bot as owner, so the team veto and the owner's half
+  apply. The shot isn't traced, so the blast goes at the target's root moved half a stud toward the bot
+  (measured: z -29.50 for a root at -30). A MISS makes no blast. A shot the bot puts into cover
+  (`coverBetween`) blasts at the cover's hit point, as a player's shot into a barricade does. The
+  `FINDING` line is now an `ok` row and a hit with no blast fails.
+- **Launcher rounds fly through team-mates (For Oliver 3).** `ProjectileService` `sweep` skips a body
+  when `CombatService.DamageVeto(owner, victim, weaponId)` says no. That is the same veto DealDamage uses
+  and the same one bullets have followed since efccfa5 (`mateInTheWay`). Thrown things are unchanged,
+  and so is the battle royale, which has no veto. Measured: every launcher's `mate+enemy` bursts where
+  `enemy` does, `mate` alone matches `sky`, and the new `solo` case (no veto) still bursts on the body.
+- **Many-pellet explosive guns get small blasts (For Oliver 4).** `CombatService.BulletBlast`: with
+  `pellets > 1`, each pellet's blast gets the ammo's damage and wallDamage divided by the pellet count,
+  and half its radius, never under 2 studs. A one-pellet gun gets its ammo untouched. No gun data changed.
+- **A shot into the open (For Oliver 2):** unchanged. It still makes 0 blasts (rows `glass`, `mate`, `sky`).
+- **`tools/explosive_ammo_check.py` runs again.** Its section C now takes `ROOTS` from
+  DestructibleService's own line and stands in for DamageInRadius's other upvalues. Section A now reads the
+  merged table (65 guns) through this check's loader instead of a regex over WeaponData.lua, and a
+  plant on a pack gun (CreativeArsenal) is caught. B covers the pellet split.
+- **This check:** `explosive_dispatch_world.lua` gained `Combatants.IsBot`. `BroadcastShot` asks it since
+  main moved on, and without it the check crashed on main. New rows cover the three rules, and there are
+  5 new plants.

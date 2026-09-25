@@ -3,14 +3,16 @@
 Runs the real source, cut out function by function (CombatService uses Luau's `continue`, rewritten to
 a goto here), in lupa against tools/hitreg_mocks.lua:
 
-  A. WeaponData: which guns carry `explosiveAmmo`, and that each is small (radius 4-6 studs), well
-     below the gun's own damage, on a hitscan gun, and leaves the Golden Sahur Cannon's body shot short
-     of a kill as its comment wants.
+  A. WeaponData, the MERGED table (every pack: ArsenalExpansion, CreativeArsenal, WorkshopArsenal),
+     loaded for real the way tools/explosive_dispatch_check.py loads it: which guns carry `explosiveAmmo`,
+     and that each is small (radius 4-6 studs), well below the gun's own damage, on a hitscan gun, and
+     leaves the Golden Sahur Cannon's body shot short of a kill as its comment wants.
   B. CombatService.firePellet: one blast per bullet, where it stopped (the victim, the wall behind a
      broken pane), none for a bullet that flew off into the open or broke a pane and flew on, none for
      a gun without the ammo; the blast carries the ammo's numbers, not the bullet's; the pellet
-     hands its rewind instant (#97) to LagCompensation.Raycast untouched; and a bullet through a
-     team-mate (the mode's veto) flies on to the enemy behind them instead of stopping.
+     hands its rewind instant (#97) to LagCompensation.Raycast untouched; a bullet through a
+     team-mate (the mode's veto) flies on to the enemy behind them instead of stopping; and a gun with
+     several pellets makes a small blast a pellet (the ammo split over the pellets, a smaller radius).
   C. ProjectileService's blast (the one launchers use) as the ammo's blast drives it: damage falls off
      with distance to a fifth at the edge and nothing past it, cover stops it, the owner takes half,
      and DestructibleService.DamageInRadius hurts each wall pool within half the radius ONCE.
@@ -19,7 +21,8 @@ a goto here), in lupa against tools/hitreg_mocks.lua:
     python tools/explosive_ammo_check.py . --plant    the planted faults; every one must be caught
 
 Untested here: the blast's look and sound on clients (ProjectileClient "detonate", kind "impact"), and
-bots, which don't trace bullets (BotService rolls against accuracy), so a bot's cannon has no blast.
+bots, which don't trace bullets (BotService rolls against accuracy); a bot's cannon blast, launcher rounds
+and team-mates, and the whole fire path are tools/explosive_dispatch_check.py's.
 """
 
 import os
@@ -49,33 +52,41 @@ def cut(src, head):
 
 # ---------------------------------------------------------------------------------------------- A
 
-def weapons(root, text=None):
-    text = text or read(root, "ReplicatedStorage", "Shared", "WeaponData.lua")
-    body = text[text.index("WeaponData.Weapons = {"):]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import explosive_dispatch_check as dispatch  # noqa: E402  (Jacob's loader: the real WeaponData, every pack merged)
+
+
+def number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def weapons(root, swaps=None):
+    """Every hand gun in the merged table (WeaponData plus its packs), read from the real modules, not a
+    regex over WeaponData.lua: a pack gun given explosiveAmmo is checked like a stock one. `swaps`
+    ({ module: [(before, after)] }) plants a fault in the source first."""
+    _, _, S = dispatch.load_world(dispatch.Tree(root, swaps))
+    scale = S.module("MatchConfig").CombatDamageScale or 1
     rows = []
     examined = 0
-    for m in re.finditer(r"^\t(\w+) = \{\n(.*?)^\t\},", body, re.M | re.S):
+    for gid, d in sorted(S.WD.Weapons.items()):
         examined += 1
-        block = m.group(2)
-        ammo = re.search(r"explosiveAmmo = \{ damage = ([\d.]+), radius = ([\d.]+), wallDamage = ([\d.]+) \}", block)
-        if "explosiveAmmo" in block and not ammo:
-            rows.append((False, "%s: explosiveAmmo not in the { damage, radius, wallDamage } shape" % m.group(1)))
+        ammo = d.explosiveAmmo
+        if ammo is None:
             continue
-        if not ammo:
+        splash, radius, wall = ammo.damage, ammo.radius, ammo.wallDamage
+        if not (number(splash) and number(radius) and number(wall)):
+            rows.append((False, "%s: explosiveAmmo not in the { damage, radius, wallDamage } shape" % gid))
             continue
-        dmg = float(re.search(r"^\t\tdamage = ([\d.]+)", block, re.M).group(1))
-        splash, radius, wall = (float(x) for x in ammo.groups())
-        hitscan = "projectile =" not in block
-        rows.append((hitscan, "%s carries explosiveAmmo and is hitscan" % m.group(1)))
-        rows.append((4 <= radius <= 6, "%s blast radius %.1f studs (4-6)" % (m.group(1), radius)))
-        rows.append((splash <= dmg * 0.25, "%s splash %.0f against a %.0f bullet (at most a quarter)" % (m.group(1), splash, dmg)))
-        rows.append((wall > 0, "%s blast damages walls (%.0f)" % (m.group(1), wall)))
-        if m.group(1) == "GoldenSahurCannon":
-            scale = float(re.search(r"MatchConfig\.CombatDamageScale = ([\d.]+)", read(root, "ReplicatedStorage", "Shared", "MatchConfig.lua")).group(1))
+        dmg = d.damage
+        rows.append((d.projectile is None, "%s carries explosiveAmmo and is hitscan" % gid))
+        rows.append((4 <= radius <= 6, "%s blast radius %.1f studs (4-6)" % (gid, radius)))
+        rows.append((splash <= dmg * 0.25, "%s splash %.0f against a %.0f bullet (at most a quarter)" % (gid, splash, dmg)))
+        rows.append((wall > 0, "%s blast damages walls (%.0f)" % (gid, wall)))
+        if gid == "GoldenSahurCannon":
             total = (dmg + splash) * scale
-            rows.append((total < 100, "Cannon body shot + a centre-of-blast splash = %.1f (< 100: still not a one-shot)" % total))
+            rows.append((total < 100, "Cannon body shot + a centre-of-blast splash = %.1f (x CombatDamageScale %s; < 100: still not a one-shot)" % (total, scale)))
     flagged = sum(1 for ok, line in rows if "carries explosiveAmmo" in line)
-    rows.insert(0, (flagged > 0, "WeaponData: %d guns examined, %d carry explosiveAmmo" % (examined, flagged)))
+    rows.insert(0, (flagged > 0 and examined > 30, "WeaponData (merged, every pack): %d guns examined, %d carry explosiveAmmo" % (examined, flagged)))
     return rows
 
 
@@ -167,6 +178,13 @@ note(toEnemy == 1 and toMate == 0, string.format("a shot through a team-mate hit
 local total = 0
 for _ = 1, 8 do total = total + #shot(cannon, { hit(wall, -30) }) end
 note(total == 8, string.format("eight bullets into a wall: %d blasts (one each)", total))
+-- Many pellets (Oliver, 2026-09-25): each pellet's blast is small, the ammo split over the pellets and a
+-- smaller radius (never under 2 studs). firePellet runs once a pellet, so this is one pellet's blast.
+local shotgun = { id = "ProbeShotgun", damage = 10, range = 100, pellets = 4, explosiveAmmo = cannon.explosiveAmmo }
+b = shot(shotgun, { hit(wall, -30) })
+note(#b == 1 and b[1].damage * 4 == 12 and b[1].wallDamage * 4 == 60 and b[1].radius >= 2 and b[1].radius < 5,
+    string.format("a 4-pellet gun on the cannon's ammo: each pellet's blast damage %s, walls %s, radius %s (12, 60, 5 split over 4, smaller, at least 2)",
+        tostring(b[1] and b[1].damage), tostring(b[1] and b[1].wallDamage), tostring(b[1] and b[1].radius)))
 return out
 """
 
@@ -176,7 +194,8 @@ def pellet_source(root, src=None):
     parts = [
         cut(src, "local function buildRaycastParams("),
         cut(src, "local function fireAbility("),
-        cut(src, "function CombatService.BulletBlast("),
+        # BulletBlast with the pellet-blast constants above it.
+        cut(src, "local PELLET_BLAST_RADIUS_SCALE"),
         cut(src, "local function bulletBlast("),
         cut(src, "local function firePellet("),
     ]
@@ -245,10 +264,18 @@ local owner = { name = "owner" }
 local Ballistics = assert(load("local Ballistics = {}\n" .. ballistics .. "\nreturn Ballistics", "Ballistics", "t", _G))()
 local DestructibleService = { GlassName = "WindowGlass" }
 DestructibleService.Damage = function(part, amount) poolHits[part.pool] = (poolHits[part.pool] or 0) + 1 end
+DestructibleService.ClearCoverInRadius = function() end
+-- DamageInRadius's file-level upvalues (d370e62 on): ROOTS is the real table, cut from the file with the
+-- function; nothing here is big enough to be cut into tiles, and no part is the map's own structure.
 local denv = setmetatable({
     DestructibleService = DestructibleService,
     keyOf = function(part) return part.pool end,
     craterAt = function() end,
+    subdividable = function() return false end,
+    subdivide = function() return nil end,
+    tileAt = function() return nil, math.huge end,
+    entryFor = function() return nil end,
+    STRUCTURE = { blast = 1 },
     OverlapParams = { new = function() return {} end },
     Enum = M.Enum, workspace = M.workspace,
 }, { __index = _G })
@@ -359,7 +386,10 @@ def blast_sources(root, psrc=None, bsrc=None, dsrc=None):
     ballistics = "\n".join(re.findall(r"^Ballistics\.(?:BodyAllowance|EdgeScale) = [\d.]+$", bsrc, re.M))
     ballistics += "\n" + cut(bsrc, "function Ballistics.BlastScale(")
     dsrc = dsrc or read(root, "ServerScriptService", "Modules", "DestructibleService.lua")
-    destructible = luau_to_lua(cut(dsrc, "function DestructibleService.DamageInRadius("))
+    roots = re.search(r"^local ROOTS = .+$", dsrc, re.M)
+    if not roots:
+        sys.exit("explosive_ammo_check: DestructibleService's ROOTS moved; update the harness")
+    destructible = luau_to_lua(roots.group(0) + "\n" + cut(dsrc, "function DestructibleService.DamageInRadius("))
     return projectile, ballistics, destructible
 
 
@@ -372,19 +402,18 @@ def blasts(root, ammo=(12, 5, 60), **sources):
 
 
 def cannon_ammo(root):
-    text = read(root, "ReplicatedStorage", "Shared", "WeaponData.lua")
-    m = re.search(r"explosiveAmmo = \{ damage = ([\d.]+), radius = ([\d.]+), wallDamage = ([\d.]+) \}", text)
-    return tuple(float(x) for x in m.groups()) if m else (12, 5, 60)
+    _, _, S = dispatch.load_world(dispatch.Tree(root))
+    ammo = S.WD.Get("GoldenSahurCannon").explosiveAmmo
+    return (ammo.damage, ammo.radius, ammo.wallDamage) if ammo is not None else (12, 5, 60)
 
 
-def all_rows(root, weapon_text=None, combat=None, **sources):
-    return weapons(root, weapon_text) + pellets(root, combat) + blasts(root, cannon_ammo(root), **sources)
+def all_rows(root, weapon_swaps=None, combat=None, **sources):
+    return weapons(root, weapon_swaps) + pellets(root, combat) + blasts(root, cannon_ammo(root), **sources)
 
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "."
     if "--plant" in sys.argv:
-        wd = read(root, "ReplicatedStorage", "Shared", "WeaponData.lua")
         cs = read(root, "ServerScriptService", "Modules", "CombatService.lua")
         ps = read(root, "ServerScriptService", "Modules", "ProjectileService.lua")
         bs = read(root, "ReplicatedStorage", "Shared", "Ballistics.lua")
@@ -396,8 +425,13 @@ def main():
             return text.replace(before, after, 1)
 
         plants = [
-            ("a big blast (radius 12)", dict(weapon_text=swap(wd, "radius = 5, wallDamage", "radius = 12, wallDamage"))),
-            ("splash as big as the bullet", dict(weapon_text=swap(wd, "explosiveAmmo = { damage = 12,", "explosiveAmmo = { damage = 92,"))),
+            ("a big blast (radius 12)", dict(weapon_swaps={"WeaponData": [("radius = 5, wallDamage", "radius = 12, wallDamage")]})),
+            ("splash as big as the bullet", dict(weapon_swaps={"WeaponData": [("explosiveAmmo = { damage = 12,", "explosiveAmmo = { damage = 92,")]})),
+            # A pack gun (not in WeaponData.lua) given a big blast: the old regex over WeaponData.lua never saw it.
+            ("a pack gun with a big blast", dict(weapon_swaps={"CreativeArsenal": [(
+                "\t\tkillEffect = \"confetti\",\n\t\tdescription = \"A chunky bath-toy pistol",
+                "\t\tkillEffect = \"confetti\",\n\t\texplosiveAmmo = { damage = 12, radius = 12, wallDamage = 60 },\n\t\tdescription = \"A chunky bath-toy pistol")]})),
+            ("a multi-pellet gun's blasts each full size", dict(combat=swap(cs, "\tif pellets > 1 then\n\t\treturn {", "\tif false then\n\t\treturn {"))),
             ("the blast takes the bullet's damage", dict(combat=swap(cs, "damage = ammo.damage,", "damage = def.damage,"))),
             ("a pane counts as where the bullet stopped", dict(combat=swap(
                 cs,
