@@ -380,6 +380,12 @@ function DropMapService.Current()
 	if not map then
 		return nil
 	end
+	-- MapGenerator.Build parents the Map to the workspace first and fills it in over seconds of
+	-- yields; ZFightRemaining is the last thing it writes. A sample taken before that would be a
+	-- half-built picture, cached (by map instance) for the whole match, so there is none yet.
+	if map:GetAttribute("ZFightRemaining") == nil then
+		return nil
+	end
 	-- VoteService's resolution is cached until the next Open, and it is the very mapId MatchService
 	-- passed to MapGenerator.Build, so this is the built map's own preset — not a guess and not
 	-- anything a client sent.

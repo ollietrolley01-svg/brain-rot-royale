@@ -84,7 +84,11 @@ function RewardService.AwardPlacement(player, rank)
 	data.Stats.matches += 1
 	if rank == 1 then
 		data.Stats.wins += 1
-		GlobalBoardService.SubmitWins(player, data.Stats.wins)
+		-- Not from a profile that can't save: a failed load plays on a blank one, and its count would
+		-- overwrite the player's real all-time total on the global board.
+		if not PlayerData.HasStore() or PlayerData.CanSave(player) then
+			GlobalBoardService.SubmitWins(player, data.Stats.wins)
+		end
 	end
 
 	QuestService.Progress(player, "matches", 1)
@@ -255,17 +259,21 @@ function RewardService.TeamPerformanceValue(summary)
 end
 
 -- The end-of-match payout for a team mode. `outcome` is "win", "draw" or "loss"; `summary` is what the
--- player did (see TeamBreakdown). Counts the match played (Stats.matches, the matches quest) but never a
--- battle royale win. Returns the shape AwardPlacement does plus `lines`, the itemised breakdown the
--- results card lists; the lines always sum to `coins` and `xp` (a 2x SahurCoins pass is a line of its own).
+-- player did (see TeamBreakdown). Counts the match played (Stats.matches, the matches quest) unless the
+-- player idled, but never a battle royale win. Returns the shape AwardPlacement does plus `lines`, the
+-- itemised breakdown the results card lists; the lines always sum to `coins` and `xp` (a 2x SahurCoins
+-- pass is a line of its own).
 function RewardService.AwardTeamResult(player, outcome, rank, summary)
 	local data = PlayerData.Get(player)
 	if not data then
 		return nil
 	end
 	summary = summary or {}
-	data.Stats.matches += 1
-	QuestService.Progress(player, "matches", 1)
+	-- An idle player's match is not counted, as the battle royale's afk.award does not count one.
+	if not summary.afk then
+		data.Stats.matches += 1
+		QuestService.Progress(player, "matches", 1)
+	end
 
 	-- TEAM BONUS state: first win of the day, the win streak, the milestone cosmetics. An idle player earns
 	-- none of it, and breaks a streak.

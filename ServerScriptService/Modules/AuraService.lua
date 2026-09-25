@@ -45,6 +45,13 @@ function AuraService.Apply(player, character)
 		existing:Destroy()
 	end
 
+	-- A dead player's body stays as player.Character, hidden by DeathFx, until the match respawns
+	-- them. An equip while spectating must not hang a fresh glowing aura on that invisible corpse.
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return
+	end
+
 	local data = PlayerData.Get(player)
 	local auraId = data and data.Cosmetics.aura
 	local item = auraId and CosmeticData.Get(auraId)

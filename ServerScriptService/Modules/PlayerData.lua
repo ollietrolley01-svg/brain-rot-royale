@@ -494,7 +494,7 @@ local JOB_ID = game.JobId ~= "" and game.JobId or ("studio-" .. tostring(os.cloc
 -- Set only by _SetStoreForTest.
 local testMode = false
 
--- Per UserId: { data, version, saving, dirty, lost }.
+-- Per UserId: { data, version, saving, releasing, dirty, lost }.
 local state = {}
 -- How many players have been asked to rejoin because another server held their profile. A rising
 -- count in the logs means locks aren't being released.
@@ -593,10 +593,12 @@ function PlayerData.Load(player)
 	-- The UserId is only handed over AFTER that wait: writeOnce refuses any write once owners[] names
 	-- someone else, so claiming it first would make the previous session's release fail every retry
 	-- and the new session would load a profile missing everything since the last autosave.
+	-- `releasing` covers the gap where Release is parked behind an autosave: `saving` drops for a
+	-- moment there, and handing over then would orphan the release and lose its final write.
 	local previous = state[player.UserId]
-	if previous and previous.saving then
+	if previous and (previous.saving or previous.releasing) then
 		local waitUntil = wallNow() + LOCK_WAIT_SECONDS
-		while state[player.UserId] == previous and previous.saving and wallNow() < waitUntil do
+		while state[player.UserId] == previous and (previous.saving or previous.releasing) and wallNow() < waitUntil do
 			task.wait(0.1)
 		end
 	end
@@ -831,6 +833,11 @@ function PlayerData.Release(player)
 	-- autosave is in flight, saveInternal waits for it rather than coalescing: a coalesced release would
 	-- leave the lock held until it went stale, and the player would be turned away from their next
 	-- server for up to LOCK_STALE_SECONDS.
+	-- Marked first so a rejoin's Load waits for this release, not just for the save it may be queued behind.
+	local session = state[player.UserId]
+	if session then
+		session.releasing = true
+	end
 	saveInternal(player, true)
 	-- Checked again: the save above yields, and a rejoin during it hands the UserId to a new session
 	-- whose tables these now are.

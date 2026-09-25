@@ -14,6 +14,7 @@ local ItemData = require(Shared:WaitForChild("ItemData"))
 local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local SafeValue = require(Shared:WaitForChild("SafeValue"))
+local WeaponData = require(Shared:WaitForChild("WeaponData"))
 
 local BotService = require(script.Parent:WaitForChild("BotService"))
 local DeathFxService = require(script.Parent:WaitForChild("DeathFxService"))
@@ -96,6 +97,13 @@ function afk.sample(player)
 	local record = afk.record(player)
 	local root = Combatants.GetRoot(player)
 	local position = root and root.Position
+	-- With no earlier position there is nothing to have moved from: the first check only sets the
+	-- baseline, unless they were already busy. Counting it idle made anyone killed between their first
+	-- and second checks (a hot drop's fight) AFK.
+	if record.last == nil and not record.busy then
+		record.last = position
+		return
+	end
 	local moved = position ~= nil and record.last ~= nil and (position - record.last).Magnitude >= afk.moveStuds
 	record.samples += 1
 	if moved or record.busy then
@@ -103,6 +111,17 @@ function afk.sample(player)
 	end
 	record.last = position
 	record.busy = false
+end
+
+-- Nobody dead is checked again, so a fight since their last check (it set `busy`) counts as one more
+-- active check at their elimination.
+function afk.settle(player)
+	local record = afk.players[player]
+	if record and record.busy then
+		record.samples += 1
+		record.active += 1
+		record.busy = false
+	end
 end
 
 function afk.isIdle(player)
@@ -193,6 +212,9 @@ CombatService.OnDamage(function(attacker, victim, dealt)
 	end
 end)
 local aliveCount = 0
+-- How many combatants this match started with (startMatch, less any bot that failed to build): the
+-- results card's "of N", which a leaver must not shrink.
+local matchField = 0
 local placements = {}
 local deathConnections = {}
 local baseSpeeds = {}
@@ -313,7 +335,9 @@ function MatchService.PlaceInLobby(player)
 	if humanoid then
 		baseSpeeds[player] = MatchConfig.BaseWalkSpeed
 		humanoid.WalkSpeed = MatchConfig.BaseWalkSpeed
-		humanoid.MaxHealth = MatchConfig.StartHealth
+		-- Plus a companion health boon already on this body (it can land on CharacterAdded first, as
+		-- applyBoosts notes): a plain write wiped it, and unequipping later took it off base max HP.
+		humanoid.MaxHealth = MatchConfig.StartHealth + CompanionService.BoonHealth(player, humanoid)
 		humanoid.Health = MatchConfig.StartHealth
 	end
 	character:PivotTo(lobbyCFrame())
@@ -663,7 +687,8 @@ local staminaSync = Remotes.Event("StaminaSync")
 MatchService.StaminaTestMode = false
 
 local function staminaApplies(token)
-	return MatchService.StaminaTestMode or (state == "InProgress" and participants[token] == true)
+	-- Not for a participant who pressed LEAVE while spectating: they are on a lobby body now.
+	return MatchService.StaminaTestMode or (state == "InProgress" and participants[token] == true and not leftSpectate[token])
 end
 
 local function isRushing(token)
@@ -1267,7 +1292,12 @@ local function finishMatch()
 		end
 	end
 
-	local total = countKeys(participants)
+	-- The field the match started with: `participants` has lost everyone who left, so a player who
+	-- stayed could read "#50 of 49". Never below a rank that was handed out.
+	local total = math.max(matchField, countKeys(participants))
+	for _, rank in pairs(ranks) do
+		total = math.max(total, rank)
+	end
 
 	-- Who actually won, so everyone gets closure rather than just their own placement.
 	local winnerName, winnerIsBot = nil, false
@@ -1477,10 +1507,21 @@ end
 -- of kit guns in a mode that hands one out every five seconds - but everything picked up during the
 -- match still drops, players and bots through this one rule. The kit is tagged where it is issued:
 -- ModeTeams.GrantLoadout marks a player's slots `issued`, and the spawn callbacks record a bot's
--- `issuedWeaponId` (a bot's kit items are never consumed today, so what it holds was picked up). A
+-- `issuedWeaponId` and, through noteIssuedKit, its issued heal and defense counts. A
 -- pickup that displaced an issued slot is untagged and drops; ammo picked up INTO an issued gun stays
 -- with it. Bots track a magazine but no reserve, so a dropped bot gun comes down full, the way the
 -- battle royale's do. Coins, XP and mastery are untouched: this is loot, not the reward economy.
+--
+-- BotService puts the kit's Bandages and structures into the same counters chest pickups fill, so
+-- every kit-mode bot death used to drop a heal and a barricade stack. What the counters held at spawn
+-- is recorded here and only what is over it drops (a bot that used kit items and then picked some up
+-- is under-counted, never over).
+local function noteIssuedKit(bot)
+	local heals = bot.heals
+	bot.issuedHeals = heals and (heals.Bandage or 0) + (heals.MedKit or 0) or 0
+	bot.issuedDefenses = bot.defenses or 0
+end
+
 local function dropPickedUp(token)
 	local position = deathSpot(token)
 	if not position then
@@ -1494,15 +1535,16 @@ local function dropPickedUp(token)
 			dropSafely(LootService.DropWeapon, token.backup.id, position)
 		end
 		local heals = token.heals
-		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > 0 then
+		if heals and (heals.Bandage or 0) + (heals.MedKit or 0) > (token.issuedHeals or 0) then
 			dropSafely(LootService.DropHeal, position)
 		end
 		local shields = token.shields
 		if shields and (shields.MiniShield or 0) + (shields.ShieldPotion or 0) > 0 then
 			dropSafely(LootService.DropItem, (shields.ShieldPotion or 0) > 0 and "ShieldPotion" or "MiniShield", position, 1)
 		end
-		if (token.defenses or 0) > 0 then
-			dropSafely(LootService.DropItem, "RotBarricade", position, token.defenses)
+		local pickedDefenses = (token.defenses or 0) - (token.issuedDefenses or 0)
+		if pickedDefenses > 0 then
+			dropSafely(LootService.DropItem, "RotBarricade", position, pickedDefenses)
 		end
 		return
 	end
@@ -1523,6 +1565,10 @@ local function eliminate(token, killerToken, method, weaponId)
 	if not alive[token] then
 		return
 	end
+	-- A Gold Rush gun's kill bonus, paid below with the kill credit and under its guards (in a respawn
+	-- mode its cap and scale). OnElimination used to pay it with none, so replaced bots could be farmed.
+	local gun = type(weaponId) == "string" and WeaponData.Get(weaponId) or nil
+	local goldRush = gun and gun.ability == "goldRush" and (gun.goldRushBonus or 100) or nil
 
 	-- S7. Team Deathmatch and King of the Hill: a death is not an elimination. The mode scores it
 	-- and brings the player back, and none of the placement path below applies — there is no rank,
@@ -1555,6 +1601,11 @@ local function eliminate(token, killerToken, method, weaponId)
 				if MatchService.OnKillCredited then
 					pcall(MatchService.OnKillCredited, killerToken, token, weaponId)
 				end
+				-- Gold Rush under the same cap and scale as the kill itself.
+				local bonus = goldRush and math.floor(goldRush * (rules.killScale or 0.5) + 0.5) or 0
+				if bonus > 0 then
+					pcall(RewardService.AwardBonusCoins, killerToken, bonus, "Gold Rush")
+				end
 			end
 		end
 		currentMode.OnDeath(token, killerToken, method, weaponId)
@@ -1567,6 +1618,7 @@ local function eliminate(token, killerToken, method, weaponId)
 	alive[token] = nil
 	placements[token] = aliveCount
 	aliveCount -= 1
+	afk.settle(token)
 	disconnectDeath(token)
 	CombatService.ClearAttacker(token)
 
@@ -1599,6 +1651,9 @@ local function eliminate(token, killerToken, method, weaponId)
 		local ok, err = pcall(RewardService.AwardKill, killerToken, Combatants.IsBot(token))
 		if not ok then
 			warn("[MatchService] kill reward failed: " .. tostring(err))
+		end
+		if goldRush then
+			pcall(RewardService.AwardBonusCoins, killerToken, goldRush, "Gold Rush")
 		end
 		-- Set by Bootstrap to ProgressionService.OnKillCredited (gun mastery). It ignores anything
 		-- that isn't a WeaponData gun: companions, barrels and mines.
@@ -1667,10 +1722,6 @@ local function eliminate(token, killerToken, method, weaponId)
 end
 
 CombatService.OnElimination = function(victim, killer, weaponDef, weaponId)
-	if weaponDef and weaponDef.ability == "goldRush" and Combatants.IsPlayer(killer) then
-		RewardService.AwardBonusCoins(killer, weaponDef.goldRushBonus or 100, "Gold Rush")
-	end
-
 	-- For the kill feed: the gun's name, the companion brainrot that landed the last hit, the barrel
 	-- or mine that went up, or the thrown item (ItemData throwables). The hazardKills quest stays
 	-- barrels and mines only.
@@ -1683,6 +1734,7 @@ CombatService.OnElimination = function(victim, killer, weaponDef, weaponId)
 	if hazard and Combatants.IsPlayer(killer) and killer ~= victim then
 		QuestService.Progress(killer, "hazardKills", 1)
 	end
+	-- A Gold Rush gun's bonus is paid inside eliminate, with the kill credit and under its guards.
 	eliminate(victim, killer, method, weaponId)
 end
 
@@ -1711,6 +1763,10 @@ GameMode.Bind({
 		participants[token] = true
 		alive[token] = true
 		aliveCount += 1
+		-- A replacement bot has just been issued its kit (GameMode's spawn callback calls this).
+		if Combatants.IsBot(token) then
+			noteIssuedKit(token)
+		end
 		watchDeath(token, humanoid)
 		broadcast()
 		return true
@@ -1863,6 +1919,7 @@ local function startMatch()
 		MatchConfig.MaxPlayers
 	)
 	local total = #joining + botCount
+	matchField = total
 
 	-- Count bots into the alive tally up front so early deaths can't hand out rank #1 while
 	-- the backfill is still spawning.
@@ -2052,6 +2109,12 @@ local function startMatch()
 				-- The gun SpawnLoadout issued (it runs before this callback): a death in a kit mode drops
 				-- the held gun only if it is a different one (dropPickedUp, Oliver's #124).
 				bot.issuedWeaponId = bot.weapon and bot.weapon.id or nil
+				noteIssuedKit(bot)
+				-- Shield Up: "Everyone starts with 50 shield", bots too (a bot's shield is this attribute,
+				-- which BotService zeroes at spawn). Never lowered, as for players.
+				if currentEvent and currentEvent.startShield and humanoid then
+					humanoid:SetAttribute("Shield", math.max(humanoid:GetAttribute("Shield") or 0, currentEvent.startShield))
+				end
 				-- S12c. WITHOUT THIS LINE a bot enters Team Deathmatch and King of the Hill with no
 				-- team at all: killing it scores nothing, it is never retired or replaced, the hill
 				-- never counts it, the spawn-pad enemy scan cannot see it, and it has no team
@@ -2071,10 +2134,14 @@ local function startMatch()
 			local missing = botCount - #spawned
 			if missing > 0 then
 				aliveCount -= missing
+				matchField -= missing
 			end
 
 			BotService.Start()
 			broadcast()
+			-- The reconcile can leave one combatant (a solo player whose bots all failed to build), and
+			-- nothing else would end the match until they died; refused unless InProgress.
+			concludeIfOver()
 		end)
 	end
 
@@ -2153,6 +2220,10 @@ function MatchService.OnCharacterAdded(player, character)
 	end)
 
 	MatchService.PlaceInLobby(player)
+	-- The lobby speed through the composition, not PlaceInLobby's plain write, which dropped a
+	-- companion speed boon applied first until the next sprint toggle (applySpeed is defined below
+	-- PlaceInLobby, so it is called here).
+	applySpeed(player)
 end
 
 function MatchService.OnPlayerRemoving(player)
@@ -2295,9 +2366,20 @@ function MatchService.Start()
 							-- A generation failure can leave a half-built map behind.
 							MapGenerator.Clear()
 							mapInfo = nil
+							-- startMatch set the event's gravity before the map build that can throw; only
+							-- finishMatch put it back, so a failed Low Gravity start left the lobby at half.
+							-- And a respawn mode that got as far as StartWorld keeps running until stopped, as
+							-- do the mounted guns OnMapBuilt put up (OnMatchEnd is OnMatchStart's pair).
+							workspace.Gravity = NORMAL_GRAVITY
+							pcall(currentMode.StopWorld)
+							if MatchService.OnMatchEnd then
+								pcall(MatchService.OnMatchEnd)
+							end
 							participants, alive, placements = {}, {}, {}
 							aliveCount = 0
 							table.clear(leftSpectate)
+							-- Nobody is in a match now (startMatch may already have tagged the joiners).
+							tagInMatch(Players:GetPlayers())
 							state = "Waiting"
 							-- A throw inside the drop window unwinds past its `dropSelect = false`, and left set it
 							-- rode every later broadcast: the picker opened over the lobby and over every team match

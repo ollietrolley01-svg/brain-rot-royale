@@ -234,9 +234,12 @@ local function showHeat(s, now)
 	glow = math.floor(glow * 20 + 0.5) / 20
 	if glow ~= s.glow then
 		s.glow = glow
-		for _, h in ipairs(s.heatParts) do
-			h.part.Color = h.color:Lerp(HOT, glow * 0.85)
-			h.part.Material = glow > 0.6 and Enum.Material.Neon or h.material
+		-- A wreck keeps the char MountedGuns' breakGun gave it: h.color/h.material are from before the break.
+		if not s.model:GetAttribute("Wrecked") then
+			for _, h in ipairs(s.heatParts) do
+				h.part.Color = h.color:Lerp(HOT, glow * 0.85)
+				h.part.Material = glow > 0.6 and Enum.Material.Neon or h.material
+			end
 		end
 	end
 	local steam = (hot or glow > 0.4) and steamFor(s.model, s)
@@ -351,8 +354,9 @@ local function muzzleNear(origin)
 	return nil
 end
 
-Remotes.Event("ShotFired").OnClientEvent:Connect(function(_shooter, origin, endPoints, _rarity, segment)
-	if segment or typeof(origin) ~= "Vector3" or type(endPoints) ~= "table" then
+Remotes.Event("ShotFired").OnClientEvent:Connect(function(_shooter, origin, endPoints, _rarity, segment, source)
+	-- Only a mount's shot (VehicleWeapons sends source "mount"): a hand gun fired from beside a muzzle is not one.
+	if segment or source ~= "mount" or typeof(origin) ~= "Vector3" or type(endPoints) ~= "table" then
 		return
 	end
 	local model = muzzleNear(origin)
@@ -515,11 +519,15 @@ local function bindGunner(model)
 	if model == boundTo then
 		return
 	end
+	local was = boundTo
 	boundTo = model
 	ContextActionService:UnbindAction(GUNNER_BUTTONS.reload.action)
 	ContextActionService:UnbindAction(GUNNER_BUTTONS.leave.action)
 	if hiddenPrompt then
-		hiddenPrompt.Enabled = true
+		-- Not on a wreck: the server turned its prompt off when the gun broke, and this would turn it back on.
+		if hiddenPrompt.Parent and was and was.Parent and not was:GetAttribute("Wrecked") then
+			hiddenPrompt.Enabled = true
+		end
 		hiddenPrompt = nil
 	end
 	if not model then

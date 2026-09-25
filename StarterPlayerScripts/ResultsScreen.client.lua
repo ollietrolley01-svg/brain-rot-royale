@@ -120,11 +120,24 @@ local card = create("Frame", {
 local cardStroke = card:FindFirstChildOfClass("UIStroke")
 local cardScale = create("UIScale", { Parent = card })
 
--- Fits the card to the screen: full size on a desktop, smaller on a phone.
+-- Fits the card to the screen: full size on a desktop, smaller on a phone. Also returns the card's
+-- height at a scale of 1, read off its last layout: its width there says the scale that layout used,
+-- where UIScale.Scale may have moved on since (mid-tween). 0 before its first layout, so floored at 400.
 local function fitScale()
 	local viewport = camera.ViewportSize
-	local height = math.max(card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01), 400)
-	return math.clamp(math.min((viewport.X - 24) / CARD_WIDTH, (viewport.Y - 24) / height), 0.45, 1)
+	local size = card.AbsoluteSize
+	local height = math.max(size.X > 0 and size.Y * CARD_WIDTH / size.X or 0, 400)
+	return math.clamp(math.min((viewport.X - 24) / CARD_WIDTH, (viewport.Y - 24) / height), 0.45, 1), height
+end
+
+-- The fit of the card on screen: the show it belongs to, the height it was fitted to, its pop-in.
+local fit = { token = 0, height = 0, target = 1 }
+
+local function popIn(target)
+	fit.target = target
+	cardScale.Scale = target * 0.85
+	fit.tween = TweenService:Create(cardScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = target })
+	fit.tween:Play()
 end
 
 --------------------------------------------------------------------------------
@@ -813,14 +826,15 @@ matchResults.OnClientEvent:Connect(function(result)
 	TweenService:Create(scrim, TweenInfo.new(0.35), { BackgroundTransparency = 0.35 }):Play()
 	TweenService:Create(glow, TweenInfo.new(0.6), { BackgroundTransparency = won and 0.25 or 0.6 }):Play()
 
-	-- Layout first, then scale to fit and pop in.
+	-- Scale to fit and pop in. This still runs before the new card's layout pass, so the AbsoluteSize
+	-- watcher at the bottom re-fits once its real height lands.
 	task.defer(function()
 		if showToken ~= token then
 			return
 		end
-		local target = fitScale()
-		cardScale.Scale = target * 0.85
-		TweenService:Create(cardScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = target }):Play()
+		local target, height = fitScale()
+		fit.token, fit.height = token, height
+		popIn(target)
 		if titleScale then
 			TweenService:Create(titleScale, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 		end
@@ -860,5 +874,28 @@ end)
 camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
 	if screenGui.Enabled then
 		cardScale.Scale = fitScale()
+	end
+end)
+
+-- The show's fit reads the card before its first layout (a disabled ScreenGui isn't laid out), so it got
+-- 0 on the first show and the last card's height after that: on a phone the first card, or the first
+-- after a mode change, came out too big and CONTINUE fell off the screen. Re-fit when the real height
+-- lands. The height is scale-free (fitScale), so the pop-in and hide tweens don't trip this.
+card:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	if not isCurrent(fit.token) then
+		return
+	end
+	local target, height = fitScale()
+	if math.abs(height - fit.height) < 4 then
+		return
+	end
+	fit.height = height
+	if fit.tween and fit.tween.PlaybackState == Enum.PlaybackState.Playing then
+		-- Still popping in (the first layout lands a frame in): pop in at the right size instead.
+		if math.abs(target - fit.target) > 0.005 then
+			popIn(target)
+		end
+	else
+		cardScale.Scale = target
 	end
 end)

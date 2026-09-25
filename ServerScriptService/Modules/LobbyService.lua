@@ -588,8 +588,8 @@ end
 -- MODULE SCOPE, NOT A LOCAL INSIDE buildReadyPad. It is the debounce for a Touched connection that
 -- lives as long as the server does, so as an upvalue it grew by one entry for every player who ever
 -- stepped on the ready pad and released none of them -- a slow leak keyed by Player, which also holds
--- the Instance alive. Cleared in the PlayerRemoving handler beside climbRuns and lastGoalPaidAt,
--- which are at module scope for exactly this reason.
+-- the Instance alive. Cleared in the PlayerRemoving handler beside climbRuns, which is at module
+-- scope for exactly this reason (lastGoalPaidAt is keyed by UserId and pruned there instead).
 local readyPadLastTouch = {}
 
 local function buildReadyPad(lobby, center)
@@ -2512,15 +2512,20 @@ local function buildPitch(lobby, base)
 		end
 		playgroundFx:FireAllClients({ kind = "goal", position = zone.Position + Vector3.new(0, 2, 0), color = GREEN })
 		if scorer then
-			for _, other in ipairs(Players:GetPlayers()) do
-				StateSync.Notify(other, string.format("GOAL by %s!", scorer.DisplayName))
+			-- The scorer and everyone else still in the lobby, not a player in a match: the same rule,
+			-- and the same reason, as the Daily Spin shout (SpinWitnesses skips the scorer, so add them).
+			local shout = string.format("GOAL by %s!", scorer.DisplayName)
+			StateSync.Notify(scorer, shout)
+			for _, other in ipairs(LobbyService.SpinWitnesses(scorer, Players:GetPlayers())) do
+				StateSync.Notify(other, shout)
 			end
 			-- At most one paid goal every GOAL_PAY_COOLDOWN, and at most 5 in any 10 minutes (Oliver,
 			-- 2026-09-22, ECONOMY.md s.2: a player who never readied could farm up to 6,300 coins an
 			-- hour here, more than a player who keeps losing earns in matches). 5 covers every goal a
 			-- player gets to score between matches; the cap only bites on someone who never leaves.
-			local paid = lastGoalPaidAt[scorer] or {}
-			lastGoalPaidAt[scorer] = paid
+			-- Keyed by UserId, not the Player, so leaving and rejoining doesn't hand back a fresh cap.
+			local paid = lastGoalPaidAt[scorer.UserId] or {}
+			lastGoalPaidAt[scorer.UserId] = paid
 			while paid[1] and now - paid[1] > 600 do
 				table.remove(paid, 1)
 			end
@@ -3824,8 +3829,15 @@ end
 function LobbyService.Start()
 	Players.PlayerRemoving:Connect(function(player)
 		climbRuns[player] = nil
-		lastGoalPaidAt[player] = nil
 		readyPadLastTouch[player] = nil
+		-- lastGoalPaidAt (by UserId) outlives the Player on purpose: clearing it here reset the goal
+		-- pay cap on every rejoin. Only ledgers with nothing left in their 10-minute window are dropped.
+		local now = wallNow()
+		for userId, paid in pairs(lastGoalPaidAt) do
+			if not paid[#paid] or now - paid[#paid] > 600 then
+				lastGoalPaidAt[userId] = nil
+			end
+		end
 	end)
 
 	task.spawn(function()

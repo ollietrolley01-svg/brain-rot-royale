@@ -20,6 +20,7 @@
 -- A ModuleScript so tools/gallery.ps1 can render it, and because HudClient's main chunk is three
 -- locals from Luau's 200-local limit.
 
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextService = game:GetService("TextService")
 local UserInputService = game:GetService("UserInputService")
@@ -206,6 +207,11 @@ end
 -- server is a handful of redraws of nine text labels — measured against the alternative of an
 -- update path that can disagree with the tally it is drawing, that is the right trade.
 --
+-- THE ONE EXCEPTION IS THE CLOCK. MatchChanged re-renders this every second of the lobby for the
+-- countdown alone, and a rebuild destroys the cards under the pointer: a press that straddles one
+-- never fires Activated (the vote is silently not cast), the hover tint blinks off, and a pad's
+-- selected card is destroyed. So when only the clock moved, only the timer and the bar move.
+--
 -- state = { open, candidates = { { id, mode, map, votes, mine } }, decided = id, seconds, ready, readyKey }
 function Screen:Render(state)
 	if state then
@@ -231,6 +237,12 @@ function Screen:Render(state)
 		end
 	end
 	if not visible then
+		-- Hidden: the next showing draws from scratch rather than trusting what was left behind.
+		self.layoutKey = nil
+		return
+	end
+	if self.layoutKey ~= nil and self.layoutKey == self:layoutKeyFor() then
+		self:updateClock()
 		return
 	end
 	self:Layout()
@@ -248,6 +260,38 @@ local function viewportOf()
 	end
 	local camera = workspace.CurrentCamera
 	return camera and camera.ViewportSize or Vector2.new(1280, 720)
+end
+
+-- The clock: the timer's number and the bar's fill. One definition for Layout and updateClock.
+local function timerText(state)
+	return tostring(math.max(0, math.floor(state.seconds or 0)))
+end
+
+local function barFill(state)
+	return UDim2.fromScale(state.decided and 1 or math.clamp((state.seconds or 0) / math.max(state.total or 15, 1), 0, 1), 1)
+end
+
+-- Everything Layout draws EXCEPT the clock. Equal keys mean the cards on screen are already right.
+function Screen:layoutKeyFor()
+	local state = self.state
+	local viewport = viewportOf()
+	local parts = {
+		tostring(state.open), tostring(state.decided), tostring(state.ready), tostring(state.readyKey),
+		tostring(viewport.X), tostring(viewport.Y), tostring(self:isTouch()), tostring(self:inputKind()),
+	}
+	for _, candidate in ipairs(state.candidates or {}) do
+		table.insert(parts, string.format("%s=%s:%s", tostring(candidate.id), tostring(candidate.votes or 0), tostring(candidate.mine)))
+	end
+	return table.concat(parts, ";")
+end
+
+function Screen:updateClock()
+	if self.timerLabel then
+		self.timerLabel.Text = timerText(self.state)
+	end
+	if self.timerBar then
+		self.timerBar.Size = barFill(self.state)
+	end
 end
 
 -- One candidate. `shape` is "card" (large), "compact" (short) or "row" (tall).
@@ -466,9 +510,25 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 end
 
 function Screen:Layout()
+	-- A pad's selection is a card instance, and this rebuild destroys it: remember which candidate it
+	-- was, and hand the selection to that candidate's new card at the end.
+	local selectedId
+	local okSelected, selected = pcall(function()
+		return GuiService.SelectedObject
+	end)
+	if okSelected and selected and self.cards then
+		for id, button in pairs(self.cards) do
+			if button == selected then
+				selectedId = id
+			end
+		end
+	end
 	for _, child in ipairs(self.root:GetChildren()) do
 		child:Destroy()
 	end
+	self.cards = {}
+	self.timerLabel, self.timerBar = nil, nil
+	self.layoutKey = self:layoutKeyFor()
 	local state = self.state
 	local viewport = viewportOf()
 	local form = UiKit.form(viewport)
@@ -511,8 +571,8 @@ function Screen:Layout()
 		ZIndex = self.zIndex + 1,
 	})
 	if not decidedId then
-		UiParts.text(panel, form == "large" and Type.Display or Type.Title,
-			tostring(math.max(0, math.floor(state.seconds or 0))), Role.Accent, {
+		self.timerLabel = UiParts.text(panel, form == "large" and Type.Display or Type.Title,
+			timerText(state), Role.Accent, {
 			AnchorPoint = Vector2.new(1, 0),
 			Position = UDim2.fromOffset(width - Space.MD, y - 4),
 			Size = UDim2.fromOffset(72, 40),
@@ -530,8 +590,8 @@ function Screen:Layout()
 		ZIndex = self.zIndex + 1,
 		Parent = panel,
 	}, { create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
-	create("Frame", {
-		Size = UDim2.fromScale(decidedId and 1 or math.clamp((state.seconds or 0) / math.max(state.total or 15, 1), 0, 1), 1),
+	self.timerBar = create("Frame", {
+		Size = barFill(state),
 		BackgroundColor3 = decidedId and Role.Positive or Role.Accent,
 		BorderSizePixel = 0,
 		ZIndex = self.zIndex + 2,
@@ -553,7 +613,10 @@ function Screen:Layout()
 		}),
 	})
 	for index, candidate in ipairs(state.candidates) do
-		self:card(holder, candidate, shape, cardW, cardH, index, decidedId, enabled)
+		local button = self:card(holder, candidate, shape, cardW, cardH, index, decidedId, enabled)
+		if candidate.id ~= nil then
+			self.cards[candidate.id] = button
+		end
 	end
 	y += holder.Size.Y.Offset + Space.SM
 
@@ -624,6 +687,13 @@ function Screen:Layout()
 	-- and the plaza are what a player looks at next.
 	local top = ceiling + math.max(0, (viewport.Y - ceiling - bottomInset - y)) * 0.45
 	panel.Position = UDim2.new(0.5, 0, 0, math.max(ceiling, math.floor(top)))
+
+	local reselect = selectedId ~= nil and self.cards[selectedId] or nil
+	if reselect and reselect.Selectable then
+		pcall(function()
+			GuiService.SelectedObject = reselect
+		end)
+	end
 end
 
 return VoteScreen

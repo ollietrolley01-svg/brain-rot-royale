@@ -731,7 +731,10 @@ end
 -- Lays `overrides` (any of clockTime, brightness, ambient, outdoorAmbient, shadowSoftness) over
 -- the map's own lighting: a Night Ops match turns the lights out.
 function MapGenerator.ApplyLightingOverride(overrides)
+	-- No override (an event without lighting, or the event cleared): put the map's own back, so
+	-- Night Ops darkness doesn't outlive an admin switching events mid-match.
 	if not overrides then
+		applyLighting(currentLighting or MapData.DefaultLighting)
 		return
 	end
 	local merged = table.clone(currentLighting or MapData.DefaultLighting)

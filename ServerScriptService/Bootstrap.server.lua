@@ -238,6 +238,11 @@ local function refreshLeaderstats(player)
 	end
 end
 
+-- Final profile writes a leave has started and not finished. BindToClose waits on these as well as on
+-- its own ReleaseAll: the last player out of a server is no longer in Players by the time it closes, so
+-- without this count their release (and its retries) could be cut off mid-write.
+local releasesInFlight = 0
+
 local function onPlayerAdded(player)
 	-- #102: not in any match until startMatch says so. The client's spectator cycle reads this off the
 	-- Player and treats an ABSENT attribute as "in" (so the read is inert wherever the write is not),
@@ -274,7 +279,9 @@ local function onPlayerAdded(player)
 
 	local data = PlayerData.Load(player)
 	if not player.Parent then
+		releasesInFlight += 1
 		PlayerData.Release(player)
+		releasesInFlight -= 1
 		return
 	end
 
@@ -336,6 +343,9 @@ local function onPlayerRemoving(player)
 	-- this player before their profile is released below.
 	StateSync.Flush(player)
 	profileSnapshots[player] = nil
+	-- Counted until the release below has written (see releasesInFlight). Release pcalls its store
+	-- writes, so the decrement is always reached.
+	releasesInFlight += 1
 	-- Pairs are "<from>><to>" UserIds. Matched exactly, one side at a time: a substring match on the id
 	-- also cleared every pair whose OTHER id merely contained it (UserId 12 cleared 3120>77's cooldown).
 	local leaving = tostring(player.UserId)
@@ -346,6 +356,7 @@ local function onPlayerRemoving(player)
 		end
 	end
 	PlayerData.Release(player)
+	releasesInFlight -= 1
 
 	task.defer(function()
 		ShowcaseService.Refresh()
@@ -484,6 +495,15 @@ PlaytimeService.Start()
 BattlePassService.OnXp = ProgressionService.OnPassXp
 MatchService.OnKillCredited = ProgressionService.OnKillCredited
 MatchService.OnKillCredited = require(Modules:WaitForChild("KillAnimService")).Chain(MatchService.OnKillCredited) -- #24 kill animations
+-- The player list's Kills column. RewardService.AwardKill has just counted the kill in the profile, and
+-- nothing else writes the leaderstats values, so they sat at their join-time numbers all visit.
+do
+	local creditKill = MatchService.OnKillCredited
+	MatchService.OnKillCredited = function(killer, victim, weaponId)
+		pcall(refreshLeaderstats, killer)
+		return creditKill(killer, victim, weaponId)
+	end
+end
 MatchService.ProgressionSummary = ProgressionService.MatchSummary
 TradeService.OnTradeMoved = ProgressionService.OnTradeMoved
 LobbyService.Start()
@@ -1184,6 +1204,11 @@ MatchService.OnMatchEnd = function()
 	HazardService.Clear("mine")
 	-- Companions downed this match come back for the next one.
 	CompanionService.ReviveAll()
+	-- The player list's Wins column: a battle-royale win is counted at the results screen
+	-- (RewardService.AwardPlacement), and nothing else writes it.
+	for _, player in ipairs(Players:GetPlayers()) do
+		refreshLeaderstats(player)
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -1206,6 +1231,14 @@ game:BindToClose(function()
 	-- Release rather than save: the final write also clears each session lock, so the server people are
 	-- sent to can load them at once instead of waiting for the locks to go stale. All in parallel,
 	-- bounded well inside the ~30 s Roblox allows.
-	local released = PlayerData.ReleaseAll(Players:GetPlayers(), 20)
-	print(string.format("[Bootstrap] shutdown: released %d of %d profiles", released, #Players:GetPlayers()))
+	local deadline = tick() + 25
+	local players = Players:GetPlayers()
+	local released = PlayerData.ReleaseAll(players, 20)
+	-- Then the releases a leave already started (releasesInFlight), inside the same bound: the last player
+	-- out is not in GetPlayers any more, so ReleaseAll alone returned at once for them.
+	while releasesInFlight > 0 and tick() < deadline do
+		task.wait(0.2)
+	end
+	print(string.format("[Bootstrap] shutdown: released %d of %d profiles, %d leave releases unfinished",
+		released, #players, releasesInFlight))
 end)

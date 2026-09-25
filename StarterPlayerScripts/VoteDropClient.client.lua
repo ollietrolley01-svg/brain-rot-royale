@@ -229,6 +229,11 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if processed or not isReady() or not (VoteReveal.View(matchState, voteState.open, false, true)) then
 		return
 	end
+	-- The same stand-aside test renderVote hides the panel with: while a menu holds the cursor the
+	-- cards are off screen, so 1/2/3 (a Settings rebind, say) must not move a vote nobody can see.
+	if VoteCursor.ShouldStandAside(MenuOpenClaims.Holders(), MenuOpenClaims.LegacyHolder(), VoteCursor.ClaimName) then
+		return
+	end
 	local index
 	if input.KeyCode == Enum.KeyCode.One then
 		index = 1

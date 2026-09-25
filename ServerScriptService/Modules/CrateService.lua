@@ -255,6 +255,16 @@ function CrateService.Open(player, tier, shownLuck)
 		if not item then
 			local odds = CrateData.EffectiveOdds(crate, luck)
 			local home = Rarity.Index[rolledRarity] or 1
+			-- A pity hit guarantees its rarity OR BETTER (and has already spent the counter), so it looks
+			-- upward first, nearest first, and only drops below when nothing above is left unowned.
+			if pityHit then
+				for index = home + 1, #Rarity.Order do
+					local rarity = Rarity.Order[index]
+					if not item and (odds[rarity] or 0) > 0 then
+						item = unownedCosmetic(data, crate.kinds or category, rarity)
+					end
+				end
+			end
 			for distance = 1, #Rarity.Order do
 				for _, index in ipairs({ home - distance, home + distance }) do
 					local rarity = Rarity.Order[index]
@@ -274,6 +284,9 @@ function CrateService.Open(player, tier, shownLuck)
 			result.id = item.id
 			result.name = item.name
 			result.color = item.color
+			-- The rarity actually handed out, which the fallback above may have moved off the roll: the
+			-- reveal and the lobby stage label and colour the pull from this.
+			result.rarity = item.rarity
 			message = string.format("%s: %s!", crate.name, item.name)
 		else
 			-- Nothing new left anywhere in this crate: a partial refund rather than a dead pull.

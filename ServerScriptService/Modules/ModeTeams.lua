@@ -33,7 +33,9 @@ local greenPool = {}
 local function buildGreenPool()
 	table.clear(greenPool)
 	for id, def in pairs(WeaponData.Weapons) do
-		if def.rarity == GameModes.GreenRarity then
+		-- Never a staged gun: `staged` is the arsenal packs' one flag keeping an unfinished gun out of
+		-- hands, and every other roll (BotService, SupplyDropService, LobbyService) skips it too.
+		if def.rarity == GameModes.GreenRarity and not def.staged then
 			table.insert(greenPool, { id = id, weight = math.max(def.groundWeight or 0, 1) })
 		end
 	end
@@ -265,7 +267,9 @@ function ModeTeams.Setup(currentMode, mapInfo)
 		for team = 1, GameModes.TeamCount do
 			local heading = axis + (team - 1) * math.pi
 			bases[team] = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
-			if withRuins then
+			-- Not once an earlier team's failed: the pair is thrown away anyway, and Build clears the site's
+			-- scenery and loot and levels it before it can fail. `bases` is still set for the open-ground pads.
+			if withRuins and (team == 1 or ruins[team - 1]) then
 				ModeTeams.BuildRuin(team, bases[team], mapInfo, ruinSeed)
 			end
 		end
@@ -397,6 +401,9 @@ local RUIN_FRACTIONS = { BASE_FRACTION, 0.66, 0.6, 0.8, 0.86, 0.54 }
 -- (ModeTeams.ArenaReach, set where the battleground is required), the compound's flat half-depth and
 -- this is not ranked at all.
 local ARENA_BUFFER = 40
+-- RefusePad's and RefuseVehicleSpot's margin: every pad, bay and wall stays this far inside the arena.
+-- (RefusePad, above this, spells the same 40 out.)
+local ARENA_EDGE = 40
 -- A pair of sites costing under this is as good as it gets (flat, clear ground: SiteCost is the
 -- ground's rise plus half the surroundings'), and RUIN_TRIES of them end the search: every SiteCost
 -- reads a few hundred thousand voxels, and 96 pairs of them is seconds.
@@ -470,6 +477,14 @@ function ModeTeams.RankBaseAxes(axis, mapInfo)
 			local total = step * 0.01 + (index - 1) * 0.5
 			local keep = (ModeTeams.ArenaReach or 0) + (TeamBaseRuins.Footprint and TeamBaseRuins.Footprint.Z / 2 or 55) + 12 + ARENA_BUFFER
 			if arenaRadius * fraction < keep then
+				total = math.huge
+			end
+			-- The outer limit: the whole compound (its footprint's far corners, so every pad, chest spot and bay)
+			-- inside the arena with ARENA_EDGE to spare. Declared bays keep the arena rule, so a site past it parked
+			-- a car short on each side (RotRidge at 0.86: Bay7 561.1 studs out, limit 560).
+			local halfX = TeamBaseRuins.Footprint and TeamBaseRuins.Footprint.X / 2 or 67
+			local far = arenaRadius * fraction + (TeamBaseRuins.Footprint and TeamBaseRuins.Footprint.Z / 2 or 55)
+			if math.sqrt(halfX * halfX + far * far) > arenaRadius - ARENA_EDGE then
 				total = math.huge
 			end
 			-- Fair roads to the arena: the two sites' distances to their nearest gateways alike.
@@ -577,6 +592,25 @@ local function mapItemOf(part, map)
 	return node
 end
 
+-- The pieces that go with `item`: a part tagged into a group ("Tree:D12") takes its whole group, since
+-- MapDecor parents every tree's trunk and leaves straight into Props beside every other tree's
+-- (TeamBaseRuins.ClearSite's piecesOf); anything else is itself.
+local function mapPiecesOf(item)
+	if item:IsA("BasePart") then
+		local tag = item:GetAttribute("Destructible")
+		if type(tag) == "string" and string.find(tag, ":", 1, true) and item.Parent then
+			local group = {}
+			for _, other in ipairs(item.Parent:GetChildren()) do
+				if other:IsA("BasePart") and other:GetAttribute("Destructible") == tag then
+					table.insert(group, other)
+				end
+			end
+			return group
+		end
+	end
+	return { item }
+end
+
 local function itemSpan(item)
 	if item:IsA("BasePart") then
 		return math.max(item.Size.X, item.Size.Z)
@@ -667,8 +701,12 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 						or itemSpan(item) > TeamBaseRuins.ClearableSpan then
 						return item.Name
 					end
-					if clear then
-						clear[item] = true
+					if clear and not clear[item] then
+						-- The whole prop, not only the parts the box touched: half a tree, or a leaf ball left
+						-- in the air over the road, otherwise. Only here (the clearing pass), not while planning.
+						for _, piece in ipairs(mapPiecesOf(item)) do
+							clear[piece] = true
+						end
 					end
 				end
 			end
@@ -942,6 +980,12 @@ function ModeTeams.Teardown()
 	mode = nil
 	table.clear(bases)
 	table.clear(teamOf)
+	-- Through BreakProtection, not just the table: grantProtection's expiry finds the entry gone and
+	-- does nothing, so a body protected at the end would keep its SpawnProtected attribute (PROTECTED
+	-- on the HUD through the results). Clearing a field during pairs() is allowed.
+	for token in pairs(protectedUntil) do
+		ModeTeams.BreakProtection(token)
+	end
 	table.clear(protectedUntil)
 	table.clear(downed)
 	pads = { {}, {} }
@@ -1246,7 +1290,7 @@ end
 -- purpose, and baySpot does its own "is this bay taken" test.
 function ModeTeams.RefuseVehicleSpot(team, at, others, inBay)
 	local config = MatchConfig.TeamBaseVehicles
-	if flatDistance(at, arenaCentre) > arenaRadius - 40 then
+	if flatDistance(at, arenaCentre) > arenaRadius - ARENA_EDGE then
 		return "outside the arena"
 	end
 	for _, pad in ipairs(pads[team] or {}) do

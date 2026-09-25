@@ -2105,10 +2105,11 @@ function MapWilds.Build(map, ctx)
 	local shedLootCounts = { structures = 0, items = 0, chests = 0, records = {} }
 
 	-- `centre` is the shelter's footprint CFrame (see tryShelter), `high` its floor height, `yaw` its
-	-- facing. The opening faces out along centre.LookVector (tryShelter's own WorldPivot convention),
-	-- and the builders keep a clear run in from it (cabin: "a clear run in from the doorway"), so a
-	-- point a few studs in from the door, short of the side walls, is reliably clear floor.
-	local function addShedLoot(spec, centre, yaw, high)
+	-- facing, `m` the model just built. The opening faces out along centre.LookVector (tryShelter's own
+	-- WorldPivot convention), and the builders keep a clear run in from it (cabin: "a clear run in from
+	-- the doorway"), so a point a few studs in from the door, short of the side walls, is usually clear
+	-- floor; one that lands under a solid piece of the shelter is skipped (see `buried`).
+	local function addShedLoot(spec, centre, yaw, high, m)
 		if not ctx.lootSpots then
 			return
 		end
@@ -2138,30 +2139,66 @@ function MapWilds.Build(map, ctx)
 				lookX = along.X, lookZ = along.Z, rightX = side.X, rightZ = side.Z,
 			})
 		end
+		-- LootService.snapToGround casts down from 3 studs over a spot, and a ray that starts inside a
+		-- part never reports it: under a solid piece of the shelter (a wreck's cabin, a pole barn's
+		-- round bale, a deer stand's ladder) the pickup would spawn inside that piece. A piece only
+		-- buries it when it also reaches a stud lower; a thin table top just shades what lands under it.
+		local solid = {}
+		for _, d in ipairs(m:GetDescendants()) do
+			if d:IsA("BasePart") and d.CanCollide then
+				table.insert(solid, d)
+			end
+		end
+		local function inside(d, point)
+			local p = d.CFrame:PointToObjectSpace(point)
+			local half = d.Size / 2
+			return math.abs(p.X) <= half.X and math.abs(p.Y) <= half.Y and math.abs(p.Z) <= half.Z
+		end
+		local function buried(pos)
+			for _, d in ipairs(solid) do
+				if inside(d, pos + Vector3.new(0, 3, 0)) and inside(d, pos + Vector3.new(0, 2, 0)) then
+					return true
+				end
+			end
+			return false
+		end
+		local placed = 0
 		for i = 1, itemCount do
 			local inset = math.min(SHED_LOOT_DOOR_INSET[i] or SHED_LOOT_DOOR_INSET[#SHED_LOOT_DOOR_INSET], doorInLimit)
-			local drift = (i - (itemCount + 1) / 2) * math.min(2.2, halfWidth)
+			-- 3.2 across: LootService.Populate drops any spot within 3 studs of one it already placed, and
+			-- 2.2 across with 1.5 deeper (2.66 apart) kept only one of each neighbouring pair. Every
+			-- shelter's halfWidth is at least 3, so neighbours stay at least 3 apart.
+			local drift = (i - (itemCount + 1) / 2) * math.min(3.2, halfWidth)
 			local at = centre.Position + along * (spec.halfZ - inset) + side * math.clamp(drift, -halfWidth, halfWidth)
 			local pos = Vector3.new(at.X, high, at.Z)
+			-- Drawn whether or not the spot is kept, so a skipped one leaves the rest of the map's draws alone.
 			local roll = rng:NextNumber()
-			local kindKey = roll < 0.45 and "weapon" or (roll < 0.75 and "heal" or "item")
-			table.insert(ctx.lootSpots[kindKey], pos)
-			if boost > 0 and kindKey ~= "item" then
-				ctx.lootSpots.rarityBoost = ctx.lootSpots.rarityBoost or {}
-				ctx.lootSpots.rarityBoost[string.format("%.3f,%.3f,%.3f", pos.X, pos.Y, pos.Z)] = boost
+			if not buried(pos) then
+				local kindKey = roll < 0.45 and "weapon" or (roll < 0.75 and "heal" or "item")
+				table.insert(ctx.lootSpots[kindKey], pos)
+				if boost > 0 and kindKey ~= "item" then
+					ctx.lootSpots.rarityBoost = ctx.lootSpots.rarityBoost or {}
+					ctx.lootSpots.rarityBoost[string.format("%.3f,%.3f,%.3f", pos.X, pos.Y, pos.Z)] = boost
+				end
+				record(pos, kindKey)
+				shedLootCounts.items += 1
+				placed += 1
 			end
-			record(pos, kindKey)
-			shedLootCounts.items += 1
 		end
-		shedLootCounts.structures += 1
 
 		-- Sometimes a chest, seated at the deepest allowed step so the loose items and the doorway
 		-- itself stay clear of it.
 		if ctx.chestSpots and chance(SHED_LOOT_CHEST_CHANCE + remote * SHED_LOOT_REMOTE_CHEST_BONUS) then
 			local at = centre.Position + along * (spec.halfZ - doorInLimit)
-			table.insert(ctx.chestSpots, CFrame.new(at.X, high, at.Z) * CFrame.Angles(0, yaw, 0))
-			record(Vector3.new(at.X, high, at.Z), "chest")
-			shedLootCounts.chests += 1
+			if not buried(Vector3.new(at.X, high, at.Z)) then
+				table.insert(ctx.chestSpots, CFrame.new(at.X, high, at.Z) * CFrame.Angles(0, yaw, 0))
+				record(Vector3.new(at.X, high, at.Z), "chest")
+				shedLootCounts.chests += 1
+				placed += 1
+			end
+		end
+		if placed > 0 then
+			shedLootCounts.structures += 1
 		end
 	end
 
@@ -2247,7 +2284,7 @@ function MapWilds.Build(map, ctx)
 		table.insert(shelterSpots, centre.Position)
 		counts.shelters += 1
 		count(kind)
-		addShedLoot(spec, centre, yaw, high)
+		addShedLoot(spec, centre, yaw, high, m)
 		return true
 	end
 

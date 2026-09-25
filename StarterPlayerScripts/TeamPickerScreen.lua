@@ -659,11 +659,14 @@ function TeamPickerScreen:_paint()
 end
 
 function TeamPickerScreen:Render(snap)
+	-- A refusal answers the tap it came back for, once. The same table is re-rendered on every match
+	-- tick and relayout; replaying its `refused` then would cancel (and "refuse") a newer tap in flight.
+	local fresh = snap ~= self.snapshot
 	self.snapshot = snap
 	-- The server has answered what was tapped: its answer is the truth from here.
 	if self.pending ~= nil and snap.mine == self.pending then
 		self.pending = nil
-	elseif self.pending ~= nil and snap.refused then
+	elseif self.pending ~= nil and snap.refused and fresh then
 		self.pending = nil
 	end
 	if not self.cards then
@@ -730,10 +733,12 @@ function TeamPickerScreen:Render(snap)
 	else
 		self.note.Text = "Everyone has picked. Starting in a moment."
 	end
-	if snap.refused and self.lastAsk and self.lastAsk ~= 0 then
-		self:Refused(self.lastAsk, snap.refused)
+	if fresh then
+		if snap.refused and self.lastAsk and self.lastAsk ~= 0 then
+			self:Refused(self.lastAsk, snap.refused)
+		end
+		self.lastAsk = nil
 	end
-	self.lastAsk = nil
 	self:Countdown(snap.secondsLeft or 0, snap.seconds or 12)
 	self:_paint()
 end

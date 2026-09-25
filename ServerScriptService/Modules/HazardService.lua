@@ -25,6 +25,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local DefensePlacement = require(Shared:WaitForChild("DefensePlacement"))
 local ItemModels = require(Shared:WaitForChild("ItemModels"))
 local ZFight = require(Shared:WaitForChild("ZFight"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
@@ -101,7 +102,7 @@ local LIGHT_ARMING = Color3.fromRGB(255, 80, 60)
 local LIGHT_ARMED = Color3.fromRGB(90, 255, 120)
 local LIGHT_OFF = Color3.fromRGB(40, 60, 44)
 
--- model -> { kind, health, exploded, base (centre height above the ground), owner, armsAt,
+-- model -> { kind, health, exploded, base (centre height above the ground), owner, ownerTeam, armsAt,
 -- armed, expiresAt, position }. Strong keys, dropped when the hazard is destroyed (with its
 -- map, or by going up): a weak-keyed table loses live Instances here, since Roblox collects an
 -- instance's Lua handle whenever nothing but a weak table holds it.
@@ -188,7 +189,9 @@ end
 --------------------------------------------------------------------------------
 
 -- The ground under a landing spot: the map or terrain, not loot, companions or another player's
--- barricade (a mine thrown onto one settles on the ground beneath it).
+-- barricade (a mine thrown onto one settles on the ground beneath it). Nor a player, bot or vehicle:
+-- one thrown onto a car roof or someone's shoulders used to arm up there and hang in the air once
+-- they moved away, so the ray carries on through a body to what's beneath (DefensePlacement.BodyOf).
 local function groundUnder(position)
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
@@ -201,8 +204,19 @@ local function groundUnder(position)
 		end
 	end
 	params.FilterDescendantsInstances = filter
-	local hit = workspace:Raycast(position + Vector3.new(0, 3, 0), Vector3.new(0, -30, 0), params)
-	return hit and hit.Position or position
+	for _ = 1, 6 do
+		local hit = workspace:Raycast(position + Vector3.new(0, 3, 0), Vector3.new(0, -30, 0), params)
+		if not hit then
+			return position
+		end
+		local body = DefensePlacement.BodyOf(hit.Instance)
+		if not body then
+			return hit.Position
+		end
+		table.insert(filter, body)
+		params.FilterDescendantsInstances = filter
+	end
+	return position
 end
 
 -- A mine's arming delay and lifetime are wall time: os.clock is CPU time in Roblox and drifts from the
@@ -210,6 +224,33 @@ end
 -- the clock CompanionService's cooldowns use.
 local function clockNow()
 	return workspace:GetServerTimeNow()
+end
+
+-- A combatant's team in a team mode, or nil. Required lazily and guarded, the way ProjectileService
+-- does: ModeTeams is optional to this module, and loading it on first use means no require cycle.
+local modeTeams = nil
+local function teamOf(token)
+	if modeTeams == nil then
+		local module = script.Parent:FindFirstChild("ModeTeams")
+		local ok, result = false, nil
+		if module then
+			ok, result = pcall(require, module)
+		end
+		modeTeams = ok and type(result) == "table" and result or false
+	end
+	if not modeTeams or not modeTeams.TeamOf or token == nil then
+		return nil
+	end
+	local ok, team = pcall(modeTeams.TeamOf, token)
+	return ok and team or nil
+end
+
+-- Whether `token` is on a mine's side in a team mode: its owner's team, or, once the owner has left
+-- (ModeTeams forgets a leaver at once), the team stamped on it when it was laid. Never outside a team
+-- match, and never for a mine nobody owns.
+local function onMineTeam(entry, token)
+	local team = teamOf(entry.owner) or entry.ownerTeam
+	return team ~= nil and teamOf(token) == team
 end
 
 -- Arms a mine on the ground under `position`, owned by `ownerToken` (a player or a bot; nil for
@@ -242,6 +283,8 @@ function HazardService.Mine(parent, position, ownerToken)
 		health = MINE_HEALTH,
 		base = 0.1 * MINE_SCALE,
 		owner = ownerToken,
+		-- Stamped now: an owner who leaves a team match is forgotten by ModeTeams at once.
+		ownerTeam = teamOf(ownerToken),
 		armsAt = now + MINE_ARM_TIME,
 		expiresAt = now + MINE_LIFETIME,
 		position = model:GetPivot().Position,
@@ -383,8 +426,13 @@ explode = function(model, attackerToken)
 
 	-- The damage. Whoever blew it up gets the credit; a barrel set off by another barrel keeps
 	-- the same credit, so a chain still counts as one shooter's. A mine spares its owner.
+	-- A mine whose owner has left a team match still spares their old team: ModeTeams has forgotten
+	-- the owner, so DamageVeto can't refuse those hits (and a kill would score for the enemy).
+	local orphaned = mine and attackerToken ~= nil and attackerToken == entry.owner and entry.ownerTeam ~= nil
+		and teamOf(attackerToken) == nil
 	for _, victim in ipairs(CombatService.InRadius(position, radius, nil)) do
-		if not (mine and entry.owner ~= nil and victim.token == entry.owner) then
+		if not (mine and entry.owner ~= nil and victim.token == entry.owner)
+			and not (orphaned and teamOf(victim.token) == entry.ownerTeam) then
 			local falloff = 1 - (victim.root.Position - position).Magnitude / radius
 			local damage = baseDamage * math.clamp(0.35 + falloff * 0.65, 0, 1)
 			CombatService.DealDamage(attackerToken, victim.token, damage, weaponId)
@@ -439,8 +487,10 @@ local function stepMines(now)
 				setLights(entry, math.floor(now * 1.5) % 2 == 0 and LIGHT_ARMED or LIGHT_OFF)
 				-- It still blinks and still times out, but it does not TRIGGER once the match is over:
 				-- walking over a mine on the results screen is not a death anyone can answer.
+				-- In a team mode only an enemy sets it off; the owner's teammates walk over it.
 				for _, victim in ipairs(matchIsLive() and CombatService.InRadius(entry.position, MINE_TRIGGER_RADIUS, entry.owner) or {}) do
-					if math.abs(victim.root.Position.Y - entry.position.Y) <= MINE_TRIGGER_HEIGHT then
+					if math.abs(victim.root.Position.Y - entry.position.Y) <= MINE_TRIGGER_HEIGHT
+						and not onMineTeam(entry, victim.token) then
 						explode(model, entry.owner)
 						break
 					end

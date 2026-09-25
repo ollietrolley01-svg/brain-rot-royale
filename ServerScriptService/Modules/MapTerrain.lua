@@ -959,13 +959,20 @@ function MapTerrain.FlattenPad(site, size, options)
 			-- sagging toward the ground beyond it (0.46 studs measured); a half-height step there made
 			-- it worse, not better. Flat means flat, then the graded edge starts. Same 8 studs the
 			-- roads hold past their shoulders, for the same reason.
-			local distance = outside(x, z) - margin - 2 * PAD_CELL
+			local out = outside(x, z)
+			local distance = out - margin - 2 * PAD_CELL
 			local current = ground[ix][iz]
 			local target, paint = nil, nil
 			if distance <= 0 then
-				target = height
-				local own = groundMaterial[ix][iz]
-				paint = painted or (own and RoadNetwork.SmoothMaterials[own] and own) or MapTerrain._padGround or Enum.Material.Ground
+				-- Past the margin the flat only holds this pad's edge up, and the check above covered the
+				-- margin alone: an earlier pad's flat at another height there is left as it is (a building
+				-- already stands on it), as the graded edge leaves it.
+				local other = out > margin and MapTerrain.PadAt(x, z)
+				if not (other and math.abs(other - height) > 0.05) then
+					target = height
+					local own = groundMaterial[ix][iz]
+					paint = painted or (own and RoadNetwork.SmoothMaterials[own] and own) or MapTerrain._padGround or Enum.Material.Ground
+				end
 
 			elseif current and not options.retain then
 				local blend = math.clamp(math.abs(current - height) * 2, PAD_BLEND_MIN, PAD_BLEND_MAX)
@@ -1574,12 +1581,14 @@ function MapTerrain.RoadCrossings(points, roads)
 	return list
 end
 
--- Carves the river `plan` (from PlanRiver, planned here if not given) and puts in its crossings.
+-- Carves the river `plan` (from PlanRiver) and puts in its crossings.
 -- Returns { points, width, bridges, roadCrossings, pond } or nil when there's no river. `roads` is
 -- the RoadNetwork, which builds its own bridges (RoadNetwork:Build); footbridges and stepping
 -- stones go in here, away from them.
 function MapTerrain.River(terrain, parent, preset, radius, centers, townSpread, plateaus, roads, space, lootSpots, groundHeightAt, plan)
-	plan = plan or MapTerrain.PlanRiver(radius, centers, townSpread, plateaus, roads)
+	-- A nil plan is PlanRiver's "no path fits", not a request to plan one: planned again here, after
+	-- the roads' heights were worked out without its crossings, the river would cross roads with no
+	-- bridges and their ground would dam it at every crossing.
 	if not plan then
 		return nil
 	end

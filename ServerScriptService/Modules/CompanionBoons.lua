@@ -60,8 +60,9 @@ local CompanionBoons = {}
 -- rather than added to, and so a reader of MatchService's status table can see where a factor is from.
 local KEY = "CompanionBoon"
 
--- [player] = { def, grantedHealth, humanoid }. `humanoid` is the body the grant went on: a respawn
--- is a new Humanoid, which never had it, so Clear takes it off the old one and Apply grants afresh.
+-- [player] = { def, grantedHealth, baseHealth, humanoid }. `humanoid` is the body the grant went on: a
+-- respawn is a new Humanoid, which never had it, so Clear takes it off the old one and Apply grants
+-- afresh. `baseHealth` is that body's MaxHealth before the grant, the floor Clear never goes under.
 local active = {}
 
 local function humanoidOf(player)
@@ -159,6 +160,7 @@ function CompanionBoons.Apply(player, def)
 
 	if SafeValue.Number(boon.health, 500) and boon.health > 0 and humanoid then
 		-- MaxHealth only. See the exploit note at the top: healing here would make a toggle a free heal.
+		state.baseHealth = humanoid.MaxHealth
 		humanoid.MaxHealth += boon.health
 		state.grantedHealth = boon.health
 	end
@@ -188,7 +190,11 @@ function CompanionBoons.Clear(player)
 		if state.grantedHealth > 0 then
 			-- Take the ceiling back down first, then bring Health under it. Doing it the other way
 			-- round lets Health sit above MaxHealth for a frame, which reads as a full bar.
-			humanoid.MaxHealth = math.max(1, humanoid.MaxHealth - state.grantedHealth)
+			-- Never under the ceiling the body had before the grant (and never raised): a spawn path
+			-- that rewrote MaxHealth without adding the grant back (the lobby's PlaceInLobby) has
+			-- already taken it off, and taking it off twice left a lobby body at 30 of 100.
+			local floor = math.min(state.baseHealth or 1, humanoid.MaxHealth)
+			humanoid.MaxHealth = math.max(1, floor, humanoid.MaxHealth - state.grantedHealth)
 			if humanoid.Health > humanoid.MaxHealth then
 				humanoid.Health = humanoid.MaxHealth
 			end
@@ -295,6 +301,13 @@ end
 -- there would mean either naming a brainrot in it or inventing a fake gun.
 local venomAccumulated = 0
 function CompanionBoons.TickVenom(delta)
+	-- Nothing ticks while combat is off, the rule StatusEffects' DoTs follow: a bite in the last
+	-- seconds of a match would otherwise keep hurting (and could kill) a winner on the results screen.
+	if not CombatService.IsEnabled() then
+		table.clear(venoms)
+		venomAccumulated = 0
+		return
+	end
 	venomAccumulated += delta
 	if venomAccumulated < VENOM_TICK then
 		return

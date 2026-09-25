@@ -161,6 +161,8 @@ end
 --------------------------------------------------------------------------------
 
 -- The live vehicle `character` rides, its seat and its model id; nil on foot or in a wreck.
+-- A mounted-gun emplacement (MountedGuns) carries a VehicleModel too, but its gunner is a body in the
+-- open: only its shield covers them, and that as traced geometry. So nil there as well (on foot).
 function VehicleCover.SeatOf(character)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local seat = humanoid and humanoid.SeatPart
@@ -169,7 +171,7 @@ function VehicleCover.SeatOf(character)
 		return nil
 	end
 	local modelId = model:GetAttribute("VehicleModel")
-	if modelId == nil or model:GetAttribute("Wrecked") then
+	if modelId == nil or model:GetAttribute("Wrecked") or model:GetAttribute("MountedGun") then
 		return nil
 	end
 	return model, seat, modelId

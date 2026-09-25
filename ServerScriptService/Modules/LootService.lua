@@ -28,7 +28,7 @@ local LootService = {}
 
 -- Guns per chest. MatchService raises it for a Loot Frenzy match.
 LootService.ChestGuns = 2
--- When set (an Aura Farm match), every chest's first gun is rerolled until it's at least this
+-- When set (an Aura Farm match), every chest's first gun (a bot's chest gun too) is at least this
 -- rarity.
 LootService.ChestRarityFloor = nil
 
@@ -256,6 +256,39 @@ local function pickupBase(name, position)
 	return base
 end
 
+-- A vehicle (a VehicleService model, marked VehicleMaxHealth) is never loot's floor. Map.Vehicles and
+-- the team-base vehicles sit under the Map the floor rays include, so a rider killed in the seat
+-- dropped everything onto the chassis, and the anchored pads hung in the air once the car moved.
+local function onVehicle(part)
+	local node = part.Parent
+	while node and node ~= workspace do
+		if node:GetAttribute("VehicleMaxHealth") ~= nil then
+			return true
+		end
+		node = node.Parent
+	end
+	return false
+end
+
+-- workspace:Raycast for a floor: a ray that meets a vehicle carries on through it to what's beneath.
+-- Each re-cast starts just inside the part it met, and a ray never reports a part it starts inside.
+local function floorCast(origin, direction, params)
+	local result = workspace:Raycast(origin, direction, params)
+	for _ = 1, 8 do
+		if not result or not onVehicle(result.Instance) then
+			return result
+		end
+		local step = (result.Position - origin).Magnitude + 0.05
+		if step >= direction.Magnitude then
+			return nil
+		end
+		origin = origin + direction.Unit * step
+		direction = direction.Unit * (direction.Magnitude - step)
+		result = workspace:Raycast(origin, direction, params)
+	end
+	return nil
+end
+
 -- Drops (from bodies, chests, swaps) start at waist height; put them on whatever is beneath.
 local function snapToGround(position)
 	local params = RaycastParams.new()
@@ -267,7 +300,7 @@ local function snapToGround(position)
 	end
 	params.FilterDescendantsInstances = include
 
-	local result = workspace:Raycast(position + Vector3.new(0, 3, 0), Vector3.new(0, -40, 0), params)
+	local result = floorCast(position + Vector3.new(0, 3, 0), Vector3.new(0, -40, 0), params)
 	return result and result.Position or position - Vector3.new(0, 2, 0)
 end
 
@@ -275,9 +308,9 @@ end
 -- Pickups
 --------------------------------------------------------------------------------
 
--- Rolls `rollFn` `times` times and keeps the best rarity seen, the way spawnChest already rerolls
--- for LootService.ChestRarityFloor. Picks within whatever pool `rollFn` already draws from -- no new
--- rarity tier, no new odds table -- just a better chance at what was already possible there.
+-- Rolls `rollFn` `times` times and keeps the best rarity seen. Picks within whatever pool `rollFn`
+-- already draws from -- no new rarity tier, no new odds table -- just a better chance at what was
+-- already possible there.
 local function bestOf(rollFn, times)
 	local best = rollFn()
 	for _ = 2, times do
@@ -506,6 +539,31 @@ end
 -- Chests
 --------------------------------------------------------------------------------
 
+-- A chest gun, at least `floor` rarity when one is given (LootService.ChestRarityFloor): one pick by
+-- chestWeight among the chest guns at or above it, the odds a reroll-until-it-qualifies gives. It
+-- used to reroll at most 12 times, which left about one Aura Farm chest in five below the floor.
+local function rollChestGun(floor)
+	if not floor then
+		return WeaponData.RollChestWeapon()
+	end
+	local pool, total = {}, 0
+	for _, def in pairs(WeaponData.Weapons) do
+		if (def.chestWeight or 0) > 0 and Rarity.IsAtLeast(def.rarity, floor) then
+			table.insert(pool, def)
+			total = total + def.chestWeight
+		end
+	end
+	local roll = math.random() * total
+	for _, def in ipairs(pool) do
+		roll = roll - def.chestWeight
+		if roll <= 0 then
+			return def
+		end
+	end
+	-- No chest gun reaches the floor: the ordinary roll.
+	return pool[#pool] or WeaponData.RollChestWeapon()
+end
+
 -- Marks a chest opened so clients play the lid swing, then removes it once that's had time
 -- to play. `Claimed` stops anyone else looting it in the meantime.
 local function openChest(chest, rarity)
@@ -556,16 +614,7 @@ local function spawnChest(cframe)
 		local dropped = {}
 		local best = "Common"
 		for gunIndex = 1, LootService.ChestGuns do
-			local def = WeaponData.RollChestWeapon()
-			local floor = gunIndex == 1 and LootService.ChestRarityFloor or nil
-			if floor then
-				for _ = 1, 12 do
-					if (Rarity.Index[def.rarity] or 0) >= (Rarity.Index[floor] or 0) then
-						break
-					end
-					def = WeaponData.RollChestWeapon()
-				end
-			end
+			local def = rollChestGun(gunIndex == 1 and LootService.ChestRarityFloor or nil)
 			if (Rarity.Index[def.rarity] or 0) > (Rarity.Index[best] or 0) then
 				best = def.rarity
 			end
@@ -870,7 +919,7 @@ end
 local function scatter(position, from)
 	local params = dropParams()
 	local origin = from or position
-	local below = workspace:Raycast(origin + Vector3.new(0, 1, 0), Vector3.new(0, -FLOOR_REACH, 0), params)
+	local below = floorCast(origin + Vector3.new(0, 1, 0), Vector3.new(0, -FLOOR_REACH, 0), params)
 	if not below then
 		return position - Vector3.new(0, 2, 0)
 	end
@@ -890,7 +939,7 @@ local function scatter(position, from)
 	-- was thrown from is over an edge, so the drop stays where it fell instead.
 	for _, candidate in ipairs({ spot, floor }) do
 		local cleared = clearOfWalls(candidate, params)
-		local land = workspace:Raycast(cleared + Vector3.new(0, STEP_TOLERANCE + 0.5, 0), Vector3.new(0, -(STEP_TOLERANCE * 2 + 0.5), 0), params)
+		local land = floorCast(cleared + Vector3.new(0, STEP_TOLERANCE + 0.5, 0), Vector3.new(0, -(STEP_TOLERANCE * 2 + 0.5), 0), params)
 		if land and math.abs(land.Position.Y - floor.Y) <= STEP_TOLERANCE then
 			return land.Position
 		end
@@ -1066,7 +1115,8 @@ function LootService.ClaimForBot(item)
 
 	local def
 	if item.Name == "Chest" then
-		def = WeaponData.RollChestWeapon()
+		-- The chest's one gun, so it keeps an Aura Farm floor the way a player's first gun does.
+		def = rollChestGun(LootService.ChestRarityFloor)
 		-- Opens visibly for anyone nearby, just like a player's chest.
 		openChest(item, def.rarity)
 	else

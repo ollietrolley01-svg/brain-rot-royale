@@ -1574,7 +1574,15 @@ local function buildBuilding(parent, origin, preset, chestSpots, lootSpots, plan
 	-- multi-storey one without them had floors, and loot on them, that nobody could reach.
 	local stairSide = 1 + STAIR_WIDTH + STAIR_EXIT
 	local stairClear = 1 + STAIR_LANDING + STAIR_RUN + STAIR_EXIT
-	local canClimb = floors > 1 and width >= 26 and depth >= stairClear + WALL_THICKNESS
+	local fitsStairs = width >= 26 and depth >= stairClear + WALL_THICKNESS
+	-- So one too small for them stands one storey tall. A town profile can roll a two-floor house
+	-- under 26 wide or deep (TownKinds' neighbourhood houses start at 24), and its upper storey used
+	-- to stand furnished over a solid ceiling. Clamped here, not in RollPlan, so the plan's draws and
+	-- values stay as rolled.
+	if floors > 1 and not fitsStairs then
+		floors = 1
+	end
+	local canClimb = floors > 1 and fitsStairs
 	local reachX, reachZ = math.max(1, halfW - 3.5), math.max(1, halfD - 3.5)
 	local facade = { archetype = archetype, trim = trimFor(wallColor), shutter = pick(SHUTTER_COLORS), floors = floors,
 		sign = plan.sign }

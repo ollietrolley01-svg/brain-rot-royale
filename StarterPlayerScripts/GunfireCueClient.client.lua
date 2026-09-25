@@ -164,6 +164,23 @@ local function isFriendly(shooter, origin)
 	return character ~= nil and character ~= player.Character and character:GetAttribute("Team") == mine
 end
 
+-- A vehicle or emplacement gun's shot comes with no shooter and source "mount" (VehicleWeapons.Fire), so
+-- `shooter == player` never catches your own. One that leaves the vehicle or emplacement you sit in is
+-- yours or a crewmate's: its origin (the muzzle, or pulled back towards the pivot) is on that model.
+local function fromOwnMount(origin)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local seat = humanoid and humanoid.SeatPart
+	local model = seat and seat.Parent
+	if not (model and model:IsA("Model")) then
+		return false
+	end
+	local frame, size = model:GetBoundingBox()
+	local here = frame:PointToObjectSpace(origin)
+	return math.abs(here.X) <= size.X / 2 + 2 and math.abs(here.Y) <= size.Y / 2 + 2
+		and math.abs(here.Z) <= size.Z / 2 + 2
+end
+
 local function hide(cue)
 	cue.holder.Visible = false
 	cue.source = nil
@@ -188,8 +205,12 @@ local function draw(cue, camera)
 	cue.holder.Visible = true
 end
 
-shotFired.OnClientEvent:Connect(function(shooter, origin, _endPoints, _rarity)
-	if shooter == player or typeof(origin) ~= "Vector3" or suppressed() then
+shotFired.OnClientEvent:Connect(function(shooter, origin, _endPoints, _rarity, segment, source)
+	-- A ricochet leaving a wall (CombatService.BroadcastSegment) is not a new shot: its origin is the wall.
+	if segment == true or shooter == player or typeof(origin) ~= "Vector3" or suppressed() then
+		return
+	end
+	if source == "mount" and fromOwnMount(origin) then
 		return
 	end
 	local camera = workspace.CurrentCamera

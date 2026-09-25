@@ -238,6 +238,13 @@ local function retire(piece)
 	piece.Anchored = true
 	piece.CanCollide = false
 	TweenService:Create(piece, TweenInfo.new(FADE_TIME), { Transparency = 1 }):Play()
+	-- A SurfaceGui draws whatever its part's Transparency, so the crack lines fade with the piece.
+	local cracks = piece:FindFirstChild("Cracks")
+	if cracks then
+		for _, crack in ipairs(cracks:GetChildren()) do
+			TweenService:Create(crack, TweenInfo.new(FADE_TIME), { BackgroundTransparency = 1 }):Play()
+		end
+	end
 	task.delay(FADE_TIME, function()
 		piece:Destroy()
 	end)

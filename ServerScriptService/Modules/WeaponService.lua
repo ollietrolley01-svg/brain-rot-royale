@@ -1812,30 +1812,15 @@ local function ammoGrant(slot, fraction)
 end
 WeaponService.AmmoGrant = ammoGrant
 
--- Returns true only if rounds actually arrived. It used to return true for any live loadout, so
--- VendorService's "Nothing to reload." refusal (VendorService:105) was unreachable and a player with no
--- gun -- or with every reserve already at the cap -- was charged 150 SahurCoins for nothing and toasted
--- success. Callers that charge money read this, so it must describe what happened, not that it ran.
--- Deliberately true/false rather than the count: 0 is truthy in Lua, so a count would walk straight
--- through the `if not WeaponService.GiveAmmo(...)` at the call site that matters.
+-- Returns true only if the player got something they can use. Callers that charge money read this
+-- (VendorService's AMMO REFILL takes 150 SahurCoins on true), so it must describe what happened, not
+-- that it ran. Under the infinite ammo pool (see Reload) nothing ever reads `reserve`: a reload fills
+-- the magazine for free and the HUD shows "/ ∞". Topping up `reserve` changed nothing the player could
+-- see or use, yet returned true, so the vendor charged for it and the pickup/chest toasts said
+-- "+ammo". So a refill has nothing to give and always says so. Deliberately true/false rather than a
+-- count: 0 is truthy in Lua. `AmmoGrant` stays (tools/ammo_grant_probe.lua) for a spendable reserve.
 function WeaponService.GiveAmmo(player, fraction)
-	local loadout = loadouts[player]
-	if not loadout then
-		return false
-	end
-	local added = 0
-	for _, slot in pairs(loadout.slots) do
-		local grant = ammoGrant(slot, fraction)
-		if grant > 0 then
-			slot.reserve += grant
-			added += grant
-		end
-	end
-	if added <= 0 then
-		return false
-	end
-	WeaponService.Push(player)
-	return true
+	return false
 end
 
 function WeaponService.Equip(player, slotIndex)

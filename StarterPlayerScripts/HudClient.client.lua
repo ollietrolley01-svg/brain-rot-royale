@@ -1191,6 +1191,9 @@ do
 	end
 	fitHotbar()
 	camera:GetPropertyChangedSignal("ViewportSize"):Connect(fitHotbar)
+	-- Also run by the phone layout on its way back to desktop, which can happen with no change of
+	-- viewport (a keyboard plugged into a tablet). On a table, not a local: see the limit above.
+	hudLayout.fitHotbar = fitHotbar
 end
 
 local ammoText = create("TextLabel", {
@@ -3341,6 +3344,14 @@ do
 					end
 				end
 				slotRow.Visible = true
+				-- Portrait may have hidden some cells, and the phone scale is still on the frame: all eight
+				-- come back, and the desktop fit (which only watches the viewport) puts its own scale back.
+				for _, cell in ipairs(slotCells or {}) do
+					cell.cell.Visible = true
+				end
+				if hudLayout.fitHotbar then
+					hudLayout.fitHotbar()
+				end
 				weaponFrame.Size = saved[weaponFrame].size
 				weaponFrame.AnchorPoint = saved[weaponFrame].anchor
 				weaponFrame.Position = saved[weaponFrame].position
@@ -3920,6 +3931,14 @@ do
 				recapPanel.Visible = false
 			end
 		end)
+	end)
+
+	-- A new body means you are no longer down: in a respawn mode (back in 5-6 s) the 10 s timer above
+	-- would leave the panel over the top of the screen, reading "ELIMINATED BY X", into live play.
+	-- The GUI doesn't reset on spawn, so it is hidden here.
+	player.CharacterAdded:Connect(function()
+		recap.token += 1
+		recapPanel.Visible = false
 	end)
 end
 

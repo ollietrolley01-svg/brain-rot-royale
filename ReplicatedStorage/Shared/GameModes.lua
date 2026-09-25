@@ -201,14 +201,14 @@ end
 
 -- Match events that still make sense in a respawn mode. Zone Rush and Hot Drops need a storm and
 -- supply drops; Loot Frenzy and Aura Farm are about chests, which nobody is fighting over when the
--- kit is handed to you. The rest change how the fight feels and are kept.
+-- kit is handed to you. The rest change how the fight feels and are kept. Shield Up and Bounty Rush
+-- are out too: the team kit already spawns everyone on a full shield, and MatchService.eliminate's
+-- respawn branch returns before any bounty is placed or paid, so both were banners that did nothing.
 local RESPAWN_EVENTS = {
 	RotRush = true,
 	LowGravity = true,
 	NightOps = true,
 	Headhunter = true,
-	ShieldUp = true,
-	BountyRush = true,
 }
 
 GameModes.Order = { "BattleRoyale", "TeamDeathmatch", "KingOfTheHill" }

@@ -111,6 +111,12 @@ function BrainrotShopService.Choose(player, name)
 	if not data then
 		return false, "Profile still loading."
 	end
+	-- A temporary profile (failed load, or the lock lost mid-session) never saves, so the pick would
+	-- die with the session and the paid receipt, refused until a later session, would pay out a random
+	-- brainrot. No DataStore at all is Studio, where Monetization's test grants still apply.
+	if PlayerData.HasStore() and not PlayerData.CanSave(player) then
+		return false, "Your progress isn't saving right now. Rejoin before buying."
+	end
 	local def = type(name) == "string" and BrainrotData.Get(name) or nil
 	if not def then
 		return false, "No such brainrot."

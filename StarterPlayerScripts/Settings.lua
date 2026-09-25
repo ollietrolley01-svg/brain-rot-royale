@@ -141,7 +141,29 @@ end
 local SAVE_DELAY = 1.5
 local saveToken = 0
 
+-- Nothing is sent until the saved settings have come back (see Loading): a save REPLACES the stored
+-- table, so defaults plus one change would wipe every custom bind and volume. Changes made before
+-- then are kept here as { op, id, value } and replayed over the saved values once they arrive.
+local loaded = false
+local pendingEdits = {}
+
+local function remember(op, id, value)
+	if loaded then
+		return
+	end
+	-- A slider drag is one Set per frame; only its last value matters.
+	local last = pendingEdits[#pendingEdits]
+	if op == "Set" and last and last[1] == op and last[2] == id then
+		last[3] = value
+	else
+		table.insert(pendingEdits, { op, id, value })
+	end
+end
+
 local function scheduleSave()
+	if not loaded then
+		return
+	end
 	saveToken += 1
 	local token = saveToken
 	task.delay(SAVE_DELAY, function()
@@ -183,6 +205,7 @@ function Settings.SetKey(actionId, keyCode)
 	end
 	values.keys[actionId] = keyCode.Name
 	fire(actionId)
+	remember("SetKey", actionId, keyCode)
 	scheduleSave()
 	return true
 end
@@ -201,6 +224,7 @@ function Settings.Set(id, value)
 		return
 	end
 	fire(id)
+	remember("Set", id, value)
 	scheduleSave()
 end
 
@@ -215,6 +239,7 @@ function Settings.ResetGroup(group)
 		end
 	end
 	fire("*")
+	remember("ResetGroup", group)
 	scheduleSave()
 end
 
@@ -331,13 +356,35 @@ local function adopt(saved)
 	end
 end
 
+-- Retried until it answers: GetSettings gives up (nil) after 20 s, and a profile load that will still
+-- succeed can take longer (a same-server rejoin waits on the old session's lock). Settling on the
+-- defaults then would let the first change save them over everything stored.
 task.spawn(function()
-	local ok, saved = pcall(function()
-		return Remotes.Function("GetSettings"):InvokeServer()
-	end)
-	if ok then
-		adopt(saved)
-		fire("*")
+	local retryDelay = 5
+	while true do
+		local ok, saved = pcall(function()
+			return Remotes.Function("GetSettings"):InvokeServer()
+		end)
+		if ok and type(saved) == "table" then
+			-- Start again from the saved values, then replay what the player changed while waiting
+			-- so it lands on top of them; the replay schedules the one save that carries both.
+			for _, section in pairs(values) do
+				for id in pairs(section) do
+					section[id] = nil
+				end
+			end
+			adopt(saved)
+			loaded = true
+			local edits = pendingEdits
+			pendingEdits = {}
+			for _, edit in ipairs(edits) do
+				Settings[edit[1]](edit[2], edit[3])
+			end
+			fire("*")
+			return
+		end
+		task.wait(retryDelay)
+		retryDelay = math.min(retryDelay * 2, 30)
 	end
 end)
 

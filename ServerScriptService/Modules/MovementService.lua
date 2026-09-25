@@ -339,7 +339,28 @@ local function bounceBoots(player, humanoid)
 	-- The client reads this for the HUD and to allow the double jump.
 	player:SetAttribute("BounceBootsUntil", workspace:GetServerTimeNow() + BOOTS_DURATION)
 
+	-- The stamp is on the player but the boots are on this body, so the body dying or being replaced (a
+	-- respawn, the lobby after the match) ends them; otherwise the next body keeps the double jump and
+	-- the HUD pill. Bumping the token leaves the timer below nothing to do.
+	local died, removed
+	local function bodyGone()
+		died:Disconnect()
+		removed:Disconnect()
+		if bootTokens[player] == token then
+			bootTokens[player] = token + 1
+			player:SetAttribute("BounceBootsUntil", nil)
+		end
+	end
+	died = humanoid.Died:Connect(bodyGone)
+	removed = humanoid.AncestryChanged:Connect(function()
+		if not humanoid:IsDescendantOf(game) then
+			bodyGone()
+		end
+	end)
+
 	task.delay(BOOTS_DURATION, function()
+		died:Disconnect()
+		removed:Disconnect()
 		if bootTokens[player] ~= token then
 			return
 		end
@@ -723,7 +744,8 @@ WeaponService.MovementEffect = function(player, itemId)
 	if itemId == "SpeedSoda" then
 		MovementService.SetSpeedBoost(player, SODA_MULTIPLIER, SODA_DURATION, { rush = true })
 	elseif itemId == "RotRocket" then
-		launch:FireClient(player, MovementService.RocketVelocity(flatLook(root)), "rocket")
+		-- Through launchCharacter, which grants the movement monitor the flight before firing the remote.
+		launchCharacter(character, MovementService.RocketVelocity(flatLook(root)), "rocket")
 	elseif itemId == "LaunchPad" then
 		deployPad(character, root)
 	elseif itemId == "BlinkBean" then
@@ -885,6 +907,7 @@ end
 
 Players.PlayerRemoving:Connect(function(player)
 	lastClientMove[player] = nil
+	bootTokens[player] = nil
 end)
 
 -- Read-only: what a climb or vault from here, facing `forward`, would be. Returns the kind

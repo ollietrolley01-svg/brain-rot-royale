@@ -14,6 +14,9 @@ In a compound's bays (ModeTeams.RuinBays): a bay full of rubble is cleared and r
 good is given up for another spot after BAY_FALLBACK_FAILS tries, and a bay with a person standing in it
 (a non-colliding root part) is never parked in. Throughout: nothing replaced before RespawnDelay, every
 loss replaced at it, bays kept full, never more live vehicles than slots, no replacement with nothing lost.
+A compound at the arena's edge still parks every bay on both sides: the farthest pair of sites
+RankBaseAxes will rank on the smallest arena (radius 600), with TeamBaseRuins' own bay and pad layout
+laid out there, keeps every declared bay inside RefuseVehicleSpot's arena rule and parks all its slots.
 Also runs VehicleService's own chassis-lost branch (Stepped) on a mock entry: it must set Wrecked.
 
 For the same thing with real physics, in Studio, see tools/base_vehicle_respawn_probe.lua; feed its log
@@ -36,6 +39,30 @@ from team_vehicles_check import PRELUDE, luau_to_lua, read, region, vehicle_mode
 from lupa import LuaRuntime  # noqa: E402
 
 SEEDS = 12
+
+# TeamBaseRuins' compound layout, as its own `local` lines: the footprint, the motor pool's bays and the
+# hall's spawn pads, all in the compound's frame (on the ground, looking at the arena centre).
+LAYOUT_NAMES = ("WX, WZ", "LANE_PITCH", "LANE_X0, LANE_X1", "EAST_Z0, EAST_Z1", "FRONT_Z", "FRONT_BAYS", "EAST_X",
+                "EAST_BAYS", "PAD_X", "PAD_Z")
+
+
+def ruin_layout(root):
+    """Lua returning { footprint = { x, z }, bays = { { x, z, yaw }... }, pads = { { x, z }... } }, built from
+    TeamBaseRuins.lua's own layout lines: the front row at FRONT_Z (yaw 0), the east row at EAST_X (yaw
+    -pi/2), and the pads PAD_X by PAD_Z."""
+    text = read(root, "ServerScriptService", "Modules", "TeamBaseRuins.lua")
+    lines = []
+    for name in LAYOUT_NAMES:
+        m = re.search(r"^local %s = .*$" % re.escape(name), text, re.M)
+        assert m, "TeamBaseRuins: no line for " + name
+        lines.append(m.group(0))
+    return "\n".join(lines) + r"""
+local bays, pads = {}, {}
+for _, x in ipairs(FRONT_BAYS) do table.insert(bays, { x, FRONT_Z, 0 }) end
+for _, z in ipairs(EAST_BAYS) do table.insert(bays, { EAST_X, z, -math.pi / 2 }) end
+for _, z in ipairs(PAD_Z) do for _, x in ipairs(PAD_X) do table.insert(pads, { x, z }) end end
+return { footprint = { 2 * (WX + 1), 2 * (WZ + 1) }, bays = bays, pads = pads }
+"""
 
 EXTRA = r"""
 local R = _R
@@ -281,6 +308,64 @@ before = R.creates
 seconds(100)
 if R.creates ~= before then fail(("bays: %d vehicles created with nothing lost"):format(R.creates - before)) end
 R.examined = R.examined + SLOTS
+
+-- 5. A compound at the arena's edge still parks every bay on both sides. The smallest arena (radius
+-- 880 is 600 after the clamp), and a SiteCost that favours the farthest site, so the pair ranked first
+-- is the farthest RankBaseAxes allows at all. Its declared bays keep RefuseVehicleSpot's arena rule
+-- (on purpose: the arena is a static storm wall in team modes), so every bay must be inside it.
+M.Teardown()
+M.Setup({ id = "TeamDeathmatch", teams = true }, { dropSpots = { Vector3.new(0, 0, 0) }, radius = 880, map = map })
+local edgeCentre, edgeRadius = M.Arena()
+CFrame.lookAt = CFrame.lookAt or function(at, target)
+    local d = target - at
+    return CFrame.new(at) * CFrame.Angles(0, math.atan2(-d.X, -d.Z), 0)
+end
+TeamBaseRuins = { Footprint = Vector3.new(R.layout.footprint[1], 0, R.layout.footprint[2]),
+    SiteCost = function(site) return 1000 - R.flat(site.Position, edgeCentre) end }
+-- RankBaseAxes hands the frame back (task.wait) between slices; here, outside any loop, that is a no-op.
+local wait = task.wait
+task.wait = function() end
+local ranked = M.RankBaseAxes(0, { map = map })
+task.wait = wait
+TeamBaseRuins = nil
+local best = ranked[1]
+if not best then fail("edge: RankBaseAxes ranked nothing at radius " .. edgeRadius) return out end
+R.extra = {}
+local edgeBays = { {}, {} }
+for team = 1, 2 do
+    local heading = best.axis + (team - 1) * math.pi
+    local base = edgeCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (edgeRadius * best.fraction)
+    local frame = CFrame.lookAt(Vector3.new(base.X, 10, base.Z), Vector3.new(edgeCentre.X, 10, edgeCentre.Z))
+    -- Flat, open ground round the compound: nothing of the mock world's own in the way.
+    R.features[team] = { base = M.BaseOf(team), hill = Vector3.new(1e6, 0, 1e6), hole = Vector3.new(1e6, 0, 1e6), buildings = {}, loot = {} }
+    local pads = M.BasePads(team)
+    table.clear(pads)
+    for _, p in ipairs(R.layout.pads) do table.insert(pads, (frame * CFrame.new(Vector3.new(p[1], 0, p[2]))).Position) end
+    for i, b in ipairs(R.layout.bays) do
+        local bay = frame * CFrame.new(Vector3.new(b[1], 0, b[2])) * CFrame.Angles(0, b[3], 0)
+        local why = M.RefuseVehicleSpot(team, bay.Position, nil, true)
+        if why then
+            fail(("edge: team %d's Bay%d refused (%s), %.1f from the centre at fraction %.2f of radius %d")
+                :format(team, i, why, R.flat(bay.Position, edgeCentre), best.fraction, edgeRadius))
+        end
+        table.insert(edgeBays[team], bay)
+    end
+end
+M.RuinBays = function(team) return edgeBays[team] end
+M.BaseVehicleBays = M.RuinBays
+local parked = M.SpawnBaseVehicles({ map = map })
+if parked ~= 2 * SLOTS then fail(("edge: parked %d of %d at the start (fraction %.2f of radius %d)"):format(parked, 2 * SLOTS, best.fraction, edgeRadius)) end
+for team = 1, 2 do
+    local filled, n = {}, 0
+    for _, slot in ipairs(M.BaseVehicleSlots(team)) do
+        local p = slot.model and slot.model.Parent and slot.model:GetPivot().Position
+        for i, bay in ipairs(edgeBays[team]) do
+            if p and not filled[i] and R.flat(p, bay.Position) < 1 then filled[i] = true n = n + 1 end
+        end
+    end
+    if n ~= math.min(SLOTS, #edgeBays[team]) then fail(("edge: team %d has %d of %d bays filled"):format(team, n, #edgeBays[team])) end
+end
+R.examined = R.examined + 2 * SLOTS
 M.Teardown()
 return out
 """
@@ -316,6 +401,7 @@ def run(root, plant=None, vs_plant=None, config_plant=None, seeds=SEEDS):
     if plant:
         assert plant[0] in body, "plant text not found: " + plant[0]
         body = body.replace(plant[0], plant[1], 1)
+    layout = ruin_layout(root)
     failures, examined = [], 0
     lua = LuaRuntime(unpack_returned_tuples=True)
     lua.execute(vs_branch(root, vs_plant))
@@ -329,6 +415,7 @@ def run(root, plant=None, vs_plant=None, config_plant=None, seeds=SEEDS):
         lua.globals()._R = R
         lua.execute(PRELUDE.replace("local R = ...", "local R = _R"))
         lua.execute(EXTRA)
+        lua.execute("_R.layout = (function()\n" + layout + "\nend)()")
         lua.execute("MatchConfig = (function() " + config_src + " end)()")
         if config_plant:
             lua.execute(config_plant)
@@ -361,6 +448,7 @@ PLANTS = [
     ("lost vehicle left standing", ("\t\t\t\t\tif wreck and wreck.Parent then\n\t\t\t\t\t\twreck:Destroy()", "\t\t\t\t\tif false then\n\t\t\t\t\t\twreck:Destroy()")),
     ("no respawn cap", ("\t\t\t\tif nowMs - slot.lostAt >= delayMs and ModeTeams.LiveBaseVehicles(team) < #slots then",
                         "\t\t\t\tif nowMs - (slot.lostAt or 0) >= 0 then")),
+    ("compound ranked past the arena's edge", ("if math.sqrt(halfX * halfX + far * far) > arenaRadius - ARENA_EDGE then", "if false then")),
 ]
 VS_PLANTS = [
     ("Wrecked not set by the destruction path", ('\t\t\t\t\tentry.model:SetAttribute("Wrecked", true)\n', "")),
@@ -370,7 +458,17 @@ CONFIG_PLANTS = [
 ]
 
 
-def judge_probe(path):
+def config_slots(root):
+    """How many base vehicles a team gets: #MatchConfig.TeamBaseVehicles.Slots, read as run() reads it."""
+    lua = LuaRuntime(unpack_returned_tuples=True)
+    lua.globals()._R = lua.eval("{ models = {}, mounts = {} }")
+    lua.execute(PRELUDE.replace("local R = ...", "local R = _R"))  # MatchConfig uses Vector3 and friends
+    lua.execute("MatchConfig = (function() " + luau_to_lua(read(root, "ReplicatedStorage", "Shared", "MatchConfig.lua"))
+                + " end)()")
+    return int(lua.eval("#MatchConfig.TeamBaseVehicles.Slots"))
+
+
+def judge_probe(path, root="."):
     text = open(path, encoding="utf-8", errors="replace").read()
     lines = re.findall(r"\[BVR\] (.*)", text)
     problems = []
@@ -386,7 +484,7 @@ def judge_probe(path):
         h1, n1, h2, n2, c1, w1, c2, w2, errs = map(int, m.groups())
         # A base that parked short at Setup is filled by the loop too, so "full" is every slot, and each
         # base is owed one replacement per loss plus one per slot it started without.
-        slots = 6
+        slots = config_slots(root)
         if h1 != slots or h2 != slots:
             problems.append("bases not full: " + result)
         if c1 != w1 + slots - n1 or c2 != w2 + slots - n2:
@@ -417,7 +515,7 @@ def judge_probe(path):
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "."
     if "--probe-log" in sys.argv:
-        sys.exit(judge_probe(sys.argv[sys.argv.index("--probe-log") + 1]))
+        sys.exit(judge_probe(sys.argv[sys.argv.index("--probe-log") + 1], root))
     if "--plant" in sys.argv:
         missed, total = 0, 0
         runs = [(n, {"plant": p}) for n, p in PLANTS] + [(n, {"vs_plant": p}) for n, p in VS_PLANTS] \

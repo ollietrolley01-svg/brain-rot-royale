@@ -48,8 +48,12 @@ local RELIEF = 0.08
 -- "Armor" is every armoured car's plate above the belt line AND its armoured glass: shot at, an
 -- armoured cabin stops the round and the vehicle takes it (VehicleArmor), where a car's glass lets it
 -- through to whoever is behind it.
+-- A prefix catches every part it starts, so none may start a glass pane's name or a bit of trim's:
+-- "QuarterSill"/"QuarterHead", not "Quarter" (the van's QuarterGlass is glass), and the bikes' exhaust
+-- pipes are HeadPipe*, clear of the van's roof "Header". RearDoor, CornerBack and PostC close the van's
+-- back above the belt, RearWall the Ranger's cab back (its RearWindow stays glass).
 local SOLID_NAMES = { "Pillar", "Sail", "BedWall", "BedCorner", "Tailgate", "DoorTop", "CabHead",
-	"PostB", "Header", "Roof", "Quarter", "Armor" }
+	"PostB", "PostC", "Header", "Roof", "QuarterSill", "QuarterHead", "CornerBack", "RearDoor", "RearWall", "Armor" }
 
 local RESERVED_NAMES = {
 	Wall = true, Floor = true, Roof = true, Gable = true, Parapet = true, Stair = true,
@@ -1133,7 +1137,7 @@ VehicleModels.Models.PatapimScrambler = {
 		b:box("TailLight", V(0.34, 0.16, 0.3), CF(0, 4.22, 4.9) * A(-9, 0, 0), "tail")
 
 		-- Exhaust: an expansion chamber round the right side and a silencer up under the tail.
-		b:pipe("Header", { V(0.1, 2.92, -0.92), V(0.3, 2.36, -1.42), V(0.5, 1.8, -1.0), V(0.7, 2.2, 0.3), V(0.82, 3.1, 1.5) }, 0.24, "chrome")
+		b:pipe("HeadPipe", { V(0.1, 2.92, -0.92), V(0.3, 2.36, -1.42), V(0.5, 1.8, -1.0), V(0.7, 2.2, 0.3), V(0.82, 3.1, 1.5) }, 0.24, "chrome")
 		b:pipe("Chamber", { V(0.46, 1.78, -1.18), V(0.6, 1.58, -0.4), V(0.72, 2.18, 0.55), V(0.8, 2.95, 1.35) }, 0.34, "exhaust")
 		b:tube("Silencer", V(0.82, 3.04, 1.3), V(0.84, 3.52, 3.4), 0.5, "alloy")
 		b:tube("SilencerCap", V(0.84, 3.50, 3.36), V(0.845, 3.56, 3.58), 0.64, "dash")
@@ -2147,7 +2151,7 @@ VehicleModels.Models.BrrStreetfighter = {
 			b:wedge(s < 0 and "RadiatorShroudL" or "RadiatorShroudR", V(0.14, 0.9, 0.7), CF(s * 0.72, 2.75, -1.5) * A(0, 180, 0), "body")
 		end
 		for index, x in ipairs({ -0.45, -0.15, 0.15, 0.45 }) do
-			b:pipe("Header" .. index, { V(x, 2.62, -0.92), V(x * 0.9, 1.7, -1.55), V(x * 0.6, 1.08, -1.05), V(x * 0.2, 1.02, -0.2) }, 0.19, "chrome")
+			b:pipe("HeadPipe" .. index, { V(x, 2.62, -0.92), V(x * 0.9, 1.7, -1.55), V(x * 0.6, 1.08, -1.05), V(x * 0.2, 1.02, -0.2) }, 0.19, "chrome")
 		end
 		b:pipe("Collector", { V(0, 1.02, -0.2), V(0.45, 1.05, 0.4), V(0.95, 1.3, 1.0) }, 0.26, "exhaust")
 		b:tube("Silencer", V(1.0, 1.38, 0.95), V(1.06, 1.8, 1.95), 0.5, "alloy")

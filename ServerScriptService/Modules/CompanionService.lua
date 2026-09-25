@@ -63,7 +63,7 @@ local SCALE = 0.55
 -- the real third-person camera and does not overlap the bottom-left HUD panels. The only use site
 -- (grepped) is `anchor.Position` below and the `cframe` this function builds the model at; every
 -- attack/ability origin elsewhere in this file reads the companion's LIVE position dynamically
--- (`entry.root.Position`), so nothing else needed to change for this.
+-- (`entry.root.Position`, through moveOrigin), so nothing else needed to change for this.
 local FOLLOW_OFFSET = Vector3.new(-2.8, 2.6, 2.4)
 local THINK_INTERVAL = 0.2
 -- Further than this from its anchor means the owner teleported; snap rather than fly across the map.
@@ -549,10 +549,39 @@ local function friendly(owner, token)
 	return ok and hostile == false
 end
 
+-- Oliver, 2026-09-25: "enemy brainrots can attack you while parachuting". Still under a canopy (the
+-- match drop-in, or a Rot Glider) is the one signal the server has for it: MovementService welds a
+-- "GliderCanopy" on, lifts it off when the feet are down, and MovementSanity reads the same child. A
+-- companion never picks, beams, forks onto or damages anyone wearing one, and a bot's companion does
+-- not fight while the bot itself is still dropping in.
+local function underCanopy(character)
+	return character ~= nil and character:FindFirstChild("GliderCanopy") ~= nil
+end
+
+-- Where a move is measured from: the companion, but never more than ORIGIN_SLACK studs from its anchor.
+-- A player's client simulates their companion (attachModel), so its position is the client's word, and
+-- the only check on it was the think loop's snap at TELEPORT_DISTANCE: a modified client could park it
+-- beside anyone, or behind any wall, within 80 studs of its owner and fire, and the range, sight and
+-- splash centre were all measured from there. The anchor hangs off the owner's own root. A companion
+-- trailing its owner sits well inside the slack, so an honest one is measured from where it is.
+local ORIGIN_SLACK = 8
+local function moveOrigin(entry)
+	local at = entry.root.Position
+	if not entry.anchor.Parent then
+		return at
+	end
+	local anchorPosition = entry.anchor.WorldPosition
+	local offset = at - anchorPosition
+	if offset.Magnitude > ORIGIN_SLACK then
+		return anchorPosition + offset.Unit * ORIGIN_SLACK
+	end
+	return at
+end
+
 -- The living enemy in range and in sight of the companion that sits nearest the owner's
 -- crosshair, or, with no aim point (bots), simply the nearest one.
 local function pickTarget(owner, entry, aimPoint)
-	local from = entry.root.Position
+	local from = moveOrigin(entry)
 	local ownerCharacter = Combatants.GetCharacter(owner)
 	local head = ownerCharacter and ownerCharacter:FindFirstChild("Head")
 	local eye = head and head.Position or from
@@ -560,7 +589,7 @@ local function pickTarget(owner, entry, aimPoint)
 
 	local bestToken, bestRoot, bestScore = nil, nil, math.huge
 	for character, token in pairs(Combatants.All()) do
-		if token ~= owner and character.Parent and not friendly(owner, token) then
+		if token ~= owner and character.Parent and not friendly(owner, token) and not underCanopy(character) then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
@@ -590,12 +619,12 @@ end
 CompanionService.OnLevelUp = nil
 
 -- Every point of damage a player's companion lands is a point of XP for that brainrot. A
--- level-up takes effect on the spot, not at the next spawn.
-local function awardXp(player, dealt)
+-- level-up takes effect on the spot, not at the next spawn. `entry` is the companion that landed it
+-- (nil: nobody's XP -- see hit).
+local function awardXp(player, entry, dealt)
 	if typeof(player) ~= "Instance" or not player:IsA("Player") then
 		return
 	end
-	local entry = companions[player]
 	local data = PlayerData.Get(player)
 	if not entry or not data then
 		return
@@ -605,8 +634,14 @@ local function awardXp(player, dealt)
 	data.CompanionXp[name] = (data.CompanionXp[name] or 0) + dealt
 	local after = BrainrotData.LevelForXp(data.CompanionXp[name])
 	if after > before then
+		-- Health too, as UpdateStats does it: the new maximum, at the same fraction of it. Only the
+		-- stats used to change, so the toast's "+N% health" never arrived until the next spawn.
+		local fraction = entry.maxHealth > 0 and entry.health / entry.maxHealth or 1
 		entry.stats = BrainrotData.Stats(entry.def, after, data.Stars[name])
+		entry.maxHealth = entry.stats.health
+		entry.model:SetAttribute("MaxHealth", entry.stats.health)
 		entry.model:SetAttribute("Level", after)
+		setHealth(entry, entry.stats.health * fraction)
 		if CompanionService.OnLevelUp then
 			-- A toast and a push: news, sent after the XP and stats are written, and never allowed
 			-- to cost the rest of a splash its other victims.
@@ -641,7 +676,8 @@ end
 -- CombatDamageScale: an amount handed to DealDamage (or to a DoT, which ticks through it) costs
 -- `amount * scale` of the budget. A Secret has no cap and no budget.
 local function useReport(entry)
-	return { positions = {}, cap = BrainrotData.MaxUseDamage[entry.def.rarity], spent = {} }
+	-- `entry`: the companion making the use, whose XP, venom and style its hits carry (hit).
+	return { positions = {}, cap = BrainrotData.MaxUseDamage[entry.def.rarity], spent = {}, entry = entry }
 end
 
 -- The most of `amount` (a DealDamage amount, before the scale) the use may still put on `token`, and
@@ -686,7 +722,7 @@ end
 
 -- `report` (optional) collects where damage landed, for one CompanionHit broadcast per attack.
 local function hit(player, token, amount, tag, report)
-	if not Combatants.IsAlive(token) then
+	if not Combatants.IsAlive(token) or underCanopy(Combatants.GetCharacter(token)) then
 		return
 	end
 	amount = withinUse(report, token, amount)
@@ -698,7 +734,14 @@ local function hit(player, token, amount, tag, report)
 		return
 	end
 	damageDealt[player] = (damageDealt[player] or 0) + dealt
-	awardXp(player, dealt)
+	-- XP, venom and style belong to the companion that made the hit, and only while it is still the one
+	-- out. A Spit, Bonk or Lob still in flight when its owner equipped another brainrot used to level the
+	-- new one with this one's damage and put the new one's venom and style on the hit.
+	local entry = companions[player]
+	if report and report.entry and report.entry ~= entry then
+		entry = nil
+	end
+	awardXp(player, entry, dealt)
 	if report then
 		local root = Combatants.GetRoot(token)
 		if root and #report.positions < MAX_HIT_MARKS then
@@ -710,7 +753,6 @@ local function hit(player, token, amount, tag, report)
 		end
 		report.killed = report.killed or not Combatants.IsAlive(token)
 	end
-	local entry = companions[player]
 	if not entry then
 		return
 	end
@@ -776,7 +818,7 @@ local function chainTarget(player, token, targetRoot, tag, exclude)
 			if distance < bestDistance then
 				local vetoed = CombatService.DamageVeto ~= nil and CombatService.DamageVeto(player, target.token, tag) == true
 				local character = Combatants.GetCharacter(target.token)
-				if not vetoed and character and lineOfSight(at, character, target.root, ownerCharacter, targetCharacter) then
+				if not vetoed and character and not underCanopy(character) and lineOfSight(at, character, target.root, ownerCharacter, targetCharacter) then
 					best, bestDistance = target, distance
 				end
 			end
@@ -822,7 +864,7 @@ local function onBeam(player, entry, from, to)
 	end
 	local bestToken, bestRoot, bestAt = nil, nil, math.huge
 	for character, token in pairs(Combatants.All()) do
-		if token ~= player and character.Parent and not friendly(player, token) then
+		if token ~= player and character.Parent and not friendly(player, token) and not underCanopy(character) then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if humanoid and root and humanoid.Health > 0 then
@@ -921,7 +963,7 @@ local function attack(player, entry, token, targetRoot)
 	local stats = entry.stats
 	local kind = stats.kind
 	local tag = "Companion:" .. entry.def.name
-	local from = entry.root.Position
+	local from = moveOrigin(entry)
 	-- A Lob lands where it was aimed, so it leads through its flight as well; everything else homes in
 	-- or strikes at once, and only needs the windup.
 	local to = kind == "Lob" and lead(targetRoot, WINDUP + LOB_TIME, LOB_MAX_LEAD) or lead(targetRoot)
@@ -934,7 +976,7 @@ local function attack(player, entry, token, targetRoot)
 		task.delay(WINDUP, function()
 			if CombatService.IsEnabled() and stillOut(player, entry) then
 				-- Centred where the creature is when it lands the stomp; its range is the radius.
-				splash(player, entry.root.Position, stats.range, stats.damage, nil, tag, report)
+				splash(player, moveOrigin(entry), stats.range, stats.damage, nil, tag, report)
 				reportHits(entry, report)
 			end
 		end)
@@ -983,7 +1025,7 @@ end
 
 -- Where a move with no target goes: toward the crosshair, no further than the move's range.
 local function reachPoint(owner, entry, aimPoint)
-	local from = entry.root.Position
+	local from = moveOrigin(entry)
 	if not aimPoint then
 		local root = Combatants.GetRoot(owner)
 		local forward = root and root.CFrame.LookVector or Vector3.new(0, 0, -1)
@@ -1007,14 +1049,14 @@ local function attackPoint(player, entry, to)
 	local kind = stats.kind
 	local tag = "Companion:" .. entry.def.name
 	local payload = basePayload(player, entry, to)
-	local from = payload.from
+	local from = moveOrigin(entry)
 	payload.travel = travelTime(kind, from, to)
 	local report = useReport(entry)
 
 	if kind == "Shockwave" then
 		task.delay(WINDUP, function()
 			if CombatService.IsEnabled() and stillOut(player, entry) then
-				splash(player, entry.root.Position, stats.range, stats.damage, nil, tag, report)
+				splash(player, moveOrigin(entry), stats.range, stats.damage, nil, tag, report)
 				reportHits(entry, report)
 			end
 		end)
@@ -1342,6 +1384,21 @@ function CompanionService.BoonHealth(player, humanoid)
 	return CompanionBoons.GrantedHealth(player, humanoid)
 end
 
+-- While combat is off (the results screen, then the lobby). A venom boon or a Burn/Toxic DoT rides
+-- CompanionBoons' venom ticker, whose DealDamage has no enabled gate, so one started just before the
+-- buzzer went on hurting its victim on the results screen -- and could kill them there, after the
+-- match's death handling was gone. What is left of each is zeroed rather than dropped: it runs out on
+-- its usual schedule without landing, and none carries into the next match. StatusEffects.tickAll
+-- stops its own DoTs when combat goes off for the same reason.
+local function defuseVenoms()
+	for _, token in pairs(Combatants.All()) do
+		local dot = CompanionBoons.VenomOn(token)
+		if dot then
+			dot.perTick = 0
+		end
+	end
+end
+
 function CompanionService.Start()
 	ensureFolder()
 
@@ -1389,6 +1446,9 @@ function CompanionService.Start()
 			for owner in pairs(companions) do
 				CompanionBoons.Tick(owner, THINK_INTERVAL)
 			end
+			if not CombatService.IsEnabled() then
+				defuseVenoms()
+			end
 			CompanionBoons.TickVenom(THINK_INTERVAL)
 		end
 		if sliceAccumulated < THINK_INTERVAL / THINK_SLICES then
@@ -1418,7 +1478,8 @@ function CompanionService.Start()
 				entry.gui.Enabled = fighting
 
 				-- Bots have no hotkey: theirs fight on their own whenever the move is ready.
-				if fighting and Combatants.IsBot(owner) and canAct(entry) and now - entry.lastAttackAt >= entry.stats.cooldown then
+				if fighting and Combatants.IsBot(owner) and canAct(entry) and now - entry.lastAttackAt >= entry.stats.cooldown
+					and not underCanopy(Combatants.GetCharacter(owner)) then
 					local token, targetRoot = pickTarget(owner, entry, nil)
 					if token then
 						entry.lastAttackAt = now

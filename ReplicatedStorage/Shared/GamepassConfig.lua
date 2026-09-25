@@ -404,8 +404,13 @@ end
 -- A one-match product that can never beat a pass this player owns for good (`owned` and `temp` are
 -- the profile snapshot's ownedPasses and tempPasses). The shop hides it rather than sell something
 -- PlanBoosts would never spend. A pass won for a day on the Daily Spin doesn't count: it runs out.
-function GamepassConfig.Outclassed(product, owned, temp)
+-- `permanent` (the snapshot's permanentPasses: owned outright) wins when given: ownedPasses and
+-- tempPasses can't tell "spin copy only" from "bought outright while a spin copy still runs".
+function GamepassConfig.Outclassed(product, owned, temp, permanent)
 	local pass = product and product.outclassedBy
+	if pass ~= nil and permanent ~= nil then
+		return permanent[pass] == true
+	end
 	return pass ~= nil and owned ~= nil and owned[pass] == true and not (temp and temp[pass])
 end
 

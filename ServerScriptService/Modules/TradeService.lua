@@ -120,6 +120,13 @@ local function closeSession(session, message)
 	end
 end
 
+-- IsBusy was asked only when the session opened, so one opened while a match was loading (nobody
+-- is alive yet) or by a downed respawn-mode player stayed usable in live play. Offer, Confirm and
+-- execute ask again and close a session either side of which is now in a match.
+local function eitherBusy(session)
+	return TradeService.IsBusy(session.a) or TradeService.IsBusy(session.b)
+end
+
 --------------------------------------------------------------------------------
 -- Invites
 --------------------------------------------------------------------------------
@@ -199,6 +206,11 @@ function TradeService.Offer(player, name, add)
 	if session.executing then
 		return false, "That trade is already going through."
 	end
+	-- closeSession toasts both sides, so the caller gets no second copy in the reply.
+	if eitherBusy(session) then
+		closeSession(session, "Trading is lobby-only.")
+		return false, nil
+	end
 	if not BrainrotData.Get(name) then
 		return false, "No such brainrot."
 	end
@@ -249,6 +261,10 @@ end
 -- is marked executing first (Confirm, Offer and Cancel refuse it) and closed before anything yields.
 local function execute(session)
 	if session.executing then
+		return
+	end
+	if eitherBusy(session) then
+		closeSession(session, "Trading is lobby-only.")
 		return
 	end
 	session.executing = true
@@ -342,6 +358,10 @@ function TradeService.Confirm(player, value)
 	end
 	if session.executing then
 		return false, "That trade is already going through."
+	end
+	if eitherBusy(session) then
+		closeSession(session, "Trading is lobby-only.")
+		return false, nil
 	end
 
 	session.confirmed[player] = value == true

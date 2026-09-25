@@ -115,7 +115,8 @@ local function skullAt(position)
 end
 
 damageDealt.OnClientEvent:Connect(function(_, wasKill, position, _, headshot, kind)
-	if not wasKill or kind == "structure" then
+	-- A wrecked vehicle is HudClient's WRECKED, not a kill: no payoff and no step in the chain.
+	if not wasKill or kind == "structure" or kind == "vehicle" then
 		return
 	end
 	-- Wall time: os.clock is CPU time in Roblox and stretches the chain window under load.

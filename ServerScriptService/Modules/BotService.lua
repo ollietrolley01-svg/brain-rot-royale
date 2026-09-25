@@ -95,17 +95,21 @@ BotService.Tick = 0
 -- answer is kept per bot for the tick (cleared when BotService.Tick moves on). shootAt still asks
 -- at the trigger, through this same cache, so a side swap mid-match is seen by the next slice.
 local function hostile(bot, token)
-	-- Riding together is a truce: nobody sharing a bot's vehicle is its target (BOT VEHICLES).
+	local hook = BotService.IsHostile
+	-- Riding together is a truce: nobody sharing a bot's vehicle is its target (BOT VEHICLES). Not an
+	-- enemy who climbed in, though (VehicleService seats anyone in an empty seat): in a team mode the
+	-- hook below decides for co-riders as for anyone, and in the battle royale the truce ends for a
+	-- player the bot is fighting (vehicleFoes: one who shot it lately). Vehicles.hostileRider gets it out.
 	local ride = bot.ride
-	if ride and ride.model then
+	if not hook and ride and ride.model then
 		local character = Combatants.GetCharacter(token)
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local seat = humanoid and humanoid.SeatPart
-		if seat and seat.Parent == ride.model then
+		if seat and seat.Parent == ride.model
+			and (Combatants.IsBot(token) or not (bot.vehicleFoes and bot.vehicleFoes[token])) then
 			return false
 		end
 	end
-	local hook = BotService.IsHostile
 	if not hook then
 		return true
 	end
@@ -696,6 +700,13 @@ end
 local function claimPhysics(character)
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if not root or not root:IsDescendantOf(workspace) then
+		return false
+	end
+	-- Not while seated: the seat weld makes the bot part of the vehicle's assembly, whose owner
+	-- VehicleService decides (a player driver's client). Claiming the root took the whole car from its
+	-- driver, and VehicleService never re-asserts an owner it thinks it already set.
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.SeatPart then
 		return false
 	end
 	-- Just claim it. Reading the current owner first is no cheaper and GetNetworkOwner() ERRORS while
@@ -1657,9 +1668,14 @@ local function modeObjective(bot, root, state, now)
 		local spread = Vector3.new(math.cos(slot), 0, math.sin(slot)) * 10
 		return sighting.position + spread, "push"
 	end
+	-- Only someone on a side: a player still in the lobby (unready, or joined mid-match) has no team, so
+	-- the hook calls them hostile, and the lobby floats over the arena centre, nearer than the enemy base.
+	local teams = lazy("ModeTeams")
+	local teamOf = teams and teams.TeamOf
 	local nearest, nearestDistance = nil, math.huge
 	for _, entry in ipairs(combatantList) do
-		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token) then
+		if entry.token ~= bot and entry.humanoid.Health > 0 and hostile(bot, entry.token)
+			and not (teamOf and teamOf(entry.token) == nil) then
 			local distance = flatDistance(root.Position, entry.position)
 			if distance < nearestDistance then
 				nearest, nearestDistance = entry, distance
@@ -1699,6 +1715,10 @@ local function setSprint(bot, want)
 	if bot.sprinting ~= want then
 		local accepted = match.SetSprinting(bot, want)
 		bot.sprinting = want and accepted ~= false
+		-- MatchService stands a body up whenever it asks to sprint; keep the crouch cache in step.
+		if want then
+			bot.crouching = false
+		end
 		if bot.sprinting then
 			STATS.sprints += 1
 		end
@@ -1725,6 +1745,9 @@ local function setCrouch(bot, want)
 	local accepted = match.SetCrouching(bot, want)
 	bot.crouching = want and accepted ~= false
 	if bot.crouching then
+		-- A crouch ends the sprint in MatchService. Left set here, the next setSprint(true) was a no-op
+		-- and the bot fled or rotated at walk speed, with no slide.
+		bot.sprinting = false
 		STATS.crouches += 1
 	end
 end
@@ -2992,9 +3015,12 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 				else
 					local id = item:GetAttribute("WeaponId")
 					local def = id and WeaponData.Get(id)
+					-- And one takeGun would keep (bestGear's rule): a higher tier of a class it doesn't want, with
+					-- a backup already on its back, was claimed, dropped at its feet as junk and found again.
 					wanted = def ~= nil and (Rarity.Index[def.rarity] or 0) > myRank
 						and not def.staged and not BOT_WEAPON_HOLD[def.id]
-						and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile]) and true or false
+						and (not def.projectile or BOT_PROJECTILE_KINDS[def.projectile])
+						and BotService.Loot.wouldKeep(bot, def, BotService.Loot.dial(bot, "upgradeThreshold")) and true or false
 				end
 				if wanted and lootAllowed(bot, item, distance, center, circleRadius, now) then
 					best, bestDistance = item, distance
@@ -3204,6 +3230,11 @@ local function fight(bot, humanoid, root, head, candidate, pressure, now)
 	local target, targetRoot, distance = candidate.token, candidate.root, candidate.distance
 	local eye = targetRoot.Position + Vector3.new(0, 1.5, 0)
 	local dials = ARCH.dialsOf(bot)
+	-- A new target is a new fight: the reaction delay, aim settle and per-fight rolls start over. Only a
+	-- think with no candidate zeroed acquiredAt, so switching straight from one target to the next kept them.
+	if bot.target ~= target then
+		bot.acquiredAt = 0
+	end
 	bot.target = target
 	bot.lastCombatAt = now
 	bot.fightState = "engage"
@@ -3734,6 +3765,13 @@ end
 function Vehicles.teamsActive()
 	local teams = lazy("ModeTeams")
 	return teams ~= nil and teams.IsActive ~= nil and teams.IsActive()
+end
+
+-- Oliver, 2026-09-25: "make the bots not camp in vehicle gunner seats in battle royale". Only a team mode
+-- (TeamDeathmatch, KingOfTheHill: ModeTeams active) puts a bot on a vehicle's gun; in the battle royale
+-- they are left to players. Stationary guns (MountedGuns, BotGunner) are not vehicles and are unchanged.
+function Vehicles.botGunners()
+	return Vehicles.teamsActive()
 end
 
 function Vehicles.teamOf(token)
@@ -4346,6 +4384,21 @@ function Vehicles.gunnerThink(bot, root, head, ride, now)
 		Vehicles.leaveRide(bot, "wrecked")
 		return
 	end
+	-- The battle royale (Vehicles.botGunners): a bot on a vehicle's gun, seated before this, gets down at once.
+	if not Vehicles.botGunners() then
+		local stationary = lazy("BotGunner")
+		if not (stationary and stationary.IsGun(model)) then
+			Vehicles.leaveRide(bot, "battle royale")
+			return
+		end
+	end
+	-- Outside the circle with nobody at the wheel to drive it out: down, and run for it (updateBot's
+	-- storm branch). A target in sight used to keep the bot on the gun until the storm killed it.
+	local driverSeat = model:FindFirstChild("DriverSeat")
+	if not (driverSeat and driverSeat.Occupant) and StormService.IsOutside(root.Position) then
+		Vehicles.leaveRide(bot, "storm", 8)
+		return
+	end
 	Vehicles.refreshFoes(bot, now)
 	local candidate = findTarget(bot, root, head, now)
 	-- A stationary gun (BotGunner): off when idle, flanked, broken or hurt, and on to something else.
@@ -4371,7 +4424,6 @@ function Vehicles.gunnerThink(bot, root, head, ride, now)
 	else
 		ride.fight = nil
 		ride.trigger = false
-		local driverSeat = model:FindFirstChild("DriverSeat")
 		if not (driverSeat and driverSeat.Occupant) and now - (ride.lastTargetAt or now) > VEHICLE.IDLE then
 			Vehicles.leaveRide(bot, "idle", 8)
 		end
@@ -4504,6 +4556,41 @@ function Vehicles.mountedGunSeat(bot, root, fighting, now)
 	})
 end
 
+-- Who a bot shares a vehicle with: a teammate, or in the battle royale another bot on a ride.
+function Vehicles.friendlyHolder(team, holder)
+	return holder ~= nil and ((team ~= nil and Vehicles.teamOf(holder) == team)
+		or (team == nil and Combatants.IsBot(holder) and riders[holder] ~= nil))
+end
+
+-- True when `seat` holds someone the bot does not share a vehicle with.
+function Vehicles.strangerIn(team, seat)
+	local occupant = seat and seat.Occupant
+	local holder = occupant and occupant.Parent and Combatants.FromCharacter(occupant.Parent)
+	return holder ~= nil and not Vehicles.friendlyHolder(team, holder)
+end
+
+-- True when anyone else sits in this vehicle (`seats`, VehicleService.SeatsOf). Boarding it would put
+-- the bot on an enemy's gun or at the wheel under an enemy gunner, at truce with them (hostile()).
+function Vehicles.strangerAboard(team, seats)
+	if Vehicles.strangerIn(team, seats.driver) or Vehicles.strangerIn(team, seats.gunner) then
+		return true
+	end
+	for _, passenger in ipairs(seats.passengers or {}) do
+		if Vehicles.strangerIn(team, passenger) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Pressed by the storm: past the pressure this bot rotates at (BotService.Loot.rotateAt), which is always
+-- so outside the circle. MatchConfig's rotate point where only this section is loaded (tools/bot_driving_takeover.py).
+function Vehicles.stormPressed(bot, root)
+	local Loot = BotService.Loot
+	local rotateAt = Loot and Loot.rotateAt and Loot.rotateAt(bot) or MatchConfig.BotStormRotate
+	return stormPressure(root.Position) >= rotateAt
+end
+
 function Vehicles.pickSeat(bot, root, now)
 	local VehicleService = lazy("VehicleService")
 	if not VehicleService or not VehicleService.VehiclesNear then
@@ -4511,9 +4598,12 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 	local team = Vehicles.teamOf(bot)
 	local fighting = bot.target ~= nil or (bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW)
+	-- Pressed by the storm (the bot is rotating, or outside the circle): no gun to sit at. Only a
+	-- vehicle that goes somewhere (a waiting driver's gun, a ride, a trip toward travelGoal) will do.
+	local pressed = Vehicles.stormPressed(bot, root)
 	-- A mountable gun (MountedGuns) close by is manned like a vehicle's turret: in a fight, or now and then
 	-- roaming past one. The gunner branch (gunnerThink, vehicleTrigger) then works it through VehicleWeapons.
-	local gunSeat = Vehicles.mountedGunSeat(bot, root, fighting, now)
+	local gunSeat = not pressed and Vehicles.mountedGunSeat(bot, root, fighting, now)
 	if gunSeat then
 		return gunSeat, "gunner", "fight"
 	end
@@ -4529,11 +4619,10 @@ function Vehicles.pickSeat(bot, root, now)
 			local seats = VehicleService.SeatsOf(found.model)
 			local driver = seats and seats.driver.Occupant
 			local holder = driver and driver.Parent and Combatants.FromCharacter(driver.Parent)
-			local friendly = holder ~= nil and ((team ~= nil and Vehicles.teamOf(holder) == team)
-				or (team == nil and Combatants.IsBot(holder) and riders[holder] ~= nil))
+			local friendly = Vehicles.friendlyHolder(team, holder)
 			if friendly then
 				local ride = riders[holder]
-				if seats.gunner and not seats.gunner.Occupant then
+				if seats.gunner and not seats.gunner.Occupant and Vehicles.botGunners() then
 					return seats.gunner, "gunner", "gunner"
 				end
 				if team ~= nil and ride and ride.offerUntil and now < ride.offerUntil and not fighting then
@@ -4549,12 +4638,14 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 
 	if fighting then
-		if math.random() > VEHICLE.FIGHT_CHANCE * Vehicles.preference(bot) then
+		-- Only armed vehicles are looked at here, for their gun (or the wheel under a bot on it): in the
+		-- battle royale, where no bot mans one (Vehicles.botGunners), none.
+		if pressed or not Vehicles.botGunners() or math.random() > VEHICLE.FIGHT_CHANCE * Vehicles.preference(bot) then
 			return nil
 		end
 		for _, found in ipairs(near) do
 			local seats = not Vehicles.shunned(bot, found.model, now) and VehicleService.SeatsOf(found.model)
-			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner then
+			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner and not Vehicles.strangerAboard(team, seats) then
 				if not seats.gunner.Occupant then
 					return seats.gunner, "gunner", "fight"
 				end
@@ -4571,10 +4662,11 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 	-- Roaming past a free gun: now and then a bot mans it, and watches from it (VEHICLE.IDLE) for
 	-- someone to shoot or someone to drive it.
-	if math.random() < VEHICLE.ROAM_GUN_CHANCE * Vehicles.preference(bot) then
+	if not pressed and Vehicles.botGunners() and math.random() < VEHICLE.ROAM_GUN_CHANCE * Vehicles.preference(bot) then
 		for _, found in ipairs(near) do
 			local seats = VehicleService.SeatsOf(found.model)
-			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner and not seats.gunner.Occupant then
+			if found.distance <= VEHICLE.FIGHT_SEEK and seats and seats.gunner and not seats.gunner.Occupant
+				and not Vehicles.strangerAboard(team, seats) then
 				return seats.gunner, "gunner", "fight"
 			end
 		end
@@ -4589,7 +4681,8 @@ function Vehicles.pickSeat(bot, root, now)
 	local best, bestScore = nil, math.huge
 	for _, found in ipairs(near) do
 		local seats = not Vehicles.shunned(bot, found.model, now) and VehicleService.SeatsOf(found.model)
-		if seats and not seats.driver.Occupant and found.distance <= (MatchConfig.BotBoardReach or 60) then
+		if seats and not seats.driver.Occupant and found.distance <= (MatchConfig.BotBoardReach or 60)
+			and not Vehicles.strangerAboard(team, seats) then
 			local position = found.model:GetPivot().Position
 			if flatDistance(position, goal) < flatDistance(root.Position, goal) + 20 then
 				local score = found.distance + ((seats.gunner and not seats.gunner.Occupant) and 50 or 0)
@@ -4610,8 +4703,10 @@ function Vehicles.considerVehicle(bot, humanoid, root, now)
 	local boarding = bot.boarding
 	if boarding then
 		local seat = boarding.seat
+		-- A gun ("fight": jumped on, or roaming past) is given up once the storm presses (pickSeat).
 		if now > boarding.giveUpAt or seat.Occupant or not seat:IsDescendantOf(workspace)
-			or (boarding.role == "driver" and not Vehicles.driverRoom(bot)) then
+			or (boarding.role == "driver" and not Vehicles.driverRoom(bot))
+			or (boarding.purpose == "fight" and Vehicles.stormPressed(bot, root)) then
 			bot.boarding = nil
 			bot.noVehicleUntil = now + VEHICLE.CHECK_EVERY * 2
 			return false
@@ -4644,6 +4739,34 @@ function Vehicles.considerVehicle(bot, humanoid, root, now)
 	return true
 end
 
+-- Someone aboard this bot's ride that hostile() keeps no truce with, by the same rule: in a team mode
+-- anyone not on its side (an enemy who took a free seat), in the battle royale a player it is fighting
+-- (vehicleFoes: one who shot it lately). Nobody aboard can be fought from a seat (a turret's round
+-- passes through everyone riding, VehicleWeapons), so the bot gets out.
+function Vehicles.hostileRider(bot, ride, now)
+	Vehicles.refreshFoes(bot, now)
+	local teams = Vehicles.teamsActive()
+	local team = teams and Vehicles.teamOf(bot) or nil
+	for _, child in ipairs(ride.model:GetChildren()) do
+		if child:IsA("Seat") or child:IsA("VehicleSeat") then
+			local occupant = child.Occupant
+			local token = occupant and occupant.Parent and Combatants.FromCharacter(occupant.Parent)
+			if token and token ~= bot then
+				local enemy
+				if teams then
+					enemy = not (team ~= nil and Vehicles.teamOf(token) == team)
+				else
+					enemy = not Combatants.IsBot(token) and bot.vehicleFoes[token] ~= nil
+				end
+				if enemy then
+					return token
+				end
+			end
+		end
+	end
+	return nil
+end
+
 -- Returns true when this think was spent in a vehicle, or on the way to one.
 function Vehicles.botVehicleThink(bot, humanoid, root, head, now)
 	local ride = bot.ride
@@ -4651,6 +4774,11 @@ function Vehicles.botVehicleThink(bot, humanoid, root, head, now)
 		if humanoid.SeatPart ~= ride.seat or not ride.model.Parent then
 			-- Out some other way (thrown clear of a wreck, a blast, jumped): back on foot.
 			Vehicles.leaveRide(bot, "unseated", 6)
+			return false
+		end
+		if Vehicles.hostileRider(bot, ride, now) then
+			-- On foot this same think, where the truce no longer covers them.
+			Vehicles.leaveRide(bot, "hostile rider", 8)
 			return false
 		end
 		stopFacing(bot, humanoid)
@@ -5617,14 +5745,20 @@ local function updateBot(bot)
 
 	-- Taking damage counts as combat even from an attacker we can't see, otherwise a bot
 	-- being sniped from cover would quietly heal through it. Where the shot came from is known the
-	-- way a player's damage indicator knows it.
-	if humanoid.Health < bot.lastHealth then
+	-- way a player's damage indicator knows it. A hit its shield soaked moves no Health (CombatService
+	-- takes a bot's damage out of the Shield attribute first; every team-mode bot spawns with 100), and
+	-- nor does one smaller than the regen or heal since: a hit time newer than the last one seen counts too.
+	local attacker, _, hitAt = CombatService.GetLastAttacker(bot)
+	local newHit = hitAt ~= nil and hitAt > (bot.lastHitAt or 0)
+	if newHit then
+		bot.lastHitAt = hitAt
+	end
+	if humanoid.Health < bot.lastHealth or newHit then
 		bot.lastCombatAt = now
 		bot.lastHurtAt = now
 		-- Only a hit since the last think names a shooter. GetLastAttacker remembers 12 s, so without the
 		-- hit time, storm damage would send a bot running from someone who stopped shooting long ago.
-		local attacker, _, hitAt = CombatService.GetLastAttacker(bot)
-		local fresh = hitAt ~= nil and now - hitAt <= MatchConfig.BotThinkInterval + 0.1
+		local fresh = hitAt ~= nil and (newHit or now - hitAt <= MatchConfig.BotThinkInterval + 0.1)
 		if hitAt == nil then
 			-- An older CombatService without the hit time: at least ignore it while outside the storm.
 			fresh = not StormService.IsOutside(root.Position)
@@ -6312,6 +6446,11 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 				align.Parent = root
 
 				bot.facing = align
+				-- Off at death. updateBot stops thinking for a dead bot, so stopFacing never ran and an align
+				-- left on from the fight held the ragdoll's root and pelvis upright at 1e6 torque.
+				humanoid.Died:Connect(function()
+					stopFacing(bot, humanoid)
+				end)
 			end
 
 			character.Parent = workspace
@@ -6436,6 +6575,15 @@ function BotService.LodDefers(bot, now)
 	local humanoid = bot.humanoid
 	if humanoid and humanoid.Health < bot.lastHealth then
 		return false
+	end
+	-- A hit the shield soaked since the last think (updateBot's hurt check) counts as damage too. Looked
+	-- up, not assumed: tools/perf_bot_cost.py runs this section with no CombatService.
+	local lastAttacker = CombatService and CombatService.GetLastAttacker
+	if lastAttacker then
+		local _, _, hitAt = lastAttacker(bot)
+		if hitAt and hitAt > (bot.lastHitAt or 0) then
+			return false
+		end
 	end
 	if bot.threat and now - bot.threat.at < FLEE_WINDOW then
 		return false

@@ -2100,6 +2100,23 @@ function TeamBaseRuins.ClearMoved(before, after, map, centre, reach)
 			end
 		end
 	end
+	-- World loot on moved ground goes too, whole (as ClearSite takes it): it lives in workspace.Loot, not
+	-- the map, and ClearSite's box reaches only 24 studs past the flat while the grading reaches
+	-- GRADE_REACH, so a pickup or chest out there was left over a cut or under a fill.
+	local loot = workspace:FindFirstChild("Loot")
+	if loot then
+		for _, pickup in ipairs(loot:GetChildren()) do
+			local p = nil
+			if pickup:IsA("BasePart") then
+				p = pickup.Position
+			elseif pickup:IsA("Model") then
+				p = pickup:GetPivot().Position
+			end
+			if p and Vector3.new(p.X - centre.X, 0, p.Z - centre.Z).Magnitude <= reach and moved(p.X, p.Z) then
+				pickup:Destroy()
+			end
+		end
+	end
 	return cleared
 end
 
@@ -2240,6 +2257,31 @@ function TeamBaseRuins.SnapSpots(model, list)
 	end
 end
 
+-- The pads Build registered with MapTerrain (FlattenPad appends one for every compound it levels), each
+-- with the compound laid out on it once there is one. ModeTeams discards a compound whose partner could
+-- not be built (ClearRuins destroys only the model), and a Build can fail after levelling; a pad left
+-- registered then made FlattenPad refuse ("pad") every later site overlapping it at another height, so
+-- one failure cascaded through the retries. A pad whose compound is gone, or never came, is dropped.
+local builtPads = {}
+
+local function dropStalePads()
+	local list = MapTerrain.Pads
+	for index = #builtPads, 1, -1 do
+		local built = builtPads[index]
+		if not (built.model and built.model.Parent) then
+			if built.pad and type(list) == "table" then
+				for at = #list, 1, -1 do
+					if list[at] == built.pad then
+						table.remove(list, at)
+						break
+					end
+				end
+			end
+			table.remove(builtPads, index)
+		end
+	end
+end
+
 -- Builds the compound for one team, FLUSH with the ground (Oliver, 2026-09-24: "the team bases are on
 -- a platform that's raised up and needs a ramp for the players and vehicles, or it needs to be made
 -- more flush to the ground"):
@@ -2256,6 +2298,7 @@ end
 -- proud of the ground. (The concrete plinth that used to stand in for a levelled site is gone: every
 -- one of them was a raycast reading ground the pad had already levelled; see LEVEL_SLACK.)
 function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
+	dropStalePads()
 	local map = (mapInfo and mapInfo.map) or workspace:FindFirstChild("Map") or workspace
 	local site, yaw = flatFrame(baseCFrame)
 	TeamBaseRuins.ClearSite(site, map)
@@ -2264,12 +2307,17 @@ function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	local _, _, around = MapTerrain.PadCost(site, TeamBaseRuins.Footprint, { margin = TeamBaseRuins.Margin })
 	around = around or site.Position.Y
 	local before = readGround(site.Position, reach, around - 72, around + 72)
+	local padCount = type(MapTerrain.Pads) == "table" and #MapTerrain.Pads or nil
 	local height, why = MapTerrain.FlattenPad(site, TeamBaseRuins.Footprint, { height = "mid", margin = TeamBaseRuins.Margin })
 	if not height then
 		return nil, "ground not levelled: " .. tostring(why)
 	end
+	-- The pad FlattenPad just registered, kept with the compound that will stand on it.
+	local built = { pad = padCount and MapTerrain.Pads[padCount + 1] or nil }
+	table.insert(builtPads, built)
 	local low, high, worst = TeamBaseRuins.GroundUnder(site, height)
 	if not low or worst > LEVEL_SLACK then
+		dropStalePads() -- (no compound on it: its pad goes now)
 		return nil, string.format("ground not level under the footprint (%s)", low and string.format("off by %.2f", worst) or "unseen")
 	end
 	local after = readGround(site.Position, reach, around - 72, around + 72)
@@ -2282,6 +2330,7 @@ function TeamBaseRuins.Build(baseCFrame, teamColor, mapInfo, seed)
 	local position = site.Position
 	local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)
 	local model, info = TeamBaseRuins.Layout(frame, teamColor, seed)
+	built.model = model
 	for _, part in ipairs(model:GetDescendants()) do
 		if part:IsA("BasePart") then
 			part:SetAttribute("TeamBaseRuin", true)

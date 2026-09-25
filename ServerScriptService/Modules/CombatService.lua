@@ -435,6 +435,11 @@ end
 
 -- `headshot` only marks the hit for the sound and hit marker; the multiplier is already in `amount`.
 function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, headshot)
+	-- Combat off (the lobby, Results): nothing still in the world may hurt anyone -- a car rolling on,
+	-- a venom tick, a round in flight, a barrel chain, a collapse (F130). 0 because callers add it.
+	if not enabled then
+		return 0
+	end
 	local humanoid = Combatants.GetHumanoid(victimToken)
 	if not humanoid or humanoid.Health <= 0 or amount <= 0 then
 		return 0
@@ -496,8 +501,11 @@ function CombatService.DealDamage(attackerToken, victimToken, amount, weaponId, 
 	end
 
 	if Combatants.IsPlayer(attackerToken) then
-		-- Whether the hit landed on shield (blue hit marker) and whether it was a headshot (gold).
-		damageDealt:FireClient(attackerToken, dealt, humanoid.Health <= 0, hitPosition, absorbed > 0, headshot == true)
+		-- Whether the hit landed on shield (blue hit marker) and whether it was a headshot (gold). Not for
+		-- your own blast on yourself: that drew a hit marker, and on death ELIMINATED over your own body.
+		if attackerToken ~= victimToken then
+			damageDealt:FireClient(attackerToken, dealt, humanoid.Health <= 0, hitPosition, absorbed > 0, headshot == true)
+		end
 		if attackerToken ~= victimToken then
 			QuestService.Progress(attackerToken, "damage", dealt)
 			local entry = statsFor(attackerToken)
@@ -889,6 +897,10 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 	local through = 1
 
 	while remaining > 0 and travelled < def.range do
+		-- Where it ends if this ray meets nothing: full range from here. Set before every ray, so a round
+		-- that glass, a team-mate or a noclip wall let through into the open draws its tracer on too,
+		-- instead of stopping at what it passed (F47).
+		endPoint = currentOrigin + direction * (def.range - travelled)
 		local result = LagCompensation.Raycast(currentOrigin, direction * (def.range - travelled), params, rewindTo)
 		if not result then
 			break
@@ -983,7 +995,13 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 		local victimCharacter = result.Instance:FindFirstAncestorOfClass("Model")
 		local victimToken = victimCharacter and Combatants.FromCharacter(victimCharacter) or nil
 		if not victimToken or not Combatants.IsAlive(victimToken) then
-			-- Solid map with no destructible behind it (terrain, the level's own props): a noclip round passes.
+			-- Terrain stops even a noclip round: it is ONE instance, so filtering it would drop every hill
+			-- and the ground for the rest of the shot, however thick (F44).
+			if result.Instance == workspace.Terrain then
+				onMap = true
+				break
+			end
+			-- Solid map with no destructible behind it (the level's own props): a noclip round passes.
 			if victimToken == nil and walls > 0 then
 				walls -= 1
 				through *= def.noclip.scale or 0.7

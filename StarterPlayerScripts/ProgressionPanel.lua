@@ -87,6 +87,15 @@ local function now(ctx)
 	return ctx and ctx.now or os.clock()
 end
 
+-- MenuClient calls this the moment a profile lands. shop.resetIn was measured when the server sent
+-- it, and Render only sees a snapshot when a progression page is drawn, which can be minutes later
+-- (menu closed, another tab open), so stamping there would overstate "RESTOCKS IN" by that delay.
+function ProgressionPanel.SnapshotArrived(progression)
+	if progression ~= snapshotSeen then
+		snapshotSeen, snapshotAt = progression, now()
+	end
+end
+
 local function hex(color)
 	return string.format("#%02X%02X%02X", math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5),
 		math.floor(color.B * 255 + 0.5))
@@ -1890,6 +1899,7 @@ end
 
 function ProgressionPanel.Render(content, profile, ctx)
 	local progression = profile and profile.progression
+	-- Fallback for a caller that never reported the arrival (SnapshotArrived): first sight is the best guess.
 	if progression ~= snapshotSeen then
 		snapshotSeen, snapshotAt = progression, now(ctx)
 	end

@@ -1293,13 +1293,16 @@ function LOOKS.Metal(rng, specs, s, g, c, mat)
 		end
 	end
 	local toU, toV = g.hu - math.abs(s.u), g.hv - math.abs(s.v)
+	-- The margin never goes negative: math.clamp throws when min > max, and a face under 1.2 studs
+	-- across (a lamp base, a post's end) would otherwise stall every sweep on this site.
+	local mu, mv = math.max(0, g.hu - 0.6), math.max(0, g.hv - 0.6)
 	local du, dv, eu, ev
 	if toU <= toV then
 		du, dv = s.u >= 0 and 1 or -1, 0
-		eu, ev = du * g.hu, math.clamp(s.v, -g.hv + 0.6, g.hv - 0.6)
+		eu, ev = du * g.hu, math.clamp(s.v, -mv, mv)
 	else
 		du, dv = 0, s.v >= 0 and 1 or -1
-		eu, ev = math.clamp(s.u, -g.hu + 0.6, g.hu - 0.6), dv * g.hv
+		eu, ev = math.clamp(s.u, -mu, mu), dv * g.hv
 	end
 	local depth = math.min(0.7, (toU <= toV and g.hu or g.hv))
 	addHinged(specs, 3, g, eu - du * depth, ev - dv * depth, du, dv, depth + 0.05, math.min(1.2, (toU <= toV and g.hv or g.hu) * 2),
@@ -2095,7 +2098,10 @@ local function spawnBit(kind, position, velocity, color, material, size, life)
 	piece.CanTouch = false
 	piece.CastShadow = false
 	piece.CustomPhysicalProperties = (kind == "crumb" or kind == "pebble") and BOUNCY or LIGHT
-	piece.Parent = fxFolder
+	-- CanQuery = false does nothing while CanCollide is on, so a bit would still catch the crosshair
+	-- ray and the camera: it goes in the client's Effects folder, which the crosshair, camera, launcher
+	-- and vehicle-gun aim rays all skip.
+	piece.Parent = workspace:FindFirstChild("Effects") or fxFolder
 	piece.AssemblyLinearVelocity = velocity
 	piece.AssemblyAngularVelocity = Vector3.new(rng:NextNumber(-12, 12), rng:NextNumber(-12, 12), rng:NextNumber(-12, 12))
 	table.insert(bits, { part = piece, born = now(), life = life or BIT_LIFE, base = piece.Transparency,
@@ -2479,6 +2485,14 @@ local function unbuild(record)
 		piece:Destroy()
 	end
 	totals.pieces -= #record.pieces
+	-- Its flickering patches give up their slots now, not at the next flicker step, so a rebuild in
+	-- the same sweep (a change of detail, a moved part) can register its own.
+	for index = #flickers, 1, -1 do
+		if not flickers[index].piece.Parent then
+			table.remove(flickers, index)
+			counts.flickering -= 1
+		end
+	end
 	record.pieces, record.pieceSites, record.pieceSpecs = {}, {}, {}
 	record.shown, record.drawn = {}, {}
 	if record.trickle then
@@ -2585,7 +2599,13 @@ local function build(part, record, play)
 	for index, site in ipairs(record.sites) do
 		local cached = record.cache[index]
 		if not cached then
-			local specs, g = siteSpecs(part.Size, site, index, part.Color, part.Material)
+			-- A look that errors leaves its site bare (cached, so it is not retried every sweep) rather
+			-- than aborting this build and, with it, the rest of the sweep or the DamageFx batch.
+			local ok, specs, g = pcall(siteSpecs, part.Size, site, index, part.Color, part.Material)
+			if not ok then
+				warn("CrackFxClient: no cracks for a site on " .. part.Name .. ": " .. tostring(specs))
+				specs, g = {}, faceOf(part.Size, site.face)
+			end
 			cached = { specs = specs, g = g, faceFrame = CFrame.fromMatrix(g.face.n * g.depth, g.face.u, g.face.v, g.face.n) }
 			record.cache[index] = cached
 		end
@@ -2835,7 +2855,9 @@ damageFx.OnClientEvent:Connect(function(batch)
 			local world = part.CFrame * point
 			local distance = (world - eye).Magnitude
 			record.distance = distance
-			record.lod = lodFor(math.max(0, distance - part.Size.Magnitude / 2), record.lod)
+			-- The detail from the part's centre, as sweep measures it: from the hit point instead, a big
+			-- wall under fire can land either side of an edge and be unbuilt and redrawn every sweep.
+			record.lod = lodFor(math.max(0, (part.Position - eye).Magnitude - part.Size.Magnitude / 2), record.lod)
 			if distance <= BURST_DISTANCE then
 				if bursts < BURSTS_PER_EVENT then
 					bursts += 1

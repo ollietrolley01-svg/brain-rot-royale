@@ -410,7 +410,24 @@ local function codexRow(order, def, count)
 	}, { rounded(10) })
 	create("UIStroke", { Color = color, Thickness = 1.5, Transparency = owned and 0.3 or 0.75, Parent = row })
 
-	brainrotPhoto(row, def, 48, not owned).Position = UDim2.fromOffset(6, 6)
+	-- Live 3D photos only once filtered to one rarity, as the undiscovered grid below does: under "All"
+	-- this is all 126 brainrots, each a ViewportFrame and a cloned creature, rebuilt on every profile
+	-- push (this row's own EQUIP included). Plain tiles there: the initial if owned, "?" if not.
+	if brainrotFilter == "All" then
+		create("TextLabel", {
+			Position = UDim2.fromOffset(6, 6),
+			Size = UDim2.fromOffset(48, 48),
+			BackgroundColor3 = C.PanelAlt,
+			BorderSizePixel = 0,
+			Font = Enum.Font.FredokaOne,
+			Text = owned and string.sub(def.name, 1, 1) or "?",
+			TextColor3 = color,
+			TextSize = 26,
+			Parent = row,
+		}, { rounded(10) })
+	else
+		brainrotPhoto(row, def, 48, not owned).Position = UDim2.fromOffset(6, 6)
+	end
 
 	create("TextLabel", {
 		Position = UDim2.fromOffset(64, 8),
@@ -528,10 +545,24 @@ local function openMergeDialog(def, entry, level, stars)
 	})
 end
 
+-- SELL ALL's confirm card. Its layer sits on the ScreenGui, outside the panel, so it is held here and
+-- every way out (CANCEL, SELL THEM, a tap on its dim layer, closing the menu) takes it down; a second
+-- Destroy after UiParts.dialog has closed itself is harmless. Left up, its full-screen layer
+-- swallowed every click under it for the session and read to MenuOpenClaims' legacy detector as an
+-- open menu, which kept the gun off in later matches.
+local sellAllDialog = nil
+local function closeSellAllDialog()
+	if sellAllDialog then
+		sellAllDialog:Destroy()
+		sellAllDialog = nil
+	end
+end
+
 -- The card belongs to the menu: closing the menu closes it too.
 panel:GetPropertyChangedSignal("Visible"):Connect(function()
 	if not panel.Visible then
 		MergeDialog.Close()
+		closeSellAllDialog()
 	end
 end)
 
@@ -876,15 +907,19 @@ local function renderBrainrots()
 			addButton(buttons, 4, "SELL ALL", C.Red, function()
 				local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
 					or Vector2.new(1280, 720)
-				UiParts.dialog({
+				closeSellAllDialog()
+				sellAllDialog = UiParts.dialog({
 					parent = screenGui,
 					viewport = viewport,
 					title = "Sell every " .. entry.rarity .. " brainrot?",
 					body = "This sells your whole " .. entry.rarity .. " collection, not just "
 						.. entry.name .. ". One copy of each merged brainrot stays. It cannot be undone.",
+					onDismiss = closeSellAllDialog,
 					actions = {
-						{ text = "CANCEL", kind = "secondary" },
+						{ text = "CANCEL", kind = "secondary", onClick = closeSellAllDialog },
 						{ text = "SELL THEM", kind = "danger", onClick = function()
+							-- Closed first, so the card can't be pressed again while the sale is on its way.
+							closeSellAllDialog()
 							invoke(sellAllOfRarity, entry.rarity)
 						end },
 					},
@@ -1619,6 +1654,9 @@ local function renderCosmetics()
 		{ title = "BUNDLE EXCLUSIVES", items = {} },
 		-- `rankOnly`: earned by prestige, gun mastery or Brain Cells (ProgressionData.RankCosmetics).
 		{ title = "RANK REWARDS  •  prestige, mastery and the Cell Shop", items = {} },
+		-- `teamOnly`: unlocked by lifetime team-match wins (MatchConfig.TeamModeRewards.bonus.milestones)
+		-- and nothing else. No crate draws them (CosmeticData.OfKind), so they are not crate exclusives.
+		{ title = "TEAM REWARDS  •  win team matches", items = {} },
 	}
 	local rotatingOut = 0
 
@@ -1632,6 +1670,8 @@ local function renderCosmetics()
 			table.insert(sections[5].items, item)
 		elseif item.bundleOnly then
 			table.insert(sections[4].items, item)
+		elseif item.teamOnly then
+			table.insert(sections[6].items, item)
 		elseif item.crateOnly or not item.price then
 			table.insert(sections[3].items, item)
 		elseif ShopRotation.IsCosmeticInStock(item.id) then
@@ -1687,7 +1727,11 @@ local function renderCosmetics()
 				MenuScreens.RowPreview(buttons.Parent, id, stacked)
 			end
 
-			if sectionIndex == 5 then
+			if sectionIndex == 6 then
+				-- Earned in team matches, not bought or pulled; the row's description names the win count.
+				-- A status, so greyed: there is no page to send the player to.
+				addButton(buttons, 1, "TEAM WINS", C.Accent, nil, false)
+			elseif sectionIndex == 5 then
 				-- Where it's earned: the progression hub on the Pass tab. Rank cosmetic ids start with
 				-- Prestige, Mastery or Cell (verify.py holds them to it), which picks the page.
 				addButton(buttons, 1, "HOW", Color3.fromRGB(255, 150, 176), function()
@@ -2891,6 +2935,11 @@ local TABS = {
 -- (Oliver, 2026-09-22 13:59: "separate buttons, each its own page"). Which screen holds which tab,
 -- each tab's glyph and subtitle, and how many a portrait phone's bar can carry, live in MenuScreens;
 -- this only says what each tab is called and which renderer it runs.
+--
+-- `phoneScreens` is set by the phone block's apply() below: true whenever it hides the HUD's screen
+-- buttons (PhoneLayout.Active). shell.phone alone is only a portrait phone, so a landscape phone or a
+-- tablet lost those buttons and got no other-screen destinations either, and SHOP had no route in.
+local phoneScreens = false
 local function renderTabStrip()
 	local destinations, screen = MenuScreens.Destinations(activeTab, function(key)
 		for _, tab in ipairs(TABS) do
@@ -2899,7 +2948,7 @@ local function renderTabStrip()
 			end
 		end
 		return nil
-	end, shell.phone)
+	end, shell.phone or phoneScreens)
 	shell:SetTitle(screen and screen.title or "BRAINROT BATTLES")
 	shell:SetDestinations(destinations, activeTab)
 end
@@ -2913,6 +2962,13 @@ shell.onSelect = function(key)
 end
 
 renderTab = function()
+	-- A key capture belongs to the Settings page. A trade going live, the invite's ACCEPT and the
+	-- bundle nudge switch tabs without openTab or the rail, and left it listening on a hidden page, so
+	-- the next key (M to close, say) was silently rebound instead of doing its job.
+	if activeTab ~= "Settings" then
+		stopListening()
+		settingsNotice = nil
+	end
 	if not panel.Visible then
 		return
 	end
@@ -3283,9 +3339,13 @@ crateOpened.OnClientEvent:Connect(function(result)
 	crate.Parent = revealViewport
 
 	local crateBase = {}
+	-- Each part's own transparency, so the fade starts from how CrateModels built it (the dome lid's
+	-- see-through band, the Secret crate's glass shell) instead of turning every part solid first.
+	local crateAlpha = {}
 	for _, part in ipairs(crate:GetDescendants()) do
 		if part:IsA("BasePart") then
 			crateBase[part] = part.CFrame
+			crateAlpha[part] = part.Transparency
 		end
 	end
 	-- The lid and everything riding on it (dome, band, padlock) swing together on the lid's hinge.
@@ -3394,6 +3454,12 @@ crateOpened.OnClientEvent:Connect(function(result)
 			end
 
 			if t >= popAt then
+				-- Settle the crate back to rest: this block never runs again, and the lid swings from its
+				-- rest pose (lidStart) from here on, so a body left at this frame's rattle and bump sat
+				-- raised and tilted away from its own lid.
+				for part, base in pairs(crateBase) do
+					part.CFrame = base
+				end
 				revealPhase = "reveal"
 				Sfx.Play("CrateOpen", nil, math.max(0.55, 1 - tierIndex * 0.06))
 
@@ -3493,8 +3559,8 @@ crateOpened.OnClientEvent:Connect(function(result)
 		local fade = math.clamp((since - lidSwing * 0.75) / 0.5, 0, 1)
 		if fade ~= crateFade then
 			crateFade = fade
-			for part in pairs(crateBase) do
-				part.Transparency = fade
+			for part, alpha in pairs(crateAlpha) do
+				part.Transparency = alpha + (1 - alpha) * fade
 			end
 		end
 
@@ -4155,6 +4221,12 @@ do
 			end
 			if stackToggle.SetPhone then
 				stackToggle:SetPhone(spots, spots and spots.inset or 0)
+			end
+			-- With the screen buttons hidden the menu's own navigation has to list the other screens
+			-- (renderTabStrip); redrawn only when that flips, and a no-op while the menu is closed.
+			if phoneScreens ~= (spots ~= nil) then
+				phoneScreens = spots ~= nil
+				renderTab()
 			end
 		end
 		apply()

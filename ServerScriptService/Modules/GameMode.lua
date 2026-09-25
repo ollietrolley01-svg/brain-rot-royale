@@ -373,12 +373,15 @@ end
 -- Each team's MVP: the best performance value (RewardService.TeamPerformanceValue, before caps), at least
 -- mvp.minCoins, never an idle player. Ties go to fewer deaths, then the name, so it never depends on
 -- table order. A bot can win it, and then no player on that team is paid for it.
+-- Never a player who has LEFT either: their ledger (and its team) outlives them, so a leaver with the best
+-- value took MVP from the best player still there and nobody was paid it. Bots are not filtered this way --
+-- a retired bot is out of the participants too. Runs in stopWorld, before the participants are cleared.
 local function pickMvps()
 	table.clear(mvps)
 	local best = {}
 	for token, ledger in pairs(ledgers) do
 		local team = ledger.team
-		if team and not (ledger.isPlayer and isAfk(ledger)) then
+		if team and not (ledger.isPlayer and (isAfk(ledger) or not host.IsParticipant(token))) then
 			local value = RewardService.TeamPerformanceValue(ledger)
 			local holder = best[team]
 			if not holder or value > holder.value
@@ -530,9 +533,25 @@ local function respawnPlayer(player, character)
 	end
 end
 
+-- [bot] = the side a RETIRED bot played on. retireBot forgets its team at once, but a frag, crumpet or
+-- rocket it let go before dying is still live and still credited to it (ProjectileService.creditable), and
+-- with no team the friendly-fire veto let that hurt its own side -- a team-mate killed by it even scored for
+-- the enemy. Cleared when the next match starts.
+local retiredTeams = {}
+
+-- ModeTeams.DamageVeto, plus friendly fire for a retired bot's leftovers (retiredTeams).
+local function damageVeto(attackerToken, victimToken, weaponId)
+	local team = attackerToken ~= nil and retiredTeams[attackerToken] or nil
+	if team and attackerToken ~= victimToken and ModeTeams.TeamOf(victimToken) == team then
+		return true
+	end
+	return ModeTeams.DamageVeto(attackerToken, victimToken, weaponId)
+end
+
 local function retireBot(bot)
 	local character = bot and bot.character
 	host.RemoveCombatant(bot)
+	retiredTeams[bot] = ModeTeams.TeamOf(bot)
 	ModeTeams.Forget(bot)
 	-- Out of BotService's think list now (a replacement is a new bot): BotService.Clear never sees a
 	-- retired bot, so what it would have done at the end of the match happens here and below.
@@ -587,6 +606,16 @@ end
 -- Deaths
 --------------------------------------------------------------------------------
 
+-- The kill feed's line for one death.
+local function feedKill(token, killerToken, method)
+	killFeed:FireAllClients({
+		victim = Combatants.GetName(token),
+		killer = killerToken and Combatants.GetName(killerToken) or nil,
+		killerUserId = killerToken and Combatants.GetUserId(killerToken) or nil,
+		method = killerToken and method or nil,
+	})
+end
+
 -- Called from MatchService.eliminate's respawn branch, INSTEAD of the placement path. Scoring
 -- happens first and the announcement last.
 local function onDeath(token, killerToken, method)
@@ -616,6 +645,15 @@ local function onDeath(token, killerToken, method)
 			-- there is no way to stall by dying to the world.
 			addScore(GameModes.OtherTeam(victimTeam), 1)
 		end
+	end
+
+	-- That score can have ENDED the match: addScore -> FinishNow -> host.Finish tore the teams down, sent
+	-- the results and cleared the bots, all before returning here. So no down mark, no respawn countdown or
+	-- "back in 5 seconds", and no bot retired into the Results screen -- just the kill and the final score.
+	if not running then
+		announce(feedKill, token, killerToken, method)
+		pushState()
+		return
 	end
 
 	ModeTeams.MarkDown(token)
@@ -659,14 +697,7 @@ local function onDeath(token, killerToken, method)
 	end
 
 	-- News, last, and protected. Everything above has already happened.
-	announce(function()
-		killFeed:FireAllClients({
-			victim = Combatants.GetName(token),
-			killer = killerToken and Combatants.GetName(killerToken) or nil,
-			killerUserId = killerToken and Combatants.GetUserId(killerToken) or nil,
-			method = killerToken and method or nil,
-		})
-	end)
+	announce(feedKill, token, killerToken, method)
 	if Combatants.IsPlayer(token) and token.Parent then
 		announce(StateSync.Notify, token, string.format("Down — back in %d seconds", current.respawnDelay or 5))
 	end
@@ -691,6 +722,7 @@ local function startWorld(mapInfo)
 	scores[1], scores[2] = 0, 0
 	hillStatus, hillHolder = "Open", nil
 	resetLedgers()
+	table.clear(retiredTeams)
 	generation += 1
 	running = true
 	deadlineMs = nowMs() + (current.timeLimit or 480) * 1000
@@ -731,7 +763,7 @@ local function startWorld(mapInfo)
 		ModeKingOfTheHill.Start(current, mapInfo)
 	end
 
-	CombatService.DamageVeto = ModeTeams.DamageVeto
+	CombatService.DamageVeto = damageVeto
 	CombatService.RespawnDelay = current.respawnDelay or 5
 	CombatService.OnShot = ModeTeams.BreakProtection
 

@@ -198,6 +198,14 @@ end
 -- Occupants
 --------------------------------------------------------------------------------
 
+-- A rider rides as part of the vehicle: welded in by the seat, every part massless. A player's rig is
+-- held by Motor6Ds, so the seat weld takes the whole body into the vehicle's assembly. A physics rig
+-- (every bot: CreateHumanoidModelFromDescription) is held by AnimationConstraints driven by torque, so the
+-- weld took only its HumanoidRootPart: the rest of the body hung off it as separate bodies, which keep
+-- their mass (Massless does nothing for a part alone in its assembly) and collide with the Hull_*
+-- colliders the rider sits inside (Oliver 09-25: "falls to the ground and wont drive anywhere" with a bot
+-- on the gun, every car). While it rides its joints are kinematic -- rigid, like Motor6Ds, one assembly
+-- with the vehicle -- and they are handed back as they were when it gets out.
 local function setMassless(entry, character, on)
 	if on then
 		local saved = {}
@@ -205,6 +213,12 @@ local function setMassless(entry, character, on)
 			if part:IsA("BasePart") then
 				saved[part] = part.Massless
 				part.Massless = true
+			elseif part:IsA("AnimationConstraint") and not part.IsKinematic then
+				if pcall(function()
+					part.IsKinematic = true
+				end) then
+					saved[part] = false
+				end
 			end
 		end
 		entry.savedMass[character] = saved
@@ -214,7 +228,13 @@ local function setMassless(entry, character, on)
 		if saved then
 			for part, value in pairs(saved) do
 				if part.Parent then
-					part.Massless = value
+					if part:IsA("AnimationConstraint") then
+						pcall(function()
+							part.IsKinematic = value
+						end)
+					else
+						part.Massless = value
+					end
 				end
 			end
 		end
@@ -579,7 +599,8 @@ end
 -- A player asking for a seat a bot holds. BotService's VehicleService.BotYield(bot, player, seat,
 -- model) says whether this player may have it and, if so, gets the bot out (stopping the car first
 -- from the driving seat); this waits for the seat to come free. While it waits the seat is spoken for
--- (entry.takeover), so no other bot sits in it first. True once the seat is free for the player.
+-- (entry.takeover), so no other bot sits in it first. True once the seat is free for the player, and
+-- the hold it made, which the caller lets go of (releaseTakeover) once the player is in or has failed.
 local TAKEOVER_WAIT = 3
 local function takeOver(entry, player, seat)
 	if not botHeld(entry, seat) or entry.takeover then
@@ -591,7 +612,8 @@ local function takeOver(entry, player, seat)
 	if type(yield) ~= "function" then
 		return false
 	end
-	entry.takeover = { player = player, seat = seat }
+	local claim = { player = player, seat = seat }
+	entry.takeover = claim
 	local ok, allowed = pcall(yield, token, player, seat, entry.model)
 	if not ok then
 		warn("VehicleService: BotYield failed: " .. tostring(allowed))
@@ -604,7 +626,15 @@ local function takeOver(entry, player, seat)
 	while seat.Occupant == occupant and tick() < deadline do
 		task.wait(0.05)
 	end
-	return seat.Occupant == nil
+	return seat.Occupant == nil, claim
+end
+
+-- Only the hold this takeover made (F40): a second press, or another player's, finds the vehicle
+-- already spoken for and must not free the seat for a bot while the first one still waits.
+local function releaseTakeover(entry, claim)
+	if claim and entry.takeover == claim then
+		entry.takeover = nil
+	end
 end
 
 local function trySit(entry, player, seat)
@@ -617,16 +647,19 @@ local function trySit(entry, player, seat)
 	if (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 6 then
 		return
 	end
-	if entry.rig.chassis.CFrame.UpVector.Y < 0.4 then
+	if entry.wrecked or entry.rig.chassis.CFrame.UpVector.Y < 0.4 then
 		return
 	end
-	-- Someone in it: only a bot, only in the seats it can be asked out of (TAKING OVER).
+	-- Someone in it: only a bot, only in the seats it can be asked out of (TAKING OVER). The seat stays
+	-- spoken for until the player is in it (or has failed), through the seat switch's frame below too.
+	local claim = nil
 	if seat.Occupant then
-		local freed = takeOver(entry, player, seat)
-		entry.takeover = nil
+		local freed
+		freed, claim = takeOver(entry, player, seat)
 		-- The car was brought to a stop for this, so a little more reach than the prompt's.
 		if not freed or humanoid.Health <= 0 or not root.Parent
 			or (root.Position - seat.Position).Magnitude > PROMPT_DISTANCE + 12 then
+			releaseTakeover(entry, claim)
 			return
 		end
 	elseif entry.takeover and entry.takeover.seat == seat and entry.takeover.player ~= player then
@@ -636,6 +669,7 @@ local function trySit(entry, player, seat)
 	local current = humanoid.SeatPart
 	if current then
 		if not current:IsDescendantOf(entry.model) then
+			releaseTakeover(entry, claim)
 			return
 		end
 		-- Moving seats: the old seat letting go must not put you out of the vehicle first.
@@ -652,10 +686,22 @@ local function trySit(entry, player, seat)
 		if seat.Occupant or humanoid.Health <= 0 then
 			entry.switching[humanoid] = nil
 			clearRider(player)
+			releaseTakeover(entry, claim)
 			return
 		end
 	end
+	-- Wrecked while this waited (the takeover, the seat switch): nobody gets into a wreck (F41), as its
+	-- disabled prompts and BotSit already say.
+	if entry.wrecked or not entry.model.Parent then
+		if current then
+			entry.switching[humanoid] = nil
+			clearRider(player)
+		end
+		releaseTakeover(entry, claim)
+		return
+	end
 	seat:Sit(humanoid)
+	releaseTakeover(entry, claim)
 end
 
 -- Sits a bot's humanoid in `seat` with the checks trySit makes for a player: alive, near it, the
@@ -1085,6 +1131,58 @@ local function onChassisTouched(entry, hit)
 	roadkill(entry, character, Vector3.new(velocity.X, 0, velocity.Z).Magnitude, velocity)
 end
 
+-- Whether the server's own geometry can believe a reported hit (F118: the report used to pass on a
+-- plain distance, in every direction and through walls). The lag allowance lies along the line of
+-- travel only -- a body the car has not reached yet here, or has already gone through -- while across
+-- it the reach stays ROADKILL_REACH; and nothing solid stands between the chassis and the body. A
+-- vehicle or a body in that line (a crowd, a rider on a bike) or loose debris the car shoves aside
+-- doesn't count as solid.
+local function reportPlausible(entry, character, root, flat, seen)
+	local chassis = entry.rig.chassis
+	local axis = flat
+	if axis.Magnitude < 1 then
+		-- All but stopped (it hit something just after): the way the car points.
+		local look = chassis.CFrame.LookVector
+		axis = Vector3.new(look.X, 0, look.Z)
+	end
+	local point = root.Position
+	if axis.Magnitude > 0.05 then
+		axis = axis.Unit
+		local offset = point - chassis.Position
+		local lag = seen * ROADKILL_LAG
+		point = point - axis * math.clamp(offset.X * axis.X + offset.Z * axis.Z, -lag, lag)
+	end
+	if hullDistance(entry, point) > ROADKILL_REACH then
+		return false
+	end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+	params.RespectCanCollide = true
+	local skip = { entry.model, character }
+	local origin = chassis.Position
+	for _ = 1, 6 do
+		params.FilterDescendantsInstances = skip
+		local hit = workspace:Raycast(origin, root.Position - origin, params)
+		if not hit then
+			return true
+		end
+		local part = hit.Instance
+		local body = RoadkillPass.BodyOf(part)
+		local model = part:FindFirstAncestorOfClass("Model")
+		if body then
+			table.insert(skip, body)
+		elseif model and byModel[model] then
+			table.insert(skip, model)
+		elseif part:IsA("BasePart") and not part.Anchored then
+			table.insert(skip, part)
+		else
+			return false
+		end
+	end
+	return true
+end
+
 -- A driver's client went through someone (RoadkillPass on the machine that simulates the car). Only
 -- the car's own driver, while their client simulates it, for a body the server has beside its hull;
 -- and the speed judged is the least of what the client says and what the server saw it doing.
@@ -1105,8 +1203,14 @@ local function onRoadkillReport(player, model, character, speed)
 		return
 	end
 	local velocity = entry.rig.chassis.AssemblyLinearVelocity
-	local seen = math.max(Vector3.new(velocity.X, 0, velocity.Z).Magnitude, entry.lastFlatSpeed or 0)
+	local flat = Vector3.new(velocity.X, 0, velocity.Z)
+	-- Both readings are the reporting client's own physics: never more than checkHonest lets any car
+	-- keep up (F118), for the reach and the damage alike.
+	local seen = math.min(entry.rig.handling.topSpeed * SPEED_SLACK + 10, math.max(flat.Magnitude, entry.lastFlatSpeed or 0))
 	if hullDistance(entry, root.Position) > ROADKILL_REACH + seen * ROADKILL_LAG then
+		return
+	end
+	if not reportPlausible(entry, character, root, flat, seen) then
 		return
 	end
 	roadkill(entry, character, math.min(speed, seen * 1.15 + 4), velocity)

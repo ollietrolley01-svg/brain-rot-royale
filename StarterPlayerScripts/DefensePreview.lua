@@ -378,7 +378,9 @@ function DefensePreview:_drawFootings(footings, valid)
 	for index, footing in ipairs(footings) do
 		local part = self.footParts[index]
 		local class = footing.class or "Part"
-		if part and (part.ClassName ~= class or (footing.shape and part.Shape ~= footing.shape)) then
+		-- Compare the effective shape (no `shape` means Block): a pooled float Cylinder must not be
+		-- reused for a post or sill. TrussPart has no Shape, hence the class guard.
+		if part and (part.ClassName ~= class or (class == "Part" and part.Shape ~= (footing.shape or Enum.PartType.Block))) then
 			part:Destroy()
 			part = nil
 		end
@@ -470,8 +472,11 @@ function DefensePreview:Update(character, itemId, aimPoint, extraExclude)
 	self.ring.Visible = true
 
 	if not site.size then
-		-- A mine: where it arms.
+		-- A mine: where it arms. It doesn't count toward the structure cap, so drop any "replaces your
+		-- oldest" outline a structure kit held just before left up.
 		self:_hideStructure()
+		self.oldestHighlight.Enabled = false
+		self.oldestHighlight.Adornee = nil
 		self:_showAim(site, groundBelow(site.aimTarget, character), item.color)
 		return
 	end

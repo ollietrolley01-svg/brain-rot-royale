@@ -23,6 +23,11 @@ ObjectiveZone.DefaultHeight = 22
 -- How far BELOW the centre still counts: the ring sits on the ground, and a root part on a slope
 -- or a step down the edge of the hill is a little under the centre's height.
 ObjectiveZone.Below = 6
+-- ...plus how far the ground under the ring can be blown away. The centre is fixed when the objective
+-- is built, but a bowl that keeps being hit deepens to DIG_DEPTH under the ground as it stood
+-- (DestructibleService.DigDepth, 24), so anyone who counted on the ground still counts in a crater dug
+-- into it instead of dropping out of the band while the owner keeps scoring.
+ObjectiveZone.DigDepth = 24
 -- The ring is a thin disc; the lift keeps its top clear of the ground it lies on (ZFight's step x3,
 -- as before).
 ObjectiveZone.RingThickness = 0.4
@@ -41,7 +46,7 @@ end
 function ObjectiveZone.Contains(mode, centre, point)
 	local dx, dy, dz = point.X - centre.X, point.Y - centre.Y, point.Z - centre.Z
 	local radius = ObjectiveZone.Radius(mode)
-	return dx * dx + dz * dz <= radius * radius and dy >= -ObjectiveZone.Below and dy <= ObjectiveZone.Height(mode)
+	return dx * dx + dz * dz <= radius * radius and dy >= -(ObjectiveZone.Below + ObjectiveZone.DigDepth) and dy <= ObjectiveZone.Height(mode)
 end
 
 -- A Cylinder part's LENGTH is its X axis and its diameter is the smaller of Y and Z, so the disc is

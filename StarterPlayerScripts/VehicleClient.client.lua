@@ -487,6 +487,10 @@ RunService.Stepped:Connect(function(_, dt)
 			driving.skidLoop:Stop()
 			driving.skidLoop = nil
 		end
+		-- #84: the jolt check below compares one step with the last, and that "last" would be from
+		-- before the hold -- so start it over, and flag its first comparison as the handoff one.
+		driving.lastVerticalVel = nil
+		driving.handedBack = true
 		return
 	end
 	VehicleDynamics.SetIgnore(rig, { player.Character })
@@ -539,14 +543,17 @@ RunService.Stepped:Connect(function(_, dt)
 	-- could already see (a bug worth fixing anyway) or the one thing it structurally cannot: a
 	-- network ownership handoff. Reported so Oliver's next session produces a number, not an
 	-- impression, per claude-43's ask -- the same shape as this project's other after-the-fact
-	-- counters. ServerControl is sent along because a handoff is exactly what that attribute marks.
+	-- counters. The ServerControl flag sent along marks the first step compared after a ServerControl
+	-- hold ended, because a handoff is exactly what that attribute marks (this step never runs while
+	-- the attribute is set, so it cannot be read here).
 	local vy = rig.chassis.AssemblyLinearVelocity.Y
 	if driving.lastVerticalVel then
 		local jump = math.abs(vy - driving.lastVerticalVel)
 		if jump > JOLT_THRESHOLD and (not driving.lastJoltReport or tick() - driving.lastJoltReport > JOLT_REPORT_EVERY) then
 			driving.lastJoltReport = tick()
-			Remotes.Event("VehicleJolt"):FireServer(jump, speed, model:GetAttribute("ServerControl") == true)
+			Remotes.Event("VehicleJolt"):FireServer(jump, speed, driving.handedBack == true)
 		end
+		driving.handedBack = nil
 	end
 	driving.lastVerticalVel = vy
 end)

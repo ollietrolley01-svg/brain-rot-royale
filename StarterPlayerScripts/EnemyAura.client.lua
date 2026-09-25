@@ -38,7 +38,9 @@ local FRIEND = Color3.fromRGB(80, 230, 110)
 -- fence or leaf covering a teammate got a green outline of its own. A fill is only drawn on the character's
 -- own visible pixels, so it cannot spill onto anything else.
 local ENEMY_FILL, FRIEND_FILL = 0.65, 0.72
-local ENEMY_OUTLINE, FRIEND_OUTLINE = 0.15, 1
+-- Enemies lost their outline for the same reason (Oliver, 2026-09-25: trees, bushes and houses in battle royale
+-- glowing red): the occluded outline was being traced round whatever stood in front of an enemy.
+local ENEMY_OUTLINE, FRIEND_OUTLINE = 1, 1
 
 local marks = {}
 
@@ -220,7 +222,7 @@ task.spawn(function()
 				else
 					local pivot = character:GetPivot().Position
 					local distance = eye and (pivot - eye).Magnitude or 0
-					if mark.highlight.OutlineTransparency < 1 then -- enemies (only they have an outline)
+					if mark.highlight.FillColor == ENEMY then -- enemies
 						distance *= 0.8
 					end
 					table.insert(list, { mark = mark, distance = distance })

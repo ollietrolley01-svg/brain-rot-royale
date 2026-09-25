@@ -201,6 +201,12 @@ glassShatter.OnClientEvent:Connect(function(batch)
 				sounds += 1
 				Sfx.PlayAt("Shatter", cframe.Position, 0.25)
 			end
+			-- Everything below takes local Z as the pane's thin axis; a pane thin along X (bus-shelter
+			-- ends) is turned a quarter about Y, same centre, so it is.
+			if size.X < size.Z then
+				cframe = cframe * CFrame.Angles(0, math.pi / 2, 0)
+				size = Vector3.new(size.Z, size.Y, size.X)
+			end
 			local ix, iy = impactOn(cframe, size, impact)
 			local pieces = nil
 			if flashes < FLASHES_PER_BATCH then

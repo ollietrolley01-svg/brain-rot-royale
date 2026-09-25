@@ -353,9 +353,9 @@ local ROOTS = { Map = true }
 DestructibleService.Roots = ROOTS
 
 -- pool key -> { health, max, broken, members, target }. The key is the part (a single part), the
--- Model (a tagged Model) or the tag string (a group). Strong keys, dropped when the pool's first
--- member is destroyed: a weak-keyed table loses live Instances, since Roblox collects an instance's
--- Lua handle whenever nothing but a weak table holds it.
+-- Model (a tagged Model) or a group's slot (slotOf: its tag within its parent). Strong keys,
+-- dropped when the pool's first member is destroyed: a weak-keyed table loses live Instances, since
+-- Roblox collects an instance's Lua handle whenever nothing but a weak table holds it.
 local damaged = {}
 
 -- The Map this part stands in, or nil if it's outside one or anything on the way is off limits.
@@ -719,16 +719,41 @@ local function resolvePool(part)
 		target = typeof(key) == "Instance" and key:IsA("Model") and key or nil }, key
 end
 
+-- Where `damaged` files a pool: its key, except that a group's tag names a pool only within its
+-- parent. Builders reuse ids in every building (each house's furniture is Furniture:F0_1, F0_2, ...),
+-- so a group gets a slot per (parent, tag), dropped with the parent. `make` makes a missing one;
+-- without it a group never hit gives nil.
+local groupSlots = {}
+local function slotOf(key, owner, make)
+	if type(key) ~= "string" or not owner then
+		return key
+	end
+	local byTag = groupSlots[owner]
+	if not byTag then
+		if not make then
+			return nil
+		end
+		byTag = cacheUntil(groupSlots, owner, {})
+	end
+	local slot = byTag[key]
+	if not slot and make then
+		slot = {}
+		byTag[key] = slot
+	end
+	return slot
+end
+
 -- Defined with the support pass, below; subdivide (by Damage) forgets what it cuts up.
 local forget
 
 -- The pool entry for a part, made on its first hit; nil if the part can't be broken.
 local function entryFor(part)
-	local key = keyOf(part)
+	local key, _, owner = keyOf(part)
 	if not key then
 		return nil
 	end
-	local entry = damaged[key]
+	local slot = slotOf(key, owner)
+	local entry = slot ~= nil and damaged[slot] or nil
 	if entry then
 		return entry, key
 	end
@@ -738,17 +763,18 @@ local function entryFor(part)
 		return nil
 	end
 	-- (A part of a pool too wide to be one thing is a pool of its own, under its own key.)
-	if damaged[key] then
-		return damaged[key], key
+	slot = slotOf(key, owner, true)
+	if damaged[slot] then
+		return damaged[slot], key
 	end
 	entry = { health = pool.max, max = pool.max, members = pool.members, tagged = pool.tagged, auto = pool.auto, stage = 0,
 		target = pool.target }
-	damaged[key] = entry
+	damaged[slot] = entry
 	-- Dropped when the pool's anchor goes: the part itself, the Model, or the group's first member.
 	local anchor = typeof(key) == "Instance" and key or pool.members[1]
 	anchor.Destroying:Connect(function()
-		if damaged[key] == entry then
-			damaged[key] = nil
+		if damaged[slot] == entry then
+			damaged[slot] = nil
 		end
 	end)
 	return entry, key
@@ -756,8 +782,9 @@ end
 
 -- (health, max) of the pool a part is in, once it has been hit; nil before. For probes and checks.
 function DestructibleService.HealthOf(part)
-	local key = keyOf(part)
-	local entry = key ~= nil and damaged[key] or nil
+	local key, _, owner = keyOf(part)
+	local slot = key ~= nil and slotOf(key, owner) or nil
+	local entry = slot ~= nil and damaged[slot] or nil
 	if entry then
 		return entry.health, entry.max
 	end
@@ -768,11 +795,12 @@ end
 -- one ray down, once): whether it is worth sending the hit here. (An oversized pool is only refused
 -- on the hit itself, which then deals 0.)
 function DestructibleService.FromPart(part)
-	local key, _, _, _, auto = keyOf(part)
+	local key, _, owner, _, auto = keyOf(part)
 	if not key then
 		return nil
 	end
-	local entry = damaged[key]
+	local slot = slotOf(key, owner)
+	local entry = slot ~= nil and damaged[slot] or nil
 	if entry then
 		return not entry.broken and part or nil
 	end
@@ -802,8 +830,9 @@ function DestructibleService.Explain(part)
 	if not (part.CanCollide or part.CanQuery) then
 		return "trim", "goes with what it hangs on"
 	end
-	local key = keyOf(part)
-	local entry = key ~= nil and damaged[key] or nil
+	local key, _, owner = keyOf(part)
+	local slot = key ~= nil and slotOf(key, owner) or nil
+	local entry = slot ~= nil and damaged[slot] or nil
 	if entry then
 		return "breakable", entry.auto and "auto" or "tagged/named", key
 	end
@@ -1626,7 +1655,9 @@ if not okCollapse or type(CollapseService) ~= "table" or type(CollapseService.Dr
 end
 DestructibleService.Collapse = CollapseService
 
--- Caches: weak-keyed, so a miss only costs a query again.
+-- Caches: weak-keyed, so a miss only costs a query again. Weak keys alone never free them (each
+-- neighbour list holds its neighbours strongly, so a building's parts keep one another), so both
+-- start afresh on a new map (useRoots).
 local adjacency = setmetatable({}, { __mode = "k" })
 local anchorCache = setmetatable({}, { __mode = "k" })
 -- A building's footprint when first hit: state, not a cache, so kept until the building goes.
@@ -1686,12 +1717,25 @@ local function anchors(part)
 end
 DestructibleService.Anchors = anchors
 
+-- The roots the caches above were filled under: a root not among them (MapGenerator's next Map)
+-- drops them, and with them the last map's parts.
+local cachedRoots = {}
 local function useRoots()
 	local roots = {}
+	local fresh = false
 	for name in pairs(ROOTS) do
 		local root = workspace:FindFirstChild(name)
 		if root then
 			table.insert(roots, root)
+			fresh = fresh or not cachedRoots[root]
+		end
+	end
+	if fresh then
+		adjacency = setmetatable({}, { __mode = "k" })
+		anchorCache = setmetatable({}, { __mode = "k" })
+		cachedRoots = {}
+		for _, root in ipairs(roots) do
+			cachedRoots[root] = true
 		end
 	end
 	supportParams = supportParams or OverlapParams.new()
@@ -2056,7 +2100,8 @@ local function gather(parts)
 		add(part)
 		local key, _, owner = keyOf(part)
 		if key ~= nil and owner ~= nil then
-			local entry = damaged[key]
+			local slot = slotOf(key, owner)
+			local entry = slot ~= nil and damaged[slot] or nil
 			for _, member in ipairs(entry and entry.members or membersOf(key, part, owner)) do
 				add(member)
 			end
@@ -2258,8 +2303,8 @@ end
 -- reach and wall damage, so a rocket digs deeper than a grenade, a grenade than a drumlet), down to
 -- DIG_DEPTH under the ground as the map built it. The ground goes for everyone (Terrain:FillCylinder
 -- with Air, which the engine replicates). Bullets never write terrain: they only scuff it, on each
--- client (CombatClient's bullet marks, through GroundFx). The server sends one CraterFx event per
--- crater, { surface, radius, material, normal, depth }, for the clods, dust, torn turf and spray.
+-- client (CombatClient's bullet marks, through GroundFx). The CraterFx remote is kept for the clods,
+-- dust, torn turf and spray, but nothing is sent on it until a client listens (see craterAt).
 --
 -- A BOWL, NEVER A SHAFT: you can always get out. Every crater is a cone: a flat floor FLOOR_RADIUS
 -- across, then walls rising a stud for every WALL_RUN out (1 in 2, 27 degrees: walkable on
@@ -2303,7 +2348,8 @@ DestructibleService.DigDepth, DestructibleService.Bedrock = DIG_DEPTH, BEDROCK
 DestructibleService.CraterMax = CRATER_MAX
 DestructibleService.WallRun = WALL_RUN
 
-local craterFx = Remotes.Event("CraterFx")
+-- (Made so the name exists; no client has an OnClientEvent for it yet.)
+Remotes.Event("CraterFx")
 
 -- A weapon's crater size from its blast: the reach its walls take damage in (half its blast
 -- radius) and its wall damage. A rocket (150 at reach ~7) about 6.4; a grenade about 5; a drumlet
@@ -2565,7 +2611,9 @@ local function craterAt(position, reach, damage, map)
 	end)
 	forgetAround(surface, rim, map)
 	tellBroken(CFrame.new(Vector3.new(surface.X, (apexY + top) / 2, surface.Z)), Vector3.new(rim * 2, top - apexY + 2, rim * 2))
-	craterFx:FireAllClients({ surface, math.max(size, FLOOR_RADIUS + (target - depthNow) * WALL_RUN), hit.Material, hit.Normal, target })
+	-- No CraterFx broadcast until a client listens: unheard, each one only queued up on every client
+	-- ("invocation queue exhausted"). Its payload was { surface, radius, hit.Material, hit.Normal,
+	-- target }, radius math.max(size, FLOOR_RADIUS + (target - depthNow) * WALL_RUN).
 	return true, target
 end
 DestructibleService.CraterAt = craterAt
@@ -2603,7 +2651,12 @@ function DestructibleService.DamageInRadius(position, radius, amount, attackerTo
 		end
 	end
 	for _, part in ipairs(hits) do
-		local key = part.Parent and keyOf(part)
+		local key, _, owner = nil, nil, nil
+		if part.Parent then
+			key, _, owner = keyOf(part)
+		end
+		-- (By slot: the same group tag in two buildings is two pools.)
+		key = key ~= nil and slotOf(key, owner, true) or nil
 		if key and not seen[key] then
 			seen[key] = true
 			-- The map's structure (not a tagged prop) takes a blast STRUCTURE.blast times over.

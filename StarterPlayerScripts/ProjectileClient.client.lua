@@ -644,7 +644,7 @@ end
 -- Cooking and throwing
 --------------------------------------------------------------------------------
 
--- { slot, item, spec, index, startedAt, ticks } while a frag's pin is out in our hand.
+-- { slot, item, spec, index, startedAt, ticks, touch } while a frag's pin is out in our hand.
 local cook = nil
 
 -- The arc preview goes the moment a throw leaves the hand (#63). Without this it stayed drawn until
@@ -680,8 +680,19 @@ local function stopCook()
 	screen.fuseBack.Visible = false
 end
 
-local function startCook(slot, item, spec)
-	cook = { slot = slot, item = item, spec = spec, index = loadout.equipped, startedAt = os.clock(), ticks = 0 }
+-- Stopping a cook without throwing it (a menu opened, out of combat, at the wheel): the server is told
+-- to put the pin back in too, or its cook would still go off in our hand with no fuse bar up.
+local function cancelCook()
+	if cook then
+		cookRemote:FireServer(false)
+	end
+	stopCook()
+end
+
+-- `touch`: started on the phone's COOK button. A finger has no state to poll (CombatClient's
+-- stillHeld), so that cook throws on the button's End rather than on the frame loop's throwHeld().
+local function startCook(slot, item, spec, touch)
+	cook = { slot = slot, item = item, spec = spec, index = loadout.equipped, startedAt = os.clock(), ticks = 0, touch = touch }
 	cookRemote:FireServer()
 	Sfx.Play("CoconutPinPull", 0.05)
 	screen.fuseFill.BackgroundColor3 = item.color
@@ -709,9 +720,18 @@ local function driving()
 	return seat ~= nil and seat:IsA("VehicleSeat")
 end
 
-local function onThrowInput(_, inputState)
+-- The phone's COOK button (see ON A PHONE below); declared here so the handler can tell its presses apart.
+local COOK_ACTION = "BRR_Cook"
+
+local function onThrowInput(actionName, inputState)
 	local slot, item, spec = throwableInHand()
 	if not slot or not inCombat() then
+		return Enum.ContextActionResult.Pass
+	end
+	-- A vehicle gun that's ours (the gunner's seat, or the wheel of an armed vehicle) owns the click and
+	-- R2: this binding sits above VehicleWeaponClient's, so they go down to it. A frag already cooking
+	-- still throws on release; the phone's COOK button shares nothing with the gun and still works.
+	if not cook and actionName ~= COOK_ACTION and player:GetAttribute("VehicleGunActive") then
 		return Enum.ContextActionResult.Pass
 	end
 	if inputState == Enum.UserInputState.Begin then
@@ -722,7 +742,7 @@ local function onThrowInput(_, inputState)
 			return Enum.ContextActionResult.Sink
 		end
 		if spec.cookable then
-			startCook(slot, item, spec)
+			startCook(slot, item, spec, actionName == COOK_ACTION)
 		else
 			useRemote:FireServer(aimPoint())
 			throwGate.Thrown(serverNow())
@@ -732,6 +752,11 @@ local function onThrowInput(_, inputState)
 		if cook then
 			throwNow()
 		end
+		return Enum.ContextActionResult.Sink
+	elseif inputState == Enum.UserInputState.Cancel and actionName == COOK_ACTION and cook and cook.touch then
+		-- A cancelled action never gets its End, and a finger can't be polled: throw it now rather than
+		-- leave it cooking until it goes off in the hand.
+		throwNow()
 		return Enum.ContextActionResult.Sink
 	end
 	-- Cancel: the button may still be down; the frame loop watches it and throws on release.
@@ -755,7 +780,6 @@ ContextActionService:BindActionAtPriority("BRR_Throw", onThrowInput, false,
 -- The real home for this is StarterPlayerScripts/TouchControls (it has "extra1"/"extra2" slots and
 -- draws every touch button in one place), but its feature flag is off, so nothing it binds appears.
 -- When that flag goes live this should move there and lose its own button.
-local COOK_ACTION = "BRR_Cook"
 local cookButtonBound = false
 
 local function refreshCookButton()
@@ -766,8 +790,11 @@ local function refreshCookButton()
 	end
 	cookButtonBound = wanted
 	if wanted then
+		-- Bound to a key nobody presses, so only the drawn button fires it. Bound to Touch it took every
+		-- touch on the screen (a camera swipe, a tap on the world), cooking and throwing on each one and
+		-- sinking the camera's drag.
 		ContextActionService:BindActionAtPriority(COOK_ACTION, onThrowInput, true,
-			Enum.ContextActionPriority.High.Value, Enum.UserInputType.Touch)
+			Enum.ContextActionPriority.High.Value, Enum.KeyCode.World95)
 		pcall(function()
 			ContextActionService:SetTitle(COOK_ACTION, "COOK")
 			ContextActionService:SetPosition(COOK_ACTION, UDim2.new(1, -140, 1, -400))
@@ -1196,8 +1223,8 @@ local function stepScreen(dt)
 			-- Too late: the server sets it off in our hand.
 			stopCook()
 		elseif not inCombat() or driving() then
-			stopCook()
-		elseif not throwHeld() then
+			cancelCook()
+		elseif not cook.touch and not throwHeld() then
 			throwNow()
 		end
 	end
@@ -1266,7 +1293,7 @@ matchChanged.OnClientEvent:Connect(function(state)
 	if type(state) == "table" and type(state.state) == "string" then
 		matchState = state.state
 		if matchState ~= "InProgress" then
-			stopCook()
+			cancelCook()
 			preview.hide()
 		end
 	end
@@ -1274,6 +1301,6 @@ end)
 
 player:GetAttributeChangedSignal("MenuOpen"):Connect(function()
 	if player:GetAttribute("MenuOpen") then
-		stopCook()
+		cancelCook()
 	end
 end)

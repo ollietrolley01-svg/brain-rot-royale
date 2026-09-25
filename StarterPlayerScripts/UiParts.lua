@@ -704,8 +704,9 @@ function UiParts.closePanel(panel, scale, onClosed, target)
 	tween:Play()
 end
 
--- A modal question. Returns the dialog; `onDismiss` is called by the scrim, the X and Escape, so
--- there is always a way out.
+-- A modal question. Returns the layer, the dialog and a `dismiss` function. Every action closes it
+-- and then runs its own onClick; the scrim (and a caller's Back, through `dismiss`) closes it and
+-- calls `onDismiss`, so there is always a way out. There is no X or Escape binding.
 function UiParts.dialog(options)
 	local viewport = options.viewport or Vector2.new(1280, 720)
 	local touch = UserInputService.TouchEnabled
@@ -715,7 +716,26 @@ function UiParts.dialog(options)
 		BackgroundTransparency = 1,
 		Parent = options.parent,
 	})
-	UiParts.scrim(layer, options.onDismiss)
+
+	-- The layer sits on the caller's ScreenGui, not in a panel a re-render or the menu's Back would
+	-- clear, so nothing but this removes it: without it a CANCEL with no onClick was dead and the
+	-- scrim ate every click until rejoin. Guarded so a double tap can't run an action twice, and the
+	-- layer goes BEFORE the handler so one that yields on the server isn't left under a live dialog.
+	local closed = false
+	local function close(handler)
+		if closed then
+			return
+		end
+		closed = true
+		layer:Destroy()
+		if handler then
+			handler()
+		end
+	end
+	local function dismiss()
+		close(options.onDismiss)
+	end
+	UiParts.scrim(layer, dismiss)
 
 	local dialog = create("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -757,13 +777,15 @@ function UiParts.dialog(options)
 			kind = action.kind or (index == #(options.actions or {}) and "primary" or "secondary"),
 			width = action.width or 132,
 			text = action.text,
-			onClick = action.onClick,
+			onClick = function()
+				close(action.onClick)
+			end,
 			layoutOrder = index,
 			parent = actions,
 		})
 	end
 	UiParts.openPanel(dialog)
-	return layer, dialog
+	return layer, dialog, dismiss
 end
 
 --------------------------------------------------------------------------------

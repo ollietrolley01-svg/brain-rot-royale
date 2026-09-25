@@ -732,7 +732,7 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 			Transparency = look.columnFade or NS({ NSK(0, 0.4), NSK(0.7, 0.7), NSK(1, 1) }),
 			Enabled = true,
 		})
-		table.insert(parts, column)
+		-- Owned by its own entry only: in the blast's `parts` it went at 1.3 s, plume and all.
 		add({
 			life = columnTime + 5,
 			parts = { column },

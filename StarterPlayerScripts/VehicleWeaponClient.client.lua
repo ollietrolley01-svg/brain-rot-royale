@@ -227,17 +227,33 @@ local function drivenVehicle()
 	return vehicle, spec, mount
 end
 
--- What's under the aim point on the screen, past the vehicle and everyone in it.
+-- What's under the aim point on the screen, past the vehicle and everyone in it, and your own companion
+-- (as the server's shot, VehicleWeapons.shotParams, and GunnerView's sight). A seated rider isn't the
+-- vehicle's descendant: without them here, the roof gunner behind a driver took the driver's aim behind
+-- its gun, and the shot went along the arc's edge.
 local function aimPoint(vehicle, screenX, screenY)
 	local ray = camera:ViewportPointToRay(screenX, screenY)
-	local filter = { vehicle }
+	local filter = { vehicle, camera }
 	if player.Character then
 		table.insert(filter, player.Character)
 	end
-	for _, name in ipairs({ "Loot", "Effects" }) do
+	for _, child in ipairs(vehicle:GetChildren()) do
+		if (child:IsA("Seat") or child:IsA("VehicleSeat")) and child.Occupant and child.Occupant.Parent then
+			table.insert(filter, child.Occupant.Parent)
+		end
+	end
+	for _, name in ipairs({ "Loot", "Effects", "DeathFx" }) do
 		local instance = workspace:FindFirstChild(name)
 		if instance then
 			table.insert(filter, instance)
+		end
+	end
+	local companions = workspace:FindFirstChild("Companions")
+	if companions then
+		for _, model in ipairs(companions:GetChildren()) do
+			if model:GetAttribute("OwnerUserId") == player.UserId then
+				table.insert(filter, model)
+			end
 		end
 	end
 	local params = RaycastParams.new()
@@ -361,17 +377,26 @@ local function swingMount(vehicle, mount, spec, yawTarget, pitchTarget, dt)
 		swing = { yaw = 0, pitch = spec.restPitch or 0 }
 		perVehicle[mount] = swing
 	end
+	-- An all-round mount turns the short way: its aim yaw flips between +180 and -180 across the back,
+	-- which read unwrapped swung it the whole way round through the front (as GunnerView's own follow).
+	local wraps = (spec.yawLimit or 0) >= 180
 	local follow = GunnerView and GunnerView.Pure and GunnerView.Pure.follow
 	if follow then
 		-- Someone else's mount from a 10 Hz attribute: the same damped follow the gunner's own view uses,
 		-- so it reads as a turret turning, never as steps (Oliver 09-24: "rotation ... smoother").
 		local speed = math.min(SWING_RATE, (spec.slew or SWING_RATE) * 1.25)
 		local accel = (spec.slewAccel or speed * 6)
-		swing.yaw, swing.yawV = follow(swing.yaw, swing.yawV or 0, yawTarget, dt, speed, accel, false, 10)
+		swing.yaw, swing.yawV = follow(swing.yaw, swing.yawV or 0, yawTarget, dt, speed, accel, wraps, 10)
 		swing.pitch, swing.pitchV = follow(swing.pitch, swing.pitchV or 0, pitchTarget, dt, speed, accel, false, 10)
 	else
 		local step = SWING_RATE * dt
+		if wraps then
+			yawTarget = swing.yaw + ((yawTarget - swing.yaw + 180) % 360 - 180)
+		end
 		swing.yaw = approach(swing.yaw, yawTarget, step)
+		if wraps then
+			swing.yaw = (swing.yaw + 180) % 360 - 180
+		end
 		swing.pitch = approach(swing.pitch, pitchTarget, step)
 	end
 	yawJoint.Transform = CFrame.Angles(0, math.rad(swing.yaw), 0)

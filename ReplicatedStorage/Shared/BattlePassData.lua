@@ -57,6 +57,11 @@ function BattlePassData.TierForXp(xp)
 end
 
 function BattlePassData.XpIntoTier(xp)
+	-- Pass.xp stays uncapped (Rot Rank feeds on it), so at the last tier show a full bar
+	-- instead of a counter that loops toward a tier that doesn't exist.
+	if BattlePassData.TierForXp(xp) >= BattlePassData.MaxTier then
+		return BattlePassData.XpPerTier
+	end
 	return xp % BattlePassData.XpPerTier
 end
 

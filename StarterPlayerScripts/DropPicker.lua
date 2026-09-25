@@ -1052,6 +1052,11 @@ end
 -- viewport changes — a screen that only ever lays out once is how the short and tall forms end up
 -- shipped untested.
 function Picker:Layout()
+	-- Drawing the map yields (DrawImage waits a frame every 48 rows), and the viewport can change
+	-- again meanwhile. Each call takes a number, and one that a newer call has overtaken stops
+	-- when the map returns, before it writes anything more to self (see drawMap).
+	self.layoutGen = (self.layoutGen or 0) + 1
+	local gen = self.layoutGen
 	for _, child in ipairs(self.root:GetChildren()) do
 		child:Destroy()
 	end
@@ -1157,11 +1162,19 @@ function Picker:Layout()
 			Parent = panel,
 		})
 		if self.data then
-			self.mapView = DropPicker.DrawMap(holder, self.data, size, {
+			local view = DropPicker.DrawMap(holder, self.data, size, {
 				labelSize = labelSize,
 				zIndex = self.zIndex + 1,
 			})
-			self.discFrame = self.mapView.frame
+			if gen ~= self.layoutGen or panel.Parent == nil then
+				-- A newer Layout destroyed this panel while the map drew. The image label went into
+				-- the dead disc after that, so its Destroying never ran: clear it here to free the
+				-- EditableImage, and tell the caller to stop.
+				view.frame:ClearAllChildren()
+				return nil
+			end
+			self.mapView = view
+			self.discFrame = view.frame
 		else
 			UiParts.text(holder, Type.Body, "Drawing the map…", Role.TextMuted, {
 				Size = UDim2.fromScale(1, 1),
@@ -1192,7 +1205,9 @@ function Picker:Layout()
 		local y = Space.MD
 		y = header(Space.MD, y, inner, Type.Heading, Type.Title)
 		y += Space.SM
-		drawMap(Space.MD, y, inner, 11)
+		if not drawMap(Space.MD, y, inner, 11) then
+			return
+		end
 		y += inner + Space.MD
 		readoutCard(Space.MD, y, inner, 50)
 		y += 50 + Space.SM
@@ -1229,7 +1244,9 @@ function Picker:Layout()
 	panel.Position = UDim2.new(0.5, 0, 0, math.max(safe.Top, math.floor(safe.Top + (viewport.Y - safe.Top - bottomInset - height) / 2)))
 	panel.AnchorPoint = Vector2.new(0.5, 0)
 
-	drawMap(Space.MD, Space.MD, mapPx, form == "short" and 11 or 12)
+	if not drawMap(Space.MD, Space.MD, mapPx, form == "short" and 11 or 12) then
+		return
+	end
 
 	local x = Space.MD + mapPx + Space.LG
 	local y = Space.MD

@@ -377,7 +377,7 @@ function InventoryPanel.new(parent, options)
 		if self.options.onDrop then
 			self.options.onDrop(index)
 		end
-		self:_refresh()
+		self:_render()
 	end)
 
 	local close = create("TextButton", {
@@ -753,7 +753,8 @@ function InventoryPanel:_render()
 	self.footRight.Text = string.format("%d / %d slots used%s", used, SLOT_COUNT, closeKey and ("   •   [" .. closeKey .. "] close") or "")
 	-- DROP is offered only for a selected slot that actually holds something: an empty slot has
 	-- nothing to put on the ground, and a button that refuses is worse than one that isn't there.
-	local canDrop = self.selected ~= nil and slots[self.selected] ~= nil
+	-- Truthiness, not ~= nil: the server sends an empty slot as `false`.
+	local canDrop = self.selected ~= nil and slots[self.selected] and true or false
 	if self.dropButton then
 		self.dropButton.Visible = canDrop
 	end
@@ -1002,7 +1003,8 @@ function InventoryPanel:SetLoadout(loadout)
 	self.loadout = loadout
 	self.shownSlots, self.shownEquipped = nil, nil
 	self.token += 1
-	if not loadout then
+	-- A selected slot the server emptied (used up, dropped) has nothing left to move or drop.
+	if not loadout or (self.selected and not loadout.slots[self.selected]) then
 		self.selected = nil
 	end
 	if self.drag and loadout and not loadout.slots[self.drag.from] then

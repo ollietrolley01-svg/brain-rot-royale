@@ -29,6 +29,7 @@
 --   ProjectileService.LeadAim(weaponId, origin, target, targetVelocity)   where to aim a launcher
 --   ProjectileService.Dangers(position, radius)   live frags and rounds that could reach `position`
 --   ProjectileService.SmokeBlocks(from, to)       whether smoke hides `to` from `from`
+--   ProjectileService.CancelCook(player)          the pin back in: a cook that was never thrown
 --   ProjectileService.Clear()                     everything gone, for a new match
 --   ProjectileService.Step(dt)                    one tick (the probe drives this by hand)
 --
@@ -362,6 +363,16 @@ local function teamOf(token)
 	return ok and team or nil
 end
 
+-- A team-mate of a round's owner whom DealDamage's veto can no longer protect: ModeTeams forgets a
+-- thrower who leaves, and a bot the moment it dies (GameMode.retireBot), while its frag, sticky or
+-- rocket is still live. The team stamped on the round at launch still keeps it off their side. While
+-- the `attacker` DealDamage is handed (the creditable owner) still has that team, the veto decides, as
+-- for any hit. `round` is a live entry or a blast.
+local function forgottenMate(round, attacker, victimToken)
+	local team = round.ownerTeam
+	return team ~= nil and victimToken ~= round.owner and teamOf(victimToken) == team and teamOf(attacker) ~= team
+end
+
 -- The blast itself. `blast` = { id, kind, owner, weaponId, position, normal, damage, radius,
 -- innerRadius, wallDamage, direct = { token, bonus, headshot, multiplier }? }. Returns a list of
 -- { token, amount, scale, reach, headshot } for everyone it hurt, for the probe.
@@ -404,9 +415,9 @@ local function explode(blast)
 			-- below (VehicleService.BlastDamage), and a wreck covers nobody.
 			amount *= VehicleCover.BlastShareFor(victim.root.Parent)
 			local taken = 0
-			-- A thrower who has left is no longer creditable (and ModeTeams has forgotten them), but the
-			-- team stamped on the round at launch still keeps friendly fire off their teammates.
-			if owner ~= nil or blast.ownerTeam == nil or teamOf(victim.token) ~= blast.ownerTeam then
+			-- A thrower who has left, or a bot retired on death, is forgotten by ModeTeams, but the team
+			-- stamped on the round at launch still keeps friendly fire off their teammates.
+			if not forgottenMate(blast, owner, victim.token) then
 				taken = CombatService.DealDamage(owner, victim.token, amount, blast.weaponId, headshot)
 			end
 			table.insert(dealt, { token = victim.token, amount = taken, scale = scale, reach = reach, headshot = headshot })
@@ -545,9 +556,10 @@ local function burst(entry, position, normal, directToken, headshot)
 	if spec.explosive == false then
 		broadcast("impact", { id = entry.id, position = position, normal = normal, kind = entry.kindName, weaponId = entry.weaponId })
 		local direct = blast.direct
-		if direct then
+		local attacker = creditable(entry.owner)
+		if direct and not forgottenMate(entry, attacker, direct.token) then
 			local amount = (blast.damage + (direct.bonus or 0)) * (direct.multiplier or 1)
-			CombatService.DealDamage(creditable(entry.owner), direct.token, amount, entry.weaponId, direct.headshot == true)
+			CombatService.DealDamage(attacker, direct.token, amount, entry.weaponId, direct.headshot == true)
 		end
 		return nil
 	end
@@ -860,13 +872,20 @@ local function stepBody(entry, dt)
 	end
 end
 
+-- Cooking only happens while the match is being played: CombatService is switched on for exactly that
+-- (MatchService, InProgress). Missing in a stripped-down harness: as before, always.
+local function matchLive()
+	return CombatService.IsEnabled == nil or CombatService.IsEnabled() == true
+end
+
 local function stepCooks()
 	for player, cook in pairs(cooks) do
 		local loadout = WeaponService.Get(player)
 		local slot = loadout and loadout.equipped and loadout.slots[loadout.equipped]
 		local spec = Ballistics.Throwables[cook.itemId]
-		if not player.Parent or not Combatants.IsAlive(player) or not loadout or loadout.equipped ~= cook.index or slot ~= cook.slot then
-			-- Put away, dropped or dead: the cook is off (the pin goes back in).
+		if not player.Parent or not Combatants.IsAlive(player) or not loadout or loadout.equipped ~= cook.index or slot ~= cook.slot or not matchLive() then
+			-- Put away, dropped or dead, or the match over (the release is refused on the results screen,
+			-- and the frag must not go off there): the cook is off (the pin goes back in).
 			cooks[player] = nil
 		elseif clock - cook.startedAt >= spec.fuse - COOK_MARGIN then
 			-- Too late. Using it now goes through the normal spend, and throwFromPlayer sees the cook.
@@ -939,6 +958,9 @@ api = {
 	DealDamage = CombatService.DealDamage,
 	-- The owner to credit a hit to, or nil once they have left (a round's own hits, as burst credits them).
 	Creditable = creditable,
+	-- (entry, attacker, victimToken): a team-mate of an owner ModeTeams has forgotten, whom that hit
+	-- must skip, as burst and explode do.
+	ForgottenMate = forgottenMate,
 	Targets = targets,
 	Exposure = exposure,
 	Report = report,
@@ -1112,14 +1134,33 @@ end
 -- Cooking and hooks
 --------------------------------------------------------------------------------
 
+-- The pin back in: a cook its thrower stopped without throwing (a menu opened, the match left
+-- InProgress on their screen), or whose release the server turned down, is dropped instead of going
+-- off in their hand a few seconds later. Not once the fuse is out: stepCooks is already setting it off,
+-- and a fresh fuse is not handed back.
+function ProjectileService.CancelCook(player)
+	local cook = cooks[player]
+	local spec = cook and Ballistics.Throwables[cook.itemId]
+	if cook and (not spec or clock - cook.startedAt < spec.fuse - COOK_MARGIN) then
+		cooks[player] = nil
+	end
+end
+
 -- The press of a throw: start the fuse if a cookable throwable is in hand. The release comes through
--- the normal UseSelected remote.
-cookRemote.OnServerEvent:Connect(function(player)
+-- the normal UseSelected remote. `pressed` false: the client stopped the cook without a throw
+-- (CancelCook); it only ever takes a cook away, so it spends no rate-limit budget.
+cookRemote.OnServerEvent:Connect(function(player, pressed)
+	if pressed == false then
+		ProjectileService.CancelCook(player)
+		return
+	end
 	-- Rate-limited like the other combat remotes (claude-f5, 2026-09-17).
 	if not RateLimit.Take(player, "Cook") then
 		return
 	end
-	if cooks[player] or not Combatants.IsAlive(player) or driving(player) then
+	-- Not outside a live match: the release is refused there (Bootstrap's UseSelected), so the cook
+	-- could only ever go off in the hand.
+	if cooks[player] or not matchLive() or not Combatants.IsAlive(player) or driving(player) then
 		return
 	end
 	local loadout = WeaponService.Get(player)

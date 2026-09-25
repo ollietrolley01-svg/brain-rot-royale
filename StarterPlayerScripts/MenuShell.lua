@@ -66,6 +66,10 @@ function MenuShell.new(options)
 		Parent = self.layer,
 	})
 	self.scrimFrame.Activated:Connect(function()
+		-- Close-only: a second tap during the close tween would reach the host's toggle and reopen.
+		if not self:IsOpen() then
+			return
+		end
 		if self.onBack then
 			self.onBack()
 		end
@@ -425,6 +429,11 @@ end
 -- shell nobody has given a handler still CLOSES rather than sitting there looking pressable. There
 -- is no arrangement of options that produces a dead X.
 function MenuShell:Dismiss()
+	-- The X is close-only. MenuClient's handler is a toggle and IsOpen counts the close tween as
+	-- closed, so a double-click inside those 0.12 s would reopen the menu; ignore it instead.
+	if not self:IsOpen() then
+		return
+	end
 	local handler = self.onClose or self.onBack
 	if handler then
 		handler()

@@ -689,7 +689,9 @@ end
 local groundPool, chestPool = {}, {}
 for id, def in pairs(WeaponData.Weapons) do
 	def.id = id
-	def.killEffect = WeaponData.KillEffects[id] or "ragdoll"
+	-- Keep a killEffect set inline on the def (ZanzarinoPikpik, TamburoTungTung, Bananerang) when the table has none.
+	def.killEffect = WeaponData.KillEffects[id] or def.killEffect or "ragdoll"
+	WeaponData.KillEffects[id] = def.killEffect
 	if (def.groundWeight or 0) > 0 then
 		table.insert(groundPool, def)
 	end

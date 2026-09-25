@@ -289,6 +289,8 @@ local function setThirdPerson(active, nextIsFirstPerson)
 		lookYaw = math.atan2(-look.X, -look.Z)
 		lookPitch = math.clamp(math.asin(math.clamp(look.Y, -1, 1)), -PITCH_LIMIT, PITCH_LIMIT)
 		shoulderDistance = aiming and THIRD_PERSON_AIM_DISTANCE or zoomDistance
+		-- A drag left over from the last time third person was on isn't carried into this one.
+		touchDelta = Vector2.zero
 		camera.CameraType = Enum.CameraType.Scriptable
 		if humanoid then
 			humanoid.AutoRotate = false
@@ -336,13 +338,13 @@ end)
 -- Gamepad right stick and touch drags steer the third-person camera; the mouse is read directly
 -- in the camera update.
 UserInputService.InputChanged:Connect(function(input, processed)
-	if not thirdPersonActive then
-		return
-	end
+	-- The stick's position is kept even while third person is off (it's only read while on): the stick
+	-- only reports when it moves, so one let go of while scoped, in the menu or in a vehicle would
+	-- otherwise leave its last deflection spinning the camera when third person came back.
 	if input.UserInputType == Enum.UserInputType.Gamepad1 and input.KeyCode == Enum.KeyCode.Thumbstick2 then
 		local stick = input.Position
 		gamepadLook = stick.Magnitude > 0.15 and Vector2.new(stick.X, stick.Y) or Vector2.zero
-	elseif input.UserInputType == Enum.UserInputType.Touch and not processed then
+	elseif input.UserInputType == Enum.UserInputType.Touch and not processed and thirdPersonActive then
 		touchDelta += Vector2.new(input.Delta.X, input.Delta.Y)
 	end
 end)
@@ -970,6 +972,14 @@ local function applyLookSensitivity()
 	UserInputService.MouseDeltaSensitivity = Settings.Get("LookSensitivity") * (aiming and Settings.Get("AimSensitivity") or 1)
 end
 
+-- The aim zoom for the gun in hand now (or none when not aiming).
+local function tweenAimFov()
+	local fov = Settings.Get("FieldOfView")
+	TweenService:Create(camera, TweenInfo.new(0.16), {
+		FieldOfView = aiming and fov * adsZoom() or fov,
+	}):Play()
+end
+
 local function setAiming(value)
 	if aiming == value then
 		return
@@ -980,10 +990,7 @@ local function setAiming(value)
 	applyLookSensitivity()
 	-- Aiming a scoped gun in third person drops into first person for the scope view.
 	updateCameraMode()
-	local fov = Settings.Get("FieldOfView")
-	TweenService:Create(camera, TweenInfo.new(0.16), {
-		FieldOfView = aiming and fov * adsZoom() or fov,
-	}):Play()
+	tweenAimFov()
 end
 
 Settings.Changed:Connect(function(id)
@@ -1262,7 +1269,15 @@ end
 
 RunService.Heartbeat:Connect(function()
 	if player:GetAttribute("InVehicle") then
-		pinCameraZoom(nil)
+		-- Only the driver's VehicleSeat has a camera that owns the range (VehicleClient widens it). A
+		-- passenger's or gunner's plain Seat has none, so the pin is released there, or it could not zoom.
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		local seat = humanoid and humanoid.SeatPart
+		if seat and not seat:IsA("VehicleSeat") then
+			pinCameraZoom(false)
+		else
+			pinCameraZoom(nil)
+		end
 	else
 		pinCameraZoom(inCombat())
 	end
@@ -2014,7 +2029,8 @@ end
 -- line is cast again here, which is how the surface (and its normal) is known; bodies and
 -- pickups don't get chips. Kept to a fixed number so a long fight never piles them up.
 local MARK_LIMIT = 80
-local MARK_LIFE = 14
+-- Oliver, 2026-09-25: gone 5 s after the hit (4 s, then the 1 s fade below).
+local MARK_LIFE = 4
 local marks = {}
 local markParams = RaycastParams.new()
 markParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -2297,6 +2313,7 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 		Sfx.Play("Pickup", 0.1)
 	end
 
+	local previousDef, previousEquipped = equippedDef(), previous and previous.equipped
 	loadout = newLoadout
 	loadoutPushedAt = tick()
 	-- Build each carried gun's viewmodel template now, while it's being picked up, rather than on its
@@ -2337,6 +2354,12 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 		-- would reopen the gap.
 		localEquipReadyAt = math.max(localEquipReadyAt, os.clock() + (newLoadout.equipReadyIn or 0))
 		updateCameraMode()
+		-- The aim zoom is only set when the aim starts, so a swap while still aiming re-zooms for the
+		-- new gun (or item) instead of keeping the old one's scope or iron sights.
+		local def = equippedDef()
+		if aiming and (newLoadout.equipped ~= previousEquipped or (def and def.id) ~= (previousDef and previousDef.id)) then
+			tweenAimFov()
+		end
 	end
 end)
 

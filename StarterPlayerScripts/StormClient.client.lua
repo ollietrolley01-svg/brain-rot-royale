@@ -150,7 +150,8 @@ end
 
 -- Whether the local player's body is out in the storm, for the enter/leave cues. A body at lobby
 -- height is not in the match (a spectator stands on the pier at MatchConfig.LobbyPosition), so it
--- counts as not outside whatever the circle does.
+-- counts as not outside whatever the circle does. A dead body (a spectator's corpse is left where it
+-- fell) keeps whatever it last was, so neither the death nor a later circle passing over it sounds a cue.
 local wasOutside = false
 local function outsideNow()
 	local player = Players.LocalPlayer
@@ -158,6 +159,10 @@ local function outsideNow()
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if not root or not target or root.Position.Y > MatchConfig.LobbyPosition.Y - 100 then
 		return false
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health <= 0 then
+		return wasOutside
 	end
 	local flat = Vector3.new(root.Position.X - target.center.X, 0, root.Position.Z - target.center.Z)
 	return flat.Magnitude > target.radius

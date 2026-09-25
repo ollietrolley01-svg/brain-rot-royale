@@ -123,6 +123,24 @@ function Life:atEmplacement(spot)
 	return self:add(kind, self.env.frameOf(spot), "arena", spot)
 end
 
+-- Its spot left the world (a compound discarded for another site, or the tower under it gone): the gun
+-- goes too, or it hangs in mid-air for the rest of the match. Nothing is rebuilt there.
+function Life:atRemoved(spot)
+	local entry = self.bySpot[spot]
+	if not entry then
+		return
+	end
+	self.bySpot[spot] = nil
+	for index, other in ipairs(self.guns) do
+		if other == entry then
+			table.remove(self.guns, index)
+			break
+		end
+	end
+	self.env.release(entry.gun, "spot gone")
+	self.env.destroy(entry.gun)
+end
+
 -- A gun broke: its gunner off, and a new one due where it stood.
 function Life:broken(entry)
 	if entry.broken then
@@ -143,8 +161,9 @@ function Life:tick()
 		if entry.broken and entry.rebuildAt and now >= entry.rebuildAt and entry.matchId == self.matchId then
 			self.env.destroy(entry.gun)
 			local gun = self.env.build(entry.kind, entry.cframe, entry.source, self.matchId, entry.opts)
+			-- opts carried over too, so a gun broken a second time still comes back with its sandbags/BotCovers.
 			local fresh = { gun = gun, kind = entry.kind, cframe = entry.cframe, source = entry.source, spot = entry.spot,
-				matchId = self.matchId }
+				matchId = self.matchId, opts = entry.opts }
 			self.guns[index] = fresh
 			if entry.spot then
 				self.bySpot[entry.spot] = fresh
@@ -195,7 +214,7 @@ end
 
 local riders = {} -- model -> { humanoid, player, character, died }; STRONG keys, dropped on release/destroy
 local lastPart = {} -- model -> the part a bullet asked about last (VehicleFromPart), for the shield rule
-local mountedAt = {} -- player -> MountedGuns.Now() of their last mount attempt
+local mountedAt = {} -- player (or bot Humanoid) -> MountedGuns.Now() of their last mount attempt
 local life
 
 local function clearRider(player)
@@ -387,6 +406,54 @@ local function destroy(model)
 	end
 end
 
+-- A gun (anchored) standing on a floor that broke, or on ground a blast dug out, comes down onto
+-- whatever is under it now, as the other anchored props do (DestructibleService.OnPartBroken; a
+-- crater reports its bowl's box there too). Its Life entry keeps the new frame, so a rebuild stands
+-- there as well. Only ever lowers, and only the map's solid parts and the terrain count as ground
+-- (never a player, bot or vehicle in the hole).
+local function regroundNear(cframe, size)
+	if not life then
+		return
+	end
+	local near = {}
+	for _, entry in ipairs(life.guns) do
+		local at = cframe:PointToObjectSpace(entry.cframe.Position)
+		if math.abs(at.X) <= size.X / 2 + 1.5 and math.abs(at.Z) <= size.Z / 2 + 1.5
+			and at.Y >= -size.Y / 2 - 1 and at.Y <= size.Y / 2 + 3 then
+			table.insert(near, entry)
+		end
+	end
+	if #near == 0 then
+		return
+	end
+	-- After the part has gone, so the ground found is what is left.
+	task.defer(function()
+		local ground = { workspace.Terrain }
+		local map = workspace:FindFirstChild("Map")
+		if map then
+			table.insert(ground, map)
+		end
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Include
+		params.FilterDescendantsInstances = ground
+		params.RespectCanCollide = true
+		params.IgnoreWater = true
+		for _, entry in ipairs(near) do
+			local gun = entry.gun
+			if gun and gun.Parent and life and life:entryOf(gun) == entry then
+				local base = entry.cframe.Position
+				local hit = workspace:Raycast(base + Vector3.new(0, 2, 0), Vector3.new(0, -400, 0), params)
+				local drop = hit and hit.Position.Y - base.Y
+				if drop and drop < -0.25 then
+					local shift = Vector3.new(0, drop, 0)
+					gun:PivotTo(gun:GetPivot() + shift)
+					entry.cframe = entry.cframe + shift
+				end
+			end
+		end
+	end)
+end
+
 --------------------------------------------------------------------------------
 -- Damage and breaking
 --------------------------------------------------------------------------------
@@ -446,7 +513,13 @@ local function damageGun(attacker, model, amount, class, part, position)
 		return 0, false
 	end
 	local rider = riders[model]
-	if attacker ~= nil and rider and Combatants.FromCharacter(rider.character) == attacker then
+	local riderToken = rider and Combatants.FromCharacter(rider.character)
+	if attacker ~= nil and rider and riderToken == attacker then
+		return 0, false
+	end
+	-- The vehicles' friendly-fire rule (VehicleService's vetoed): a gun manned by someone the attacker
+	-- may not hurt (a team-mate, spawn protection) is refused. An unmanned gun is anyone's to shoot at.
+	if attacker ~= nil and riderToken ~= nil and CombatService.DamageVeto and CombatService.DamageVeto(attacker, riderToken, nil) then
 		return 0, false
 	end
 	local scale = MountedGunData.Classes[class or "bullet"] or 1
@@ -651,9 +724,18 @@ function MountedGuns.Start()
 			life:atEmplacement(spot)
 		end
 	end)
+	CollectionService:GetInstanceRemovedSignal(MountedGunData.EmplacementTag):Connect(function(spot)
+		if life then
+			life:atRemoved(spot)
+		end
+	end)
 	Players.PlayerRemoving:Connect(function(player)
 		mountedAt[player] = nil
 	end)
+	local okDestructible, DestructibleService = pcall(require, Modules:FindFirstChild("DestructibleService"))
+	if okDestructible and DestructibleService.OnPartBroken then
+		DestructibleService.OnPartBroken(regroundNear)
+	end
 	local acc = 0
 	RunService.Heartbeat:Connect(function(dt)
 		acc += dt
@@ -663,6 +745,14 @@ function MountedGuns.Start()
 		acc = 0
 		if life then
 			life:tick()
+		end
+		-- Spent mount cooldowns go: a bot's key is its Humanoid, which PlayerRemoving never clears,
+		-- so every bot that ever manned a gun would otherwise stay here for the server's life.
+		local now = MountedGuns.Now()
+		for who, at in pairs(mountedAt) do
+			if now - at >= MountedGunData.MountCooldown then
+				mountedAt[who] = nil
+			end
 		end
 		-- A rider whose seat let go without the Occupant signal (a streamed-out seat, a teleport).
 		for model, rider in pairs(riders) do

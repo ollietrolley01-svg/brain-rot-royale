@@ -418,6 +418,16 @@ Remotes.Event("Launch").OnClientEvent:Connect(function(velocity, kind)
 	if not SafeValue.Vector3(velocity, 2000) or not alive() then
 		return
 	end
+	if kind then
+		-- Every kind of launch throws you out of a climb or slide first. Left running, a climb pins the body
+		-- to its path and eats the launch (the item is already spent), and a slide reads the launch's
+		-- Jumping as a slide-jump and re-aims the flight along the slide. No kind: applied as it always was.
+		active = nil
+		if slide then
+			endSlide(false)
+		end
+		MovementState.move = nil
+	end
 	if kind == "blast" then
 		-- An explosion's knockback: capped, it throws you out of a climb or slide, and keeps its speed
 		-- through the air like any other launch.
@@ -426,11 +436,6 @@ Remotes.Event("Launch").OnClientEvent:Connect(function(velocity, kind)
 			horizontal = horizontal.Unit * 60
 		end
 		velocity = horizontal + Vector3.new(0, math.clamp(velocity.Y, -40, 70), 0)
-		active = nil
-		if slide then
-			endSlide(false)
-		end
-		MovementState.move = nil
 		-- Entering Jumping would raise a small knock-up to a full jump (the humanoid applies its own jump
 		-- speed over anything slower), so a weak blast only leaves the ground in Freefall.
 		local jumpSpeed = humanoid.UseJumpPower and humanoid.JumpPower or math.sqrt(2 * workspace.Gravity * humanoid.JumpHeight)
@@ -1363,7 +1368,9 @@ RunService:BindToRenderStep("BRR_MovementPoses", Enum.RenderPriority.Character.V
 				if entry.loudness and entry.steps and entry.steps.Parent then
 					entry.steps.Volume = entry.loudness
 				end
-				posed[model] = model.Parent and false or nil
+				-- Back to false (still watched, its handlers still connected), never nil: nil would have the
+				-- watch loop connect a second set. The loop drops the entry once the body has no Parent.
+				posed[model] = false
 				posing[model] = nil
 			elseif entry.root and entry.root.Parent and (entry.root.Position - focus).Magnitude < POSE_DISTANCE then
 				-- A climb or vault takes the body over from the crouch while it runs.
