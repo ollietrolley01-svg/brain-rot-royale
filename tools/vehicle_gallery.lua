@@ -1273,7 +1273,8 @@ table.insert(views, {
 		-- 09-21 vehicle-tab lesson), same seed `place()` always uses, so this is the exact geometry
 		-- that ships.
 		local model = place(folder, "SahurVan", 1, Vector3.zero, 0, false)
-		local names = { "BatKnob", "BatHandle", "BatTaper", "BatThroat", "BatBarrel", "BatEnd",
+		-- The taper is BatTaper1..22 (Builder:taper); its two ends and middle stand for it.
+		local names = { "BatKnob", "BatHandle", "BatTaper1", "BatTaper11", "BatTaper22", "BatBarrel", "BatEnd",
 			"BatStrap1", "BatStrap2", "DrumShell" }
 		for _, name in ipairs(names) do
 			local part = model:FindFirstChild(name)
