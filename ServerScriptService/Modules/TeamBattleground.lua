@@ -2624,17 +2624,19 @@ local ROAD_LINES = { RoadEdge = true, RoadCentreLine = true }
 local CARRIAGEWAY = { Asphalt = true, RoadSurface = true, BridgeRoad = true }
 -- RoadNetwork's slabs: always laid along their LookVector (their Size.Z), however short.
 local ROAD_SLABS = { RoadSurface = true, BridgeRoad = true }
+-- The road and kerb measures the gateways use, in one table (the main chunk is at Luau's 200-local limit).
+local ROAD = {}
 -- How far short of the apron's edge a road heading at the arena may stop and still be drawn on to it.
-local ROAD_STUB = 16
+ROAD.STUB = 16
 -- A road's width (RoadNetwork.Width, MapDecor's streets).
-local ROAD_WIDE = 18
+ROAD.WIDE = 18
 TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 6
 TeamBattleground.RoadEnd = TeamBattleground.Radius + TeamBattleground.Margin + TeamBattleground.Apron
 -- MapDecor's road heights: the asphalt's top over the ground, a kerb's top, a marking's thickness.
-local ROAD_LIFT, KERB_TOP, KERB_BOTTOM, KERB_WIDE, MARK = 0.4, 0.5, -0.06, 0.8, 0.07
-local KERB_GREY = rgb(176, 174, 166)
+ROAD.LIFT, ROAD.KERB_TOP, ROAD.KERB_BOTTOM, ROAD.KERB_WIDE, ROAD.MARK = 0.4, 0.5, -0.06, 0.8, 0.07
+ROAD.KERB_GREY = rgb(176, 174, 166)
 -- The gateway's beam: its underside over the road, clear of the tallest vehicle by 2.
-local GATEWAY_CLEAR = 12.3
+ROAD.GATEWAY_CLEAR = 12.3
 local VOXEL = 4
 
 -- A part's footprint on the ground, as the box on the world's axes round it.
@@ -2666,7 +2668,7 @@ local function stretchOf(part)
 	-- studs long, cleared or kept one by one, and a road that met the apron's edge on a run of short
 	-- slabs was never ended (RotRidge: 0 ends). Everything else lies along its longer side.
 	-- A town street's asphalt (MapDecor lays it the same way) is read so when it is a road's width across.
-	local lengthwise = ROAD_SLABS[part.Name] or (part.Name == "Asphalt" and math.abs(size.X - ROAD_WIDE) < 0.6 and size.Z < size.X)
+	local lengthwise = ROAD_SLABS[part.Name] or (part.Name == "Asphalt" and math.abs(size.X - ROAD.WIDE) < 0.6 and size.Z < size.X)
 	if math.abs(cf.UpVector.Y) < 0.95 or (not lengthwise and math.abs(size.X - size.Z) < 0.5) then
 		return nil
 	end
@@ -2758,14 +2760,14 @@ end
 -- spanning cx0..cx1 across.
 local function gateway(model, cx0, cx1)
 	-- The give-way line, across the carriageway a little in from its end.
-	box(model, "StopLine", cx0 + 0.35, cx1 - 0.35, ROAD_LIFT, ROAD_LIFT + MARK, 1.1, 1.7, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
+	box(model, "StopLine", cx0 + 0.35, cx1 - 0.35, ROAD.LIFT, ROAD.LIFT + ROAD.MARK, 1.1, 1.7, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
 	-- The gateway: a pillar on each verge, clear of the carriageway by 1.1, a beam across.
 	local pillarZ0, pillarZ1 = 2.4, 5.0
 	for _, side in ipairs({ -1, 1 }) do
 		local inner = side < 0 and cx0 - 1.1 or cx1 + 1.1
 		local x0, x1 = side < 0 and inner - 2.6 or inner, side < 0 and inner or inner + 2.6
-		box(model, "GatewayPillar", x0, x1, -1, GATEWAY_CLEAR + 1.5, pillarZ0, pillarZ1, CONCRETE_DARK, MAT.Concrete, NEVER)
-		box(model, "GatewayCap", x0 - 0.25, x1 + 0.25, GATEWAY_CLEAR + 1.5, GATEWAY_CLEAR + 2.1, pillarZ0 - 0.25, pillarZ1 + 0.25, CONCRETE, MAT.Concrete, NEVER)
+		box(model, "GatewayPillar", x0, x1, -1, ROAD.GATEWAY_CLEAR + 1.5, pillarZ0, pillarZ1, CONCRETE_DARK, MAT.Concrete, NEVER)
+		box(model, "GatewayCap", x0 - 0.25, x1 + 0.25, ROAD.GATEWAY_CLEAR + 1.5, ROAD.GATEWAY_CLEAR + 2.1, pillarZ0 - 0.25, pillarZ1 + 0.25, CONCRETE, MAT.Concrete, NEVER)
 		box(model, "GatewayPlinth", x0 - 0.3, x1 + 0.3, -0.5, 1.2, pillarZ0 - 0.3, pillarZ1 + 0.3, CONCRETE, MAT.Concrete, NEVER)
 		-- Hazard bands on the face toward the traffic: a yellow board with two black stripes on it.
 		facePlate(model, "HazardBoard", "x", inner, 0.12, pillarZ0 + 0.3, pillarZ1 - 0.3, 1.8, 5.4, HAZARD, MAT.SmoothPlastic)
@@ -2775,8 +2777,8 @@ local function gateway(model, cx0, cx1)
 		-- A lamp on the outer face, lighting the way in.
 		wallLamp(model, Vector3.new((x0 + x1) / 2, 9.4, pillarZ1), Vector3.new(0, 0, 1), 26)
 	end
-	box(model, "GatewayBeam", cx0 - 2.5, cx1 + 2.5, GATEWAY_CLEAR, GATEWAY_CLEAR + 1.2, pillarZ0 + 0.5, pillarZ1 - 0.5, STEEL_DARK, MAT.Metal, NEVER)
-	local board = box(model, "GatewaySign", (cx0 + cx1) / 2 - 7, (cx0 + cx1) / 2 + 7, GATEWAY_CLEAR - 0.1, GATEWAY_CLEAR + 2.3,
+	box(model, "GatewayBeam", cx0 - 2.5, cx1 + 2.5, ROAD.GATEWAY_CLEAR, ROAD.GATEWAY_CLEAR + 1.2, pillarZ0 + 0.5, pillarZ1 - 0.5, STEEL_DARK, MAT.Metal, NEVER)
+	local board = box(model, "GatewaySign", (cx0 + cx1) / 2 - 7, (cx0 + cx1) / 2 + 7, ROAD.GATEWAY_CLEAR - 0.1, ROAD.GATEWAY_CLEAR + 2.3,
 		pillarZ1 - 0.5, pillarZ1 - 0.25, PURPLE_DARK, MAT.Metal, NEVER)
 	signText(board, "ROT ARENA", WHITE_PAINT)
 end
@@ -2787,7 +2789,7 @@ end
 -- cut, on the ground under the road; +Z out along the road, X across it.
 local function roadEnd(parent, road, cut, outward, centre)
 	-- The carriageway at the cut: its span across, and its top.
-	local c0, c1, top, kerbColor = math.huge, -math.huge, nil, KERB_GREY
+	local c0, c1, top, kerbColor = math.huge, -math.huge, nil, ROAD.KERB_GREY
 	local atEnd = {}
 	for _, stretch in ipairs(road.stretches) do
 		local part = stretch.part
@@ -2814,7 +2816,7 @@ local function roadEnd(parent, road, cut, outward, centre)
 	end
 	local mid = (c0 + c1) / 2
 	local out = road.axis == "x" and Vector3.new(outward, 0, 0) or Vector3.new(0, 0, outward)
-	local origin = road.axis == "x" and Vector3.new(cut, top - ROAD_LIFT, mid) or Vector3.new(mid, top - ROAD_LIFT, cut)
+	local origin = road.axis == "x" and Vector3.new(cut, top - ROAD.LIFT, mid) or Vector3.new(mid, top - ROAD.LIFT, cut)
 	local frame = CFrame.lookAt(origin, origin - out)
 	local function across(l)
 		local p = road.axis == "x" and Vector3.new(cut, origin.Y, l) or Vector3.new(l, origin.Y, cut)
@@ -2832,13 +2834,13 @@ local function roadEnd(parent, road, cut, outward, centre)
 		if part.Name == "Pavement" and part.Parent then
 			local keep0, keep1 = stretch.a0, stretch.a1
 			if outward > 0 then
-				keep0 = keep0 + KERB_WIDE
+				keep0 = keep0 + ROAD.KERB_WIDE
 			else
-				keep1 = keep1 - KERB_WIDE
+				keep1 = keep1 - ROAD.KERB_WIDE
 			end
 			if cutStretch(stretch, keep0, keep1) then
 				local x0, x1 = across(stretch.l0), across(stretch.l1)
-				box(model, "Kerb", math.min(x0, x1), math.max(x0, x1), KERB_BOTTOM, KERB_TOP, 0, KERB_WIDE, kerbColor, MAT.Concrete)
+				box(model, "Kerb", math.min(x0, x1), math.max(x0, x1), ROAD.KERB_BOTTOM, ROAD.KERB_TOP, 0, ROAD.KERB_WIDE, kerbColor, MAT.Concrete)
 			else
 				part:Destroy()
 			end
@@ -2876,7 +2878,7 @@ end
 -- carriageway's centre line at the joint, on its top), out (the way the road goes on), half (half its
 -- width).
 local function curveEnd(parent, spec)
-	local origin = spec.origin - Vector3.new(0, ROAD_LIFT, 0)
+	local origin = spec.origin - Vector3.new(0, ROAD.LIFT, 0)
 	B = { frame = CFrame.lookAt(origin, origin - spec.out), mirror = false, cover = {}, pools = 0 }
 	local model = folder(parent, "RoadEnd", true)
 	gateway(model, -spec.half, spec.half)
@@ -3161,9 +3163,9 @@ function TeamBattleground.ClearSite(site, map)
 		local stub = nil
 		if not stopsInside and lateral < outer - 9 then
 			local u = math.sqrt(outer * outer - lateral * lateral)
-			if road.a0 > ca and road.a0 - ca < u + ROAD_STUB then
+			if road.a0 > ca and road.a0 - ca < u + ROAD.STUB then
 				stub = -1
-			elseif road.a1 < ca and ca - road.a1 < u + ROAD_STUB then
+			elseif road.a1 < ca and ca - road.a1 < u + ROAD.STUB then
 				stub = 1
 			end
 		end
@@ -3596,9 +3598,11 @@ end
 -- rarity (the most exposed spots hold the best), heals and items; then every RESTOCK seconds while it
 -- stands, any spot whose pickup has been taken is filled again.
 local RESTOCK = 75
-local SPOT_TAKEN = 3
 
 local function spotFree(position)
+	-- A pickup this close to the spot means it's still taken. Local here: the main chunk sits at
+	-- Luau's 200-local limit.
+	local SPOT_TAKEN = 3
 	local loot = workspace:FindFirstChild("Loot")
 	if not loot then
 		return true
