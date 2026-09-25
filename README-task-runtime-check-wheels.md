@@ -36,3 +36,12 @@ passes, 1.95 fails; GT still passes at 2.0 (its well liner reaches down to 0.64)
 **Evidence:** runtime check OK (0 faults, 9/9 plants caught); parked_car, vehicle_collision,
 vehicle_aim, vehicle_cover, vehicle_stability_sim `--source` and vehicle_models_axis_check green;
 verify/balance/lua_static clean.
+
+## Renders
+
+From `tools/wheel_droop_gallery.lua` (own build, wheels posed with the transform `AnimateWheels` applies):
+
+- ![SahurVan front-left at full droop on lock](reports/runtime-check-wheels/droop_lock_sahurvan.jpg)
+  Full droop (1.15) on full lock: the tyre top is still inside the arch, the well dark behind it. Now passes.
+- ![Planted 2.0 droop](reports/runtime-check-wheels/plant_droop2_sahurvan.jpg)
+  The planted fault (`travelDown` 2.0): the tyre hangs below the arch lip, out of its arch. Still caught.
