@@ -383,7 +383,12 @@ end
 -- compounds are built flush with the ground (TeamBaseRuins.Build), so a sloping site costs banks and
 -- gate ramps rather than a plinth: more candidates find ground that needs less of either.
 local RUIN_AXES = 16
-local RUIN_FRACTIONS = { BASE_FRACTION, 0.66, 0.6 }
+local RUIN_FRACTIONS = { BASE_FRACTION, 0.66, 0.6, 0.8 }
+-- The clear ground kept between a compound's levelled pad and the battleground's apron (the arena is
+-- growing toward the bases, pc/battleground-v2): a site nearer the middle than the battleground's reach
+-- (ModeTeams.ArenaReach, set where the battleground is required), the compound's flat half-depth and
+-- this is not ranked at all.
+local ARENA_BUFFER = 40
 -- A pair of sites costing under this is as good as it gets (flat, clear ground: SiteCost is the
 -- ground's rise plus half the surroundings'), and RUIN_TRIES of them end the search: every SiteCost
 -- reads a few hundred thousand voxels, and 96 pairs of them is seconds.
@@ -410,6 +415,10 @@ function ModeTeams.RankBaseAxes(axis, mapInfo)
 		local candidate = axis + step * math.pi / RUIN_AXES
 		for index, fraction in ipairs(RUIN_FRACTIONS) do
 			local total = step * 0.01 + (index - 1) * 0.5
+			local keep = (ModeTeams.ArenaReach or 0) + (TeamBaseRuins.Footprint and TeamBaseRuins.Footprint.Z / 2 or 55) + 12 + ARENA_BUFFER
+			if arenaRadius * fraction < keep then
+				total = math.huge
+			end
 			for team = 1, GameModes.TeamCount do
 				local heading = candidate + (team - 1) * math.pi
 				local base = arenaCentre + Vector3.new(math.cos(heading), 0, math.sin(heading)) * (arenaRadius * fraction)
@@ -588,6 +597,8 @@ end
 -- tools/team_battleground_modeteams_check.py runs it.
 
 local TeamBattleground = require(script.Parent:WaitForChild("TeamBattleground"))
+-- How far from the middle the battleground and its apron reach, for RankBaseAxes' buffer.
+ModeTeams.ArenaReach = TeamBattleground and ((TeamBattleground.Radius or 0) + (TeamBattleground.Margin or 0) + (TeamBattleground.Apron or 0)) or 0
 local BotNav = require(script.Parent:WaitForChild("BotNav"))
 local battleground = nil
 
@@ -1350,23 +1361,59 @@ local SPAWN_CLEARANCE = 20
 -- OnCharacterAdded reaches the respawn, and the placement watchdog can run this again when the body
 -- is ALREADY standing on the pad -- so without this it would see itself, call the pad occupied and
 -- shuffle sideways on every check.
-local function occupiedAt(point, except)
+-- In a compound the pads are 6.5 to 7.5 apart under one roof (TeamBaseRuins: 28 of them, for 25 a side),
+-- so a pad counts as taken only when a body stands ON it: within PAD_CLEARANCE, a little more than a
+-- character is wide. SPAWN_CLEARANCE is for the open ground, where "taken" means "too close".
+local PAD_CLEARANCE = 3.5
+
+-- The distance from `point` to the nearest living body other than `except` (math.huge when none).
+-- `flat`: across the floor only, for a body standing on (or over) a pad -- its root is 3 or so up, so a
+-- straight-line reading of a body ON the pad was 3+ and missed a clearance of 3.5 by height alone.
+local function nearestBody(point, except, flat)
+	local nearest = math.huge
 	for character in pairs(Combatants.All()) do
 		if character.Parent and character ~= except then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			local root = character:FindFirstChild("HumanoidRootPart")
-			if humanoid and root and humanoid.Health > 0 and (root.Position - point).Magnitude < SPAWN_CLEARANCE then
-				return true
+			if humanoid and root and humanoid.Health > 0 then
+				local offset = root.Position - point
+				if flat then
+					offset = math.abs(offset.Y) < 8 and Vector3.new(offset.X, 0, offset.Z) or offset
+				end
+				nearest = math.min(nearest, offset.Magnitude)
 			end
 		end
 	end
-	return false
+	return nearest
 end
 
--- `others` (optional) are the team's other pads, tried nearest first before the rings. In a compound
--- the pads stand 9 to 14 apart under one roof, so the ring search from a busy pad would put the body
--- out in the courtyard, or outside the walls, while a free pad stood a few steps away.
-function ModeTeams.ClearSpotNear(pad, except, others)
+local function occupiedAt(point, except, clearance)
+	return nearestBody(point, except, clearance ~= nil) < (clearance or SPAWN_CLEARANCE)
+end
+
+-- `others` (optional) are the team's other pads. In a compound (Oliver, 2026-09-24: "make players and
+-- bots spawn inside the bases") the answer is ALWAYS one of them: the pad itself when nobody stands on
+-- it, else the nearest free pad, else -- every pad taken -- the pad with the most room round it. The ring
+-- search below is for the open-ground pads only: from a compound it put bodies in the courtyard or
+-- outside the walls (SPAWN_CLEARANCE is 20 and the pads are 7 apart, so with three people in the hall
+-- every pad read as taken).
+function ModeTeams.ClearSpotNear(pad, except, others, inCompound)
+	if inCompound and others and #others > 0 then
+		if not occupiedAt(pad, except, PAD_CLEARANCE) then
+			return pad
+		end
+		local best, bestDistance, roomiest, room = nil, math.huge, nil, -1
+		for _, other in ipairs(others) do
+			local around = nearestBody(other, except, true)
+			if around >= PAD_CLEARANCE and (other - pad).Magnitude < bestDistance then
+				best, bestDistance = other, (other - pad).Magnitude
+			end
+			if around > room then
+				roomiest, room = other, around
+			end
+		end
+		return best or roomiest or pad
+	end
 	if not occupiedAt(pad, except) then
 		return pad
 	end
@@ -1523,7 +1570,7 @@ function ModeTeams.PlaceAt(token, character, extra, allowRefused)
 		return false
 	end
 
-	pad = ModeTeams.ClearSpotNear(pad, character, ruins[team] and pads[team] or nil)
+	pad = ModeTeams.ClearSpotNear(pad, character, ruins[team] and pads[team] or nil, ruins[team] ~= nil)
 	local position = pad + Vector3.new(0, 4, 0)
 	character:PivotTo(CFrame.lookAt(position, Vector3.new(arenaCentre.X, position.Y, arenaCentre.Z)))
 	character:SetAttribute("Team", team)
