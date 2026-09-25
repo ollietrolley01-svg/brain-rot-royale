@@ -695,7 +695,7 @@ local autoReloadAskedAt = 0
 -- back, so a wrong guess costs a fraction of a second, never a stuck empty gun. The server stays the
 -- only authority over ammo.
 local FLIGHT_MARGIN = 0.1 -- seconds past the round trip a sent shot is still counted
-local shotsInFlight = {} -- { t = os.clock(), slot = loadout index, id = weapon id }
+local shotsInFlight = {} -- { t = tick(), slot = loadout index, id = weapon id }
 local loadoutPushedAt = 0
 
 local function roundTrip()
@@ -713,7 +713,7 @@ local function roundsInHand(slot)
 	if not slot or type(slot.mag) ~= "number" then
 		return 0
 	end
-	local now = os.clock()
+	local now = tick() -- wall time, like shot.t and loadoutPushedAt: an age against the round trip
 	local rtt = roundTrip()
 	local pending = 0
 	for i = #shotsInFlight, 1, -1 do
@@ -756,7 +756,7 @@ local function tryFire()
 		-- Hold fire on the local count, but reload only on the server's: a shot it refused without
 		-- spending ammo (budget, aim check) sends no push, so the local count can read empty with rounds
 		-- still in the magazine, and a reload asked for then would sit through a full reload for nothing.
-		local now = os.clock()
+		local now = tick() -- wall time: a 0.6 s retry window, not CPU time
 		if slot.mag <= 0 and Settings.Get("AutoReload") and now - autoReloadAskedAt > 0.6 then
 			autoReloadAskedAt = now
 			reloadRemote:FireServer()
@@ -799,7 +799,7 @@ local function tryFire()
 		end
 		addRecoil(def)
 		kickViewmodel(def)
-		table.insert(shotsInFlight, { t = os.clock(), slot = loadout.equipped, id = slot.id })
+		table.insert(shotsInFlight, { t = tick(), slot = loadout.equipped, id = slot.id })
 	end
 end
 
@@ -2298,7 +2298,7 @@ loadoutChanged.OnClientEvent:Connect(function(newLoadout)
 	end
 
 	loadout = newLoadout
-	loadoutPushedAt = os.clock()
+	loadoutPushedAt = tick()
 	-- Build each carried gun's viewmodel template now, while it's being picked up, rather than on its
 	-- first draw (Viewmodel.Preload; it had no caller, so every first draw built one and hitched). One
 	-- gun per frame so a full loadout arriving at once doesn't hitch here instead. Unskinned only: a
