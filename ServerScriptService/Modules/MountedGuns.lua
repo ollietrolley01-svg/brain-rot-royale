@@ -103,7 +103,8 @@ function Life:start(teams, mapInfo)
 		end
 	else
 		for _, s in ipairs(self.env.choose(mapInfo) or {}) do
-			self:add(s.kind, s.cframe, "map", nil, s.details and s.details.sandbag and { flankBags = true } or nil)
+			local d = s.details
+			self:add(s.kind, s.cframe, "map", nil, d and { flankBags = d.sandbag == true, covers = (d.vehicles or 0) > 0 } or nil)
 		end
 	end
 end
@@ -338,6 +339,10 @@ local function build(kind, cframe, source, _matchId, opts)
 	model:SetAttribute("MountedGun", kind)
 	model:SetAttribute("VehicleMaxHealth", info.health)
 	model:SetAttribute("VehicleHealth", info.health)
+	-- For BotGunner: which way the gun faces, and whether it covers ground worth holding without a
+	-- known enemy in view (a team mode's battleground guns; a battle royale's over roads and bridges).
+	model:SetAttribute("BotFacing", cframe.LookVector)
+	model:SetAttribute("BotCovers", source == "arena" or (opts ~= nil and opts.covers == true) or nil)
 	local root = model.PrimaryPart
 	local promptAt = root:FindFirstChild("MountPromptAt")
 	local prompt = Instance.new("ProximityPrompt")
@@ -546,6 +551,12 @@ function MountedGuns.BotSit(humanoid, seat)
 	if (root.Position - seat.Position).Magnitude > MountedGunData.MountReach then
 		return false
 	end
+	-- The prompt's cooldown between mounts, as a player's (tryMount), keyed by the bot's humanoid.
+	local now = MountedGuns.Now()
+	if mountedAt[humanoid] and now - mountedAt[humanoid] < MountedGunData.MountCooldown then
+		return false
+	end
+	mountedAt[humanoid] = now
 	seat:Sit(humanoid)
 	return true
 end

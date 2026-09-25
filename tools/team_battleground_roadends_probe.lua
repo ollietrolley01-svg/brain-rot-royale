@@ -156,6 +156,21 @@ for _, id in ipairs({ "SahurSprings", "TralalaTown", "BombardiroBay", "RotRidge"
 			if finished < 2 or #open > 0 then
 				bad += 1
 			end
+			-- No roundabout left under the arena.
+			local rings = 0
+			for _, d in ipairs(info.map:GetDescendants()) do
+				if d:IsA("Model") and d.Name == "Roundabout" then
+					for _, p in ipairs(d:GetDescendants()) do
+						if p:IsA("BasePart") and (Vector3.new(p.Position.X, 0, p.Position.Z) - Vector3.new(field.frame.Position.X, 0, field.frame.Position.Z)).Magnitude < TB.RoadEnd then
+							rings += 1
+						end
+					end
+				end
+			end
+			out("%s: %d roundabout parts inside the apron's edge", id, rings)
+			if rings > 0 then
+				bad += 1
+			end
 			-- Objective capture on the same arena.
 			local kothMode = GameModes.Get("KingOfTheHill")
 			local ok3, err = pcall(KOTH.Start, kothMode, info)

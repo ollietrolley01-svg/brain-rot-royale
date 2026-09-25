@@ -1722,6 +1722,19 @@ function smoke(BG, mode)
     local shortRoad = part("RoadSurface", roads, Vector3.new(18, 0.8, 1.6), CFrame.lookAt(shortAt, shortAt + Vector3.new(0, 0, 1)))
     local westAt = centre + Vector3.new(-180, 0, -216)
     local westRoad = part("RoadSurface", roads, Vector3.new(18, 0.8, 300), CFrame.lookAt(westAt, westAt + Vector3.new(-1, 0, 0)))
+    -- The town's roundabout round its fountain, 110 across (MapDecor.Roundabout: every town square is
+    -- one since 09-25), a little off the arena's middle: gone whole, nothing of it left under the arena.
+    local ring = inst("Model", "Roundabout", town)
+    town:SetAttribute("RoundaboutIsland", 12)
+    for k = 0, 7 do
+        local a = k * math.pi / 4
+        local at = centre + Vector3.new(20 + math.cos(a) * 40, 0.2, -30 + math.sin(a) * 40)
+        clutter(part("RingAsphalt", ring, Vector3.new(16, 0.4, 32), CFrame.lookAt(at, at + Vector3.new(-math.sin(a), 0, math.cos(a)))))
+        clutter(part("Kerb", ring, Vector3.new(0.8, 0.56, 30), CFrame.lookAt(at + Vector3.new(math.cos(a) * 9, 0, math.sin(a) * 9),
+            at + Vector3.new(math.cos(a) * 9 - math.sin(a), 0, math.sin(a) * 9 + math.cos(a)))))
+    end
+    part("IslandFountain", ring, Vector3.new(14, 2, 14), CFrame.new(centre + Vector3.new(20, 1, -30)))
+    part("RoundaboutSign", ring, Vector3.new(0.3, 3, 3), CFrame.new(centre + Vector3.new(20, 2, 26)))
     local vehicles = inst("Model", "Vehicles", map)
     local car = inst("Model", "Car", vehicles)
     rawget(car, "props").Extents = Vector3.new(9, 6, 17)
@@ -1789,6 +1802,13 @@ function smoke(BG, mode)
     if signalPole.Parent or signalHead.Parent then fail("a traffic light (its head non-queryable) was left in the disc") end
     if lampPost.Parent or lampArm.Parent then fail("a street lamp in the disc was left, whole or in part") end
     if car.Parent then fail("a parked car in the disc was left") end
+    -- No roundabout under the arena: no part of one, nor its model, anywhere in the map.
+    for _, kid in ipairs(map:GetDescendants()) do
+        if kid.Name == "Roundabout" or kid.Name == "RingAsphalt" or kid.Name == "RoundaboutSign" or kid.Name == "IslandFountain" then
+            fail("the town's roundabout is left under the arena (" .. kid.Name .. ")") break
+        end
+    end
+    if town:GetAttribute("RoundaboutIsland") ~= nil then fail("the town still says it has a roundabout") end
     if tree.Parent then fail("a tree in the disc was left") end
     if not woods.Parent then fail("a whole woods group went") end
     if not base.Parent then fail("a team base was touched") end
@@ -2348,6 +2368,7 @@ PLANTS = [
      ["zones"], "zone B"),
     ("the capture rings not marked", "bg", [("\tbuildCaptureRings(model)\n", "")], ["zones"], "ring is marked"),
     ("a gun turned onto a zone's middle", "bg", [("facing(-52.7, RIM, -22.5, -90, -42.3)", "facing(-52.7, RIM, -22.5, -90, -22.5)")], ["zones"], "sees its middle"),
+    ("the roundabout left under the arena", "bg", [("if model:IsA(\"Model\") and model.Name == \"Roundabout\" then", "if false then")], ["build"], "roundabout"),
     ("the road-end pass switched off", "bg", [("for _, spec in ipairs(ends) do", "for _, spec in ipairs({}) do"),
      ("for _, spec in ipairs(curveEnds) do", "for _, spec in ipairs({}) do")], ["build"], "build"),
     ("RoadNetwork's short slabs read across their road", "bg", [("local lengthwise = ROAD_SLABS[part.Name]", "local lengthwise = false")], ["build"], "build"),
@@ -2367,7 +2388,7 @@ PLANTS = [
        "TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 30")], ["build"], "was cut"),
     ("road ends left raw", "bg",
      [("local built = roadEnd(model, spec.road, spec.cut, spec.outward, centre)", "local built = nil")], ["build"], "finished road ends"),
-    ("gateway beam under the tallest van", "bg", [("local GATEWAY_CLEAR = 12.3", "local GATEWAY_CLEAR = 9.5")], ["build"], "tallest vehicle"),
+    ("gateway beam under the tallest van", "bg", [("ROAD.GATEWAY_CLEAR = 12.3", "ROAD.GATEWAY_CLEAR = 9.5")], ["build"], "tallest vehicle"),
     ("pavements left open", "bg", [('box(model, "Kerb", math.min(x0, x1)', 'box(model, "KerbCap", math.min(x0, x1)')], ["build"], "kerbs across"),
     ("objective A on the crack", "bg",
      [('\tbox(middle, "Paving", -3.9, 3.9, 0.5, KF, -3.9, 3.9, BASALT_LIGHT, MAT.Slate, NEVER)\n', ""),

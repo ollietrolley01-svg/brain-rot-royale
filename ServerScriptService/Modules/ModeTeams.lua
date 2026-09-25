@@ -1036,6 +1036,10 @@ local BAY_TAKEN = 6
 local BAY_CLEAR = Vector3.new(10, 8, 20.1)
 -- A vehicle put in a bay is held anchored this long, so nothing shoves it before it has settled.
 local BAY_SETTLE_SECONDS = 1.5
+-- Failed tries to find a free bay before a compound's slot takes a spot outside the bays.
+local BAY_FALLBACK_FAILS = 2
+-- A chassis less than this above FallenPartsDestroyHeight is below anything playable: lost.
+local BELOW_MAP_MARGIN = 100
 
 local bayParams = OverlapParams.new()
 bayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1066,15 +1070,67 @@ local function boxesOverlap(a, aSize, b, bSize)
 	return true
 end
 
+local personParams = OverlapParams.new()
+personParams.FilterType = Enum.RaycastFilterType.Exclude
+personParams.RespectCanCollide = false
+
+-- Anyone (a player's or a bot's character) with any part in the box, collidable or not: a character's
+-- root part does not always collide, and a car is never put into a person.
+local function personIn(frame, size)
+	personParams.FilterDescendantsInstances = { workspace.Terrain }
+	for _, part in ipairs(workspace:GetPartBoundsInBox(frame, size, personParams)) do
+		local owner = part.Parent
+		if owner and owner.FindFirstChildOfClass and owner:FindFirstChildOfClass("Humanoid")
+			and (not part.CFrame or boxesOverlap(frame, size, part.CFrame, part.Size)) then
+			return true
+		end
+	end
+	return false
+end
+
+-- What may be cleared out of a bay so a vehicle can be parked in it: settled rubble (CollapseService
+-- marks it Rubble) and the wreck of any vehicle, as the thing to remove. Never a live vehicle, a person,
+-- a wall or a deployable. Oliver, 2026-09-25: the yards stand among buildings that now come down, and
+-- a bay that took a slab of roof used to stay shut for the rest of the match.
+local function clearable(part)
+	if not part.GetAttribute then
+		return nil
+	end
+	if part:GetAttribute("Rubble") == true then
+		return part
+	end
+	local node = part.Parent
+	while node and node ~= workspace do
+		if node.GetAttribute and node:GetAttribute("Wrecked") == true then
+			return node
+		end
+		node = node.Parent
+	end
+	return nil
+end
+
+-- Anything solid standing in the bay, or anyone in it. Rubble and wrecks are cleared out, but only
+-- when nothing else blocks the bay (so they are never cleared for nothing).
 local function bayOccupied(bay)
 	bayParams.FilterDescendantsInstances = { workspace.Terrain }
 	local look = bay.LookVector
 	local frame = CFrame.new(bay.Position + Vector3.new(0, 0.6 + BAY_CLEAR.Y / 2, 0)) * CFrame.Angles(0, math.atan2(-look.X, -look.Z), 0)
+	if personIn(frame, BAY_CLEAR) then
+		return true
+	end
+	local debris = {}
 	for _, part in ipairs(workspace:GetPartBoundsInBox(frame, BAY_CLEAR, bayParams)) do
 		-- A ball or cylinder is tested as its box: a little generous, never short.
 		if part.CanCollide and (not part.CFrame or boxesOverlap(frame, BAY_CLEAR, part.CFrame, part.Size)) then
-			return true
+			local junk = clearable(part)
+			if not junk then
+				return true
+			end
+			debris[junk] = true
 		end
+	end
+	for junk in pairs(debris) do
+		junk:Destroy()
 	end
 	return false
 end
@@ -1114,7 +1170,7 @@ local function footprintClear(at, yaw)
 			return false
 		end
 	end
-	return true
+	return not personIn(frame, size)
 end
 
 -- The models for one base, rolled once and handed to both. "armed" is drawn from the ordinary cars that
@@ -1246,8 +1302,11 @@ function ModeTeams.BaseVehicleSpot(team, except)
 		return bayAt, bayYaw, true
 	end
 	-- A compound's bays are where its vehicles go. With all of them taken, the slot waits and tries
-	-- again (BASE_VEHICLE_RETRY_MS) rather than dropping a car in a random spot round the walls.
-	if ModeTeams.BaseVehicleBays ~= nil and ModeTeams.BaseVehicleBays == ModeTeams.RuinBays then
+	-- again (BASE_VEHICLE_RETRY_MS) rather than dropping a car in a random spot round the walls --
+	-- until it has waited BAY_FALLBACK_FAILS times: a bay can now be shut for good (a wall came down
+	-- into it), and a base short a vehicle for the rest of the match is worse than one parked outside.
+	if ModeTeams.BaseVehicleBays ~= nil and ModeTeams.BaseVehicleBays == ModeTeams.RuinBays
+		and not (type(except) == "table" and (except.bayFails or 0) >= BAY_FALLBACK_FAILS) then
 		return nil
 	end
 	local config = MatchConfig.TeamBaseVehicles
@@ -1309,19 +1368,94 @@ local function parkSlot(team, slot)
 	return nil
 end
 
-local function isLive(model)
-	return model ~= nil and model.Parent ~= nil and model:GetAttribute("Wrecked") ~= true
+-- Anyone in any of its seats.
+local function occupied(model)
+	for _, seat in ipairs(model:GetDescendants()) do
+		if (seat:IsA("VehicleSeat") or seat:IsA("Seat")) and seat.Occupant then
+			return true
+		end
+	end
+	return false
+end
+
+-- Terrain water filling the cell just over the chassis: the car has sunk.
+local function submerged(position)
+	local ok, full = pcall(function()
+		local at = position + Vector3.new(0, 2, 0)
+		local region = Region3.new(at - Vector3.new(1, 1, 1), at + Vector3.new(1, 1, 1)):ExpandToGrid(4)
+		local materials, occupancies = workspace.Terrain:ReadVoxels(region, 4)
+		for x = 1, #materials do
+			for y = 1, #materials[x] do
+				for z = 1, #materials[x][y] do
+					if materials[x][y][z] == Enum.Material.Water and occupancies[x][y][z] >= 0.9 then
+						return true
+					end
+				end
+			end
+		end
+		return false
+	end)
+	return ok and full == true
+end
+
+-- Why `slot`'s vehicle no longer counts as the base's, or nil while it does. Lost: gone; wrecked; its
+-- chassis broken off or deleted (the engine deletes whatever falls below FallenPartsDestroyHeight, and
+-- a part-by-part delete leaves a parented model with no Wrecked); below the map; sunk with nobody in
+-- it; or abandoned -- empty for AbandonSeconds more than AbandonDistance studs from the base. `nowMs`
+-- (from the tick) advances the abandon clock; without it the last verdict stands.
+local function lostReason(team, slot, nowMs)
+	local model = slot.model
+	if model == nil or model.Parent == nil then
+		return "gone"
+	end
+	if model:GetAttribute("Wrecked") == true then
+		return "wrecked"
+	end
+	local chassis = model.PrimaryPart
+	if not chassis or not chassis.Parent then
+		return "chassis"
+	end
+	local at = chassis.Position
+	if at.Y < (workspace.FallenPartsDestroyHeight or -500) + BELOW_MAP_MARGIN then
+		return "fell"
+	end
+	if occupied(model) then
+		slot.emptySince, slot.abandoned = nil, nil
+		return nil
+	end
+	if submerged(at) then
+		return "drowned"
+	end
+	local config = MatchConfig.TeamBaseVehicles
+	local base = bases[team]
+	if base and config.AbandonDistance and flatDistance(at, base) > config.AbandonDistance then
+		if nowMs then
+			slot.emptySince = slot.emptySince or nowMs
+			slot.abandoned = nowMs - slot.emptySince >= (config.AbandonSeconds or math.huge) * 1000
+		end
+		if slot.abandoned then
+			return "abandoned"
+		end
+	else
+		slot.emptySince, slot.abandoned = nil, nil
+	end
+	return nil
 end
 
 -- Live base vehicles of `team`, counted from the slots.
 function ModeTeams.LiveBaseVehicles(team)
 	local live = 0
 	for _, slot in ipairs(baseSlots[team] or {}) do
-		if isLive(slot.model) then
+		if not lostReason(team, slot) then
 			live += 1
 		end
 	end
 	return live
+end
+
+-- The slots of `team`, for the harness: { modelId, kind, model, lostAt, lostWhy, bayFails, ... }.
+function ModeTeams.BaseVehicleSlots(team)
+	return baseSlots[team] or {}
 end
 
 -- A team's spawn pads, for the harness and for whatever lays out bays around them.
@@ -1343,20 +1477,38 @@ function ModeTeams.TickBaseVehicles(nowMs)
 	local delayMs = MatchConfig.TeamBaseVehicles.RespawnDelay * 1000
 	for team, slots in pairs(baseSlots) do
 		for _, slot in ipairs(slots) do
-			if not isLive(slot.model) then
-				slot.lostAt = slot.lostAt or nowMs
+			-- One slot's failure never stops the others, nor the loop.
+			local ok, problem = pcall(function()
+				local why = lostReason(team, slot, nowMs)
+				if not why then
+					-- In use again (someone got back in, or drove it home): its clock starts afresh.
+					slot.lostAt, slot.lostWhy = nil, nil
+					return
+				end
+				if not slot.lostAt then
+					slot.lostAt, slot.lostWhy = nowMs, why
+				end
 				if nowMs - slot.lostAt >= delayMs and ModeTeams.LiveBaseVehicles(team) < #slots then
 					-- The wreck goes BEFORE its replacement is parked: it is still standing in its bay,
 					-- and the bay test skips this slot's own vehicle, so the replacement used to be
-					-- put into the wreck. Wrecking has already put everyone out of it.
+					-- put into the wreck. Wrecking has already put everyone out of it; a lost vehicle
+					-- that is no wreck (abandoned, sunk, broken) is empty, or it would not be lost.
 					local wreck = slot.model
+					slot.model = nil
 					if wreck and wreck.Parent then
 						wreck:Destroy()
 					end
-					if not parkSlot(team, slot) then
+					if parkSlot(team, slot) then
+						slot.bayFails, slot.lostWhy = nil, nil
+					else
+						slot.bayFails = (slot.bayFails or 0) + 1
 						slot.lostAt = nowMs - delayMs + BASE_VEHICLE_RETRY_MS
 					end
 				end
+			end)
+			if not ok then
+				warn("ModeTeams: base vehicle respawn failed: " .. tostring(problem))
+				slot.lostAt = nowMs - delayMs + BASE_VEHICLE_RETRY_MS
 			end
 		end
 	end
@@ -1384,7 +1536,11 @@ function ModeTeams.SpawnBaseVehicles(mapInfo)
 		for _, modelId in ipairs(modelIds) do
 			local slot = { modelId = modelId, kind = VehicleModels.Models[modelId].kind }
 			table.insert(baseSlots[team], slot)
-			if parkSlot(team, slot) then
+			local ok, model = pcall(parkSlot, team, slot)
+			if not ok then
+				warn("ModeTeams: parking a base vehicle failed: " .. tostring(model))
+			end
+			if ok and model then
 				parked += 1
 			else
 				-- Tried again once the delay has run, like a wreck.
@@ -1403,7 +1559,10 @@ function ModeTeams.SpawnBaseVehicles(mapInfo)
 			if baseGeneration ~= generation then
 				return
 			end
-			ModeTeams.TickBaseVehicles(protectionNowMs())
+			local ok, problem = pcall(ModeTeams.TickBaseVehicles, protectionNowMs())
+			if not ok then
+				warn("ModeTeams: base vehicle tick failed: " .. tostring(problem))
+			end
 		end
 	end)
 	return parked

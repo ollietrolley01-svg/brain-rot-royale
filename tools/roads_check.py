@@ -793,16 +793,19 @@ def measure(geo, show=False):
                 continue
             if not any((math.floor(at[0] + dx), math.floor(at[1] + dz)) in drive_cells for dx in (-1, 0, 1) for dz in (-1, 0, 1)):
                 continue
-            # From the kerb to the outline's nearest point, a car's width: anything solid in it?
-            cx = sum(q[0] for q in outline) / len(outline)
-            cz = sum(q[1] for q in outline) / len(outline)
+            # From the kerb to the outline's nearest point (where the driveway meets the lot, not its middle,
+            # which from a side entrance cuts across the kerbed rows), carried 3 studs on inside, a car's
+            # width: anything solid in it?
+            nx, nz = nearest_on_poly(outline, at)
+            d = math.hypot(nx - at[0], nz - at[1])
+            if d > 1e-6:
+                nx, nz = nx + (nx - at[0]) / d * 3, nz + (nz - at[1]) / d * 3
+            cx, cz = nx, nz
             blocked = None
             steps = 12
             for k in range(steps + 1):
                 t = k / steps
                 x, z = at[0] + (cx - at[0]) * t, at[1] + (cz - at[1]) * t
-                if poly_distance(outline, (x, z)) <= 0:
-                    break
                 for poly, y0, y1, part in solid_index.at(x, z):
                     if y1 > dk.c[1] + 0.3 and y0 < dk.c[1] + 4.5 and poly_distance(poly, (x, z)) < 1.5:
                         blocked = part
@@ -930,6 +933,21 @@ def measure(geo, show=False):
     r["pieces"] = len(pieces)
     r["curves"] = sum(1 for n in geo.nodes if n["curve"])
     return r, worst, notes, kerb_heights
+
+
+def nearest_on_poly(poly, p):
+    """The point on a polygon's boundary nearest p."""
+    best, at = math.inf, p
+    for i in range(len(poly)):
+        a, b = poly[i], poly[(i + 1) % len(poly)]
+        ex, ez = b[0] - a[0], b[1] - a[1]
+        L = ex * ex + ez * ez
+        t = 0 if L < 1e-12 else max(0, min(1, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ez) / L))
+        q = (a[0] + ex * t, a[1] + ez * t)
+        d = math.hypot(p[0] - q[0], p[1] - q[1])
+        if d < best:
+            best, at = d, q
+    return at
 
 
 def poly_distance(poly, p):

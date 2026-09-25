@@ -1,62 +1,61 @@
-# STOP — Oliver, 2026-09-22 14:44: every tab wraps up now. Write your handoff and stop.
-# Start nothing new, no rebuilds, no Studio jobs. Details: the 14:45 entry at the end of COORDINATION.md.
-
-> ## Hello from Oliver
->
-> Oliver owns this game. He asked us to pass this on, in his words: **"tell jacob to pick up more
-> tasks, and tell him i said hello."** He has been reading the pull requests as they come in.
->
-> Three heavier tasks are open in `tasks/`: 05, 06 and 07. Take whichever you like.
-
 # What is claimed, and what is free
 
-Maintained by claude-43 on the build machine. **Read this before you pick anything up.** A task in
-`tasks/` that this file says is claimed IS claimed, and the task file will not have been updated.
+Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it took over from
+claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
+task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-21 23:2x.
+Last updated: 2026-09-25 01:08 (EDT).
 
-## Why this file exists
+## What changed since 2026-09-22
 
-Fourteen agents work on the build machine and cannot see your clone; you cannot see them. The only
-thing both sides can read is this repository. Everything below is a live claim, not a plan.
+- **The 09-22 STOP is over.** `STOP.md` was removed on main (ffc0e1c). Work is running again.
+- **The game is now called Brainrot Battles** (menu title on main, f9ddce2). Saved data keeps its old
+  internal key, so nobody loses progress.
+- **The 14-agent fleet is gone.** The build machine now works in **`pc/*` branches** (one feature per
+  branch) and merges each into main when it's done. Every `pc/*` branch pushed so far is already on main.
+  Cloud sessions (`claude/*` branches, PRs #15-#28) landed a lot of OLIVER_LIST rows on 09-23/24. Those
+  rows are marked **"in tree, unproven"**. 64 rows carry that mark.
+- **Tasks 01-07 are all claimed or done.** `tasks/` has nothing open. The open work now is proving the
+  "in tree, unproven" rows (see below).
+- Playtest releases are on GitHub Releases. The latest is `playtest-2026-09-24-2000` (main 8f16a5f).
 
-## DO NOT TOUCH — a worker on the build machine is inside these right now
+## Claimed right now
 
-These have someone in them this hour. An edit from outside will collide.
+| Who | What | Branch | State |
+|---|---|---|---|
+| Jacob (bimjom) | #84/#109 car-bounce proof | `task/prove-car-bounce` (PR #31) | **Merged to main 09-25 (36aa63a).** #84/#109 stays unproven until a playtest `[VehicleJolt]` count |
+| Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` (PR #33) | **Merged to main 09-25.** Both fire-rate faults fixed on main (1e964ca); new bugs F3 (phantom end-of-mag shots) and F4 (vehicle guns still quantised) reported |
+| Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` (PR #34) | **Merged to main 09-25.** Payouts hold. Oliver decided spectator pay: **all time in the server counts** (pc/playtime-all-time, on main) |
+| Jacob (bimjom) | #122 explosive-ammo proof | `task/prove-explosive-ammo` | Claimed 09-25 01:01 (PR #32) |
+| Jacob (bimjom) | #107 vote-menu-mid-match proof | `task/prove-vote-menu` | Claimed 09-25 01:03 (2731d7a, merged with PR #32). After #122 |
+| Dalton | Brainrot Battles icon: a 4x4 grid of candidates | `art/icon/` or mailbox | Asked 09-22 20:46, no reply yet |
 
-| Area | Files | What is happening |
-|---|---|---|
-| Guns | `GunModels*`, `Arsenal*`, `Viewmodel`, `GunFx`, `CombatClient.client.lua`, `WeaponService` | Hit registration and the weapon-pickup bug. Three streams converging on `CombatClient`. |
-| Menu | `MenuClient.client.lua`, `MenuShell.lua`, `UiParts.lua`, `ProgressionPanel.lua`, `CrateData/Open/Models`, `CosmeticData/Preview` | A five-destination navigation rewrite. **`MenuClient` is one local variable below Luau's compiler warning, so any change there must remove more locals than it adds.** |
-| Match flow | `MatchService.lua`, `GameMode*.lua`, `ModeTeams.lua`, `ModeKingOfTheHill.lua`, `LobbyService.lua`, `Bootstrap.server.lua` | Spectator exit, a second King of the Hill objective, and a respawn bug. |
-| Pre-match UI | `VoteService.lua`, `VoteScreen.lua`, `DropPicker.lua`, `VoteDropClient.client.lua`, `MenuOpenClaims.lua`, `DropMapService` | A cursor-ownership fix. |
-| HUD | `HudClient.client.lua`, `ControlsHint`, `ModeScoreHud`, `HitSplatClient`, `MenuCursor.client.lua`, `InventoryPanel`, `UiKit`, `PhoneLayout`, `EnemyAura.client.lua`, `NameplateService.lua` | Telling friend from enemy at a glance, and the mouse cursor. |
-| Vehicles | `VehicleModels.lua`, `VehicleService.lua`, `TrafficClient`, `VehicleDynamics` | Bouncing cars and roadkill. |
-| Destruction | `ExplosiveFx`, `ProjectileClient/Service`, `ThrowableModels`, `DefensePlacement`, `MovementService.lua`, `Parkour.lua` | Glass breaking and window vaulting. |
-| Bots | `BotService.lua`, `MatchConfig.lua` bot fields | Bots standing still, and their aim. |
-| Map and terrain | `MapGenerator`, `MapBuildings`, `MapDecor`, `MapTerrain`, `MapWilds`, `RoadNetwork`, `TownKinds`, `TownThemes`, `Landmarks`, `LootService` | Map size, foliage, rivers, town hookup. Split across three workers. |
-| Storm and audio | `StormService.lua`, `StormClient.client.lua`, `EasterEggs.lua` | The storm damaging players in the lobby. |
-| Brainrot art | `BrainrotModels.lua`, `BrainrotModelsRemake.lua` | Swapping the live art for the remake set. |
-| Tooling | `tools/verify.py`, `tools/lua_static_check.py`, `tools/clock_ratchet.py`, `tools/climb_design.py` | Coordinate through the mailbox before touching any of these. |
+## Recently changed on main: expect these to move under you
 
-## FREE — nothing on the build machine owns these
+The build machine touched these in the last day. Read-only is fine; if a proof needs a change here,
+report it in the mailbox and don't edit.
 
-- `ReplicatedStorage/Shared/QuestData.lua` — see the answer in the mailbox. Probably needs nothing.
-- `ReplicatedStorage/Shared/ProgressionData.lua`
-- `ReplicatedStorage/Shared/AchievementData.lua`
-- `README.md`
-- `HANDOFF.md`, `tasks/`, `coordination/`
-- Any NEW file you create, as long as nothing here already covers its job.
+- Vehicles: `VehicleService.lua`, `VehicleDynamics.lua` (parked-rest a1eb7a8, base-vehicle respawn b5cbc05)
+- Bots: `BotService.lua`, `BotGunner.lua` (new), `BotDriveTactics.lua`, `MountedGun*`
+- Team modes: `ModeTeams.lua`, `TeamBattleground.lua`, `MatchConfig.lua`
+- Lobby, roundabouts, interiors, wall durability, shed loot (the `pc/*` names on the branch list)
 
-## The rule that matters most
+## The rule that hasn't changed
 
-**A file not listed as free is not free.** The DO NOT TOUCH table is long because this project is
-busy, not because the work is closed. If something there needs changing for your task, say so in
-the mailbox and it gets routed to whoever is inside it. That is faster than a conflict.
+**Contributors from outside don't edit game files.** You write reports, checks, probes and new files. A
+bug you find goes in the mailbox with the file and line. The build machine owns the fix. Proofs that
+end in "no bug, here is the evidence" count as much as fixes do.
 
-## Something we learned tonight, which applies to you too
+## Good next work: only NEW, USEFUL work (Oliver, 2026-09-25)
 
-A brief can be wrong about the tree. Two of the four briefs named a file or a field that does not
-exist in the shape described. **Check the brief against the code before you build to it, and if
-they disagree, say so rather than building to the brief.** Both times that happened tonight the
-contributor was right and the brief was wrong.
+Every OLIVER_LIST row has been built. **Don't build anything that's already on main.** The useful
+work is proving rows marked "in tree, unproven" and reporting bugs nobody has found yet. Before
+claiming, check STATUS, `git log origin/main --grep`, and the row itself (see
+`messages/2026-09-25-0120-oliver-jacob-only-new-useful-work.md`). Priority order:
+
+1. #122 explosive ammo (6ef6a52), claimed, Jacob
+2. #107 game-choosing menu mid-match (81c1263, fefa725), claimed, Jacob (after #122)
+3. #57/#110 roadkill (32de759, 41631ba)
+4. #113/#126 bot lag, #99 movement looks low-fps
+
+Claim a row with a one-line mailbox message before you start, as before.
