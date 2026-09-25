@@ -6,6 +6,7 @@
 --   VehicleWreckFx.LampShare(role, wrecked, driven, braking) -> 0..1   pure, no Instances, unit-testable
 --   VehicleWreckFx.LampBaseColor(part) -> Color3                       the part's TRUE original colour
 --   VehicleWreckFx.SetSmoke(model, wrecked) -> ParticleEmitter or nil  creates once, toggles after
+--   VehicleWreckFx.Watch(model) -> connection                         OnWreck the moment it is wrecked
 --
 -- Reasons wrecked matters twice over: the driver's own HUD warning (VehicleClient's panel) is
 -- rarely SEEN, because the same server frame that zeroes health also ejects them (VehicleService's
@@ -64,21 +65,30 @@ local smoke = {}
 -- Called once with the model when a vehicle this client has already seen whole becomes wrecked (its
 -- blast: ProjectileClient sets it). A wreck that was already a wreck when first seen stays silent.
 VehicleWreckFx.OnWreck = nil
--- Strong keys, dropped when the model leaves the world (the same shape as `smoke` below).
-local seenWrecked = {}
+
+-- Watch one vehicle for the moment it's wrecked (VehicleClient calls this for every vehicle it
+-- tracks, near or far). The blast goes off when the Wrecked attribute turns true, wherever the
+-- vehicle is -- Sfx.Blast does the falloff with distance. It used to fire from SetSmoke, which only
+-- runs within ANIMATE_DISTANCE: a car wrecked far off made no sound then, and blew up, audio duck
+-- and all, minutes later when you walked up to it (bug sweep 09-25).
+function VehicleWreckFx.Watch(model)
+	local connection
+	local fired = model:GetAttribute("Wrecked") == true -- already a wreck when first seen: silent
+	connection = model:GetAttributeChangedSignal("Wrecked"):Connect(function()
+		if not fired and model:GetAttribute("Wrecked") == true and VehicleWreckFx.OnWreck then
+			fired = true
+			VehicleWreckFx.OnWreck(model)
+		end
+	end)
+	model.AncestryChanged:Connect(function()
+		if not model:IsDescendantOf(game) then
+			connection:Disconnect()
+		end
+	end)
+	return connection
+end
 
 function VehicleWreckFx.SetSmoke(model, wrecked)
-	local seen = seenWrecked[model]
-	if seen == nil then
-		model.AncestryChanged:Connect(function()
-			if not model:IsDescendantOf(workspace) then
-				seenWrecked[model] = nil
-			end
-		end)
-	elseif wrecked and seen == false and VehicleWreckFx.OnWreck then
-		VehicleWreckFx.OnWreck(model)
-	end
-	seenWrecked[model] = wrecked == true
 	local emitter = smoke[model]
 	if not emitter then
 		if not wrecked then

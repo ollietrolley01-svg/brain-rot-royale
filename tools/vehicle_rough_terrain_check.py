@@ -39,7 +39,9 @@ LIMITS = {
 # the car stands on. What the rough still may not do: get stuck (snag), flip, jolt, or stay airborne.
 REPORTED_ONLY = {"crater"}
 MAX_CASE_RISE = 4.0     # studs: the ledge is 2.5
-MAX_ROCK_STUCK = 3.0    # s with throttle held and under 2 studs/s, in a rock field
+# s with throttle held and under 2 studs/s, in a rock field (Oliver 09-25, the armoured cars stuck on rocks:
+# none held over 1 s). Pulling away from the standstill before the field takes up to about 0.6 s on its own.
+MAX_ROCK_STUCK = 1.0
 ROCK_FIELD_END = 200    # studs: the field runs 30-190
 MIN_LANE_CHANGE = 5.0   # studs of the 8 asked for, within 1.5 s
 # A bike leans into its corrections: its roll limit is its own most lean (VehicleDynamics.Handling) plus this.
@@ -147,9 +149,10 @@ def main():
         100 * max([float(m.group(3)) / float(m.group(4)) for m in cases] or [0]), max([float(m.group(6)) for m in cases] or [0])))
     # Rock fields: every vehicle across each kind of drive-over map rock, never stuck past MAX_ROCK_STUCK.
     rocks = [(m.group(1), float(m.group(2)), float(m.group(3)))
-             for m in re.finditer(r"\[ROUGH\] rocks (\S+) stuck=([\d.]+) distance=([-\d.]+)", text)]
+             for m in re.finditer(r"\[ROUGH\] rocks (\S+) stuck=([\d.]+)(?: stalls=\d+)? distance=([-\d.]+)", text)]
     if len(rocks) < 6:
         failures.append("only %d rock-field runs" % len(rocks))
+    rocks = [r for r in rocks if "FAULT_" not in r[0]]
     for label, stuck, dist in rocks:
         if stuck > MAX_ROCK_STUCK:
             failures.append("%s: stuck %.1f s on the rocks" % (label, stuck))
@@ -178,7 +181,8 @@ def main():
     for key in real:
         for p in run_problems(segs[key], totals.get(key), key[0]):
             failures.append("%s %d%%: %s" % (key[0], key[1], p))
-    for fault in ("FAULT_underdamped", "FAULT_oneray"):
+    # (One ray per wheel is planted on a rock field now, and caught by vehicle_visuals_check.)
+    for fault in ("FAULT_underdamped",):
         keys = [k for k in segs if k[0] == fault]
         if not keys:
             failures.append("planted fault %s has no run" % fault)

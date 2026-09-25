@@ -69,9 +69,13 @@ local clamp = math.clamp
 -- yawDamping                0..1
 -- downforce                 per stud/s squared, as a share of weight
 -- lean, leanRate            bikes: most lean in degrees, how quickly it follows (1/s)
+-- enginePitch, engineVolume the engine note's base pitch and loudness (VehicleVisuals.EngineStep):
+--                           bikes and scooters high and buzzy, the Ranger, Scout and Carrier low and
+--                           heavy, the GT and the Streetfighter in the middle
 
 VehicleDynamics.Handling = {
 	Rotster = {
+		enginePitch = 1.0, engineVolume = 1.0,
 		topSpeed = 84, reverseSpeed = 26, accel = 40, brake = 100, coast = 13,
 		grip = 1.6, traction = 1.45, offroad = 0.35, driven = "all",
 		steerLow = 36, steerHigh = 11, steerRate = 180,
@@ -79,6 +83,7 @@ VehicleDynamics.Handling = {
 		yawDamping = 0.4, downforce = 0,
 	},
 	CrocodiloRanger = {
+		enginePitch = 0.72, engineVolume = 1.15,
 		topSpeed = 78, reverseSpeed = 30, accel = 36, brake = 92, coast = 14,
 		grip = 1.5, traction = 1.55, offroad = 0.85, driven = "all",
 		steerLow = 34, steerHigh = 9, steerRate = 160,
@@ -86,6 +91,7 @@ VehicleDynamics.Handling = {
 		yawDamping = 0.4, downforce = 0,
 	},
 	TralalaGT = {
+		enginePitch = 0.95, engineVolume = 1.05,
 		topSpeed = 106, reverseSpeed = 28, accel = 46, brake = 118, coast = 11,
 		grip = 1.9, traction = 1.45, offroad = 0, driven = "all",
 		steerLow = 32, steerHigh = 8, steerRate = 200,
@@ -94,6 +100,7 @@ VehicleDynamics.Handling = {
 		yawDamping = 0.45, downforce = 0.00004,
 	},
 	SahurVan = {
+		enginePitch = 0.88, engineVolume = 0.95,
 		topSpeed = 72, reverseSpeed = 24, accel = 30, brake = 86, coast = 14,
 		grip = 1.4, traction = 1.3, offroad = 0.3, driven = "all",
 		steerLow = 34, steerHigh = 10, steerRate = 150,
@@ -106,20 +113,26 @@ VehicleDynamics.Handling = {
 	-- is the slowest thing on four wheels, and the slowest to get going (24 against the van's 30). Both
 	-- drive all four wheels and shrug off rough ground almost as well as the Ranger.
 	TartarugaScout = {
+		enginePitch = 0.76, engineVolume = 1.1,
 		topSpeed = 70, reverseSpeed = 22, accel = 30, brake = 84, coast = 15,
 		grip = 1.5, traction = 1.5, offroad = 0.75, driven = "all",
 		steerLow = 32, steerHigh = 8, steerRate = 140,
-		travelUp = 1.0, travelDown = 1.35, springHz = 1.5, dampingRatio = 0.6, antiRoll = 1.1, rideLift = 0.7,
+		-- Ride height (09-25, stuck on rocks): 3.6 studs under the belly -- bigger tyres (VehicleModels'
+		-- ARMOURED_TYRE), more lift, the droop longer by as much.
+		travelUp = 1.0, travelDown = 1.9, springHz = 1.5, dampingRatio = 0.6, antiRoll = 1.1, rideLift = 1.25,
 		yawDamping = 0.5, downforce = 0,
 	},
 	CameloCarrier = {
+		enginePitch = 0.66, engineVolume = 1.2,
 		topSpeed = 62, reverseSpeed = 20, accel = 24, brake = 78, coast = 16,
 		grip = 1.45, traction = 1.5, offroad = 0.7, driven = "all",
 		steerLow = 30, steerHigh = 7, steerRate = 120,
-		travelUp = 1.0, travelDown = 0.7, springHz = 1.4, dampingRatio = 0.62, antiRoll = 1.2,
+		-- Ride height (09-25): as the scout car's, 3.6 under the belly.
+		travelUp = 1.0, travelDown = 1.65, springHz = 1.4, dampingRatio = 0.62, antiRoll = 1.2, rideLift = 0.95,
 		yawDamping = 0.55, downforce = 0,
 	},
 	BananiniScoot = {
+		enginePitch = 1.45, engineVolume = 0.8,
 		topSpeed = 66, reverseSpeed = 12, accel = 44, brake = 104, coast = 12,
 		grip = 1.7, traction = 1.4, offroad = 0.1, driven = "rear",
 		steerLow = 40, steerHigh = 12, steerRate = 240,
@@ -127,6 +140,7 @@ VehicleDynamics.Handling = {
 		yawDamping = 0.3, lean = 32, leanRate = 8,
 	},
 	PatapimScrambler = {
+		enginePitch = 1.3, engineVolume = 0.9,
 		topSpeed = 90, reverseSpeed = 12, accel = 48, brake = 100, coast = 12,
 		grip = 1.65, traction = 1.6, offroad = 0.8, driven = "rear",
 		steerLow = 38, steerHigh = 10, steerRate = 220,
@@ -134,12 +148,53 @@ VehicleDynamics.Handling = {
 		yawDamping = 0.3, lean = 40, leanRate = 7,
 	},
 	BrrStreetfighter = {
+		enginePitch = 1.12, engineVolume = 1.0,
 		topSpeed = 114, reverseSpeed = 12, accel = 54, brake = 120, coast = 11,
 		grip = 1.9, traction = 1.5, offroad = 0.15, driven = "rear",
 		steerLow = 34, steerHigh = 8, steerRate = 220,
 		travelUp = 0.55, travelDown = 0.35, springHz = 2.4, dampingRatio = 0.6,
 		yawDamping = 0.35, lean = 46, leanRate = 8, downforce = 0.00002,
 	},
+}
+
+-- The suspension standard every model meets (Oliver 09-25: "make sure they all are up to standard on
+-- suspension"), by class. tools/vehicle_suspension_standard_check.py measures each model against it
+-- with the real Rig and Step in a rigid-body sim (a bump, a drop, a hard stop, a hard corner) and
+-- reads the Studio probes for what only Studio can show (rest clearance, drawn wheel travel):
+--   springHz, dampingRatio  the handling's own figures, inside the class's band
+--   minTravel               travelUp + travelDown, studs
+--   maxLoadG                no wheel ever pushes harder than this many of its share of the weight
+--   minClearance            the collider's lowest point above flat ground at rest (vehicle_clearance_probe)
+--   maxClearance            the most, where a class has one (the armoured cars: 3.5-4 studs)
+--   minTip                  the lighter side's least share of the wheel load on full lock at 80% of top
+--                           speed (0 is up on two wheels; not bikes)
+--   maxBumpG                vertical acceleration of the body over a 0.5-stud bump at 60% of top speed
+--   maxBrakePitch           nose-down pitch, degrees, stopping hard from 80% of top speed
+--   maxCornerRoll           body roll, degrees, on full lock at half top speed (not bikes: they lean)
+--   maxSettle, maxOvershoot seconds to come to rest (within SETTLE_BAND) dropped from a stud above its
+--                           ride height, and how many times it may rise back past it on the way
+--   maxVisualError          drawn wheel travel against the physics compression (vehicle_visuals_check)
+VehicleDynamics.SuspensionStandard = {
+	class = {
+		BananiniScoot = "light", PatapimScrambler = "light", BrrStreetfighter = "light",
+		Rotster = "car", TralalaGT = "car", SahurVan = "car",
+		CrocodiloRanger = "heavy",
+		-- Oliver 09-25: the armoured cars "higher off the ground", 3.5-4 studs under them.
+		TartarugaScout = "armored", CameloCarrier = "armored",
+	},
+	springHz = { light = { 1.4, 2.8 }, car = { 1.4, 2.4 }, heavy = { 1.1, 1.8 }, armored = { 1.1, 1.8 } },
+	dampingRatio = { 0.3, 0.65 },
+	minTravel = { light = 0.8, car = 1.5, heavy = 1.7, armored = 2.5 },
+	maxLoadG = 2.5,
+	minClearance = { light = 1.5, car = 2.0, heavy = 2.0, armored = 3.5 },
+	maxClearance = { armored = 4.0 },
+	minTip = 0.3,
+	maxBumpG = 4,
+	maxBrakePitch = 6,
+	maxCornerRoll = 8,
+	maxSettle = 0.8,
+	maxOvershoot = 1,
+	maxVisualError = 0.1,
 }
 
 -- Assists shared by every model.
@@ -161,6 +216,11 @@ local GRAVITY_ASSIST = 0.85      -- share of a hill's pull the drive pushes back
 local BUMP_DAMPING = 0.7         -- share of the damping while a wheel is being pushed up (rough ground)
 local REBOUND_DAMPING = 1.4      -- share of it while the wheel extends again (no pogo)
 local BUMP_STOP_DAMPING = 1.0    -- extra damping, on the way in, once a wheel is at its bump stop
+-- Anti-roll fades out below this speed (studs/s), like an off-roader's sway-bar disconnect. At a crawl
+-- over rocks it was the bar that emptied the drooped wheel of each crossed-up axle -- it hands load to
+-- the more compressed side -- and left the armoured cars rocking on two diagonal wheels, stalled
+-- (tools/vehicle_rough_terrain_probe.lua's rockstall log, 09-25). Corners are taken faster than this.
+local ANTIROLL_FULL_SPEED = 12
 local GOVERNOR = 1.06            -- past this share of top speed, drag grows until it holds
 local OVERSPEED_RESPONSE = 6     -- 1/s
 local HANDBRAKE_GRIP = 0.42      -- rear lateral grip while the handbrake is on
@@ -325,6 +385,16 @@ function VehicleDynamics.Rig(model, findOnly)
 	end
 	if #wheels == 0 then
 		return nil
+	end
+	-- A car's suspension strut (VehicleModels Builder:struts): its rod rides up and down with the wheel.
+	for _, part in ipairs(model:GetChildren()) do
+		if part:IsA("BasePart") and part:GetAttribute("Pivot") == "Strut" then
+			for _, wheel in ipairs(wheels) do
+				if wheel.name == part:GetAttribute("Hub") then
+					wheel.strutJoint = part:FindFirstChild("Joint")
+				end
+			end
+		end
 	end
 	table.sort(wheels, function(a, b)
 		return a.name < b.name
@@ -513,17 +583,25 @@ end
 
 -- The least extension any sample of the tyre allows (the tyre sits on whatever it reaches first),
 -- and the hit that set it.
+-- Every wheel ray starts RAY_HEADROOM above the top of its travel. A ray that starts inside the ground
+-- finds nothing, so a wheel whose travel-top had gone under the surface -- a bike come down on its
+-- raised belly (the scooter's travel-top sits below its belly: 1.4 studs up against 1.7), a car pushed
+-- down onto a rock past full bump -- read as in the air, its spring let go, and the vehicle lay there on
+-- its hull with its wheels buried. From above, that ground is found at a negative extension: past full
+-- bump, where the bump stop (BUMP_EXTRA, MAX_LOAD_G) lifts it back out.
+local RAY_HEADROOM = 1.0
+
 local function contact(rig, wheel, frame, castUp, castForward, travel)
 	local radius = wheel.radius
-	local base = frame:PointToWorldSpace(wheel.mount) + castUp * rig.handling.travelUp
+	local base = frame:PointToWorldSpace(wheel.mount) + castUp * (rig.handling.travelUp + RAY_HEADROOM)
 	local bestExtension, bestHit = nil, nil
 	-- `rig.samples` stands in for SAMPLES on one rig only (a test plants a single ray per wheel with it).
 	for _, share in ipairs(rig.samples or SAMPLES) do
 		local offset = share * radius
 		local depth = math.sqrt(radius * radius - offset * offset)
-		local hit = cast(rig, base + castForward * offset, -castUp * (travel + depth))
+		local hit = cast(rig, base + castForward * offset, -castUp * (travel + depth + RAY_HEADROOM))
 		if hit then
-			local extension = hit.Distance - depth
+			local extension = hit.Distance - depth - RAY_HEADROOM
 			if not bestExtension or extension < bestExtension then
 				bestExtension, bestHit = extension, hit
 			end
@@ -689,10 +767,11 @@ function VehicleDynamics.Step(rig, input, dt)
 		end
 	end
 
+	local antiRoll = (h.antiRoll or 0) * clamp(math.abs(forwardSpeed) / ANTIROLL_FULL_SPEED, 0, 1)
 	for _, pair in ipairs(rig.axles) do
 		local a, b = pair[1], pair[2]
-		if a.grounded and b.grounded and (h.antiRoll or 0) > 0 then
-			local transfer = (a.compression - b.compression) * k * h.antiRoll
+		if a.grounded and b.grounded and antiRoll > 0 then
+			local transfer = (a.compression - b.compression) * k * antiRoll
 			a.load = clamp(a.load + transfer, 0, maxLoad)
 			b.load = clamp(b.load - transfer, 0, maxLoad)
 		end
@@ -980,6 +1059,10 @@ function VehicleDynamics.Step(rig, input, dt)
 	-- mostly waiting on the engine, which would make a stale step read as "fresh" for longer than
 	-- the 0.05s AnimateWheels below actually intends.
 	rig.steppedAt = tick()
+	-- For the wheel visuals on this machine: drive wheels spin up under a slipping throttle, and lock
+	-- under the handbrake or a skidding brake.
+	rig.lastThrottle, rig.lastHandbrake, rig.lastBraking = throttle, handbrake, brakeAccel > 0
+
 
 	local telemetry = {
 		speed = speed,
@@ -1029,43 +1112,88 @@ function VehicleDynamics.Right(rig)
 end
 
 -- Wheel visuals for any client: bob, steer and spin through each hub's Motor6D.Transform, which
--- stays on the machine that sets it. Where this machine stepped the rig this frame the step's own
--- compression is used; otherwise a ray finds the ground, so a watcher sees wheels on the road
--- without the driver sending anything.
-function VehicleDynamics.AnimateWheels(rig, dt, steerAngle)
+-- stays on the machine that sets it (nothing here replicates).
+-- Ground contact (Oliver 09-25: wheels clipped into the ground): each drawn wheel sits on what its
+-- own tyre reaches every frame -- VISUAL_SAMPLES rays across the tyre's round footprint, the centre
+-- put radius-deep above the highest of them (terrain gets TERRAIN_LIFT extra: its drawn surface can
+-- sit a hair above the voxel the ray hits). It used to reuse the physics step's compression, which
+-- has three samples and is capped at full travel, and eased toward it over ~50 ms, so a rock between
+-- the samples, past the bump stop, or come up faster than the easing sank into the tyre. A wheel
+-- sits on the ground exactly every frame it has ground under it, and eases down only when it has
+-- none (dropping to full droop in the air); past full bump it may ride up into the arch
+-- (VISUAL_OVERTRAVEL radii) rather than into the rock. A car's strut rod (VehicleModels) follows it.
+-- Spin: each wheel rolls at its own contact speed along its own heading over its radius (the inner
+-- and outer wheels differ in a corner, and reverse turns them back); a driven wheel slipping under
+-- throttle spins faster, a braked wheel skidding or a rear wheel on the handbrake locks, and a wheel
+-- in the air coasts down.
+-- The physics step's own samples (so the drawn wheel and the spring agree wherever those find the
+-- ground) and two at the tyre's leading and trailing edges (so a rock there lifts it, not sinks into it).
+local VISUAL_SAMPLES = { 0, SWEEP, -SWEEP, 0.92, -0.92 }
+local TERRAIN_LIFT = 0.03
+local VISUAL_OVERTRAVEL = 0.3
+VehicleDynamics.VISUAL_OVERTRAVEL = VISUAL_OVERTRAVEL
+local AIR_SPIN_DECAY = 1.2        -- per second
+local SLIP_SPIN = 0.35            -- a slipping driven wheel's extra spin, as a share of top speed over radius
+
+function VehicleDynamics.AnimateWheels(rig, dt, steerAngle, throttle)
 	local chassis = rig.chassis
 	local h = rig.handling
 	local frame = chassis.CFrame
 	local travel = h.travelUp + h.travelDown
 	local fresh = rig.steppedAt and tick() - rig.steppedAt < 0.05
+	throttle = fresh and rig.lastThrottle or throttle or 0
+	local handbrake = fresh and rig.lastHandbrake
+	local braking = fresh and rig.lastBraking
 	local castUp = frame.UpVector
 	if rig.bike then
 		local leanNow = math.asin(clamp(-frame.RightVector.Y, -1, 1))
 		castUp = CFrame.fromAxisAngle(frame.LookVector, -leanNow):VectorToWorldSpace(frame.UpVector)
 	end
+	local steer = -rad(steerAngle or rig.steerAngle or 0)
+	local steerFrame = frame * CFrame.Angles(0, steer, 0)
+	local groundedCount = 0
 	for _, wheel in ipairs(rig.wheels) do
-		local compression
-		if fresh then
-			compression = wheel.grounded and wheel.compression or 0
-		else
-			local top = frame:PointToWorldSpace(wheel.mount) + castUp * h.travelUp
-			local hit = cast(rig, top, -castUp * (travel + wheel.radius))
-			compression = hit and clamp(travel - (hit.Distance - wheel.radius), 0, travel) or 0
+		local radius = wheel.radius
+		local heading = wheel.steer and steerFrame.LookVector or frame.LookVector
+		local base = frame:PointToWorldSpace(wheel.mount) + castUp * (h.travelUp + RAY_HEADROOM)
+		local extension
+		for _, share in ipairs(VISUAL_SAMPLES) do
+			local offset = share * radius
+			local depth = math.sqrt(radius * radius - offset * offset)
+			local hit = cast(rig, base + heading * offset, -castUp * (travel + depth + RAY_HEADROOM))
+			if hit then
+				local e = hit.Distance - depth - RAY_HEADROOM - (hit.Instance:IsA("Terrain") and TERRAIN_LIFT or 0)
+				extension = extension and math.min(extension, e) or e
+			end
 		end
-		local offset = clamp(compression - h.travelDown, -h.travelDown, h.travelUp)
-		wheel.visualOffset += (offset - wheel.visualOffset) * clamp(dt * 20, 0, 1)
+		local grounded = extension ~= nil
+		groundedCount += grounded and 1 or 0
+		local offset = grounded and clamp(h.travelUp - extension, -h.travelDown, h.travelUp + VISUAL_OVERTRAVEL * radius) or -h.travelDown
+		if grounded or offset > wheel.visualOffset then
+			wheel.visualOffset = offset
+		else
+			wheel.visualOffset += (offset - wheel.visualOffset) * clamp(dt * 20, 0, 1)
+		end
 
-		local steer = wheel.steer and -rad(steerAngle or rig.steerAngle or 0) or 0
-		-- A wheel rolls along the way it points, so a steered one on full lock spins at its own rate,
-		-- not the body's.
-		local heading = steer ~= 0 and (frame * CFrame.Angles(0, steer, 0)).LookVector or frame.LookVector
 		local rolling = chassis:GetVelocityAtPosition(frame:PointToWorldSpace(wheel.mount)):Dot(heading)
-		wheel.spin = (wheel.spin - rolling / wheel.radius * dt) % (2 * math.pi)
+		local rate
+		if not grounded then
+			rate = (wheel.spinRate or 0) * math.exp(-AIR_SPIN_DECAY * dt)
+		elseif (handbrake and not wheel.front) or (braking and wheel.slip) then
+			rate = 0
+		else
+			rate = rolling / radius
+			if wheel.drive and wheel.slip and math.abs(throttle) > 0.3 then
+				rate += throttle * SLIP_SPIN * h.topSpeed / radius
+			end
+		end
+		wheel.spinRate = rate
+		wheel.spin = (wheel.spin - rate * dt) % (2 * math.pi)
 
 		local hubTransform = CFrame.Angles(wheel.spin, 0, 0)
 		if wheel.steerJoint then
-			wheel.steerJoint.Transform = CFrame.Angles(0, steer, 0)
-		else
+			wheel.steerJoint.Transform = CFrame.Angles(0, wheel.steer and steer or 0, 0)
+		elseif wheel.steer then
 			hubTransform = CFrame.Angles(0, steer, 0) * hubTransform
 		end
 		if wheel.sliderJoint then
@@ -1076,10 +1204,14 @@ function VehicleDynamics.AnimateWheels(rig, dt, steerAngle)
 			hubTransform = CFrame.new(0, wheel.visualOffset, 0) * hubTransform
 		end
 		wheel.joint.Transform = hubTransform
+		if wheel.strutJoint then
+			wheel.strutJoint.Transform = CFrame.new(0, wheel.visualOffset, 0)
+		end
 	end
 	for _, entry in ipairs(rig.steerWheels) do
-		entry.joint.Transform = CFrame.Angles(0, 0, -rad(steerAngle or rig.steerAngle or 0) * entry.ratio)
+		entry.joint.Transform = CFrame.Angles(0, 0, steer * entry.ratio)
 	end
+	rig.visualGrounded = groundedCount
 end
 
 return VehicleDynamics

@@ -20,8 +20,12 @@
 -- Per run and per segment: the largest vertical acceleration (g), airtime (total and longest single
 -- flight), wheel contact %, roll and pitch peaks against the ground under it, flips, snag time (under
 -- half the target speed after reaching it), speed held (mean / target), and the lane change reached.
--- Planted faults (always run, Rotster at 65%): "FAULT_underdamped" (damping ratio 0.08) and
--- "FAULT_oneray" (one ray per wheel). The check must fail both.
+-- Planted faults (always run): "FAULT_underdamped" (Rotster at 65%, damping ratio 0.08), which the
+-- rough check must fail, and "CASE_outcrop_FAULT_oneray" (Rotster on the outcrop rock field, one ray
+-- per wheel), which vehicle_visuals_check must fail. One ray per wheel used to be planted on the
+-- course; with the belly, the lift and the caps its course runs came out inside the limits (09-25),
+-- but on rocks the single ray misses what the tyre's front meets and the physics wheel sinks into
+-- the rock where the drawn one sits on it.
 -- Lines: "[ROUGH] PHYSICS ...", "[ROUGH] run <model> <speed%> <segment> key=value ...", "[ROUGH] done".
 
 local RunService = game:GetService("RunService")
@@ -30,6 +34,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local VehicleDynamics = require(Shared:WaitForChild("VehicleDynamics"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
+local VehicleVisuals = require(Shared:WaitForChild("VehicleVisuals"))
+local Lighting = game:GetService("Lighting")
 
 local TAG = "[ROUGH]"
 local function out(format, ...)
@@ -51,7 +57,8 @@ do
 	ball:Destroy()
 end
 
-local MODELS = { "Rotster", "CrocodiloRanger", "TralalaGT", "SahurVan", "TartarugaScout", "PatapimScrambler", "BananiniScoot", "BrrStreetfighter" }
+local MODELS = { "Rotster", "CrocodiloRanger", "TralalaGT", "SahurVan", "TartarugaScout", "CameloCarrier", "PatapimScrambler", "BananiniScoot",
+	"BrrStreetfighter" }
 local SPEEDS = { 0.35, 0.65, 0.9 }
 -- Physics in Studio is not deterministic, so one run of a course is one sample: every run is repeated
 -- on its own copy of the lane, and the check judges them all.
@@ -171,6 +178,149 @@ local function buildLane(x)
 	end
 end
 
+-- The lamps and the engine note, proven on every model before anything drives (VehicleVisuals is
+-- what VehicleClient runs; this is the same code). Dusk, so the beams show on camera.
+Lighting.ClockTime = 18.6
+local TRUCKS = { CrocodiloRanger = true, TartarugaScout = true, CameloCarrier = true }
+do
+	local ids = table.clone(MODELS)
+	if VehicleModels.Models.CameloCarrier and not table.find(ids, "CameloCarrier") then
+		table.insert(ids, "CameloCarrier")
+	end
+	for i, id in ipairs(ids) do
+		local model = VehicleModels.Build(id, Random.new(7))
+		model:PivotTo(CFrame.new(OX - 400 - i * 30, 200, OZ))
+		model.PrimaryPart.Anchored = true
+		model.Parent = folder
+		local found = VehicleVisuals.LampsOf(model)
+		local heads, tails = 0, 0
+		for _, entry in ipairs(found.entries) do
+			heads += entry.kind == "head" and 1 or 0
+			tails += entry.kind == "tail" and 1 or 0
+		end
+		local problems = {}
+		local function lit(kind)
+			for _, entry in ipairs(found.entries) do
+				if entry.kind == kind then
+					local c, b = entry.part.Color, entry.base
+					return (c.R + c.G + c.B) / math.max(b.R + b.G + b.B, 1e-3)
+				end
+			end
+			return -1
+		end
+		local function beams()
+			local n = 0
+			for _, spot in ipairs(found.spots) do
+				n += spot.Enabled and 1 or 0
+				if spot.Range > VehicleVisuals.HEAD_RANGE then
+					table.insert(problems, "beam range")
+				end
+			end
+			return n
+		end
+		local function brake()
+			return found.brake ~= nil and found.brake.Enabled
+		end
+		VehicleVisuals.Lights(model, { driven = false }, 10, 20)
+		if beams() > 0 or brake() then
+			table.insert(problems, "lit while empty")
+		end
+		VehicleVisuals.Lights(model, { driven = true }, 10, 20)
+		if beams() == 0 or beams() > VehicleVisuals.MAX_SPOTS then
+			table.insert(problems, "beams driven=" .. beams())
+		end
+		if brake() or lit("tail") > 0.6 then
+			table.insert(problems, "brake lit without braking")
+		end
+		VehicleVisuals.Lights(model, { driven = true, braking = true }, 10, 20)
+		if not brake() or lit("tail") < 0.95 then
+			table.insert(problems, "brake not lit under braking")
+		end
+		VehicleVisuals.Lights(model, { driven = true, braking = true }, VehicleVisuals.LIGHT_DISTANCE + 50, 20)
+		if beams() > 0 or brake() then
+			table.insert(problems, "lit past the distance cap")
+		end
+		VehicleVisuals.Lights(model, { driven = true, braking = true, reversing = true, wrecked = true }, 10, 20)
+		if beams() > 0 or brake() or lit("head") > 0 or lit("tail") > 0 then
+			table.insert(problems, "lit when wrecked")
+		end
+		if heads == 0 then
+			table.insert(problems, "no head lens")
+		end
+		if tails == 0 then
+			table.insert(problems, "no brake lens")
+		end
+		out("lights %s head=%d tail=%d spots=%d problems=%s", id, heads, tails, #found.spots,
+			#problems > 0 and table.concat(problems, ",") or "none")
+		model:Destroy()
+
+		-- The engine: revs at a standstill, then a run up through the gears at full throttle.
+		local h = VehicleDynamics.Handling[id]
+		local function step(engine, throttle, speed)
+			return VehicleVisuals.EngineStep(engine, { throttle = throttle, speed = speed, top = h.topSpeed, grounded = true,
+				pitch = h.enginePitch, volume = h.engineVolume }, 1 / 60)
+		end
+		local engine = {}
+		local base = step(engine, 0, 0)
+		local last, rising = base, true
+		for _ = 1, 30 do
+			local pitch = step(engine, 1, 0)
+			rising = rising and pitch >= last - 1e-6
+			last = pitch
+		end
+		local blip = last
+		engine = {}
+		local drops, prev, dropping = 0, nil, false
+		for f = 1, 60 * 14 do
+			step(engine, 1, h.topSpeed * math.min(1, f / (60 * 12)))
+			local falling = prev ~= nil and engine.rpm < prev - 1e-4
+			if falling and not dropping then
+				drops += 1
+			end
+			dropping = falling
+			prev = engine.rpm
+		end
+		local class = VehicleModels.Models[id].kind == "bike" and "bike" or (TRUCKS[id] and "truck" or "car")
+		out("engine %s class=%s base=%.3f blip=%.3f rising=%s shifts=%d drops=%d", id, class, base, blip, tostring(rising), engine.shifts, drops)
+	end
+end
+
+-- The wreck blast (bug sweep 09-25): it goes off the moment a vehicle is wrecked, however far away
+-- (VehicleWreckFx.Watch; Sfx does the falloff), never again when the smoke is next updated on the way
+-- up to it, and never for a vehicle that was already a wreck when first seen.
+do
+	local VehicleWreckFx = require(Shared:WaitForChild("VehicleWreckFx"))
+	local blasts, previous = {}, VehicleWreckFx.OnWreck
+	VehicleWreckFx.OnWreck = function(model)
+		blasts[model] = (blasts[model] or 0) + 1
+	end
+	local far = VehicleModels.Build("Rotster", Random.new(7))
+	far:PivotTo(CFrame.new(OX - 1000, 200, OZ + 600))
+	far.PrimaryPart.Anchored = true
+	far.Parent = folder
+	local old = VehicleModels.Build("Rotster", Random.new(7))
+	old:PivotTo(CFrame.new(OX - 1030, 200, OZ + 600))
+	old.PrimaryPart.Anchored = true
+	old:SetAttribute("Wrecked", true)
+	old.Parent = folder
+	VehicleWreckFx.Watch(far)
+	VehicleWreckFx.Watch(old)
+	far:SetAttribute("Wrecked", true)
+	task.wait()
+	local immediate = blasts[far] or 0
+	for _ = 1, 30 do
+		VehicleWreckFx.SetSmoke(far, true) -- walking up to it: the smoke comes on, nothing else
+		VehicleWreckFx.SetSmoke(old, true)
+	end
+	far:SetAttribute("Wrecked", false)
+	far:SetAttribute("Wrecked", true)
+	task.wait()
+	out("wreck immediate=%d total=%d prewrecked=%d", immediate, blasts[far] or 0, blasts[old] or 0)
+	VehicleWreckFx.OnWreck = previous
+	far:Destroy()
+	old:Destroy()
+end
+
 -- The runs.
 local runs = {}
 for _, modelId in ipairs(MODELS) do
@@ -188,7 +338,6 @@ do
 	planted.dampingRatio = 0.08
 	VehicleDynamics.Handling.FAULT_underdamped = planted
 	table.insert(runs, { modelId = "Rotster", handlingId = "FAULT_underdamped", share = 0.65, label = "FAULT_underdamped" })
-	table.insert(runs, { modelId = "Rotster", handlingId = "Rotster", share = 0.65, label = "FAULT_oneray", oneRay = true })
 	-- Stuck-then-fling cases: full throttle for 10 s nose-first into a wall, and into a 2.5-stud ledge.
 	-- Neither may go past its speed cap or leave the ground by more than a few studs.
 	for _, case in ipairs({ "wall", "ledge" }) do
@@ -203,6 +352,14 @@ do
 		for _, modelId in ipairs(MODELS) do
 			if VehicleModels.Models[modelId] and VehicleDynamics.Handling[modelId] then
 				table.insert(runs, { modelId = modelId, handlingId = modelId, share = 0.35, label = "CASE_" .. case .. "_" .. modelId, case = case, rocks = true })
+			end
+			if modelId == "Rotster" and case == "outcrop" then
+				table.insert(runs, { modelId = modelId, handlingId = modelId, share = 0.35, label = "CASE_outcrop_FAULT_oneray", case = case, rocks = true, oneRay = true })
+			end
+			-- The armoured cars again at 65% (Oliver 09-25, the armoured cars stuck on rocks): a player
+			-- doesn't pick their way at 35%.
+			if modelId == "TartarugaScout" or modelId == "CameloCarrier" then
+				table.insert(runs, { modelId = modelId, handlingId = modelId, share = 0.65, label = "CASE_" .. case .. "_" .. modelId .. "@65", case = case, rocks = true })
 			end
 		end
 	end
@@ -321,6 +478,12 @@ for _, run in ipairs(runs) do
 			rig.samples = { 0 }
 		end
 		run.model, run.rig = model, rig
+		-- Each hub's axle as built: its X against the chassis's +X (1 = along it, the way the wheel
+		-- visuals turn it; -1 would roll backwards on screen, 0 an axle turned 90 degrees).
+		run.axle = 1
+		for _, wheel in ipairs(rig.wheels) do
+			run.axle = math.min(run.axle, rig.chassis.CFrame:ToObjectSpace(wheel.hub.CFrame).RightVector.X)
+		end
 		run.target = rig.handling.topSpeed * run.share
 		run.stats = {}
 		run.lineX = run.x
@@ -362,6 +525,224 @@ do
 	end
 end
 
+-- What the drawn wheels do on the rock fields, measured after the physics each frame (Heartbeat):
+--   sink / float  the drawn tyre's lowest point against the ground under it, across its footprint
+--   vis_phys      the drawn compression against the physics step's (where the spring isn't bottomed)
+--   strut         a car strut's rod inside its sleeve, its bottom on the hub centre, upright
+--   fwd / rev     the wheels' drawn roll rate against contact speed over radius, on the flat, off the
+--                 line and backing up
+-- The lamps follow each car's own inputs, and the engine plays if the client sound module loads here.
+local Sfx
+do
+	local ok, module = pcall(function()
+		return require(game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts"):WaitForChild("Sfx"))
+	end)
+	Sfx = ok and module or nil
+	out("engine sound in this run: %s", ok and "yes" or ("no (" .. tostring(module) .. ")"))
+end
+do
+	local exclude = {}
+	for _, run in ipairs(runs) do
+		if run.model then
+			table.insert(exclude, run.model)
+		end
+	end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = exclude
+	local SAMPLE = { -0.9, -0.6, -0.3, 0, 0.3, 0.6, 0.9 }
+	RunService.Heartbeat:Connect(function(dt)
+		local camera = workspace.CurrentCamera
+		for _, run in ipairs(runs) do
+			local rig = run.rig
+			if run.rocks and rig and not run.done and run.throttle then
+				local chassis = rig.chassis
+				local cf = chassis.CFrame
+				local h = rig.handling
+				local w = run.wheelStats or { sink = {}, float = {}, diff = {}, strutBad = 0, strutFrames = 0, fwdMeas = 0, fwdExp = 0,
+					revMeas = 0, revExp = 0 }
+				run.wheelStats = w
+				local s = OZ - cf.Position.Z
+				local flat = s < 26
+				-- Drawn travel against the physics compression, as the step drew it (Stepped)...
+				for _, wheel in ipairs(rig.wheels) do
+					if wheel.grounded and wheel.compression < h.travelUp + h.travelDown - 0.05 then
+						table.insert(w.diff, math.abs(wheel.visualOffset + h.travelDown - wheel.compression))
+					end
+				end
+				-- ...then the wheels put back on the ground where the body is after the physics, as
+				-- VehicleClient does before each frame is drawn (RenderStepped), and the tyres measured
+				-- against the ground there: what the player sees.
+				VehicleDynamics.AnimateWheels(rig, 0)
+				for _, wheel in ipairs(rig.wheels) do
+					local hub, r = wheel.hub, wheel.radius
+					if wheel.grounded then
+						local c = hub.Position
+						local worst
+						for _, share in ipairs(SAMPLE) do
+							local d = share * r
+							local at = c + cf.LookVector * d
+							local hit = workspace:Raycast(at + Vector3.new(0, r + 2, 0), Vector3.new(0, -(2 * r + 6), 0), params)
+							if hit then
+								local sink = hit.Position.Y - (at.Y - math.sqrt(r * r - d * d))
+								worst = worst and math.max(worst, sink) or sink
+							end
+						end
+						if worst then
+							table.insert(w.sink, math.max(worst, 0))
+							table.insert(w.float, math.max(-worst, 0))
+						end
+					end
+					if wheel.strutJoint then
+						local rod = wheel.strutJoint.Parent
+						local sleeve = rig.model:FindFirstChild("StrutSleeve_" .. wheel.name)
+						if sleeve then
+							w.strutFrames += 1
+							local rodAt = cf:ToObjectSpace(rod.CFrame)
+							local sleeveAt = cf:ToObjectSpace(sleeve.CFrame)
+							local hubAt = cf:PointToObjectSpace(hub.Position)
+							local rodTop = rodAt.Y + rod.Size.Y / 2
+							if rodTop < sleeveAt.Y - sleeve.Size.Y / 2 + 0.02 or rodTop > sleeveAt.Y + sleeve.Size.Y / 2 + 0.02
+								or math.abs(rodAt.Y - rod.Size.Y / 2 - hubAt.Y) > 0.15 or rodAt.UpVector.Y < 0.95 then
+								w.strutBad += 1
+							end
+						end
+					end
+				end
+				-- Lamps and engine, from this car's own inputs.
+				local throttle, forward = run.throttle, run.forward
+				local distance = camera and (camera.CFrame.Position - cf.Position).Magnitude or 0
+				VehicleVisuals.Lights(rig.model, { driven = true,
+					braking = (throttle < -0.05 and forward > 1) or (throttle > 0.05 and forward < -1),
+					reversing = throttle < -0.05 and forward < 0.5 }, distance, Lighting.ClockTime)
+				if Sfx then
+					if not run.engineLoop then
+						local attachment = Instance.new("Attachment")
+						attachment.Parent = chassis
+						run.engineLoop, run.engine = Sfx.Loop("VehicleEngine", attachment), {}
+					end
+					if run.engineLoop then
+						local pitch, volume = VehicleVisuals.EngineStep(run.engine, { throttle = throttle, speed = forward, top = h.topSpeed,
+							grounded = (rig.visualGrounded or 1) > 0, pitch = h.enginePitch, volume = h.engineVolume }, dt)
+						run.engineLoop:SetPitch(pitch)
+						run.engineLoop:SetVolume(math.clamp(volume, 0, 1))
+					end
+				end
+			elseif run.engineLoop and run.done then
+				run.engineLoop:Stop()
+				run.engineLoop = nil
+			end
+		end
+	end)
+end
+
+-- What a stopped car is resting on: each wheel (down or up, load as a share of the car's weight,
+-- compression against full travel), and every collider (CanCollide) within 0.15 studs of the ground or
+-- a rock under or ahead of it, at the closest point found, in the chassis's frame (x right, y up,
+-- z back): rays from inside each collider down through its underside and forward through its front.
+local CONTACT_GAP = 0.15
+local function stallReport(rig)
+	local chassis = rig.chassis
+	local cf = chassis.CFrame
+	local weight = chassis.AssemblyMass * GRAVITY
+	local wheels = {}
+	for _, wheel in ipairs(rig.wheels) do
+		table.insert(wheels, string.format("%s:%s/%.2f/%.2f", wheel.name:gsub("^Wheel_", ""), wheel.grounded and "dn" or "up",
+			wheel.load / weight, wheel.compression / (rig.handling.travelUp + rig.handling.travelDown)))
+	end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { rig.model }
+	local touching = {}
+	for _, hull in ipairs(rig.model:GetDescendants()) do
+		if hull:IsA("BasePart") and hull.CanCollide then
+			local best, bestHit
+			local half = hull.Size / 2
+			for _, fx in ipairs({ -0.9, 0, 0.9 }) do
+				for _, fz in ipairs({ -0.9, -0.45, 0, 0.45, 0.9 }) do
+					-- Down: from the collider's middle height to 0.15 below its underside (a wedge's
+					-- sloped face is above its box's bottom, so a wedge reads high: fine for "which part").
+					local from = hull.CFrame:PointToWorldSpace(Vector3.new(fx * half.X, 0, fz * half.Z))
+					local hit = workspace:Raycast(from, Vector3.new(0, -(half.Y + CONTACT_GAP), 0), params)
+					if hit then
+						local gap = (from.Y - hit.Position.Y) - half.Y
+						if not best or gap < best then
+							best, bestHit = gap, hit
+						end
+					end
+				end
+			end
+			for _, fx in ipairs({ -0.9, 0, 0.9 }) do
+				for _, fy in ipairs({ -0.8, 0 }) do
+					local from = hull.CFrame:PointToWorldSpace(Vector3.new(fx * half.X, fy * half.Y, 0))
+					local hit = workspace:Raycast(from, cf.LookVector * (half.Z + CONTACT_GAP), params)
+					if hit then
+						local gap = (hit.Position - from):Dot(cf.LookVector) - half.Z
+						if not best or gap < best then
+							best, bestHit = gap, hit
+						end
+					end
+				end
+			end
+			if best and best <= CONTACT_GAP then
+				local at = cf:PointToObjectSpace(bestHit.Position)
+				table.insert(touching, string.format("%s>%s@(%.1f,%.1f,%.1f)gap%.2f", hull.Name, bestHit.Instance.Name, at.X, at.Y, at.Z, best))
+			end
+		end
+	end
+	return string.format("wheels=%s touching=%s", table.concat(wheels, " "), #touching > 0 and table.concat(touching, ",") or "none")
+end
+
+-- See-through parts (Oliver 09-25: parts of the vehicles looked partly transparent in the trial):
+-- every half second, every vehicle's parts other than its glass (Glass material, or a SightGlass)
+-- with Transparency or LocalTransparencyModifier between 0.05 and 0.95; and every change to the van
+-- bat's pieces, as it happens. Only the glass is meant to be see-through.
+local seeThrough, seeThroughSeen, batChanges = 0, {}, 0
+local function partlyClear(part)
+	if part.Material == Enum.Material.Glass or string.find(part.Name, "SightGlass") then
+		return false
+	end
+	local t = math.max(part.Transparency, part.LocalTransparencyModifier)
+	return t > 0.05 and t < 0.95
+end
+for _, run in ipairs(runs) do
+	if run.modelId == "SahurVan" and run.model then
+		for _, part in ipairs(run.model:GetDescendants()) do
+			if part:IsA("BasePart") and string.sub(part.Name, 1, 3) == "Bat" then
+				for _, property in ipairs({ "Transparency", "LocalTransparencyModifier" }) do
+					part:GetPropertyChangedSignal(property):Connect(function()
+						batChanges += 1
+						if batChanges <= 5 then
+							out("batchange %s %s.%s=%.2f", run.label, part.Name, property, part[property])
+						end
+					end)
+				end
+			end
+		end
+	end
+end
+local lastScan = 0
+RunService.Heartbeat:Connect(function()
+	if tick() - lastScan < 0.5 then
+		return
+	end
+	lastScan = tick()
+	for _, run in ipairs(runs) do
+		if run.model and run.model.Parent then
+			for _, part in ipairs(run.model:GetDescendants()) do
+				if part:IsA("BasePart") and partlyClear(part) then
+					seeThrough += 1
+					local key = run.modelId .. "/" .. part.Name
+					if not seeThroughSeen[key] then
+						seeThroughSeen[key] = true
+						out("seethrough %s %s T=%.2f LTM=%.2f", run.label, part.Name, part.Transparency, part.LocalTransparencyModifier)
+					end
+				end
+			end
+		end
+	end
+end)
+
 local startAt = tick()
 local finished = 0
 local live = 0
@@ -388,15 +769,40 @@ connection = RunService.Stepped:Connect(function(_, dt)
 			local steer = math.clamp(-(pos.X - wantX) * 0.12 - cf.LookVector.X * 2.5, -1, 1)
 			local throttle = (run.case and not run.rocks) and 1 or math.clamp((run.target - forward) / 4, -1, 1)
 			if run.rocks then
-				if s >= 110 and not run.halted then
+				-- On the flat before the field: off the line, brake to a stop, back up 1.5 s, then on
+				-- through the rocks -- every car at once, for the lamps and the wheels in reverse.
+				run.phase = run.phase or "launch"
+				if run.phase == "launch" and s >= 20 then
+					run.phase = "stop"
+				elseif run.phase == "stop" and forward < 0.5 then
+					run.phase, run.reverseUntil = "reverse", tick() + 1.5
+				elseif run.phase == "reverse" and tick() > run.reverseUntil then
+					run.phase = "go"
+				end
+				if run.phase == "stop" then
+					throttle = -1
+				elseif run.phase == "reverse" then
+					-- Backing up the lane-keeping steer turns the wrong way (it would put the car off the
+					-- lane in a second): straight back, wheels centred.
+					throttle, steer = -0.7, 0
+				elseif s >= 110 and not run.halted then
 					throttle = -1
 					run.halted = forward < 0.5
 				end
 				run.through = math.max(run.through or 0, s)
+				run.throttle, run.forward = throttle, forward
 			end
 			if run.rocks then
-				run.stuckFor = (throttle > 0.5 and forward < 2) and (run.stuckFor or 0) + dt or 0
+				local wasStuck = run.stuckFor or 0
+				run.stuckFor = (run.phase == "go" and throttle > 0.5 and forward < 2) and wasStuck + dt or 0
 				run.maxStuck = math.max(run.maxStuck or 0, run.stuckFor)
+				-- Past the pull-away from a standstill (about 0.6 s under 2 studs/s for the heaviest): held by
+				-- something. Say what -- each collider the ground or a rock is against, where on the car, and
+				-- the wheel loads -- once per stall; count stalls over 1 s.
+				if run.stuckFor > 1 and wasStuck <= 1 then
+					run.stalls = (run.stalls or 0) + 1
+					out("rockstall %s s=%.0f %s", run.label, s, stallReport(rig))
+				end
 			end
 			-- Peaks while stepped, for the fling question: speed, spin, and height over the start.
 			run.startY = run.startY or pos.Y
@@ -406,8 +812,33 @@ connection = RunService.Stepped:Connect(function(_, dt)
 			run.peakW = math.max(run.peakW or 0, chassis.AssemblyAngularVelocity.Magnitude)
 			run.rise = math.max(run.rise or 0, pos.Y - run.startY)
 			local telemetry = VehicleDynamics.Step(rig, { throttle = throttle, steer = steer }, dt)
-			if forward >= run.target * 0.9 then
-				run.reached = true
+			if run.case then
+				-- What a client draws (no LocalScript runs in a server-only run): the wheels, their
+				-- struts; on the rock fields the lamps and the engine too (Heartbeat, below).
+				local spinBefore = {}
+				for _, wheel in ipairs(rig.wheels) do
+					spinBefore[wheel] = wheel.spin
+				end
+				VehicleDynamics.AnimateWheels(rig, dt)
+				-- Roll: the turn each wheel was drawn this frame against contact speed over radius, over the
+				-- frames on the flat it rolled freely (down, not slipping, not braked). With every hub's axle
+				-- along the chassis's +X (checked at the start, `axle`), that is the turn on screen.
+				if run.rocks and s < 26 then
+					local w = run.wheelStats
+					for _, wheel in ipairs(w and rig.wheels or {}) do
+						local rolling = chassis:GetVelocityAtPosition(cf:PointToWorldSpace(wheel.mount)):Dot(cf.LookVector)
+						if wheel.grounded and not wheel.slip and not rig.lastBraking and math.abs(rolling) > 4 then
+							local turned = -((wheel.spin - spinBefore[wheel] + math.pi) % (2 * math.pi) - math.pi)
+							if run.phase == "launch" then
+								w.fwdMeas += turned
+								w.fwdExp += rolling / wheel.radius * dt
+							elseif run.phase == "reverse" then
+								w.revMeas += turned
+								w.revExp += rolling / wheel.radius * dt
+							end
+						end
+					end
+				end
 			end
 			if seg and not run.case and seg ~= "runup" and seg ~= "end" then
 				local st = run.stats[seg]
@@ -455,32 +886,15 @@ connection = RunService.Stepped:Connect(function(_, dt)
 				end
 			end
 			run.lastVy = v.Y
-			-- A course run sat still for 3 s: say what's holding it -- each wheel (down, load as a share of
-			-- the car's weight, compression against full travel) and what the body's colliders touch.
-			if not run.case and seg and forward < 1 then
+			-- A course run sat still for over 1 s: say what's holding it (stallReport), once per stall, and
+			-- count them.
+			if not run.case and seg and seg ~= "runup" and forward < 1 then
 				run.stallFor = (run.stallFor or 0) + dt
-				if run.stallFor > 3 and not run.stallLogged then
-					run.stallLogged = true
-					local weight = chassis.AssemblyMass * GRAVITY
-					local wheels = {}
-					for _, wheel in ipairs(rig.wheels) do
-						table.insert(wheels, string.format("%s:%s/%.2f/%.2f", wheel.name, wheel.grounded and "down" or "up",
-							wheel.load / weight, wheel.compression / (rig.handling.travelUp + rig.handling.travelDown)))
-					end
-					local touching = {}
-					for _, hull in ipairs(rig.model:GetChildren()) do
-						if hull:IsA("BasePart") and hull.CanCollide then
-							for _, other in ipairs(hull:GetTouchingParts()) do
-								if not other:IsDescendantOf(rig.model) then
-									table.insert(touching, hull.Name .. ">" .. other.Name)
-								end
-							end
-						end
-					end
+				if run.stallFor > 1 and run.stallFor - dt <= 1 then
+					run.stalls = (run.stalls or 0) + 1
 					local look = cf.LookVector
-					out("stall %s %d s=%.0f seg=%s pitch=%.0f roll=%.0f wheels=%s touching=%s", run.label, math.floor(run.share * 100 + 0.5), s, seg,
-						math.deg(math.asin(math.clamp(look.Y, -1, 1))), math.deg(math.asin(math.clamp(-cf.RightVector.Y, -1, 1))),
-						table.concat(wheels, " "), #touching > 0 and table.concat(touching, ",") or "none")
+					out("stall %s %d s=%.0f seg=%s pitch=%.0f roll=%.0f %s", run.label, math.floor(run.share * 100 + 0.5), s, seg,
+						math.deg(math.asin(math.clamp(look.Y, -1, 1))), math.deg(math.asin(math.clamp(-cf.RightVector.Y, -1, 1))), stallReport(rig))
 				end
 			else
 				run.stallFor = 0
@@ -491,7 +905,7 @@ connection = RunService.Stepped:Connect(function(_, dt)
 				run.harness = string.format("left the course at s=%.0f x=%+.1f y=%.1f", s, pos.X - run.x, pos.Y)
 			end
 			if s >= LENGTH - 20 or tick() - startAt > 120 or run.harness or (run.case and s >= 200)
-				or (run.case and tick() - startAt > (run.rocks and 25 or 12)) then
+				or (run.case and tick() - startAt > (run.rocks and 35 or 12)) then
 				run.done = true
 				run.finalS = s
 				finished += 1
@@ -527,11 +941,22 @@ for _, run in ipairs(runs) do
 		out("peak %s %d v=%.1f cap=%.1f w=%.1f rise=%.1f at_s=%.0f", run.label, math.floor(run.share * 100 + 0.5), run.peakV or 0,
 			run.rig.handling.topSpeed * 1.5, run.peakW or 0, run.rise or 0, run.peakAt or -1)
 		if run.rocks then
-			out("rocks %s stuck=%.2f distance=%.0f", run.label, run.maxStuck or 0, run.through or s)
+			out("rocks %s stuck=%.2f stalls=%d distance=%.0f", run.label, run.maxStuck or 0, run.stalls or 0, run.through or s)
+			local w = run.wheelStats
+			if w then
+				local function p95(list)
+					table.sort(list)
+					return #list > 0 and list[math.max(1, math.ceil(#list * 0.95))] or 0
+				end
+				out("wheels %s sink95=%.3f float95=%.3f vis_phys95=%.3f strut_bad=%d/%d fwd_ratio=%.3f rev_ratio=%.3f samples=%d axle=%.2f",
+					run.label, p95(w.sink), p95(w.float), p95(w.diff), w.strutBad, w.strutFrames,
+					w.fwdExp ~= 0 and w.fwdMeas / w.fwdExp or 0, w.revExp ~= 0 and w.revMeas / w.revExp or 0, #w.sink, run.axle or 0)
+			end
 		end
-		out("run %s %d total finished=%s distance=%.0f lanechange=%.2f crater_crossed=%s", run.label, math.floor(run.share * 100 + 0.5),
-			tostring(s >= FINISH), s, run.steerAt or -1, tostring(s >= LENGTH - 20))
+		out("run %s %d total finished=%s distance=%.0f lanechange=%.2f crater_crossed=%s stalls=%d", run.label, math.floor(run.share * 100 + 0.5),
+			tostring(s >= FINISH), s, run.steerAt or -1, tostring(s >= LENGTH - 20), run.stalls or 0)
 	end
 end
 VehicleDynamics.Handling.FAULT_underdamped = nil
+out("transparency partly_clear=%d bat_changes=%d", seeThrough, batChanges)
 out("done %d runs", #runs)
