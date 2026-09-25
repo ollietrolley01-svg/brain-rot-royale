@@ -1,5 +1,5 @@
 """Behaviour check for the team-mode spawn kit, without Studio: #114 a (a popup defense) and Oliver's
-2026-09-25 kit -- 2 of each of 2 random explosives, 2 smoke bombs, 2 random portable defenses, full
+2026-09-25 kit -- 2 of each of 2 random explosives, 2 smoke bombs, 2 of 1 random portable defense, full
 shield.
 
 Runs the real ReplicatedStorage/Shared/GameModes.lua and ItemData.lua and the real
@@ -146,10 +146,10 @@ def checks(sources):
             ids[c["id"]] = ids.get(c["id"], 0) + c["count"]
         if ids.get("LowkeyLatte", 0) != 2:
             bad["smoke"].append(f"life {n}: {ids.get('LowkeyLatte', 0)} smoke")
-        for key, group in (("explosives", EXPLOSIVES), ("defenses", DEFENSES)):
+        for key, group, want in (("explosives", EXPLOSIVES, 2), ("defenses", DEFENSES, 1)):
             kinds = [i for i in ids if i in group]
             seen[key].update(kinds)
-            if len(kinds) != 2:
+            if len(kinds) != want:
                 bad[key].append(f"life {n}: {kinds}")
         for c in carried:
             if c["id"] in EXPLOSIVES | DEFENSES and c["count"] != min(2, c["stack"]):
@@ -158,7 +158,7 @@ def checks(sources):
             bad["landed"].append(f"life {n}: {life['stacks']} stacks")
         if life["used"] != life["slotsUsed"]:
             bad["slots"].append(f"life {n}: carried {life['used']}, GameModes says {life['slotsUsed']}")
-        if life["used"] > 7:
+        if life["used"] > 6:
             bad["room"].append(f"life {n}: {life['used']} of 8")
         if not all(c["issued"] for c in carried):
             bad["issued"].append(f"life {n}")
@@ -168,7 +168,7 @@ def checks(sources):
     results = [
         ("2 smoke bombs every life", not bad["smoke"], first("smoke")),
         ("exactly 2 different explosive kinds every life", not bad["explosives"], first("explosives")),
-        ("exactly 2 different portable defense kinds every life", not bad["defenses"], first("defenses")),
+        ("exactly 1 portable defense kind every life", not bad["defenses"], first("defenses")),
         ("2 of each rolled kind (capped by its stack)", not bad["counts"], first("counts")),
         ("every explosive kind comes up over 60 lives (really random)", seen["explosives"] == EXPLOSIVES,
          f"seen {sorted(seen['explosives'])}"),
@@ -176,7 +176,7 @@ def checks(sources):
          f"seen {sorted(seen['defenses'])}"),
         ("every kit item landed (none silently skipped)", not bad["landed"], first("landed")),
         ("slotsUsed matches what was carried", not bad["slots"], first("slots")),
-        ("room left to loot (at least 1 of 8 slots free)", not bad["room"], first("room")),
+        ("room left to loot (at least 2 of 8 slots free)", not bad["room"], first("room")),
         ("the whole kit is tagged issued (so a death does not drop it)", not bad["issued"], first("issued")),
         ("spawns with full shield", not bad["shield"], first("shield")),
     ]
@@ -208,6 +208,8 @@ def plants(root):
         '"RotMine" }, kinds = 2', '"RotMine" }, kinds = 1'))
     yield "defense pool loses a kind (never rolled)", sources_for(root, gamemodes=gm.replace(
         '"RotBarricade", "PopupBunker", "BrainrotFortress" }', '"RotBarricade", "PopupBunker" }'))
+    yield "two defense kinds instead of one", sources_for(root, gamemodes=gm.replace(
+        '"BrainrotFortress" }, kinds = 1', '"BrainrotFortress" }, kinds = 2'))
     yield "roll can repeat the same kind", sources_for(root, gamemodes=gm.replace(
         "local id = table.remove(left, random(#left))", "local id = left[random(#left)]"))
     yield "defense id typo (ItemData.Get nil, skipped)", sources_for(root, gamemodes=gm.replace('"PopupBunker"', '"PopupBunkr"'))

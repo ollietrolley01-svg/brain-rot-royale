@@ -126,11 +126,11 @@ end
 -- respawn timer; a Bandage takes 2.5.
 --
 -- Oliver, 2026-09-25: "everyone spawn with 2 of each of 2 random kinds of explosive, and 2 smoke
--- bombs, and 2 random types of portable defense, and they spawn with full shield". The random
--- picks are rolled per life from `pools` (two different kinds from each, 2 of each, capped by the
--- item's stack -- the Brainrot Fortress stacks to 1). Full shield replaces the Mini Shields that used
+-- bombs, and ... they spawn with full shield", then "make it only 2 of one random type of portable
+-- defense". The random picks are rolled per life from `pools` (two different explosives, one
+-- defense, 2 of each, capped by the item's stack -- the Brainrot Fortress stacks to 1). Full shield replaces the Mini Shields that used
 -- to be here: a Mini Shield only fills to 50, so at a full 100 it was a slot doing nothing, and
--- dropping it keeps one of the eight slots free for what you pick up off the map.
+-- dropping it keeps two of the eight slots free for what you pick up off the map.
 GameModes.Loadout = {
 	items = {
 		{ id = "Bandage", count = 3 },
@@ -138,12 +138,12 @@ GameModes.Loadout = {
 	},
 	pools = {
 		{ ids = { "CookedCoconut", "ClingyCrumpet", "RotMine" }, kinds = 2, count = 2 },
-		{ ids = { "RotBarricade", "PopupBunker", "BrainrotFortress" }, kinds = 2, count = 2 },
+		{ ids = { "RotBarricade", "PopupBunker", "BrainrotFortress" }, kinds = 1, count = 2 },
 	},
 	fullShield = true,
 	-- Checked by the loadout probe so a silent drift in ItemData's stack sizes shows up as a
-	-- failure rather than as a quietly truncated kit: the gun, 2 fixed items and 2 + 2 rolled.
-	slotsUsed = 7,
+	-- failure rather than as a quietly truncated kit: the gun, 2 fixed items and 2 + 1 rolled.
+	slotsUsed = 6,
 }
 
 -- One life's kit: the fixed items plus `kinds` different ids drawn from each pool. `random(n)`
