@@ -116,6 +116,10 @@ local LANE_X0, LANE_X1 = 3, 3 + 4 * LANE_PITCH
 local EAST_Z0, EAST_Z1 = 6.5, 6.5 + 3 * LANE_PITCH
 local DRIVE_OUT = WX + 16
 TeamBaseRuins.Lanes = { pitch = LANE_PITCH, front = { LANE_X0, LANE_X1 }, east = { EAST_Z0, EAST_Z1 }, driveOut = DRIVE_OUT }
+-- Where the access road to the map's roads starts (TeamBaseRoads): the foot of the gatehouse's ramp,
+-- in the middle of its lanes.
+TeamBaseRuins.GateOut = Vector3.new((LANE_X0 + LANE_X1) / 2, 0, -(WZ + 0.8 + 3))
+TeamBaseRuins.GateOutEast = Vector3.new(WX + 0.8 + 3, 0, (EAST_Z0 + EAST_Z1) / 2)
 -- The two vehicle gates' corridors (local), for the ground work: a little wider than the lanes.
 local GATE_FRONT = { LANE_X0 - 4, LANE_X1 + 4 }
 local GATE_EAST = { EAST_Z0 - 4, EAST_Z1 + 4 }

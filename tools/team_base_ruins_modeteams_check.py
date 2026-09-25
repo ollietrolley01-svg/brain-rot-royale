@@ -150,6 +150,11 @@ function workspace:GetPartBoundsInBox(cf, size, params)
     return hits
 end
 local function site(frame, x, z) return frame * CFrame.new(Vector3.new(x, 0, z)) end
+-- The access roads are tools/team_base_road_check.py's business: here they only count their calls.
+TeamBaseRoads = {
+    Width = 18,
+    Plan = function() R.accessPlans = (R.accessPlans or 0) + 1 return nil, "stub" end,
+}
 TeamBaseRuins = {
     SiteCost = function(frame, mapInfo)
         for _, bad in ipairs(R.badSites) do
@@ -457,7 +462,7 @@ def wiring(root, edits=None):
     gm = files["ServerScriptService/Modules/GameMode.lua"]
     start = gm.index("GameMode.BattleRoyale = setmetatable({")
     br = "\n".join(code_lines(gm[start:gm.index("\n}", start)]))
-    for name in ("ModeTeams", "TeamBaseRuins", "FlattenPad", "TeamBattleground"):
+    for name in ("ModeTeams", "TeamBaseRuins", "TeamBaseRoads", "FlattenPad", "TeamBattleground"):
         if name in br:
             problems.append("wiring: the battle royale's behaviour reaches %s" % name)
     for rel, text in files.items():

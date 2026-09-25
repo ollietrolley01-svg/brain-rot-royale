@@ -956,7 +956,7 @@ function smoke(Ruins, mode)
     -- crosses the slope.
     local function T(x, z)
         local here = localOf(x, z)
-        local rise = math.clamp(here.X, -48, 48) - math.clamp(here.X, -10, 10)
+        local rise = math.clamp(here.X, -100, 100) - math.clamp(here.X, -62, 62)
         return 12.5 + 0.25 * rise + 0.1 * math.sin(x * 0.7) * math.cos(z * 0.9)
     end
     local written = {}
@@ -1387,7 +1387,8 @@ PLANTS = [
                                  ('return box(hall, "BunkerWall", a, b, -1, y1 or BUNKER_TOP, c, d, color or BUNKER, MAT.Concrete, never)',
                                   'return box(hall, "Wall", a, b, -1, y1 or BUNKER_TOP, c, d, color or BUNKER, MAT.Concrete)')],
      "breaks, and must not"),
-    ("perimeter unbreakable", [('local name = style.name or "Wall"', 'local name = style.name or "PerimeterWall"')],
+    # (a Model named Spawn... is kept whole by DestructibleService's NEVER_PREFIX, whatever is in it)
+    ("perimeter unbreakable", [('walls.Name = "Perimeter"', 'walls.Name = "SpawnWalls"')],
      "does not break"),
     ("layout depends on the team", [("tops[index] = rnd(6.6, 9.4)", "tops[index] = rnd(6.6, 9.4) + (B.team.R > 0.5 and 0.3 or 0)")],
      "identical"),

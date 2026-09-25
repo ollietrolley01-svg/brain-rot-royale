@@ -534,4 +534,32 @@ local views = {
 	},
 }
 
+-- Each base's access road to the map's roads, from high over its middle.
+for team = 1, 2 do
+	table.insert(views, {
+		name = string.format("%d_access_road_team%d", 17 + team, team),
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			local ruin = state.ruins[team]
+			local plan = ruin and ruin.accessPlan
+			if not plan then
+				note(string.format("team %d: NO ACCESS ROAD", team))
+				look(camera, at(team, 0, 160, 120), at(team, 0, 0, -60), 60)
+				return
+			end
+			local first, last = plan.points[1], plan.points[#plan.points]
+			local mid = (first + last) / 2
+			local span = (last - first).Magnitude
+			note(string.format("team %d: access road %.0f studs, %d stretches, gate %d", team, plan.length, #plan.points - 1, plan.gate or 1))
+			local base = ruin.frame.Position
+			local away = Vector3.new(mid.X - base.X, 0, mid.Z - base.Z)
+			away = away.Magnitude > 1 and away.Unit or Vector3.new(0, 0, 1)
+			local side = Vector3.new(-away.Z, 0, away.X)
+			local centre = Vector3.new(mid.X, ruin.height, mid.Z)
+			look(camera, centre + side * (span * 0.6 + 80) + Vector3.new(0, span * 0.55 + 90, 0) - away * 40, centre, 60)
+		end,
+	})
+end
+
 return views

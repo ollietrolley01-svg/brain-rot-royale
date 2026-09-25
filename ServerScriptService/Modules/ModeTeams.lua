@@ -16,6 +16,7 @@ local WeaponData = require(Shared:WaitForChild("WeaponData"))
 local Combatants = require(script.Parent:WaitForChild("Combatants"))
 local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
 local TeamBaseRuins = require(script.Parent:WaitForChild("TeamBaseRuins"))
+local TeamBaseRoads = require(script.Parent:WaitForChild("TeamBaseRoads"))
 local WeaponService = require(script.Parent:WaitForChild("WeaponService"))
 
 local ModeTeams = {}
@@ -294,6 +295,13 @@ function ModeTeams.Setup(currentMode, mapInfo)
 	if withRuins then
 		ModeTeams.BuildBattleground(mapInfo, axis, ruinSeed)
 	end
+	-- Each compound's access road to the map's roads, after the battleground so it keeps out of it.
+	if ruins[1] and ruins[2] then
+		local ok, problem = pcall(ModeTeams.BuildAccessRoads, mapInfo)
+		if not ok then
+			warn("ModeTeams: access roads failed: " .. tostring(problem))
+		end
+	end
 
 	-- After the pads (it keeps clear of them) and before GameMode seeds the base loot, which then
 	-- keeps clear of the vehicles through RefusePad's blocked test. A failure here costs the base its
@@ -470,11 +478,123 @@ end
 
 -- Takes both compounds down (a match ending, or one side failing to build).
 function ModeTeams.ClearRuins()
+	ModeTeams.UnregisterAccessRoads()
 	for team, ruin in pairs(ruins) do
 		if ruin.model then
 			ruin.model:Destroy()
 		end
 		ruins[team] = nil
+	end
+end
+
+--------------------------------------------------------------------------------
+-- The access roads (Oliver, 2026-09-24: "make sure the team bases connect to the roads too")
+--------------------------------------------------------------------------------
+-- TeamBaseRoads plans, builds and registers one per compound, from the foot of its gatehouse ramp to
+-- the nearest map road it can reach at a T-junction: never through the battleground or the other
+-- compound, never through a building (anything bigger than TeamBaseRuins.ClearableSpan); the small
+-- scenery in its way (trees, rocks, props) is cleared. The road is parented into the compound, so it
+-- goes with it; the bot road data is put back by UnregisterAccessRoads.
+local accessUndo = {}
+local ACCESS_CLEAR = TeamBaseRoads.Width / 2 + 3
+
+function ModeTeams.UnregisterAccessRoads()
+	for index = #accessUndo, 1, -1 do
+		pcall(accessUndo[index])
+		accessUndo[index] = nil
+	end
+end
+
+-- The thing in the map that `part` belongs to (a building in a town, a tree in the props), or nil.
+local function mapItemOf(part, map)
+	local node = part
+	while node.Parent and node.Parent ~= map and node.Parent.Parent ~= map do
+		node = node.Parent
+	end
+	if node.Parent == map or not node.Parent then
+		return nil
+	end
+	return node
+end
+
+local function itemSpan(item)
+	if item:IsA("BasePart") then
+		return math.max(item.Size.X, item.Size.Z)
+	end
+	local ok, size = pcall(function()
+		return item:GetExtentsSize()
+	end)
+	return ok and math.max(size.X, size.Z) or math.huge
+end
+
+function ModeTeams.BuildAccessRoads(mapInfo)
+	ModeTeams.UnregisterAccessRoads()
+	local roads = mapInfo and mapInfo.roads
+	local map = mapInfo and mapInfo.map
+	if not (roads and roads.edges and map) then
+		return
+	end
+	local keep = { Roads = true, River = true, Ziplines = true }
+	local avoid = { { centre = arenaCentre, radius = (ModeTeams.ArenaReach or 150) + 10, name = "battleground" } }
+	local boxes = {}
+	for team = 1, GameModes.TeamCount do
+		if ruins[team] then
+			table.insert(boxes, { frame = ruins[team].frame, halfX = TeamBaseRuins.Footprint.X / 2 + 4, halfZ = TeamBaseRuins.Footprint.Z / 2 + 4 })
+		end
+	end
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { map }
+	for team = 1, GameModes.TeamCount do
+		local ruin = ruins[team]
+		if ruin and not ruin.accessRoad then
+			local clear = {}
+			-- What stands in a stretch of the way: nil when it is clear or can be cleared, else why not.
+			local function blocked(a, b)
+				local mid = (a + b) / 2
+				local length = (b - a).Magnitude
+				if length < 0.1 then
+					return nil
+				end
+				local ground = terrainAt(mid.X, mid.Z) or ruin.height
+				local frame = CFrame.lookAt(Vector3.new(mid.X, ground + 7, mid.Z), Vector3.new(b.X, ground + 7, b.Z))
+				for _, part in ipairs(workspace:GetPartBoundsInBox(frame, Vector3.new(ACCESS_CLEAR * 2, 16, length), params)) do
+					local item = mapItemOf(part, map)
+					local top = item and item.Parent
+					if item and not (top and keep[top.Name]) and item ~= ruin.model and not item:IsDescendantOf(ruin.model) then
+						if string.sub(item.Name, 1, 8) == "TeamBase" or itemSpan(item) > TeamBaseRuins.ClearableSpan then
+							return item.Name
+						end
+						clear[item] = true
+					end
+				end
+				return nil
+			end
+			-- Out of the gatehouse or the east gate, whichever makes the shorter road.
+			local gates = {
+				{ position = ruin.frame * TeamBaseRuins.GateOut, heading = ruin.frame.LookVector },
+				{ position = ruin.frame * TeamBaseRuins.GateOutEast, heading = ruin.frame.RightVector },
+			}
+			local plan, why = TeamBaseRoads.Plan(gates, nil, roads, { avoid = avoid, boxes = boxes, blocked = blocked })
+			if not plan then
+				warn("ModeTeams: team " .. team .. "'s base has no access road: " .. tostring(why))
+			else
+				-- Only what is in the chosen way goes.
+				table.clear(clear)
+				for i = 2, #plan.points do
+					blocked(plan.points[i - 1], plan.points[i])
+				end
+				for item in pairs(clear) do
+					item:Destroy()
+				end
+				local heights = TeamBaseRoads.Profile(plan, function(x, z)
+					return terrainAt(x, z)
+				end, ruin.height)
+				ruin.accessRoad = TeamBaseRoads.Build(plan, heights, ruin.model, workspace.Terrain)
+				ruin.accessPlan = plan
+				table.insert(accessUndo, (TeamBaseRoads.Register(roads, plan, heights)))
+			end
+		end
 	end
 end
 
