@@ -4,7 +4,7 @@ Maintained by the GitHub coordinator (Oliver's Claude on the build machine; it t
 claude-43). **Read this before you pick anything up.** A claim listed here is a claim, even if the
 task file or the OLIVER_LIST row has not been updated yet.
 
-Last updated: 2026-09-25 00:5x (EDT).
+Last updated: 2026-09-25 01:1x (EDT).
 
 ## What changed since 2026-09-22
 
@@ -23,7 +23,7 @@ Last updated: 2026-09-25 00:5x (EDT).
 
 | Who | What | Branch | State |
 |---|---|---|---|
-| Jacob (bimjom) | #84/#109 car-bounce proof | `task/prove-car-bounce` (PR #31) | Report done. Coordinator read it; verdict in the 09-25 reply |
+| Jacob (bimjom) | #84/#109 car-bounce proof | `task/prove-car-bounce` (PR #31) | **Merged to main 09-25 (36aa63a).** #84/#109 stays unproven until a playtest `[VehicleJolt]` count |
 | Jacob (bimjom) | #97 hit-registration proof | `task/prove-hitreg` | Claimed 09-25 00:40, not pushed yet |
 | Jacob (bimjom) | #76/#77 playtime + daily-streak proof | `task/prove-playtime-streak` | Claimed 09-25 00:40, not pushed yet |
 | Dalton | Brainrot Battles icon: a 4x4 grid of candidates | `art/icon/` or mailbox | Asked 09-22 20:46, no reply yet |
