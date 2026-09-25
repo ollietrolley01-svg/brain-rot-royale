@@ -5,7 +5,7 @@ ReplicatedStorage/Shared/ZFight.lua and the real ServerScriptService/Modules/Des
 under the lupa mock from tools/vehicle_models_axis_check.py (extended here with Random, Color3 maths,
 TrussPart and Roblox's part defaults), then measures what was built:
 
-  budget     400..700 parts per base (said, with the count per room)
+  budget     760..1450 parts per base (said, with the count per room)
   zfight     ZFight.Scan finds no fighting pair at source (before any fix) and none after ZFight.Fix,
              the pass Build runs; also how many Fix had to move
   floating   every part is connected, through parts it touches (OBBs, 0.12 slack), to the ground (the
@@ -50,9 +50,12 @@ from vehicle_models_axis_check import MOCK, luau_to_lua  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
 
-BUDGET = (400, 760)
+# 760 -> 1450 with the compound's area (92 x 84 -> 134 x 110, x1.91), sized for 25 a side.
+BUDGET = (760, 1450)
 BODY_RADIUS, BODY_HEIGHT, STEP = 1.0, 5.2, 1.5
 GRID = 0.5
+# The flat pad round the compound (its footprint and margin), and how far past its middle every bay's
+# way out is kept clear: read from TeamBaseRuins' WX, WZ at start (main).
 FLAT_X, FLAT_Z = 50.0, 46.0
 DOOR_WIDTH, DOOR_HEIGHT = 4.0, 7.0
 CHEST_CLEAR = 2.4
@@ -66,6 +69,8 @@ CAR_MARGIN = 0.5
 # Past the compound's middle, along a bay's nose, that its way out must stay clear to: beyond every
 # wall (they stand at 41 and 45).
 DRIVE_OUT = 62
+# The lane each bay drives out along: the biggest vehicle's width and this much more (Oliver, 2026-09-24).
+LANE_SPARE = 6.0
 # One bay per base vehicle (MatchConfig.TeamBaseVehicles.Slots, read from the source).
 BAYS = None
 # One named chest spot per base chest (LootService.BaseStock.chest, read from the source): GameMode
@@ -474,8 +479,8 @@ class Walk:
     """A grid of where an R15 body can stand, and a flood from the pads."""
 
     def __init__(self, parts):
-        self.x0, self.z0 = -56.0, -52.0
-        self.nx, self.nz = int(112 / GRID) + 1, int(104 / GRID) + 1
+        self.x0, self.z0 = -(FLAT_X + 6), -(FLAT_Z + 6)
+        self.nx, self.nz = int(2 * (FLAT_X + 6) / GRID) + 1, int(2 * (FLAT_Z + 6) / GRID) + 1
         n = self.nx * self.nz
         self.stand = [0.0] * n
         self.blocks = [None] * n
@@ -664,6 +669,7 @@ def check_all(build, frame, model, info, parts, log):
     # through a gate or it hits a wall. Bays must not overlap one another.
     hx, hz = CAR[0] / 2, CAR[1] / 2
     frames = []
+    lanes = []
     for name, b in zip(bay_names, bays):
         x, y, z = b[0], b[1], b[2]
         look = (-b[9], 0.0, -b[11])
@@ -696,6 +702,16 @@ def check_all(build, frame, model, info, parts, log):
                 problems.append("chest %s is in %s's way out" % (cname, name))
         if way:
             problems.append("%s: drive-out blocked by %s" % (name, ", ".join(sorted({p["name"] for p in way}))))
+        lanes.append((name, lane))
+    # No parked neighbour stands in a bay's lane either: every other bay's car box is clear of it.
+    for name, lane in lanes:
+        for other, b in zip(bay_names, bays):
+            if other == name:
+                continue
+            ox, oz = b[0], b[2]
+            car = ((ox, b[1] + 3, oz), ((b[3], 0.0, b[5]), (0.0, 1.0, 0.0), (-b[9], 0.0, -b[11])), (CAR[0] / 2, 2.5, CAR[1] / 2))
+            if obb_overlap(lane, car):
+                problems.append("%s: drive-out blocked by the car parked in %s" % (name, other))
     for i in range(len(frames)):
         for j in range(i + 1, len(frames)):
             a, b2 = frames[i], frames[j]
@@ -716,7 +732,11 @@ def check_all(build, frame, model, info, parts, log):
     seen = walk.flood(starts)
     targets = [("chest " + n, c[0], c[2]) for n, c in zip(chest_names, chests)]
     targets += [(n, b[0], b[2]) for n, b in zip(bay_names, bays)]
-    targets += [("front breach", -20.5, -48), ("gate", 24, -48), ("west breach", -51, -6.5), ("east gap", 51, 17.5)]
+    exits = info["exits"]
+    for i in range(1, len(exits) + 1):
+        targets.append((exits[i]["name"], exits[i]["x"], exits[i]["z"]))
+    if len(exits) < 3:
+        problems.append("walk: only %d ways out of the compound" % len(exits))
     unreached = [t[0] for t in targets if not walk.reached(seen, t[1], t[2])]
     log("walk: %d cells reached from %d pads; %d targets, %d unreached" % (len(seen), len(starts), len(targets), len(unreached)))
     problems += ["walk: cannot reach " + t for t in unreached]
@@ -775,15 +795,8 @@ def check_destruct(build, model, parts_by_order, log):
     def must_break(part, top):
         if not part.CanCollide or part.Name in never_names:
             return False
-        if top in ("Perimeter", "Ruin"):
-            return True
-        if top == "SupplyRoom":
-            # the brick infill: 2 thick on the frame's lines
-            c, size = part.CFrame.p, part.Size
-            on_line = (abs(c.Z - 23) < 0.01 or abs(c.Z - 40.8) < 0.01) and abs(size.Z - 2) < 0.01 \
-                or abs(c.X - 44.8) < 0.01 and abs(size.X - 2) < 0.01
-            return on_line
-        return False
+        # Every wall panel outside the spawn shelter: the perimeter's, the armoury's, the ops room's.
+        return top != shelter and (part.Name == "Wall" or (top == "Perimeter" and part.Name.endswith("Wall")))
 
     flags = []
     for part in live:
@@ -1047,16 +1060,16 @@ function smoke(Ruins, mode)
     -- the query's list): flowers on the east bank (non-collidable, cut 17 studs down by the gate ramp), a
     -- tagged tree on the west bank (filled 14 up), a tree far out on untouched ground, and a road across
     -- the west slope whose ground must not move at all.
-    local flowers = item("Wilds", "Flowers", nil, Vector3.new(80, 0, 20), nil, 1, T((base * Vector3.new(80, 0, 20)).X, (base * Vector3.new(80, 0, 20)).Z))
+    local flowers = item("Wilds", "Flowers", nil, Vector3.new(96, 0, 20), nil, 1, T((base * Vector3.new(96, 0, 20)).X, (base * Vector3.new(96, 0, 20)).Z))
     flowers.CanCollide = false
     flowers.CanQuery = false
-    local bankTree = item("Props", "BankTree", nil, Vector3.new(-70, 0, 20), "Tree:11")
+    local bankTree = item("Props", "BankTree", nil, Vector3.new(-92, 0, 20), "Tree:11")
     local farTree = item("Props", "FarTree", nil, Vector3.new(0, 0, 190), "Tree:12")
-    local road = item("Roads", "RoadSurface", nil, Vector3.new(-80, 0, -60))
+    local road = item("Roads", "RoadSurface", nil, Vector3.new(-101, 0, -60))
     road.Size = Vector3.new(18, 0.8, 60)
     local roadGround = {}
     for dz = -86, -34, 4 do
-        local p = base * Vector3.new(-80, 0, dz)
+        local p = base * Vector3.new(-101, 0, dz)
         table.insert(roadGround, { p.X, p.Z, ground(p.X, p.Z) })
     end
     local loot = Instance.new("Folder")
@@ -1213,9 +1226,13 @@ function smoke(Ruins, mode)
         end
         return worst
     end
-    local east = steepest(Vector3.new(60, 0, 4), Vector3.new(4, 0, 0), 30)
-    local front = steepest(Vector3.new(24, 0, -56), Vector3.new(0, 0, -4), 30)
-    local back = steepest(Vector3.new(-30, 0, 56), Vector3.new(0, 0, 4), 30)
+    -- (From one voxel column past the pad's flat: the column where the ramp leaves the pad is read
+    -- bilinearly against the last flat one, a kink rather than a slope.)
+    local gates = Ruins.GateCorridors
+    local eastMid, frontMid = (gates.east[1] + gates.east[2]) / 2, (gates.front[1] + gates.front[2]) / 2
+    local east = steepest(Vector3.new(gates.flat.X + 6, 0, eastMid), Vector3.new(4, 0, 0), 30)
+    local front = steepest(Vector3.new(frontMid, 0, -(gates.flat.Z + 6)), Vector3.new(0, 0, -4), 30)
+    local back = steepest(Vector3.new(-30, 0, gates.flat.Z + 2), Vector3.new(0, 0, 4), 30)
     if east > 1 / 8 + 0.035 then fail(("gate ramp: the east gate's way out climbs %.3f, steeper than 1 in 8"):format(east)) end
     if front > 1 / 8 + 0.035 then fail(("gate ramp: the main gate's way out climbs %.3f, steeper than 1 in 8"):format(front)) end
     if back > 1 / Ruins.GradeBank + 0.035 then fail(("bank: behind the compound the ground climbs %.3f, steeper than 1 in %d"):format(back, Ruins.GradeBank)) end
@@ -1345,36 +1362,37 @@ def run(src, log):
 PLANTS = [
     ("coplanar plates", [("local PROUD_BRICK, PROUD_PAINT, PROUD_SOOT = 0.12, 0.2, 0.28",
                           "local PROUD_BRICK, PROUD_PAINT, PROUD_SOOT = 0.2, 0.2, 0.28")], "zfight"),
-    ("lamp off its post", [('box(gate, "GateLamp", 2.6, 4.2, 9.4, 10.4, -39.8, -38.9',
-                            'box(gate, "GateLamp", 2.6, 4.2, 9.4, 10.4, -39.5, -38.6'),
-                           ('box(gate, "GateLampGlass", 2.8, 4.0, 9.55, 10.25, -38.9, -38.75',
-                            'box(gate, "GateLampGlass", 2.8, 4.0, 9.55, 10.25, -38.6, -38.45')], "floating"),
-    ("dish sized (d, t, d)", [('put(bunker, "Dish", Vector3.new(0.35, 4.2, 4.2)', 'put(bunker, "Dish", Vector3.new(4.2, 0.35, 4.2)')],
+    ("lamp off its post", [('local lampHead = box(gate, "GateLamp", la, la + 1.6, 10.2, 11.1, z1, z1 + 0.9,',
+                            'local lampHead = box(gate, "GateLamp", la, la + 1.6, 10.2, 11.1, z1 + 0.3, z1 + 1.2,'),
+                           ('box(gate, "GateLampGlass", la + 0.2, la + 1.4, 10.35, 10.95, z1 + 0.9, z1 + 1.05,',
+                            'box(gate, "GateLampGlass", la + 0.2, la + 1.4, 10.35, 10.95, z1 + 1.2, z1 + 1.35,')], "floating"),
+    ("dish sized (d, t, d)", [('put(hall, "Dish", Vector3.new(0.35, 4.2, 4.2)', 'put(hall, "Dish", Vector3.new(4.2, 0.35, 4.2)')],
      "cylinder"),
-    ("doorway narrowed", [("wall(-9, -4, BUNKER_TOP, 8, 10)", "wall(-12.5, -4, BUNKER_TOP, 8, 10)")], "doorway"),
-    ("supply sealed off", [('	table.insert(B.doorways, { name = "SupplyDoor"',
-                            '	sandbags(room, "plantA", 19, 21, 28, 21, 3, TILE_TOP)\n'
-                            '	sandbags(room, "plantB", 5.3, 27, 5.3, 36, 3, ROOM_FLOOR)\n'
-                            '	table.insert(B.doorways, { name = "SupplyDoor"')], "walk: cannot reach chest Supply"),
-    ("tyres in bay 2's way", [('tyres(18.75, -24, 3, "tyresA")', 'tyres(25, -24, 3, "tyresA")')], "Bay2: drive-out"),
-    ("east gate walled up", [('perimeterRun(walls, "z", 45, -39.8, -14.6, 1, false, true, -27,',
-                              'perimeterRun(walls, "z", 45, -39.8, 13, 1, false, true, -27,')], "Bay4: drive-out"),
-    ("back row on the front row", [("local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32", "local BACK_BAYS, BACK_X = { -20, 4, 15 }, 32")],
+    ("doorway narrowed", [('box(ops, "Wall", -54, -48, 8, top,', 'box(ops, "Wall", -54, -48, 6.6, top,')], "doorway"),
+    ("armoury sealed off", [('	table.insert(B.doorways, { name = "ArmouryFront"',
+                             '	sandbags(room, "plantA", 9.6, 7.2, 18.4, 7.2, 4, TILE_TOP)\n'
+                             '	sandbags(room, "plantB", 3.2, 32.2, 3.2, 42.6, 4, TILE_TOP)\n'
+                             '	table.insert(B.doorways, { name = "ArmouryFront"')], "walk: cannot reach chest Armoury"),
+    ("tyres in bay 2's way", [('tyres(20.5, 5.6, 3, "tyresA")', 'tyres(25.5, -45, 3, "tyresA")')], "Bay2: drive-out"),
+    ("east gate walled up", [('perimeterRun(walls, "z", WX, -WZ + 6.4, EAST_Z0 - 3.9, 1, false, false, -24)',
+                              'perimeterRun(walls, "z", WX, -WZ + 6.4, EAST_Z0 + 20, 1, false, false, -24)')], "Bay5: drive-out"),
+    ("back row on the front row", [("local EAST_BAYS = { EAST_Z0 + LANE_PITCH / 2,", "local EAST_BAYS = { EAST_Z0 - 30,")],
      "overlap"),
-    ("a bay short", [("local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32", "local BACK_BAYS, BACK_X = { -7, 4 }, 32")], "bays: 5, want 6"),
+    ("a bay short", [("local EAST_BAYS = { EAST_Z0 + LANE_PITCH / 2, EAST_Z0 + LANE_PITCH * 1.5, EAST_Z0 + LANE_PITCH * 2.5 }",
+                      "local EAST_BAYS = { EAST_Z0 + LANE_PITCH / 2, EAST_Z0 + LANE_PITCH * 1.5 }")], "bays: 6, want 7"),
     ("queryable camo net", [("local netOpts = trimWith({ transparency = 0.12 })", "local netOpts = { transparency = 0.12 }")],
      "queryable over the bay"),
-    ("spawn shelter breakable", [('bunker.Name = "Spawn"\n\tbunker:SetAttribute("Destructible", false)',
-                                  'bunker.Name = "Bunker"'),
-                                 ('return box(bunker, "BunkerWall", x0, x1, -1, y1, z0, z1, color or BUNKER, MAT.Concrete, never)',
-                                  'return box(bunker, "Wall", x0, x1, -1, y1, z0, z1, color or BUNKER, MAT.Concrete)')],
+    ("spawn shelter breakable", [('hall.Name = "Spawn"\n\thall:SetAttribute("Destructible", false)',
+                                  'hall.Name = "Hall"'),
+                                 ('return box(hall, "BunkerWall", a, b, -1, y1 or BUNKER_TOP, c, d, color or BUNKER, MAT.Concrete, never)',
+                                  'return box(hall, "Wall", a, b, -1, y1 or BUNKER_TOP, c, d, color or BUNKER, MAT.Concrete)')],
      "breaks, and must not"),
     ("perimeter unbreakable", [('local name = style.name or "Wall"', 'local name = style.name or "PerimeterWall"')],
      "does not break"),
     ("layout depends on the team", [("tops[index] = rnd(6.6, 9.4)", "tops[index] = rnd(6.6, 9.4) + (B.team.R > 0.5 and 0.3 or 0)")],
      "identical"),
     ("unseeded wear", [("rng = Random.new(seed or 1),", "rng = Random.new((seed or 1) + math.random(1, 100000)),")], "seed"),
-    ("over budget", [("paving(ground, -44.2, 4, -40.2, 8, 4, 4,", "paving(ground, -44.2, 4, -40.2, 8, 16, 16,")], "budget"),
+    ("over budget", [("paving(ground, -WX + 0.8, 2, -WZ + 0.8, 24, 6, 6,", "paving(ground, -WX + 0.8, 2, -WZ + 0.8, 24, 20, 20,")], "budget"),
     ("scenery left on the site", [("if span <= TeamBaseRuins.ClearableSpan then", "if false then")], "build (flat): a tree on the site"),
     ("clearing only the footprint", [("local reach = TeamBaseRuins.Margin + FLATTEN_REACH", "local reach = TeamBaseRuins.Margin")],
      "build (flat): a tree where the ground is graded"),
@@ -1386,7 +1404,7 @@ PLANTS = [
      "build (partial): built on ground that is not level"),
     ("ground round it left alone", [("local graded = TeamBaseRuins.GradeSurroundings(site, height, mapInfo, after, locked)",
                                      "local graded = { moved = 0, most = 0, bank = 0 }")], "build (flat): gate ramp"),
-    ("gate ramp as steep as a bank", [("local GRADE_BANK, GRADE_GATE = 4, 8", "local GRADE_BANK, GRADE_GATE = 4, 4")],
+    ("gate ramp as steep as a bank", [("local GRADE_BANK, GRADE_GATE = 3, 8", "local GRADE_BANK, GRADE_GATE = 3, 3")],
      "build (flat): gate ramp"),
     ("scenery left on moved ground", [("graded.cleared = TeamBaseRuins.ClearMoved(before, after, map, site.Position, reach)",
                                        "graded.cleared = 0")], "build (flat): scenery left where the ground moved"),
@@ -1397,24 +1415,28 @@ PLANTS = [
     ("built at the asked height", [("local frame = CFrame.new(position.X, height, position.Z) * CFrame.Angles(0, yaw, 0)",
                                     "local frame = CFrame.new(position.X, position.Y, position.Z) * CFrame.Angles(0, yaw, 0)")],
      "build (flat): stands at"),
-    ("bays sized for the smallest car", [("local BACK_BAYS, BACK_X = { -7, 4, 15 }, 32", "local BACK_BAYS, BACK_X = { -5, 4, 13 }, 32")],
-     "overlap"),
+    ("bays sized for the smallest car", [("local LANE_PITCH = 15", "local LANE_PITCH = 9")], "overlap"),
+    ("lanes only a car wide", [("local LANE_PITCH = 15", "local LANE_PITCH = 12")], "drive-out blocked by the car parked in"),
+    ("a bollard in a lane", [("	-- Where a thrown defense may not go up: each bay and its way out",
+                              '	box(yard, "Bollard", 40, 40.6, TILE_TOP, 4, -50, -49.4, STEEL, MAT.Metal)\n'
+                              "	-- Where a thrown defense may not go up: each bay and its way out")], "Bay3: drive-out blocked by Bollard"),
+    ("canopy masts in front of the bays", [("local mastZ, tipZ, beamY = FRONT_Z + BAY_HALF_LENGTH + 8,",
+                                            "local mastZ, tipZ, beamY = FRONT_Z - BAY_HALF_LENGTH - 4,")], "drive-out blocked by CanopyMast"),
     ("gantry under the tallest van", [("local GANTRY_Y = 12.5", "local GANTRY_Y = 11.5")], "drive-out blocked by Gantry"),
-    ("drums back by the east wall", [('rod(yard, "Drum", Vector3.new(6.1, TILE_TOP, -30.8), Vector3.new(6.1, TILE_TOP + 2.8, -30.8)',
-                                      'rod(yard, "Drum", Vector3.new(43.25, TILE_TOP, -26), Vector3.new(43.25, TILE_TOP + 2.8, -26)')],
-     "Bay3: queryable over the bay (Drum)"),
-    ("a chest in bay 5's way", [('table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(16.5, TILE_TOP, 19.5) })',
-                                 'table.insert(B.chests, { name = "YardWorkbench", at = CFrame.new(38, TILE_TOP, 4) })')],
+    ("drums in a bay", [("{ { 64.1, -16.2 }, { 64.1, -18.3 }, { 61.9, -16.6 } }", "{ { 55.5, -30 }, { 64.1, -18.3 }, { 61.9, -16.6 } }")],
+     "Bay4: queryable over the bay (Drum)"),
+    ("a chest in bay 5's way", [('table.insert(B.chests, { name = "FuelPoint", at = CFrame.new(54, TILE_TOP, -8) })',
+                                 'table.insert(B.chests, { name = "FuelPoint", at = CFrame.new(54, TILE_TOP, 14) })')],
      "is in Bay5's way out"),
-    ("a chest spot short", [('	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(-39, TILE_TOP, -34.8) })\n', '')],
+    ("a chest spot short", [('	table.insert(B.chests, { name = "TowerBase", at = CFrame.new(mid, TILE_TOP, (z0 + z1) / 2) })\n', '')],
      "but LootService.BaseStock.chest is"),
     ("one pool tag for both bases", [('\t\t\t\ttag = tag .. "@" .. B.site\n', '')], "both bases carry"),
     # (in another Model than its crate: dropDressing walks only the breaking part's siblings)
     ("crate band out of its pool", [('facePlate(room, "CrateBand"', 'facePlate(model, "CrateBand"'),
-                                    ('STEEL_DARK, MAT.Metal, trimWith({ tag = stackA.tag }))', 'STEEL_DARK, MAT.Metal)')],
+                                    ('STEEL_DARK, MAT.Metal, trimWith({ tag = stack.tag }))', 'STEEL_DARK, MAT.Metal)')],
      "CrateBand (on Crate) is left hanging"),
     ("crate on a chest spot", [('	table.insert(B.chests, { name = "LeanTo"',
-                                '	box(yard, "Crate", -42, -39.6, TILE_TOP, TILE_TOP + 2.4, -23, -21, WOOD, MAT.WoodPlanks)\n'
+                                '	box(yard, "Crate", -63, -61, TILE_TOP, TILE_TOP + 2.4, 5.4, 7.4, WOOD, MAT.WoodPlanks)\n'
                                 '	table.insert(B.chests, { name = "LeanTo"')], "chest LeanTo: not clear"),
 ]
 
@@ -1449,7 +1471,11 @@ def main(argv):
     length = max(v[1] for v in sizes.values())
     height = max(v[2] for v in sizes.values())
     CAR = (width + 2 * CAR_MARGIN, length + 2 * CAR_MARGIN)
-    CORRIDOR_HALF = max(CORRIDOR_HALF, CAR[0] / 2)
+    CORRIDOR_HALF = max(CORRIDOR_HALF, CAR[0] / 2, width / 2 + LANE_SPARE / 2)
+    global FLAT_X, FLAT_Z, DRIVE_OUT
+    ruins = (Path(repo) / "ServerScriptService/Modules/TeamBaseRuins.lua").read_text()
+    wx, wz = (float(v) for v in re.search(r"local WX, WZ = ([\d.]+), ([\d.]+)", ruins).groups())
+    FLAT_X, FLAT_Z, DRIVE_OUT = wx + 1 + 4, wz + 1 + 4, wx + 16
     CORRIDOR_HEIGHT = max(CORRIDOR_HEIGHT, height + 0.6 + 0.5)
     print("vehicles: %d models, biggest %.2f wide, %.2f long, %.2f tall -> bay box %.2f x %.2f, way out %.2f wide x %.2f tall"
           % (len(sizes), width, length, height, CAR[0], CAR[1], CORRIDOR_HALF * 2, CORRIDOR_HEIGHT))

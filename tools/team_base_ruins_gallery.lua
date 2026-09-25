@@ -251,10 +251,10 @@ local function setup()
 		-- The ramps out of the vehicle gates and the banks on the other sides.
 		-- Out of each gate along its middle, from 6 past the wall to 124 past the pad's flat edge (the work
 		-- reaches 136 past it and meets the ground as it stands there); the banks on the other sides out to 48.
-		local frontRamp, frontEnd, frontAt = steepest(team, Vector3.new(24, 0, -48), Vector3.new(0, 0, -1), 130)
-		local eastRamp, eastEnd, eastAt = steepest(team, Vector3.new(52, 0, 4), Vector3.new(1, 0, 0), 130)
+		local frontRamp, frontEnd, frontAt = steepest(team, Vector3.new(33, 0, -60), Vector3.new(0, 0, -1), 130)
+		local eastRamp, eastEnd, eastAt = steepest(team, Vector3.new(72, 0, 29), Vector3.new(1, 0, 0), 130)
 		local banks, bankAt = 0, ""
-		for _, line in ipairs({ { -30, 46, 0, 1 }, { 20, 46, 0, 1 }, { -50, -20, -1, 0 }, { -50, 20, -1, 0 }, { -30, -46, 0, -1 } }) do
+		for _, line in ipairs({ { -30, 60, 0, 1 }, { 20, 60, 0, 1 }, { -72, -30, -1, 0 }, { -72, 10, -1, 0 }, { -50, -60, 0, -1 } }) do
 			local grade, _, where = steepest(team, Vector3.new(line[1], 0, line[2]), Vector3.new(line[3], 0, line[4]), 48)
 			if grade > banks then
 				banks, bankAt = grade, string.format("%d out from (%d, %d)", where, line[1], line[2])
@@ -413,7 +413,7 @@ local views = {
 		settle = 4,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 90, 90, -130), at(1, 0, 0, 0), 55)
+			look(camera, at(1, 125, 115, -175), at(1, 0, 0, 0), 55)
 		end,
 	},
 	{
@@ -421,22 +421,22 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(2, 90, 90, -130), at(2, 0, 0, 0), 55)
+			look(camera, at(2, 125, 115, -175), at(2, 0, 0, 0), 55)
 		end,
 	},
-	outside("03_front_from_the_arena_eye_level", 10, -100, 10, 5, 0),
-	outside("04_east_side_eye_level", 105, -10, 0, 5, 0),
-	outside("05_back_eye_level", -10, 100, 0, 5, 0),
-	outside("06_west_side_eye_level", -105, 10, 0, 5, 0),
+	outside("03_front_from_the_arena_eye_level", 5, -135, 5, 7, 0),
+	outside("04_east_side_eye_level", 140, -5, 0, 7, 0),
+	outside("05_back_eye_level", -5, 130, 0, 7, 0),
+	outside("06_west_side_eye_level", -140, 5, 0, 7, 0),
 	{
 		name = "07_main_gate_ramp_with_a_vehicle",
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			standVehicle(24, -70, Vector3.new(0, 0, -1))
-			local g = groundLocal(1, 58, -118) or state.ruins[1].height
-			local from = at(1, 58, 0, -118)
-			look(camera, Vector3.new(from.X, g + 16, from.Z), at(1, 24, 0, -62), 65)
+			standVehicle(25.5, -78, Vector3.new(0, 0, -1))
+			local g = groundLocal(1, 75, -140) or state.ruins[1].height
+			local from = at(1, 75, 0, -140)
+			look(camera, Vector3.new(from.X, g + 18, from.Z), at(1, 30, 4, -60), 65)
 		end,
 	},
 	{
@@ -444,10 +444,10 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			standVehicle(76, 4, Vector3.new(1, 0, 0))
-			local g = groundLocal(1, 118, 44) or state.ruins[1].height
-			local from = at(1, 118, 0, 44)
-			look(camera, Vector3.new(from.X, g + 16, from.Z), at(1, 62, 0, 4), 65)
+			standVehicle(92, 29, Vector3.new(1, 0, 0))
+			local g = groundLocal(1, 150, 75) or state.ruins[1].height
+			local from = at(1, 150, 0, 75)
+			look(camera, Vector3.new(from.X, g + 18, from.Z), at(1, 72, 4, 29), 65)
 		end,
 	},
 	{
@@ -459,7 +459,7 @@ local views = {
 				state.shown:Destroy()
 				state.shown = nil
 			end
-			look(camera, at(1, 150, 120, 120), at(1, 0, 0, 0), 55)
+			look(camera, at(1, 200, 165, 170), at(1, 0, 0, 0), 55)
 		end,
 	},
 	{
@@ -467,9 +467,9 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			local p = at(2, 10, 0, -100)
+			local p = at(2, 5, 0, -135)
 			local g = groundAt(p.X, p.Z) or state.ruins[2].height
-			look(camera, Vector3.new(p.X, g + 5.2, p.Z), at(2, 10, 5, 0), 65)
+			look(camera, Vector3.new(p.X, g + 5.2, p.Z), at(2, 5, 7, 0), 65)
 		end,
 	},
 	{
@@ -477,8 +477,8 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			-- Just inside the west door, head height, across the two rows of pads.
-			look(camera, at(1, -31, 5.8, 12), at(1, -12, 3, 32), 70)
+			-- Inside the east end of the spawn hall, head height, across the 28 pads.
+			look(camera, at(1, -11, 7.5, 27.5), at(1, -52, 1.5, 47), 75)
 		end,
 	},
 	{
@@ -486,7 +486,7 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 8, 14, 18), at(1, 30, 1, -16), 70)
+			look(camera, at(1, 2, 15, -4), at(1, 38, 1, -40), 72)
 		end,
 	},
 	{
@@ -494,7 +494,7 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, 23.5, 6.5, 25), at(1, 24, 2, 38), 75)
+			look(camera, at(1, 14, 6.5, 11), at(1, 14, 2.5, 46), 75)
 		end,
 	},
 	{
@@ -502,7 +502,7 @@ local views = {
 		settle = 3,
 		setup = function(_, camera)
 			setup()
-			look(camera, at(1, -39, 10.5, -35), at(1, -14, 1, -8), 70)
+			look(camera, at(1, -60, 12.8, -48.8), at(1, -28, 1, -4), 72)
 		end,
 	},
 	{
@@ -511,7 +511,25 @@ local views = {
 		setup = function(_, camera)
 			setup()
 			Lighting.ClockTime = 19.4
-			look(camera, at(1, -10, 30, -70), at(1, 0, 0, 5), 60)
+			look(camera, at(1, -10, 42, -110), at(1, 0, 0, 5), 60)
+		end,
+	},
+	{
+		name = "16_gatehouse_from_outside",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			local g = groundLocal(1, 18, -100) or state.ruins[1].height
+			local from = at(1, 18, 0, -100)
+			look(camera, Vector3.new(from.X, g + 5.2, from.Z), at(1, 33, 13, -54), 65)
+		end,
+	},
+	{
+		name = "17_spawn_hall_facade",
+		settle = 3,
+		setup = function(_, camera)
+			setup()
+			look(camera, at(1, -26, 7, -8), at(1, -40, 8, 24), 70)
 		end,
 	},
 }
