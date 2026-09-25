@@ -833,6 +833,75 @@ out.sounds = #mock.sounds
 return out
 """
 
+COVER_LUA = r"""
+local DS, mock = ...
+mock.raycast = mock.flatWorld(0, -72)
+local map = Instance.new("Folder"); map.Name = "Map"; map.Parent = workspace
+local wilds = Instance.new("Folder"); wilds.Name = "Wilds"; wilds.Parent = map
+local function part(parent, name, size, pos, props)
+    local p = Instance.new("Part")
+    p.Name = name; p.Size = size; p.CFrame = CFrame.new(pos); p.Anchored = true
+    for k, v in pairs(props or {}) do p[k] = v end
+    p.Parent = parent
+    return p
+end
+local TRIM = { CanCollide = false, CanQuery = false }
+-- A meadow on open ground: grass tufts and flowers nothing holds.
+local tufts = {}
+for i = 1, 6 do tufts[i] = part(wilds, "Grass", Vector3.new(1, 1, 1), Vector3.new(i * 2, 0.5, 0), TRIM) end
+local far = part(wilds, "Flowers", Vector3.new(1, 1, 1), Vector3.new(80, 0.5, 0), TRIM)
+-- A planter holding its flowers (they stay while it stands).
+local box = part(wilds, "Planter", Vector3.new(4, 1, 2), Vector3.new(40, 0.5, 0))
+local held = part(wilds, "Flowers", Vector3.new(3, 1, 1.5), Vector3.new(40, 1.5, 0), TRIM)
+-- A road tile with its marking, in a folder far too big for the dressing walk.
+local roads = Instance.new("Folder"); roads.Name = "Roads"; roads.Parent = map
+for i = 1, 820 do part(roads, "Kerb", Vector3.new(1, 1, 1), Vector3.new(500 + i * 3, 0.5, 300)) end
+local tile = part(roads, "RoadSurface", Vector3.new(8, 1, 8), Vector3.new(200, 0.5, 200))
+local dash = part(roads, "RoadDash", Vector3.new(0.4, 0.05, 3), Vector3.new(200, 1.02, 200), TRIM)
+local out = {}
+out.cover = DS.IsCover and DS.IsCover(tufts[1]) or false
+-- (No ground under this blast, so no crater: the blast's own clearing is what is measured.)
+local ground = mock.raycast
+mock.raycast = function() return nil end
+DS.DamageInRadius(Vector3.new(6, 1, 0), 8, 30, nil)
+mock.runDue()
+mock.raycast = ground
+local gone = 0
+for _, t in ipairs(tufts) do if not t.Parent then gone += 1 end end
+out.meadowGone = gone
+out.farStays = far.Parent ~= nil
+DS.DamageInRadius(Vector3.new(40, 3, -3), 4, 1, nil)
+mock.runDue()
+out.heldStays = held.Parent ~= nil and box.Parent ~= nil
+local guard = 0
+while tile.Parent and guard < 50 do DS.Damage(tile, 200, nil, Vector3.new(200, 10, 200)); guard += 1 end
+mock.runDue(); mock.advance(0.1); mock.runDue()
+out.tileGone = tile.Parent == nil
+out.dashGone = dash.Parent == nil
+return out
+"""
+
+COVER_BLAST = ("\tDestructibleService.ClearCoverInRadius(position, radius)\n", "")
+COVER_BREAK = ("\tif DestructibleService.ClearCoverAround then\n\t\tDestructibleService.ClearCoverAround(cframe, size)\n\tend\n", "")
+
+
+def cover(faults=(), quiet=False):
+    world = World()
+    ds = world.load(SERVICE, faults, name="DestructibleService")
+    out = world.run(COVER_LUA, ds, world.mock)
+    if not quiet:
+        print("    loose cover: a blast cleared %d/6 meadow tufts, the flowers 74 studs off %s, the planter's flowers %s;"
+              " road tile broken %s, its marking %s"
+              % (out["meadowGone"], "stayed" if out["farStays"] else "WENT", "stayed" if out["heldStays"] else "WENT",
+                 out["tileGone"], "went with it" if out["dashGone"] else "LEFT HANGING"))
+    r = []
+    r.append(check(out["cover"] and out["meadowGone"] == 6 and out["farStays"],
+                   "loose cover (grass, flowers nothing holds) goes in a blast that reaches it, and only there"))
+    r.append(check(out["heldStays"], "cover a standing solid part holds stays through a blast"))
+    r.append(check(out["tileGone"] and out["dashGone"], "cover goes with the part it lay on (a road marking with its tile)"))
+    return all(r)
+
+
 CLIENT_CAP = ("\tcount = math.min(count, budget, MAX_ACTIVE - active)\n", "\tcount = math.min(count, budget)\n")
 CLIENT_CAP2 = ("\t\t\tif budget > 0 and active < MAX_ACTIVE then\n", "\t\t\tif true then\n")
 CLIENT_LIFE = ("local SETTLE_AFTER = 2.2\n", "local SETTLE_AFTER = 1e9\n")
@@ -866,6 +935,8 @@ def main():
     service()
     print("opt-out (everything breaks; kept-whole rules; nothing left in the air)")
     optout()
+    print("cover (loose trim nothing holds)")
+    cover()
     print("client (BreakFxClient)")
     client()
     if plant:
@@ -885,6 +956,8 @@ def main():
             ("compact Models not pooled (a flag's cloth left hanging)", lambda: optout([OPTOUT_THING], quiet=True)),
             ("big parts not cut into tiles (a road hole takes the whole road)", lambda: optout([OPTOUT_SLAB], quiet=True)),
             ("own-health Models not refused (barrels, vendors)", lambda: optout([OPTOUT_OWNER], quiet=True)),
+            ("loose cover left standing in a blast", lambda: cover([COVER_BLAST], quiet=True)),
+            ("loose cover left hanging when what it lay on breaks", lambda: cover([COVER_BREAK], quiet=True)),
             ("client total cap removed", lambda: client([CLIENT_CAP, CLIENT_CAP2], quiet=True)),
             ("client settle/lifetime backstop removed", lambda: client([CLIENT_LIFE], quiet=True)),
         ]

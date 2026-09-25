@@ -96,7 +96,11 @@ EDGE_INSET = _const(r"MapDecor\.EdgeLineInset = ([\d.]+)", "MapDecor.EdgeLineIns
 
 # What things are, by part name.
 DRIVE = {"RoadSurface", "BridgeRoad", "RoadCurve", "JunctionAsphalt", "Asphalt"}
-SURFACE = DRIVE | {"Paving"}
+# The roundabouts' carriageway (MapDecor.Roundabout): a surface, walked and joined like the rest, but not
+# a carriageway for "in road" -- its island, splitters and signs stand on it by design, and
+# tools/roundabout_check.py measures what stands in its lanes.
+RING = {"RingAsphalt"}
+SURFACE = DRIVE | {"Paving"} | RING
 CARRIAGEWAY = DRIVE
 MARKS = {"RoadEdge", "RoadDash", "RoadCentreLine", "StopLine", "Dash", "Crossing"}
 KERBS = {"Kerb", "Pavement", "PavementTaper", "DroppedKerb"}
@@ -676,7 +680,7 @@ def measure(geo, show=False):
     # ---------------------------------------------------------------- connected: the surface
     cells = {}
     for pc in pieces:
-        if pc.name not in DRIVE and pc.name != "Paving":
+        if pc.name not in DRIVE and pc.name != "Paving" and pc.name not in RING:
             continue
         x0, x1, z0, z1 = pc.bbox
         for i in range(math.floor(x0 - 0.3), math.floor(x1 + 0.3) + 1):

@@ -22,7 +22,7 @@
 --     gets a road through its yard.
 --   * the yard sits inside zext: its depth is at most YARD_MAX_DEPTH, beyond the back street's
 --     outer pavement, beside the outer cross street (which runs on past the back-street junction).
---   * nothing goes inside CENTRE_RESERVE of TownCenter (the square today; the roundabout to come).
+--   * nothing goes inside CENTRE_RESERVE of TownCenter (the roundabout).
 --   * every field is optional; a name that leaves one unset gets the default town's value, so a
 --     profile of {} is exactly today's town.
 --
@@ -31,9 +31,9 @@
 
 local TownKinds = {}
 
--- Radius round the town centre that nothing themed may enter: 25 is today's square (PLAZA_HALF);
--- the roundabout, when it lands, reserves 45. Set to 45 now so nothing has to move later.
-TownKinds.CENTRE_RESERVE = 45
+-- Radius round the town centre that nothing themed may enter: the roundabout (MapDecor.RoundaboutSpec),
+-- whose biggest reaches 53 out to the corners of its approaches' pavements.
+TownKinds.CENTRE_RESERVE = 54
 -- The deepest yard block that still sits inside a town's footprint (zext - the back street's outer
 -- pavement - 2): see MapGenerator.townShape.
 TownKinds.YARD_MAX_DEPTH = 54

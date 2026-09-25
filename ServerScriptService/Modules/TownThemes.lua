@@ -4616,8 +4616,13 @@ local function placeFlags(ctx, theme, parent)
 	local kit, group = Kit.new(parent, CFrame.identity, ctx.rng):model("Flags")
 	group:SetAttribute("FootingGroup", true)
 	local placed = 0
+	-- On the roundabout's corners when the town has one (it says how far out, behind its benches), else
+	-- just outside the old square's corners.
+	local roundabout = ctx.town and ctx.town:FindFirstChild("Roundabout")
+	local radius = roundabout and roundabout:GetAttribute("FlagRadius")
+	local offset = type(radius) == "number" and radius / math.sqrt(2) or FLAG_CORNER
 	for _, corner in ipairs({ { 1, 1 }, { -1, 1 }, { -1, -1 }, { 1, -1 } }) do
-		local x, z = ctx.center.X + corner[1] * FLAG_CORNER, ctx.center.Z + corner[2] * FLAG_CORNER
+		local x, z = ctx.center.X + corner[1] * offset, ctx.center.Z + corner[2] * offset
 		if ctx.space:IsFree(x, z, 1.2) then
 			local height = solidGround(ctx.groundAt, x, z)
 			if height and math.abs(height - ctx.level) < 0.6 then
