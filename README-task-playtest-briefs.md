@@ -1,0 +1,18 @@
+# task/playtest-briefs
+
+Cut from `origin/main` at d1e4f73 ("Mailbox: hotfix notice, vehicle WIP 14eebfd reverted (9c44f4b);
+don't reintroduce"). No game file or tool changes. Markdown only.
+
+Adds six open task briefs from Oliver's 2026-09-25 playtest feedback:
+
+- `tasks/08-vehicle-gun-aim-third-person.md`: the vehicle gun ignores the mouse in third person and
+  the cursor stays locked in the middle.
+- `tasks/09-cant-un-ready-in-the-lobby.md`: un-ready doesn't stick.
+- `tasks/10-arms-on-long-guns.md`: the elbow looks wrong on longer guns.
+- `tasks/11-car-health-400-500.md`: cars at 400-500 health, and the questions for Oliver first.
+- `tasks/12-minimap-towns.md`: draw the towns better on the minimap.
+- `tasks/13-bots-drive-into-props.md`: bot drivers hit props and get stuck.
+
+Changes `tasks/README.md` so its conditions stay true for these briefs. Tasks 08-13 may name a Studio
+Play test they need, and they may share files with named `pc/*` branches. The README also restates
+the 03:00 game-file rule for outside claimants.
