@@ -292,7 +292,7 @@ end
 -- The k-th road end: at eye level on the road 34 out, looking in along it; or from 46 up over it.
 local function endView(k, above)
 	return {
-		name = string.format("%02d_road_end_%d_%s", 12 + k * 2 - (above and 0 or 1), k, above and "from_above" or "eye_level_driving_in"),
+		name = string.format("%02d_road_end_%d_%s", 15 + k * 2 - (above and 0 or 1), k, above and "from_above" or "eye_level_driving_in"),
 		settle = 3,
 		setup = function(_, camera)
 			setup()
@@ -312,28 +312,32 @@ local function endView(k, above)
 end
 
 local views = {
-	view("01_overview_from_team1", { 0, 110, -190 }, { 0, 0, -10 }, 55),
-	view("02_straight_down_the_site_and_its_roads", { 0, 430, 1 }, { 0, 0, 0 }, 50),
-	-- Eye level (5.2 above the floor, an R15's eyes) from team 1's end of each lane.
-	view("03_centre_lane_eye_level", { 0, 5.2, -118 }, { 0, 5, 0 }, 70),
-	view("04_west_lane_to_the_pit_eye_level", { -62, 5.2, -108 }, { -80, 4, 0 }, 70),
-	view("05_east_container_lane_eye_level", { 70, 5.2, -112 }, { 84, 5, -20 }, 70),
-	view("06_keep_gallery_into_the_hall", { -15, 16.2, -16 }, { 10, 9, 8 }, 70),
-	-- From the gallery's edge, looking down through the void onto the rot eye.
-	view("07_objective_A_rot_eye", { -3, 16.5, -13.5 }, { 0.5, 0.8, 0.5 }, 70),
-	view("08_objective_B_pit_fountain", { -60, 12, -24 }, { -86, 1, 2 }, 70),
-	view("09_market_eye_level", { 50, 5.2, -70 }, { 48, 4, -10 }, 70),
-	view("10_bridge_to_the_gantry", { 32, 16, -1 }, { 104, 11, 0 }, 65),
-	view("11_keep_at_dusk", { -30, 34, -80 }, { 0, 6, 0 }, 60, function()
-		Lighting.ClockTime = 19.4
-	end),
-	view("12_arena_at_dusk", { 60, 90, -170 }, { 0, 0, 0 }, 60, function()
+	view("01_overview_from_team1", { 0, 150, -260 }, { 0, 0, -20 }, 55),
+	view("02_straight_down_the_site_and_its_roads", { 0, 560, 1 }, { 0, 0, 0 }, 50),
+	-- Eye level (5.2 above the floor, an R15's eyes) from team 1's way in to each lane.
+	view("03_centre_lane_eye_level", { -4, 5.2, -168 }, { 0, 5, 0 }, 70),
+	view("04_pit_lane_eye_level", { -56, 5.2, -160 }, { -70, 4, -60 }, 70),
+	view("05_east_cut_eye_level", { 100, 5.2, -148 }, { 70, 5, -100 }, 70),
+	view("06_checkpoint_and_depot", { -40, 40, -190 }, { -30, 0, -125 }, 60),
+	view("07_signal_box_and_gangway", { -58, 22, -84 }, { -94, 8, -48 }, 65),
+	-- The gun emplacements, over the gunner's shoulder.
+	view("08_gun_signal_box_roof", { -95, 13.8, -61 }, { -55, 5, -61 }, 70),
+	view("09_gun_gate_bay", { -6.4, 13.4, -70 }, { -6.4, 5, -20 }, 70),
+	view("10_sentry_post_and_catwalk", { 62, 20, -96 }, { 36, 8, -66 }, 65),
+	view("11_scrap_yard_deck", { 162, 30, -112 }, { 124, 5, -45 }, 65),
+	view("12_rail_yard", { -176, 26, -100 }, { -134, 3, -40 }, 65),
+	view("13_gun_berm_battery_into_the_pit", { -44, 12.5, -22.5 }, { -90, 2, -8 }, 70),
+	view("14_objective_A_rot_eye", { -3, 16.5, -13.5 }, { 0.5, 0.8, 0.5 }, 70),
+	view("15_arena_at_dusk", { 90, 120, -240 }, { 0, 0, 0 }, 60, function()
 		Lighting.ClockTime = 19.4
 	end),
 }
-for k = 1, 4 do
+for k = 1, 2 do
 	table.insert(views, endView(k, false))
 	table.insert(views, endView(k, true))
 end
+-- The two capture areas (objective capture mode), each with its ring marked round it.
+table.insert(views, view("20_zone_A_keep_capture_ring", { 46, 52, -58 }, { 0, 0, 0 }, 62))
+table.insert(views, view("21_zone_B_pit_capture_ring", { -40, 46, -62 }, { -84, 0, 0 }, 62))
 
 return views

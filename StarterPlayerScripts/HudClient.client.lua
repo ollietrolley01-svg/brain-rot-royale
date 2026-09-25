@@ -1493,11 +1493,10 @@ local function renderSlots()
 			refs.bar.BackgroundColor3 = Rarity.Color(slot.rarity)
 		else
 			setSlotIcon(refs, nil)
-			local empty = slot.mag == 0 and slot.reserve == 0
-			refs.center.Text = (phoneShape and empty) and "NO AMMO" or slot.name
-			refs.center.TextColor3 = (phoneShape and empty) and C.Red or Rarity.Color(slot.rarity)
+			refs.center.Text = slot.name
+			refs.center.TextColor3 = Rarity.Color(slot.rarity)
 			refs.name.Text = ""
-			refs.count.Text = phoneShape and string.format("%d/%d", slot.mag, slot.reserve or 0) or tostring(slot.mag)
+			refs.count.Text = phoneShape and string.format("%d/∞", slot.mag) or tostring(slot.mag)
 			refs.count.TextColor3 = slot.mag == 0 and C.Red or C.Text
 			refs.bar.Visible = true
 			refs.bar.BackgroundColor3 = Rarity.Color(slot.rarity)
@@ -1645,18 +1644,12 @@ local function renderWeapon()
 		elseif raising then
 			ammoText.Text = "RAISING"
 			ammoText.TextColor3 = C.Muted
-		elseif slot.mag == 0 and slot.reserve == 0 then
-			-- Out entirely. "0 / 0" in the ordinary colour carries the same weight as "24 / 90", and
-			-- a reload at zero reserve is refused SILENTLY (WeaponService.lua:1756) -- so the player
-			-- presses reload, nothing happens, and nothing says why.
-			ammoText.Text = "NO AMMO"
-			ammoText.TextColor3 = C.Red
 		elseif slot.mag == 0 then
-			-- Empty magazine, ammo to load. The key is read from Settings so a rebind shows.
-			ammoText.Text = string.format("0 / %d  •  [%s]", slot.reserve, Settings.KeyLabel("Reload"))
+			-- Empty magazine. The ammo pool is infinite (Oliver, 2026-09-24), so a reload always works. The key is read from Settings so a rebind shows.
+			ammoText.Text = string.format("0 / ∞  •  [%s]", Settings.KeyLabel("Reload"))
 			ammoText.TextColor3 = C.Accent
 		else
-			ammoText.Text = string.format("%d / %d", slot.mag, slot.reserve)
+			ammoText.Text = string.format("%d / ∞", slot.mag)
 			ammoText.TextColor3 = C.Text
 		end
 		-- What the gun's perk does, not its internal id (#86 C45).
@@ -4095,6 +4088,9 @@ local function renderBanner()
 		if matchState.dropSelect then
 			bannerTitle.Text = "CHOOSE YOUR DROP  " .. (matchState.countdown or 0)
 			bannerSub.Text = "Click the map, or leave it and land somewhere random"
+		elseif matchState.teamSelect then
+			bannerTitle.Text = "CHOOSE YOUR SIDE  " .. (matchState.countdown or 0)
+			bannerSub.Text = "Pick a team, or leave it on AUTO"
 		else
 			bannerTitle.Text = "BUILDING MAP…"
 			bannerSub.Text = "Generating terrain, towns and loot"

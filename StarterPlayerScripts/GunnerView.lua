@@ -61,6 +61,20 @@ Pure.Kick = {
 Pure.MouseDegrees = 0.22
 Pure.StickDegrees = 150
 Pure.TouchDegrees = 0.3
+-- The stick's response: past a dead zone, the deflection to the power StickCurve; held hard over for
+-- StickRampTime seconds it turns StickRamp times as fast.
+Pure.StickDeadZone = 0.12
+Pure.StickCurve = 1.8
+Pure.StickRamp = 1.6
+Pure.StickRampTime = 0.5
+function Pure.stickCurve(v)
+	local m = math.abs(v)
+	if m < Pure.StickDeadZone then
+		return 0
+	end
+	m = (m - Pure.StickDeadZone) / (1 - Pure.StickDeadZone)
+	return (v > 0 and 1 or -1) * math.min(1, m) ^ Pure.StickCurve
+end
 
 -- Whether a spec lobs its round (the mortar): a grenade that can't fire below level.
 function Pure.lobs(spec)
@@ -110,6 +124,43 @@ function Pure.slew(from, to, step, wraps)
 		out = (out + 180) % 360 - 180
 	end
 	return out
+end
+
+-- The mount's angle following the wanted one (Oliver 09-24: "the mounted guns rotation needs to be made
+-- smoother"): a critically damped spring (natural frequency `omega`) held to the mount's top speed and
+-- acceleration, which brakes in time to stop ON the wanted angle -- so a flick never overshoots, the arc's
+-- limit (the wanted angle is clamped to it) is eased into rather than hit, and it settles softly.
+-- Sub-stepped at 1/240 s: the same motion at any frame rate. Returns the angle and its velocity (deg/s).
+Pure.FollowOmega = 16
+function Pure.follow(value, velocity, target, dt, maxSpeed, maxAccel, wraps, omega)
+	omega = omega or Pure.FollowOmega
+	local left = math.min(dt, 0.1)
+	while left > 1e-6 do
+		local h = math.min(left, 1 / 240)
+		local delta = target - value
+		if wraps then
+			delta = (delta + 180) % 360 - 180
+		end
+		local accel = omega * omega * delta - 2 * omega * velocity
+		-- Moving toward the target and no further to go than it takes to stop: brake at full.
+		if delta * velocity > 0 and velocity * velocity / (2 * maxAccel) >= math.abs(delta) then
+			accel = -velocity * velocity / (2 * math.abs(delta) + 1e-6) * (velocity > 0 and 1 or -1)
+		end
+		accel = math.clamp(accel, -maxAccel, maxAccel)
+		velocity = math.clamp(velocity + accel * h, -maxSpeed, maxSpeed)
+		local stepTaken = velocity * h
+		-- Never step past the target.
+		if (delta > 0 and stepTaken > delta) or (delta < 0 and stepTaken < delta) then
+			stepTaken = delta
+			velocity = 0
+		end
+		value += stepTaken
+		left -= h
+	end
+	if wraps then
+		value = (value + 180) % 360 - 180
+	end
+	return value, velocity
 end
 
 -- The barrel's ray at (yaw, pitch) degrees, world space: `rest` the yaw pivot's frame at rest,
@@ -199,6 +250,9 @@ local function sightParams(vehicle)
 	return params
 end
 
+-- The lobbing sight's range marks, studs over the ground from the gun.
+local LADDER_RANGES = { 100, 200, 300, 400, 500, 600, 700 }
+
 local function makeGui(parent)
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "GunnerSight"
@@ -285,7 +339,34 @@ local function makeGui(parent)
 		line.BorderSizePixel = 0
 		line.Parent = scope
 	end
-	return gui, { cross = cross, ring = ring, stroke = stroke, dot = dot, range = range, scope = scope }
+	-- A lobbing sight's range ladder: a short red tick and its range for each of LADDER_RANGES, laid on
+	-- the ground straight down range (placeSight puts them), drawn only aiming.
+	local ladder = {}
+	for index, r in ipairs(LADDER_RANGES) do
+		local tick = Instance.new("Frame")
+		tick.Name = "LadderTick" .. index
+		tick.AnchorPoint = Vector2.new(0.5, 0.5)
+		tick.Size = UDim2.fromOffset(16, 2)
+		tick.BackgroundColor3 = Color3.fromRGB(255, 70, 50)
+		tick.BorderSizePixel = 0
+		tick.Visible = false
+		tick.Parent = gui
+		local label = Instance.new("TextLabel")
+		label.Name = "Range"
+		label.AnchorPoint = Vector2.new(0, 0.5)
+		label.Position = UDim2.new(1, 4, 0.5, 0)
+		label.Size = UDim2.fromOffset(34, 12)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.GothamBold
+		label.TextSize = 12
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextColor3 = Color3.fromRGB(255, 120, 100)
+		label.TextStrokeTransparency = 0.5
+		label.Text = tostring(r)
+		label.Parent = tick
+		ladder[index] = tick
+	end
+	return gui, { cross = cross, ring = ring, stroke = stroke, dot = dot, range = range, scope = scope, ladder = ladder }
 end
 
 -- Starts the view on `vehicle`'s turret, or returns nil if the model carries no first-person markers
@@ -298,6 +379,12 @@ function GunnerView.Start(vehicle, spec, options)
 	local yawPart, pitchPart, muzzle = vehicle:FindFirstChild(names.yaw), vehicle:FindFirstChild(names.pitch), vehicle:FindFirstChild(names.muzzle)
 	local yawJoint, pitchJoint = jointOf(yawPart), jointOf(pitchPart)
 	local eye = yawPart and yawPart:FindFirstChild("GunnerEye")
+	-- A stationary emplacement (MountedGuns) carries its GunnerEye on TurretPitch instead: the gunner's head
+	-- rides the grips up and down, so the hip view always looks through the shield's sight window.
+	local eyeOnPitch = false
+	if not eye and pitchPart and pitchPart:FindFirstChild("GunnerEye") then
+		eye, eyeOnPitch = pitchPart:FindFirstChild("GunnerEye"), true
+	end
 	local sight = pitchPart and pitchPart:FindFirstChild("GunnerSight")
 	local gripR, gripL = pitchPart and pitchPart:FindFirstChild("GripR"), pitchPart and pitchPart:FindFirstChild("GripL")
 	if not (yawJoint and pitchJoint and muzzle and eye and sight and gripR and gripL and yawJoint.Part0) then
@@ -309,6 +396,7 @@ function GunnerView.Start(vehicle, spec, options)
 	self.yawPart, self.pitchPart, self.muzzle = yawPart, pitchPart, muzzle
 	self.yawJoint, self.pitchJoint = yawJoint, pitchJoint
 	self.eye, self.sight, self.gripR, self.gripL = eye, sight, gripR, gripL
+	self.eyeOnPitch = eyeOnPitch
 	self.reloadHand = (yawPart:FindFirstChild("ReloadHand") or pitchPart:FindFirstChild("ReloadHand"))
 	self.reloadOnYaw = yawPart:FindFirstChild("ReloadHand") ~= nil
 	-- The mount's shape at rest, in the yaw pivot's own frame (what VehicleWeaponData.Solve takes).
@@ -321,7 +409,7 @@ function GunnerView.Start(vehicle, spec, options)
 	-- A scope is a solid tube: looked through, its own parts (named *Sight*: the body, the lens, the eye
 	-- cup, the bracket) are hidden on this screen, or the view down it is the inside of a box.
 	self.scopeParts = {}
-	if self.sightKind == "scope" then
+	if self.sightKind == "scope" or self.sightKind == "lob" then
 		for _, part in ipairs(vehicle:GetChildren()) do
 			if part:IsA("BasePart") and string.find(part.Name, "Sight") then
 				table.insert(self.scopeParts, part)
@@ -413,8 +501,13 @@ function GunnerView:look(dt)
 		self.wantYaw -= delta.X * Pure.MouseDegrees * scale
 		self.wantPitch -= delta.Y * Pure.MouseDegrees * scale
 	end
-	self.wantYaw -= self.stick.X * Pure.StickDegrees * scale * dt
-	self.wantPitch += self.stick.Y * Pure.StickDegrees * scale * dt
+	-- The stick on a curve (fine near the middle, full speed at the edge) and a ramp that builds while it is
+	-- held over, so a small correction is precise and a long swing still gets there.
+	local held = self.stick.Magnitude > 0.85
+	self.stickHeld = held and math.min(1, (self.stickHeld or 0) + dt / Pure.StickRampTime) or 0
+	local boost = 1 + (Pure.StickRamp - 1) * self.stickHeld
+	self.wantYaw -= Pure.stickCurve(self.stick.X) * Pure.StickDegrees * boost * scale * dt
+	self.wantPitch += Pure.stickCurve(self.stick.Y) * Pure.StickDegrees * boost * scale * dt
 	self.wantYaw -= self.touch.X * Pure.TouchDegrees * scale
 	self.wantPitch -= self.touch.Y * Pure.TouchDegrees * scale
 	self.touch = Vector2.zero
@@ -449,9 +542,11 @@ function GunnerView:Update(dt, state)
 	end
 	dt = math.min(dt, 0.1)
 	self:look(dt)
-	local step = (self.spec.slew or 240) * dt
-	self.yaw = Pure.slew(self.yaw, self.wantYaw, step, self.spec.yawLimit >= 180)
-	self.pitch = Pure.slew(self.pitch, self.wantPitch, step, false)
+	-- Damped, speed- and acceleration-limited (Pure.follow); `slewAccel` defaults to six times the slew.
+	local speed = self.spec.slew or 240
+	local accel = self.spec.slewAccel or speed * 6
+	self.yaw, self.yawV = Pure.follow(self.yaw, self.yawV or 0, self.wantYaw, dt, speed, accel, self.spec.yawLimit >= 180)
+	self.pitch, self.pitchV = Pure.follow(self.pitch, self.pitchV or 0, self.wantPitch, dt, speed, accel, false)
 	-- The kick springs back, sub-stepped.
 	local left = dt
 	while left > 1e-4 do
@@ -478,7 +573,7 @@ function GunnerView:Update(dt, state)
 
 	-- The camera: the eye, turned with the yaw and tipped with the barrel (or, lobbing, toward where the
 	-- bomb comes down); aiming, at the sight.
-	local hipEye = yawFrame * self.eye.CFrame
+	local hipEye = (self.eyeOnPitch and pitchFrame or yawFrame) * self.eye.CFrame
 	local lookPitch = self.pitch + self.kickPitch
 	if self.lobs then
 		local flat = Vector3.new(impact.X - hipEye.X, 0, impact.Z - hipEye.Z).Magnitude
@@ -489,9 +584,11 @@ function GunnerView:Update(dt, state)
 	local hipView = CFrame.new(hipEye.Position) * (yawFrame - yawFrame.Position) * CFrame.Angles(math.rad(lookPitch), 0, 0)
 	local sightView = pitchFrame * self.sight.CFrame
 	if self.lobs then
-		-- A mortar is laid by where its bomb comes down, not along its tube: aiming only zooms the view
-		-- (from beside the tube, the sight's own spot, the van's roof load filled the picture).
-		sightView = hipView
+		-- A mortar is laid by where its bomb comes down, not along its tube: aiming moves the eye to its
+		-- sight, beside the tube and a little over it (so the tube stays off to one side, below the middle)
+		-- and keeps looking at the landing, zoomed, with the range ladder (placeSight) drawn on the ground.
+		local at = sightView.Position + yawFrame.UpVector * 0.8
+		sightView = CFrame.new(at) * (hipView - hipView.Position)
 	end
 	local view = hipView:Lerp(sightView, Pure.smooth(self.aim))
 	if self.shake > 0 then
@@ -522,21 +619,23 @@ function GunnerView:Update(dt, state)
 	self.arms:pose(1, view, right, 0.9, parts, cframes)
 	self.arms:pose(-1, view, left, 0.9, parts, cframes)
 	workspace:BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged)
-	-- The scope's glass only when the view is right down the launcher's sight.
+	-- The scope's glass only when the view is right down the launcher's sight. A lobbing sight's own
+	-- parts go too once the eye is at it (they would sit across the view), the arms stay.
 	local scoped = self.sightKind == "scope" and self.aim > 0.9
 	self.arms:SetHidden(scoped)
-	if scoped ~= self.scopeHidden then
-		self.scopeHidden = scoped
+	local hideSight = scoped or (self.sightKind == "lob" and self.aim > 0.6)
+	if hideSight ~= self.scopeHidden then
+		self.scopeHidden = hideSight
 		for _, part in ipairs(self.scopeParts) do
-			part.LocalTransparencyModifier = scoped and 1 or 0
+			part.LocalTransparencyModifier = hideSight and 1 or 0
 		end
 	end
 	self.ui.scope.Visible = scoped
-	self:placeSight(view, impact, hit)
+	self:placeSight(view, impact, hit, origin, direction)
 	self:hideBody(true)
 end
 
-function GunnerView:placeSight(view, impact, hit)
+function GunnerView:placeSight(view, impact, hit, origin, direction)
 	local camera = self.camera
 	local screen, onScreen = camera:WorldToViewportPoint(impact)
 	local ui = self.ui
@@ -550,6 +649,23 @@ function GunnerView:placeSight(view, impact, hit)
 	local distance = (impact - view.Position).Magnitude
 	ui.range.Text = self.spec.kind == "round" and string.format("%d", math.floor(distance + 0.5)) or ""
 	ui.cross.Visible = not self.lobs
+	-- The range ladder, on the ground the bomb is coming down on, straight down range from the gun.
+	local laddered = self.lobs and self.aim > 0.6 and origin ~= nil
+	local flat = laddered and Vector3.new(direction.X, 0, direction.Z) or Vector3.zero
+	laddered = laddered and flat.Magnitude > 1e-3
+	for index, tick in ipairs(ui.ladder) do
+		local shown = false
+		if laddered then
+			local r = LADDER_RANGES[index]
+			local point = Vector3.new(origin.X, impact.Y, origin.Z) + flat.Unit * r
+			local at, visible = camera:WorldToViewportPoint(point)
+			if visible then
+				tick.Position = UDim2.fromOffset(at.X, at.Y)
+				shown = true
+			end
+		end
+		tick.Visible = shown
+	end
 end
 
 function GunnerView:Stop()
