@@ -1302,11 +1302,10 @@ local SHOT_CUE = {
 	squeak = "GunshotSqueak", droplets = "GunshotSquirt", noodle = "GunshotNoodle", bassring = "GunshotBassDrop",
 	gumball = "GunshotGumball", zap = "GunshotZap", disco = "GunshotDisco", snow = "GunshotSnow",
 	lava = "GunshotLavaLamp",
-	-- The workshop guns, borrowing the nearest stock report until they have their own (claude-3b's
-	-- SoundConfig): a blower roars like a belt gun, a hose hisses like the bubble gun, a broom and a
-	-- vacuum thump and whirr, a popper cracks like a cannon and a keyboard clacks like a rifle.
-	leaves = "GunshotLMG", spray = "GunshotBubble", dust = "GunshotShotgun", confetti = "GunshotCannon",
-	keycap = "GunshotRifle",
+	-- The workshop guns are household things, not firearms, so each fires what it is: a blower's rush
+	-- of leaves, a hose's gush, a broom's swish, a party popper's cork and a keyboard's clack.
+	leaves = "GunshotBlower", spray = "GunshotHose", dust = "GunshotBroom", confetti = "GunshotPopper",
+	keycap = "GunshotKeycap",
 }
 -- Guns whose report differs from the rest of their flash kind (claude-3b's sound design), by weapon id.
 local SHOT_CUE_BY_ID = {
@@ -1318,10 +1317,18 @@ local SHOT_CUE_BY_ID = {
 	MicrowaveZapper = "GunshotZap", PizzaCutterCrossbow = "GunshotPizza", DiscoBallDeleter = "GunshotDisco",
 	ToasterMortar = "GunshotToaster", RubberChickenRailgun = "GunshotChicken", LavaLampLancer = "GunshotLavaLamp",
 	SnowGlobeSingularity = "GunshotSnow", GrandmasSlipperLauncher = "GunshotSlipper",
-	-- The workshop guns: the vacuum whirrs rather than thumps, so it takes the heavy report instead of the
-	-- broom's; the rest follow their flash kind above.
-	DustDevilRotary = "GunshotHeavy",
+	-- The workshop guns: the vacuum whirrs rather than swishes, so it has its own rather than the broom's;
+	-- the rest follow their flash kind above.
+	DustDevilRotary = "GunshotVacuum",
 }
+
+-- A gun model's report: a signature gun names its own (GunModelsSignature's ShotCue), everything else
+-- goes by weapon id, then by flash kind.
+local function shotCueOf(gun)
+	local flash = gun and gun:GetAttribute("Flash") or "rifle"
+	return (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""]
+		or SHOT_CUE[flash] or "GunshotRifle"
+end
 -- What flies out of it.
 local TRACER_KIND = {
 	shotgun = "pellet", rotary = "heavy", cannon = "heavy", rail = "energy", bubble = "bubble", rocket = "rocket",
@@ -1481,7 +1488,9 @@ end
 -- magazine.
 local function onViewmodelEvent(kind, a, b)
 	if kind == "sound" then
-		Sfx.Play(a, 0.06)
+		-- A novelty gun (a bubble gun, a keyboard) reloads with toy snaps or a squeaky water pump, not
+		-- a real gun's mag and bolt (SoundConfig.FoleyFor).
+		Sfx.Play(Sfx.FoleyFor(viewmodel and shotCueOf(viewmodel.source), a), 0.06)
 	elseif kind == "casing" then
 		GunFx.Casing(a, b)
 	elseif kind == "drop" then
@@ -1490,10 +1499,19 @@ local function onViewmodelEvent(kind, a, b)
 end
 
 -- A spent case tinks on its first bounce, at most six a second however fast the gun fires; a shotgun
--- shell lands a lower, duller note.
+-- shell lands a lower, duller note. Brass rings on something hard; in grass, sand, snow, mud or water
+-- it lands without a sound. A novelty gun throws no brass worth hearing.
 do
 	local recentTinks = {}
-	GunFx.OnCasingLand = function(_, casing)
+	local SOFT = { Grass = true, LeafyGrass = true, Sand = true, Snow = true, Mud = true, Ground = true, Water = true,
+		Fabric = true }
+	GunFx.OnCasingLand = function(_, casing, material)
+		if material and SOFT[material.Name] then
+			return
+		end
+		if viewmodel and Sfx.IsNovelty(shotCueOf(viewmodel.source)) then
+			return
+		end
 		local now = tick() -- wall time: a one-second window, not CPU time
 		while recentTinks[1] and now - recentTinks[1] > 1 do
 			table.remove(recentTinks, 1)
@@ -2072,7 +2090,7 @@ local function drawSegment(shooter, origin, endPoints)
 	end
 end
 
-shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, segment)
+shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, segment, source)
 	if segment then
 		drawSegment(shooter, origin, endPoints)
 		return
@@ -2081,8 +2099,17 @@ shotFired.OnClientEvent:Connect(function(shooter, origin, endPoints, rarity, seg
 	local gun = shooterGun(shooter, origin)
 	local flash = gun and gun:GetAttribute("Flash") or "rifle"
 	-- A signature gun (GunModelsSignature) names its own report and tracer on the model (ShotCue, Tracer), so a
-	-- new one needs no entry here; everything else goes by weapon id, then by flash kind.
-	local cue = (gun and gun:GetAttribute("ShotCue")) or SHOT_CUE_BY_ID[gun and gun:GetAttribute("WeaponId") or ""] or SHOT_CUE[flash] or "GunshotRifle"
+	-- new one needs no entry here (shotCueOf). A vehicle's or a mount's shot (VehicleWeapons tags it
+	-- "mount"): a launched round whoomps like a launcher, a mounted machine gun hammers like a belt
+	-- gun, rather than both passing for a rifle.
+	if not gun and typeof(source) == "Instance" then
+		-- A bot's shot names its character (CombatService.BroadcastShot): its gun is on it.
+		gun = source:FindFirstChild("HeldGun")
+	end
+	local cue = shotCueOf(gun)
+	if source == "mount" then
+		cue = #endPoints == 0 and "GunshotRocket" or "GunshotLMG"
+	end
 
 	if mine then
 		-- In first person the body — and the gun on it — sits below and beside the camera,
