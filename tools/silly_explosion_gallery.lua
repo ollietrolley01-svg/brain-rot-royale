@@ -1,17 +1,20 @@
--- The silly explosions, for tools/gallery.ps1:
+-- Every explosion beside the grenade, for tools/gallery.ps1:
 --
 --   powershell -ExecutionPolicy Bypass -File tools/gallery.ps1 -Gallery tools/silly_explosion_gallery.lua -OutDir <folder> -TimeoutSeconds 1500
 --
--- Each silly weapon's blast (SillyExplosionFx) detonated in turn on a plain plate with a figure for
--- scale, the camera framed on it, frozen at two ages: the burst (danger marks up, the word popping)
--- and the pieces flying. Then one at the FAR level of detail, and the realistic Tralala Thumper blast
--- beside them, so the silly ones can be seen to read as a blast of the same size.
+-- One row per blast, the same three moments in each (0.10 s: flash and shock; 0.35 s: the cluster
+-- and the pieces in flight; 0.90 s: smoke and what is left), the camera framed the same way against
+-- each blast's radius, so a contact sheet with three columns compares them honestly. Row 1 is the
+-- reference: the Cooked Coconut, the grenade. Then the silly ones (SillyExplosionFx) and the
+-- realistic ones that used to be weaker (mines, barrels, a mounted gun and a vehicle breaking; they
+-- are drawn here exactly as ProjectileClient draws the server's "detonate" for them). Last, a
+-- crowd of six silly blasts at once and a check that every piece is gone after 3 s.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterPlayer = game:GetService("StarterPlayer")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
-local WeaponData = require(Shared:WaitForChild("WeaponData"))
+require(Shared:WaitForChild("WeaponData"))
 local scripts = StarterPlayer:WaitForChild("StarterPlayerScripts")
 local ExplosiveFx = require(scripts:WaitForChild("ExplosiveFx"))
 local Silly = require(scripts:WaitForChild("SillyExplosionFx"))
@@ -44,12 +47,14 @@ local function block(parent, name, size, cframe, color, material)
 	return part
 end
 
-local function stage(folder, centre)
-	block(folder, "Ground", V(120, 2, 120), centre - V(0, 1, 0), Color3.fromRGB(118, 150, 96), Enum.Material.Grass)
-	block(folder, "Wall", V(14, 6, 1), centre + V(0, 3, -16), Color3.fromRGB(170, 160, 140), Enum.Material.Brick)
-	block(folder, "Body", V(2, 3.2, 1), centre + V(8, 2.6, 4), Color3.fromRGB(80, 110, 160), Enum.Material.SmoothPlastic)
-	block(folder, "Head", V(1.2, 1.2, 1.2), centre + V(8, 4.8, 4), Color3.fromRGB(230, 200, 170), Enum.Material.SmoothPlastic)
-	block(folder, "Legs", V(2, 2, 1), centre + V(8, 1, 4), Color3.fromRGB(60, 60, 70), Enum.Material.SmoothPlastic)
+-- A plate, a wall behind and a figure beside the blast (2 studs wide, 5 tall) for scale.
+local function stage(folder, centre, radius)
+	block(folder, "Ground", V(160, 2, 160), centre - V(0, 1, 0), Color3.fromRGB(118, 150, 96), Enum.Material.Grass)
+	block(folder, "Wall", V(16, 7, 1), centre + V(0, 3.5, -radius * 1.4 - 3), Color3.fromRGB(170, 160, 140), Enum.Material.Brick)
+	local x = math.max(4, radius * 0.7)
+	block(folder, "Body", V(2, 3.2, 1), centre + V(x, 2.6, 2), Color3.fromRGB(80, 110, 160), Enum.Material.SmoothPlastic)
+	block(folder, "Head", V(1.2, 1.2, 1.2), centre + V(x, 4.8, 2), Color3.fromRGB(230, 200, 170), Enum.Material.SmoothPlastic)
+	block(folder, "Legs", V(2, 2, 1), centre + V(x, 1, 2), Color3.fromRGB(60, 60, 70), Enum.Material.SmoothPlastic)
 end
 
 local function advanceTo(seconds)
@@ -62,80 +67,92 @@ local function advanceTo(seconds)
 	end
 end
 
--- The radius the server uses for this weapon's blast (what the dome and ring must reach).
-local function radiusOf(weaponId)
-	local def = WeaponData.Weapons and WeaponData.Weapons[weaponId] or WeaponData[weaponId]
-	if type(def) ~= "table" then
-		return 4, true
+local function fxParts()
+	local count = 0
+	for _, d in ipairs(ExplosiveFx.Folder():GetChildren()) do
+		if d:IsA("BasePart") and d.Name ~= "BRR_SillyHost" and d.Name ~= "BRR_BlastHost" then
+			count += 1
+		end
 	end
-	if def.explosiveAmmo then
-		return def.explosiveAmmo.radius, false
-	end
-	if def.splashRadius and def.ability == "explosive" then
-		return def.splashRadius, false
-	end
-	return 4, true
+	return count
 end
 
-local function blastView(weaponId, age, lod)
-	local theme = Silly.ThemeFor(weaponId) or "realistic"
-	add(string.format("silly_%s_%s_t%03d%s", theme, weaponId, math.floor(age * 100), lod and ("_" .. lod) or ""), function(folder, camera)
-		ExplosiveFx.Clear()
-		Silly.ForceLod = lod
-		local centre = HIGH + V(200, 0, 0)
-		stage(folder, centre)
-		local radius, hit = radiusOf(weaponId)
-		-- The camera first: the POW star faces it and the level of detail is measured from it.
-		local back = hit and 13 or math.max(16, radius * 2.3)
-		camera.FieldOfView = 60
-		camera.CFrame = CFrame.lookAt(centre + V(back * 0.55, back * 0.45, back * 0.95), centre + V(0, (hit and 1.5 or radius * 0.3), 0))
-		local at = centre + V(0, hit and 1.2 or 0.2, 0)
-		if hit then
-			ExplosiveFx.Impact(at, Vector3.yAxis, weaponId)
-		else
-			ExplosiveFx.Explosion(at, Vector3.yAxis, weaponId == "TralalaThumper" and "grenade" or "rocket", radius, weaponId)
-		end
-		advanceTo(age)
-		local live, debris = ExplosiveFx.Count()
-		local parts = 0
-		local effects = ExplosiveFx.Folder()
-		for _, d in ipairs(effects:GetChildren()) do
-			if d:IsA("BasePart") and d.Name ~= "BRR_SillyHost" and d.Name ~= "BRR_BlastHost" then
-				parts += 1
+-- { label, weaponId, look kind (as ProjectileClient maps it), server radius, hit-only }
+local ROWS = {
+	{ "grenade_ref", "CookedCoconut", "frag", 13 },
+	{ "party", "TamburoTungTung", "frag", 7 },
+	{ "gold", "GoldenSahurCannon", "frag", 5 },
+	{ "coffee", "CappuccinaLauncher", "rocket", 14 },
+	{ "toast", "ToasterMortar", "frag", 10 },
+	{ "impact_ref", "ZanzarinoPikpik", "impact", 4, true },
+	{ "slipper", "GrandmasSlipperLauncher", "impact", 4, true },
+	{ "fidget", "FidgetDiscLauncher", "impact", 4, true },
+	{ "rocket", "VehicleRocket", "rocket", 12 },
+	{ "mine", "RotMine", "grenade", 10 },
+	{ "barrel", "ExplosiveBarrel", "grenade", 15 },
+	{ "mounted_wreck", "MountedGunWreck", "grenade", 8 },
+	{ "vehicle_wreck_proposed", "VehicleWreck", "rocket", 12 },
+}
+local AGES = { 0.1, 0.35, 0.9 }
+
+for index, row in ipairs(ROWS) do
+	local label, weaponId, kind, radius, hit = row[1], row[2], row[3], row[4], row[5]
+	for column, age in ipairs(AGES) do
+		add(string.format("r%02d_%s_c%d_t%03d", index, label, column, math.floor(age * 100)), function(folder, camera)
+			ExplosiveFx.Clear()
+			Silly.ForceLod = "full"
+			local centre = HIGH + V(200, 0, 0)
+			local scale = hit and 4 or math.max(radius, 6)
+			stage(folder, centre, scale)
+			-- The camera first (the level of detail is measured from it), the same framing per radius.
+			camera.FieldOfView = 60
+			camera.CFrame = CFrame.lookAt(centre + V(scale * 1.25, scale * 0.95, scale * 2.3), centre + V(0, scale * 0.35, 0))
+			if hit then
+				ExplosiveFx.Impact(centre + V(0, 1, 0), Vector3.yAxis, weaponId)
+			else
+				ExplosiveFx.Explosion(centre + V(0, 0.2, 0), Vector3.yAxis, kind, radius, weaponId)
 			end
-		end
-		note(string.format("%s (%s) r%.0f at %.2fs lod=%s: %d live, %d debris, %d fx parts, %d silly active",
-			weaponId, theme, radius, age, lod or "auto", live, debris, parts, Silly.Active))
-		Silly.ForceLod = nil
-	end)
+			advanceTo(age)
+			local live, debris = ExplosiveFx.Count()
+			note(string.format("%s (%s, %s r%d) at %.2fs: %d live, %d debris, %d fx parts", label, weaponId, kind, radius, age, live, debris, fxParts()))
+			Silly.ForceLod = nil
+		end)
+	end
 end
 
-for _, weaponId in ipairs({ "CappuccinaLauncher", "GoldenSahurCannon", "TamburoTungTung", "ToasterMortar", "GrandmasSlipperLauncher", "FidgetDiscLauncher" }) do
-	blastView(weaponId, 0.12)
-	blastView(weaponId, 0.5)
-end
-blastView("CappuccinaLauncher", 0.12, "far")
-blastView("TralalaThumper", 0.12)
-
--- Cleanup: every silly part gone by 3 s.
-add("silly_cleanup_after_3s", function(folder, camera)
+-- A crowd: eight silly blasts at once. Past MAX_BLASTS the rest are drawn FAR (no pieces).
+add("z1_crowd_of_8", function(folder, camera)
 	ExplosiveFx.Clear()
 	local centre = HIGH + V(200, 0, 0)
-	stage(folder, centre)
+	stage(folder, centre, 12)
+	camera.FieldOfView = 60
+	camera.CFrame = CFrame.lookAt(centre + V(0, 26, 52), centre)
+	local ids = { "CappuccinaLauncher", "GoldenSahurCannon", "TamburoTungTung", "ToasterMortar" }
+	for index = 1, 8 do
+		local id = ids[(index - 1) % #ids + 1]
+		ExplosiveFx.Explosion(centre + V((index - 4.5) * 8, 0.2, (index % 2) * 8 - 4), Vector3.yAxis, "frag", 7, id)
+	end
+	advanceTo(0.35)
+	note(string.format("crowd of 8: %d fx parts, %d silly active (MAX_BLASTS %d)", fxParts(), Silly.Active, Silly.MAX_BLASTS))
+end)
+
+add("z2_cleanup_after_3s", function(folder, camera)
+	ExplosiveFx.Clear()
+	local centre = HIGH + V(200, 0, 0)
+	stage(folder, centre, 12)
 	camera.FieldOfView = 60
 	camera.CFrame = CFrame.lookAt(centre + V(18, 14, 30), centre)
-	for index, weaponId in ipairs({ "CappuccinaLauncher", "GoldenSahurCannon", "TamburoTungTung", "ToasterMortar", "GrandmasSlipperLauncher", "FidgetDiscLauncher" }) do
-		local radius = radiusOf(weaponId)
-		ExplosiveFx.Explosion(centre + V((index - 3.5) * 6, 0.2, 0), Vector3.yAxis, "rocket", radius, weaponId)
+	for index, id in ipairs({ "CappuccinaLauncher", "GoldenSahurCannon", "TamburoTungTung", "ToasterMortar", "GrandmasSlipperLauncher", "FidgetDiscLauncher" }) do
+		ExplosiveFx.Explosion(centre + V((index - 3.5) * 6, 0.2, 0), Vector3.yAxis, "frag", 7, id)
 	end
 	advanceTo(3)
 	local left = 0
 	for _, d in ipairs(ExplosiveFx.Folder():GetChildren()) do
-		if d:IsA("BasePart") and d.Name ~= "BRR_SillyHost" and d.Name ~= "BRR_BlastHost" then
+		if d:IsA("BasePart") and d.Name ~= "BRR_SillyHost" and d.Name ~= "BRR_BlastHost" and d.Name ~= "SmokeColumn" then
 			left += 1
 		end
 	end
-	note(string.format("cleanup: %d silly fx parts left after 3 s (want 0), %d silly active", left, Silly.Active))
+	note(string.format("cleanup: %d silly pieces left after 3 s (want 0), %d silly active", left, Silly.Active))
 end)
 
 return views

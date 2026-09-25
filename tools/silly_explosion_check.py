@@ -5,16 +5,21 @@
      theme) or REALISTIC, and SillyExplosionFx.Weapons is exactly the SILLY list: every silly one has
      its theme, no realistic one has one. The two hit-only silly rounds (slipper, fidget) are themed
      hits, not blasts.
-  B. Budget (lag, #131): per theme, parts (PieceCost x counts + the common parts + puffs) within
-     PART_BUDGET and particles within PARTICLE_BUDGET; LIFE (every part's hard end) within 3 s;
-     MAX_BLASTS and the LOD distances set; the runtime guards in place (make/ringOn refuse past the
-     budget, the loop entry ends at LIFE, a crowd past MAX_BLASTS drops to FAR); no map queries
-     (#71: nothing here fades or moves a wall or prop).
-  C. Danger reads: every non-hit theme draws the dome to exactly the server radius and the ring to it.
+  B. Budget (lag, #131): a silly blast is the grenade's own layers (ExplosiveFx, in the theme's
+     palette) plus its pieces: per theme, pieces (PieceCost x counts + the danger ring) within
+     EXTRA_BUDGET, the theme host's particles within EXTRA_PARTICLES, no grenade layer multiplied past
+     2x; LIFE (every piece's hard end) within 3 s; MAX_BLASTS and the LOD distances set; the runtime
+     guards in place (make/ringOn refuse past the budget, the loop entry ends at LIFE, a crowd past
+     MAX_BLASTS drops to FAR, FAR throws no pieces); no map queries (#71: nothing here fades or moves
+     a wall or prop); no comic words or POW stars (Oliver).
+  C. Danger reads: ExplosiveFx keeps the grenade's flash, fireballs, shell and shock ring for every
+     theme, and every non-hit theme adds a ring at exactly the server radius.
   D. Wiring: ProjectileService sends weaponId on detonate/impact, ProjectileClient passes it on and
-     plays ExplosiveFx.ThemeCue (falling back to the plain cue), ExplosiveFx hands themed blasts over.
-  E. Gameplay identical to the base (default origin/main): the gameplay sources are byte-identical,
-     and ProjectileService differs only by the weaponId fields on its two broadcasts.
+     plays ExplosiveFx.ThemeCue (falling back to the plain cue), ExplosiveFx draws a theme's look and
+     hands over to Extras; HazardService and MountedGuns send the blast look.
+  E. Gameplay identical to the base: the gameplay sources are byte-identical, ProjectileService
+     differs only by the weaponId fields on its two broadcasts, and the two LOOK_ONLY server files
+     differ only in look lines (the hazard damage block byte-identical).
 
     python tools/silly_explosion_check.py .            the checks
     python tools/silly_explosion_check.py . --plant    the planted faults; every one must be caught
@@ -29,7 +34,7 @@ import sys
 SILLY = {
     "CappuccinaLauncher": "coffee",
     "GoldenSahurCannon": "gold",
-    "TamburoTungTung": "drum",
+    "TamburoTungTung": "party",
     "ToasterMortar": "toast",
     "GrandmasSlipperLauncher": "slipper",
     "FidgetDiscLauncher": "fidget",
@@ -41,8 +46,8 @@ REALISTIC = {
     "FinalNotice": "an AK's collect blast",
     "CookedCoconut": "the core frag grenade",
     "ClingyCrumpet": "the core sticky grenade",
-    "RotMine": "a landmine (server hazard fireball)",
-    "ExplosiveBarrel": "a barrel (server hazard fireball)",
+    "RotMine": "a landmine (HazardService sends the grenade blast look)",
+    "ExplosiveBarrel": "a barrel (HazardService sends the rocket blast look)",
 }
 # Mounted and vehicle weapons are all realistic; they are found by file, not listed by id.
 MILITARY_FILES = ("MountedGunData.lua", "VehicleWeaponData.lua")
@@ -55,8 +60,17 @@ SHARED = "ReplicatedStorage/Shared/"
 WEAPON_FILES = ["WeaponData.lua", "CreativeArsenal.lua", "WorkshopArsenal.lua", "ArsenalExpansion.lua"]
 GAMEPLAY = [SHARED + f for f in WEAPON_FILES + ["CreativeRounds.lua", "Ballistics.lua", "ItemData.lua",
             "MountedGunData.lua", "VehicleWeaponData.lua"]] + [
-    "ServerScriptService/Modules/HazardService.lua", "ServerScriptService/Modules/CombatService.lua",
-    "ServerScriptService/Modules/DestructibleService.lua"]
+    "ServerScriptService/Modules/CombatService.lua", "ServerScriptService/Modules/DestructibleService.lua"]
+# Server files that now send the grenade-standard blast look for things that had a weaker one; each
+# may differ from the base only in look lines, and the damage after each marker must be identical.
+LOOK_ONLY = {
+    "ServerScriptService/Modules/HazardService.lua": ["\t-- The damage. Whoever blew it up"],
+    "ServerScriptService/Modules/MountedGuns.lua": [],
+}
+LOOK_LINE = re.compile(
+    r"^\s*$|^\s*--|Remotes|FireAllClients|^\s*(position|normal|kind|radius|weaponId) = |^\s*\}\)$|^\s*end$"
+    r"|flash|fireball|light\b|Fireball|blast\.|scorch|smoke|Explosion|TweenService:Create|:Play\(\)|Debris:AddItem|task\.delay"
+    r"|local chassis = entry\.rig and entry\.rig\.chassis|if chassis and chassis\.Parent then")
 
 
 def read(root, rel):
@@ -134,13 +148,13 @@ def check(srcs, base):
             problems.append(f"A: silly {wid} isn't an explosive or themed round in the data any more")
 
     # B. Budget.
-    part_budget, particle_budget = number(mod, "PART_BUDGET"), number(mod, "PARTICLE_BUDGET")
+    extra_budget, extra_particles = number(mod, "EXTRA_BUDGET"), number(mod, "EXTRA_PARTICLES")
     life, max_blasts = number(mod, "LIFE"), number(mod, "MAX_BLASTS")
     lod_full, lod_mid = number(mod, "LOD_FULL"), number(mod, "LOD_MID")
-    if not part_budget or part_budget > 30:
-        problems.append(f"B: PART_BUDGET {part_budget} must be set and at most 30")
-    if not particle_budget or particle_budget > 60:
-        problems.append(f"B: PARTICLE_BUDGET {particle_budget} must be set and at most 60")
+    if not extra_budget or extra_budget > 30:
+        problems.append(f"B: EXTRA_BUDGET {extra_budget} must be set and at most 30 pieces over the grenade's own layers")
+    if not extra_particles or extra_particles > 40:
+        problems.append(f"B: EXTRA_PARTICLES {extra_particles} must be set and at most 40")
     if not life or life > 3:
         problems.append(f"B: LIFE {life} must be set and at most 3 s (short-lived parts gone within 3 s)")
     if not max_blasts or not 1 <= max_blasts <= 8:
@@ -148,9 +162,7 @@ def check(srcs, base):
     if not lod_full or not lod_mid or not lod_full < lod_mid <= 650:
         problems.append(f"B: LOD_FULL {lod_full} < LOD_MID {lod_mid} <= 650 (the client's cull)")
     cost = dict((k, int(v)) for k, v in re.findall(r"(\w+) = (\d+)", (re.search(r"Silly\.PieceCost = \{(.*?)\}", mod) or [None, ""])[1]))
-    common = dict((k, int(v)) for k, v in re.findall(r"(\w+) = (\d+)", (re.search(r"Silly\.CommonCost = \{(.*?)\}", mod) or [None, ""])[1]))
-    themes_src = lua_table(mod, "Silly.Themes") or ""
-    themes = blocks(themes_src)
+    themes = blocks(lua_table(mod, "Silly.Themes") or "")
     per_theme = {}
     for theme in sorted(set(SILLY.values())):
         body = themes.get(theme)
@@ -160,32 +172,37 @@ def check(srcs, base):
         hit = "hit = true" in body
         if hit != (theme in HIT_ONLY):
             problems.append(f"B: theme {theme} hit = {hit}, but it should be {theme in HIT_ONLY}")
-        if not re.search(r'sound = "[A-Z]\w+"', body) or not re.search(r'word = "[^"]+"', body):
-            problems.append(f"B: theme {theme} needs a sound key and a word")
+        if not re.search(r'sound = "[A-Z]\w+"', body):
+            problems.append(f"B: theme {theme} needs a sound key")
+        if "look = {" not in body or "ramps = {" not in body:
+            problems.append(f"B: theme {theme} needs a look with its own fireball ramps (the grenade's layers in its palette)")
+        for share in re.findall(r"(?:sparkShare|emberShare|smokeShare) = ([\d.]+)", body):
+            if float(share) > 2:
+                problems.append(f"B: theme {theme} multiplies a particle layer by {share}, over 2x the grenade's")
         pieces = dict((k, int(v)) for k, v in re.findall(r"(\w+) = (\d+)", (re.search(r"pieces = \{(.*?)\}", body) or [None, ""])[1]))
         particles = sum(int(v) for v in re.findall(r"= (\d+)", (re.search(r"particles = \{(.*?)\}", body) or [None, ""])[1]))
-        puffs = int((re.search(r"puffs = (\d+)", body) or [None, 0])[1])
         if not pieces:
             problems.append(f"B: theme {theme} throws no pieces of its own")
         unknown = [p for p in pieces if p not in cost or not re.search(r"^function BUILD\." + p + r"\(", mod, re.M)]
         if unknown:
             problems.append(f"B: theme {theme} uses pieces with no PieceCost or BUILD: {unknown}")
-        parts = sum(cost.get(p, 99) * n for p, n in pieces.items()) + puffs + common.get("flash", 1) + common.get("word", 1)
-        if not hit:
-            parts += common.get("dome", 1) + common.get("ring", 1)
+        parts = sum(cost.get(p, 99) * n for p, n in pieces.items()) + (0 if hit else cost.get("dangerRing", 1))
         per_theme[theme] = (parts, particles)
-        if part_budget and parts > part_budget:
-            problems.append(f"B: theme {theme} costs {parts} parts, over PART_BUDGET {part_budget:.0f}")
-        if particle_budget and particles > particle_budget:
-            problems.append(f"B: theme {theme} emits {particles} particles, over PARTICLE_BUDGET {particle_budget:.0f}")
+        if extra_budget and parts > extra_budget:
+            problems.append(f"B: theme {theme} costs {parts} pieces, over EXTRA_BUDGET {extra_budget:.0f}")
+        if extra_particles and particles > extra_particles:
+            problems.append(f"B: theme {theme} emits {particles} extra particles, over EXTRA_PARTICLES {extra_particles:.0f}")
     guards = {
-        "make() refuses past PART_BUDGET": r"local function make\(.*?\n\tif b\.count >= Silly\.PART_BUDGET then\n\t\treturn nil",
-        "ringOn() refuses past PART_BUDGET": r"local function ringOn\(.*?\n\tif b\.count >= Silly\.PART_BUDGET then\n\t\treturn nil",
-        "the blast's loop entry ends at LIFE": r"api\.add\(\{\n\t\tlife = Silly\.LIFE,",
+        "make() refuses past EXTRA_BUDGET": r"local function make\(.*?\n\tif b\.count >= Silly\.EXTRA_BUDGET then\n\t\treturn nil",
+        "ringOn() refuses past EXTRA_BUDGET": r"local function ringOn\(.*?\n\tif b\.count >= Silly\.EXTRA_BUDGET then\n\t\treturn nil",
+        "the extras' loop entry ends at LIFE": r"api\.add\(\{\n\t\tlife = Silly\.LIFE,",
         "a piece's life is capped under LIFE": r"life = math\.min\(options\.life or [\d.]+, Silly\.LIFE",
-        "particles capped at PARTICLE_BUDGET": r"local left = Silly\.PARTICLE_BUDGET",
+        "a ribbon's life is capped under LIFE": r"life = math\.min\(life, Silly\.LIFE",
+        "extra particles capped at EXTRA_PARTICLES": r"local left = Silly\.EXTRA_PARTICLES",
         "a crowd past MAX_BLASTS drops to FAR": r"if Silly\.Active >= Silly\.MAX_BLASTS then\n\t\treturn \"far\"",
         "the active count comes down on destroy": r"Silly\.Active = math\.max\(0, Silly\.Active - 1\)",
+        "FAR draws no pieces": r"far = \{ pieces = 0,",
+        "hit-only rounds don't count toward MAX_BLASTS": r"local counted = not theme\.hit\n\tif counted then\n\t\tSilly\.Active \+= 1",
     }
     for what, pattern in guards.items():
         if not re.search(pattern, mod, re.S):
@@ -197,21 +214,37 @@ def check(srcs, base):
     for banned in ("GetDescendants", "GetPartBoundsInRadius", "GetPartBoundsInBox", "GetPartsInPart", "FindPartsInRegion", "Raycast", "TweenService"):
         if banned in mod:
             problems.append(f"B: {banned} in SillyExplosionFx: it draws its own pieces only and never touches the map (#71)")
+    # No words, no cartoon stars (Oliver, 2026-09-25).
+    for banned in ("BillboardGui", "TextLabel", "SurfaceGui", "PowSpike", "PowCentre"):
+        if banned in mod:
+            problems.append(f"B: {banned} in SillyExplosionFx: no comic text or POW stars, the theme is in materials, shapes and debris")
 
-    # C. Danger reads.
-    if not re.search(r"if not theme\.hit then\n\t\tdome = make\(", mod):
-        problems.append("C: a non-hit theme must always get the dome")
-    if "local size = r * 2 * easeOut(" not in mod:
-        problems.append("C: the dome must swell to exactly the blast radius (diameter r * 2)")
-    if "local reach = 0.5 + (r - 0.5) * easeOut(" not in mod:
-        problems.append("C: the danger ring must race out to exactly the blast radius")
-    if "local r = math.max(2, radius)" not in mod:
-        problems.append("C: the blast radius r must be the server's radius (math.max(2, radius))")
+    # C. Danger reads: the grenade's own layers (shell, shock ring) for every theme, plus the ring at
+    # exactly the server radius for every non-hit one.
+    fx = srcs[FX]
+    if not re.search(r"if not theme\.hit and ground then\n\t\tring = ringOn\(b, \"DangerRing\"", mod):
+        problems.append("C: a non-hit theme must always get the danger ring")
+    if "local reach = 0.5 + (r - 0.5) * easeOut(" not in mod or "local r = math.max(2, radius)" not in mod:
+        problems.append("C: the danger ring must race out to exactly the server's blast radius")
+    for layer in ('part("Shockwave"', 'ring.Name = "ShockRing"', 'part("Flash"', 'part("Fireball"'):
+        if fx and layer not in fx:
+            problems.append(f"C: ExplosiveFx lost the grenade layer {layer}")
+    for what, pattern in {
+        "ExplosiveFx's crowd budget (LIVE_BLASTS) marks a blast crowded": r"local crowded = liveBlasts >= LIVE_BLASTS\n\tif crowded then\n\t\tshare \*= 0\.5",
+        "a crowded blast throws no chunks": r"if spec\.debris > 0 and not theme and not crowded then",
+        "a crowded blast has no column": r"local columnTime = crowded and 0 or",
+        "the live count comes down when a blast ends": r"liveBlasts = math\.max\(0, liveBlasts - 1\)",
+    }.items():
+        if fx and not re.search(pattern, fx):
+            problems.append(f"B: guard missing in ExplosiveFx: {what}")
+    if fx and "SillyExplosionFx.Extras(sillyApi, theme, look, position, up, radius or 12," not in fx:
+        problems.append("C: ExplosiveFx must hand the server radius to Extras")
 
     # D. Wiring.
-    fx, client, service = srcs[FX], srcs[CLIENT], srcs[SERVICE]
+    client, service = srcs[CLIENT], srcs[SERVICE]
     wiring = {
-        FX: [(fx, r"local theme = SillyExplosionFx\.ThemeFor\(weaponId\)\n\tif theme then\n\t\tSillyExplosionFx\.Blast\(sillyApi, theme, position, [^\n]*, radius or 12, ground\)")],
+        FX: [(fx, r"local theme = SillyExplosionFx\.ThemeFor\(weaponId\)\n\tlocal look = theme and SillyExplosionFx\.LookFor\(theme, position\) or NO_LOOK"),
+             (fx, r"local host = hostFor\(kind, theme and look or nil\)")],
         CLIENT: [(client, r"ExplosiveFx\.Explosion\(position, normal, BLAST_LOOK\[kind\] or \"frag\", radius, info\.weaponId\)"),
                  (client, r"local cue = ExplosiveFx\.ThemeCue\(info\.weaponId\) or BLAST_CUE\[kind\]"),
                  (client, r"ExplosiveFx\.Impact\([^\n]*, info\.weaponId\)")],
@@ -219,6 +252,8 @@ def check(srcs, base):
                   (service, r"broadcast\(\"impact\", \{[^}]*weaponId = entry\.weaponId \}\)")],
         MODULE: [(mod, r'local key = "Explosion" \.\. theme\.sound'), (mod, r"pcall\(SoundConfig\.Get, key\)")],
     }
+    for path in LOOK_ONLY:
+        wiring[path] = [(srcs.get(path), r'Remotes\.Event\("ProjectileFx"\):FireAllClients\("detonate", \{')]
     for path, rules in wiring.items():
         for src, pattern in rules:
             if not src or not re.search(pattern, src):
@@ -238,17 +273,29 @@ def check(srcs, base):
             return text.replace(", weaponId = entry.weaponId }", " }")
         if SERVICE in base and strip(service) != strip(base[SERVICE]):
             problems.append(f"E: {SERVICE} differs from the base by more than the weaponId look fields")
+        # The server files that now send a look: every line added or removed is look, never damage.
+        for path in LOOK_ONLY:
+            if path not in base or srcs.get(path) is None:
+                continue
+            old, new = base[path].split("\n"), srcs[path].split("\n")
+            for tag, line in [("-", l) for l in old if l not in new] + [("+", l) for l in new if l not in old]:
+                if not LOOK_LINE.search(line):
+                    problems.append(f"E: {path} {tag} {line.strip()[:70]!r} is not a look-only line")
+                    break
+            for marker in LOOK_ONLY[path]:
+                if marker not in srcs[path] or srcs[path].split(marker, 1)[1][:1500] != base[path].split(marker, 1)[1][:1500]:
+                    problems.append(f"E: {path}: the damage after {marker.strip()[:40]!r} changed")
     return problems, per_theme
 
 
 def load(root):
-    paths = GAMEPLAY + [MODULE, FX, CLIENT, SERVICE]
+    paths = GAMEPLAY + [MODULE, FX, CLIENT, SERVICE] + list(LOOK_ONLY)
     return {p: read(root, p) for p in paths}
 
 
 def load_base(root, ref):
     base = {}
-    for p in GAMEPLAY + [SERVICE]:
+    for p in GAMEPLAY + [SERVICE] + list(LOOK_ONLY):
         try:
             out = subprocess.run(["git", "-C", root, "show", f"{ref}:{p}"], capture_output=True, check=True)
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -266,17 +313,28 @@ def plant(srcs, path, old, new):
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "."
-    ref = sys.argv[sys.argv.index("--base") + 1] if "--base" in sys.argv else "origin/main"
+    # Default base: where this branch left origin/main (the merge base), so main moving on under an
+    # unmerged branch isn't read as this branch changing gameplay.
+    ref = sys.argv[sys.argv.index("--base") + 1] if "--base" in sys.argv else None
+    if ref is None:
+        try:
+            ref = subprocess.run(["git", "-C", root, "merge-base", "HEAD", "origin/main"], capture_output=True, check=True).stdout.decode().strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            ref = "origin/main"
     srcs = {p: (s.replace("\r\n", "\n") if s else s) for p, s in load(root).items()}
     base = load_base(root, ref)
     if "--plant" in sys.argv:
         plants = [
             ("silly weapon loses its theme", MODULE, '\tToasterMortar = "toast",\n', ""),
             ("realistic weapon given a theme", MODULE, '\tFidgetDiscLauncher = "fidget",\n', '\tFidgetDiscLauncher = "fidget",\n\tTralalaThumper = "coffee",\n'),
-            ("part budget blown", MODULE, "pieces = { coin = 10 }", "pieces = { coin = 30 }"),
+            ("part budget blown", MODULE, "pieces = { coin = 14 }", "pieces = { coin = 40 }"),
             ("cleanup past 3 s", MODULE, "Silly.LIFE = 2.5", "Silly.LIFE = 4"),
             ("gameplay changed (damage)", SHARED + "WeaponData.lua", "damage = 68,", "damage = 70,"),
-            ("danger dome dropped", MODULE, "\tif not theme.hit then\n\t\tdome = make(", "\tif false then\n\t\tdome = make("),
+            ("danger ring dropped", MODULE, "\tif not theme.hit and ground then\n\t\tring = ringOn(", "\tif false then\n\t\tring = ringOn("),
+            ("comic word back", MODULE, "local UP = Vector3.yAxis", "local UP = Vector3.yAxis\nlocal WORD = Instance.new(\"BillboardGui\")"),
+            ("hit rounds counted in the crowd cap", MODULE, "local counted = not theme.hit", "local counted = true"),
+            ("crowd budget dropped", FX, "local crowded = liveBlasts >= LIVE_BLASTS", "local crowded = false"),
+            ("hazard damage changed", "ServerScriptService/Modules/HazardService.lua", "local damage = baseDamage * math.clamp(0.35 + falloff * 0.65, 0, 1)", "local damage = baseDamage * math.clamp(0.4 + falloff * 0.65, 0, 1)"),
         ]
         caught = 0
         clean, _ = check(srcs, base)

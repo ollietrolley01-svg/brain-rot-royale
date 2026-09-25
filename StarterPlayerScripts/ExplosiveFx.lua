@@ -273,8 +273,12 @@ end
 
 local hosts = {}
 
-local function hostFor(kind)
-	local host = hosts[kind]
+-- `look`: a themed blast's palette (SillyExplosionFx), nil for the realistic one. A theme gets its own
+-- host, so its colours are set once, never swapped back and forth under particles still in flight.
+local function hostFor(kind, look)
+	look = look or {}
+	local key = look.key and (kind .. ":" .. look.key) or kind
+	local host = hosts[key]
 	if host and host.part.Parent then
 		return host
 	end
@@ -283,9 +287,9 @@ local function hostFor(kind)
 	attachment.Parent = holder
 	host = { part = holder, attachment = attachment }
 	host.sparks = emitter(attachment, "Sparks", {
-		Texture = TEXTURE.sparks,
+		Texture = look.sparksTexture or TEXTURE.sparks,
 		LightEmission = 1,
-		Color = CS(FIRE_HOT, FIRE_DEEP),
+		Color = look.sparks or CS(FIRE_HOT, FIRE_DEEP),
 		Lifetime = NumberRange.new(0.35, 0.9),
 		Speed = NumberRange.new(28, 70),
 		SpreadAngle = Vector2.new(75, 75),
@@ -297,7 +301,7 @@ local function hostFor(kind)
 	host.embers = emitter(attachment, "Embers", {
 		Texture = TEXTURE.glow,
 		LightEmission = 1,
-		Color = CS(FIRE, FIRE_DEEP),
+		Color = look.embers or CS(FIRE, FIRE_DEEP),
 		Lifetime = NumberRange.new(0.8, 1.6),
 		Speed = NumberRange.new(8, 24),
 		SpreadAngle = Vector2.new(180, 180),
@@ -310,7 +314,7 @@ local function hostFor(kind)
 	host.smoke = emitter(attachment, "Smoke", {
 		Texture = TEXTURE.smoke,
 		LightInfluence = 1,
-		Color = CS(SMOKE_DARK, Color3.fromRGB(120, 116, 112)),
+		Color = look.smoke or CS(SMOKE_DARK, Color3.fromRGB(120, 116, 112)),
 		Lifetime = NumberRange.new(1.4, 2.8),
 		Speed = NumberRange.new(6, 18),
 		SpreadAngle = Vector2.new(70, 70),
@@ -325,7 +329,7 @@ local function hostFor(kind)
 	host.flames = emitter(attachment, "Flames", {
 		Texture = TEXTURE.fire,
 		LightEmission = 1,
-		Color = CS(FIRE_HOT, FIRE_DEEP),
+		Color = look.flames or CS(FIRE_HOT, FIRE_DEEP),
 		Lifetime = NumberRange.new(0.25, 0.5),
 		Speed = NumberRange.new(6, 16),
 		SpreadAngle = Vector2.new(180, 180),
@@ -339,7 +343,7 @@ local function hostFor(kind)
 	host.dust = emitter(attachment, "Dust", {
 		Texture = TEXTURE.smoke,
 		LightInfluence = 1,
-		Color = CS(Color3.fromRGB(150, 140, 126)),
+		Color = look.dust and CS(look.dust) or CS(Color3.fromRGB(150, 140, 126)),
 		Lifetime = NumberRange.new(0.8, 1.6),
 		Speed = NumberRange.new(20, 40),
 		SpreadAngle = Vector2.new(10, 10),
@@ -348,7 +352,7 @@ local function hostFor(kind)
 		Size = NS({ NSK(0, 1.5), NSK(1, 5) }),
 		Transparency = NS({ NSK(0, 0.5), NSK(1, 1) }),
 	})
-	hosts[kind] = host
+	hosts[key] = host
 	return host
 end
 
@@ -587,6 +591,13 @@ end
 
 -- What SillyExplosionFx builds with: the same parts, emitters and loop as every other effect here,
 -- so Advance steps it, Paused freezes it for the gallery and Clear takes it down.
+-- The fire's colour ramp (white-hot, orange, deep red, smoke) for every fireball, and the empty look
+-- the realistic blast draws with (every field falls back to the fire's own).
+local FIRE_RAMPS = { { FIRE_HOT, FIRE, FIRE_DEEP, FIRE_DONE } }
+local NO_LOOK = {}
+-- Blasts still in their first 1.3 s, and how many before the next is drawn light.
+local LIVE_BLASTS = 3
+local liveBlasts = 0
 local sillyApi = { part = part, emitter = emitter, add = add, destroyParts = destroyParts, surfaceFrame = surfaceFrame, texture = TEXTURE }
 
 -- The blast: a white flash and its light, a cluster of fireballs that swell, rise and darken to
@@ -597,19 +608,29 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 	local spec = KIND[kind] or KIND.rocket
 	local r = math.max(3, (radius or 12) * spec.scale)
 	local ground, groundNormal, surfacePart = findSurface(position, normal, r)
-	local theme = SillyExplosionFx.ThemeFor(weaponId)
-	if theme then
-		SillyExplosionFx.Blast(sillyApi, theme, position, groundNormal or normal or UP, radius or 12, ground)
-		return
-	end
 	local onSurface = ground ~= nil
 	local up = groundNormal or normal or UP
 	ground = ground or position
 	local parts = {}
+	-- A silly gun's blast is this same blast, layer for layer, in its theme's palette (`look`), with
+	-- the theme's own pieces thrown on top (SillyExplosionFx.Extras). `share` thins the particles at
+	-- a distance or in a crowd. The realistic blast has no look and every default below is its own.
+	local theme = SillyExplosionFx.ThemeFor(weaponId)
+	local look = theme and SillyExplosionFx.LookFor(theme, position) or NO_LOOK
+	local share = look.share or 1
+	-- The crowd budget (lag, #131): past LIVE_BLASTS blasts still going (a barrel chain, a rocket
+	-- volley), the next one is drawn light: half the particles, no chunks, no smoke column.
+	local crowded = liveBlasts >= LIVE_BLASTS
+	if crowded then
+		share *= 0.5
+	end
+	liveBlasts += 1
+	local ramps = look.ramps or FIRE_RAMPS
+	local coreNeon = look.coreNeon ~= false
 
-	local flash = part("Flash", V(1, 1, 1), CFrame.new(position + up * 0.5), FIRE_HOT, Enum.Material.Neon, 0, Enum.PartType.Ball)
+	local flash = part("Flash", V(1, 1, 1), CFrame.new(position + up * 0.5), look.flash or FIRE_HOT, Enum.Material.Neon, 0, Enum.PartType.Ball)
 	local light = Instance.new("PointLight")
-	light.Color = FIRE
+	light.Color = look.light or FIRE
 	light.Range = spec.light
 	light.Brightness = 8
 	light.Shadows = false
@@ -619,18 +640,21 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 	-- Fireballs: a few glowing (neon) cores inside a shell of lit, matte balls. Each runs the same
 	-- colour ramp (white-hot, orange, deep red, smoke) but starts at its own point on it, so at any
 	-- moment the cluster is a mix of bright and dark rather than one flat yellow dome. The outer ones
-	-- are partly see-through, which lets the cores glow through them.
+	-- are partly see-through, which lets the cores glow through them. A theme's ramps take the place
+	-- of the fire's (foam, gold, party colours), one per ball in turn.
 	local balls = {}
 	for index = 1, spec.balls do
 		local core = index <= math.max(2, math.floor(spec.balls * 0.35))
+		local ramp = ramps[(index - 1) % #ramps + 1]
 		local offset = V(rng:NextNumber(-1, 1), rng:NextNumber(-0.5, 1), rng:NextNumber(-1, 1)) * (r * (core and 0.12 or 0.26)) + up * (r * 0.12)
-		local ball = part("Fireball", V(0.5, 0.5, 0.5), CFrame.new(position + offset), FIRE, core and Enum.Material.Neon or Enum.Material.SmoothPlastic, core and 0 or 0.22, Enum.PartType.Ball)
+		local ball = part("Fireball", V(0.5, 0.5, 0.5), CFrame.new(position + offset), ramp[2], (core and coreNeon) and Enum.Material.Neon or Enum.Material.SmoothPlastic, core and 0 or 0.22, Enum.PartType.Ball)
 		table.insert(parts, ball)
 		table.insert(balls, {
 			part = ball,
 			core = core,
+			ramp = ramp,
 			offset = offset,
-			final = r * (core and rng:NextNumber(0.45, 0.65) or rng:NextNumber(0.5, 0.85)),
+			final = r * (look.ballScale or 1) * (core and rng:NextNumber(0.45, 0.65) or rng:NextNumber(0.5, 0.85)),
 			delay = core and 0 or rng:NextNumber(0.02, 0.1),
 			phase = core and rng:NextNumber(0, 0.06) or rng:NextNumber(0.08, 0.3),
 			rise = r * rng:NextNumber(0.15, 0.4),
@@ -642,7 +666,7 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 	-- pressure sweeping across it ahead of the dust. Plain plastic, not Glass: Roblox draws nothing
 	-- see-through behind a transparent Glass part (the fireballs, every particle, the smoke), so a
 	-- glass shell hid the whole first half-second of the explosion behind a blank dome.
-	local wave = part("Shockwave", V(1, 1, 1), CFrame.new(position + up * 0.3), Color3.fromRGB(255, 244, 228), Enum.Material.SmoothPlastic, 0.62, Enum.PartType.Ball)
+	local wave = part("Shockwave", V(1, 1, 1), CFrame.new(position + up * 0.3), look.wave or Color3.fromRGB(255, 244, 228), Enum.Material.SmoothPlastic, 0.62, Enum.PartType.Ball)
 	table.insert(parts, wave)
 	local ring, dust
 	if onSurface then
@@ -653,39 +677,49 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 		ring.Height = 0.35
 		ring.Radius = 0.5
 		ring.InnerRadius = 0
-		ring.Color3 = FIRE_HOT
+		ring.Color3 = look.ring or FIRE_HOT
 		ring.Transparency = 0.15
 		ring.AlwaysOnTop = false
 		ring.ZIndex = 1
 		ring.Parent = workspace.Terrain
-		dust = part("DustRing", V(0.9, 1, 1), surfaceFrame(ground + up * 0.5, up) * ALONG_NORMAL, Color3.fromRGB(140, 132, 120), Enum.Material.SmoothPlastic, 0.45, Enum.PartType.Cylinder)
+		dust = part("DustRing", V(0.9, 1, 1), surfaceFrame(ground + up * 0.5, up) * ALONG_NORMAL, look.dust or Color3.fromRGB(140, 132, 120), Enum.Material.SmoothPlastic, 0.45, Enum.PartType.Cylinder)
 		table.insert(parts, ring)
 		table.insert(parts, dust)
 	end
 	local ringRider = ring and rider(surfacePart, ring) or nil
 	local dustRider = dust and rider(surfacePart, dust) or nil
 
-	-- Particles from the shared host, pointed along the normal.
-	local host = hostFor(kind)
+	-- Particles from the shared host (a theme has its own), pointed along the normal.
+	local host = hostFor(kind, theme and look or nil)
+	local function emit(particles, count)
+		count = math.floor(count * share + 0.5)
+		if count > 0 then
+			particles:Emit(count)
+		end
+	end
 	host.part.CFrame = surfaceFrame(position + up * 0.3, up) * CFrame.Angles(-math.pi / 2, 0, 0)
-	host.sparks:Emit(spec.sparks)
-	host.embers:Emit(spec.embers)
-	host.smoke:Emit(spec.smoke)
+	emit(host.sparks, spec.sparks * (look.sparkShare or 1))
+	emit(host.embers, spec.embers * (look.emberShare or 1))
+	emit(host.smoke, spec.smoke * (look.smokeShare or 1))
 	host.flames.Size = NS({ NSK(0, r * 0.25), NSK(0.5, r * 0.4), NSK(1, r * 0.18) })
-	host.flames:Emit(math.floor(spec.balls * 1.5))
+	if look.flames ~= false then
+		emit(host.flames, math.floor(spec.balls * 1.5))
+	end
 	if onSurface then
-		host.dust:Emit(math.floor(spec.smoke * 0.6))
+		emit(host.dust, math.floor(spec.smoke * 0.6))
 	end
 
-	-- The column: its own emitter, since it stays lit for a while.
-	if spec.column > 0 then
+	-- The column: its own emitter, since it stays lit for a while. A theme's is its own (a steam
+	-- plume, golden smoke, coloured smoke); a hit-only round's has none.
+	local columnTime = crowded and 0 or look.columnTime or spec.column
+	if columnTime > 0 then
 		local column = part("SmokeColumn", V(0.1, 0.1, 0.1), CFrame.new(position + up * (r * 0.3)), Color3.new(), nil, 1)
 		local attachment = Instance.new("Attachment")
 		attachment.Parent = column
 		local plume = emitter(attachment, "Plume", {
 			Texture = TEXTURE.smoke,
 			LightInfluence = 1,
-			Color = CS(SMOKE_DARK, Color3.fromRGB(110, 106, 102)),
+			Color = look.column or CS(SMOKE_DARK, Color3.fromRGB(110, 106, 102)),
 			Lifetime = NumberRange.new(2.5, 4),
 			Speed = NumberRange.new(6, 12),
 			SpreadAngle = Vector2.new(25, 25),
@@ -693,17 +727,17 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 			Drag = 1.2,
 			Rotation = NumberRange.new(0, 360),
 			RotSpeed = NumberRange.new(-20, 20),
-			Rate = 22,
+			Rate = 22 * share,
 			Size = NS({ NSK(0, r * 0.25), NSK(1, r * 0.7) }),
-			Transparency = NS({ NSK(0, 0.4), NSK(0.7, 0.7), NSK(1, 1) }),
+			Transparency = look.columnFade or NS({ NSK(0, 0.4), NSK(0.7, 0.7), NSK(1, 1) }),
 			Enabled = true,
 		})
 		table.insert(parts, column)
 		add({
-			life = spec.column + 5,
+			life = columnTime + 5,
 			parts = { column },
 			update = function(_, age)
-				if age >= spec.column and plume.Enabled then
+				if age >= columnTime and plume.Enabled then
 					plume.Enabled = false
 				end
 			end,
@@ -711,11 +745,15 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 		})
 	end
 
-	if spec.debris > 0 then
+	-- A theme throws its own pieces in place of the rock chunks, and leaves no scorch.
+	if spec.debris > 0 and not theme and not crowded then
 		throwDebris(position, up, spec.debris, r * 3, math.clamp(r * 0.06, 0.25, 0.7), Color3.fromRGB(70, 62, 56), Enum.Material.Slate)
 	end
-	if onSurface and spec.scorch > 0 then
+	if onSurface and spec.scorch > 0 and not theme then
 		scorch(ground, up, r * spec.scorch, surfacePart)
+	end
+	if theme then
+		SillyExplosionFx.Extras(sillyApi, theme, look, position, up, radius or 12, onSurface and ground or nil)
 	end
 
 	add({
@@ -732,20 +770,21 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 			elseif flash.Parent then
 				flash:Destroy()
 			end
-			-- Fireballs: swell fast, rise, darken from white-orange through red to smoke, fade. `phase`
-			-- puts each ball at its own point on that ramp.
+			-- Fireballs: swell fast, rise, run down their ramp (white-orange, red, smoke), fade.
+			-- `phase` puts each ball at its own point on that ramp.
 			for _, ball in ipairs(balls) do
 				local a = clamp01((age - ball.delay) / 0.75)
 				local size = ball.final * easeOut(math.min(a * 2.2, 1))
 				ball.part.Size = V(size, size, size)
 				ball.part.CFrame = CFrame.new(position + ball.offset + up * (ball.rise * a) + ball.drift * a)
 				local c = clamp01(a + ball.phase)
+				local ramp = ball.ramp
 				if c < 0.18 then
-					ball.part.Color = FIRE_HOT:Lerp(FIRE, c / 0.18)
+					ball.part.Color = ramp[1]:Lerp(ramp[2], c / 0.18)
 				elseif c < 0.5 then
-					ball.part.Color = FIRE:Lerp(FIRE_DEEP, (c - 0.18) / 0.32)
+					ball.part.Color = ramp[2]:Lerp(ramp[3], (c - 0.18) / 0.32)
 				else
-					ball.part.Color = FIRE_DEEP:Lerp(FIRE_DONE, (c - 0.5) / 0.5)
+					ball.part.Color = ramp[3]:Lerp(ramp[4], (c - 0.5) / 0.5)
 					if ball.core and ball.part.Material ~= Enum.Material.SmoothPlastic and c > 0.62 then
 						ball.part.Material = Enum.Material.SmoothPlastic
 					end
@@ -794,7 +833,10 @@ function ExplosiveFx.Explosion(position, normal, kind, radius, weaponId)
 				end
 			end
 		end,
-		destroy = destroyParts,
+		destroy = function(entry)
+			destroyParts(entry)
+			liveBlasts = math.max(0, liveBlasts - 1)
+		end,
 	})
 end
 
