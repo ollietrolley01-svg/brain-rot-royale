@@ -507,7 +507,12 @@ local function setSpectating(value)
 	spectateLabel.Position = UDim2.new(0.5, 0, 1, -24)
 	-- Wide enough for "Spectating <name>   •   [E] next   •   [L] leave" at GothamBold 16, and wrapped
 	-- rather than spilling past the rounded plate when the name is long (#102).
-	spectateLabel.Size = UDim2.fromOffset(620, 48)
+	-- Never wider than the screen less 12 px a side: a flat 620 ran 122 px off each edge of a 375 px
+	-- upright phone, cutting the plate and its words in half.
+	spectateLabel.Size = UDim2.new(1, -24, 0, 48)
+	local spectateWidth = Instance.new("UISizeConstraint")
+	spectateWidth.MaxSize = Vector2.new(620, 48)
+	spectateWidth.Parent = spectateLabel
 	spectateLabel.TextWrapped = true
 	spectateLabel.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
 	spectateLabel.BackgroundTransparency = 0.2

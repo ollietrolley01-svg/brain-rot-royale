@@ -20,6 +20,7 @@
 -- A ModuleScript so tools/gallery.ps1 can render it, and because HudClient's main chunk is three
 -- locals from Luau's 200-local limit.
 
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextService = game:GetService("TextService")
 local UserInputService = game:GetService("UserInputService")
@@ -217,6 +218,9 @@ function Screen:Render(state)
 	-- decided`), so there is nothing to click, and claiming for it would switch combat off.
 	local visible, wantsCursor = VoteCursor.Screen(state.open, state.decided, state.ready)
 	self.root.Visible = visible
+	if not visible then
+		self:dropPadFocus()
+	end
 	if self.modal then
 		self.modal.Visible = wantsCursor
 	end
@@ -268,6 +272,7 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 		ZIndex = self.zIndex + 1,
 		Parent = parent,
 	}, { create("UICorner", { CornerRadius = UDim.new(0, Radius.Card) }) })
+	button:SetAttribute("CandidateId", candidate.id)
 
 	-- EXACTLY ONE UIStroke. Roblox applies one per object, so a card that adds a "highlight" stroke
 	-- next to its resting stroke gets whichever the engine picked — which is how a highlight ends up
@@ -465,7 +470,42 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 	return button
 end
 
+-- A pad player votes by selecting a card and pressing A. The screen redraws every second (the
+-- countdown) and on every vote, destroying the card the pad was on, so the selection used to vanish
+-- within a second. It is carried across by candidate id. It is NOT taken on the player's behalf when
+-- nothing was selected: in the lobby a selection takes the left stick and A away from walking and
+-- jumping, and whether the vote may do that is Oliver's call (see README-task-device-compat.md).
+function Screen:padFocus(cards, previous)
+	if previous == nil then
+		return
+	end
+	for _, card in ipairs(cards) do
+		if card:GetAttribute("CandidateId") == previous then
+			pcall(function()
+				GuiService.SelectedObject = card
+			end)
+			return
+		end
+	end
+end
+
+function Screen:dropPadFocus()
+	pcall(function()
+		local selected = GuiService.SelectedObject
+		if selected and selected:IsDescendantOf(self.root) then
+			GuiService.SelectedObject = nil
+		end
+	end)
+end
+
 function Screen:Layout()
+	local previous = nil
+	pcall(function()
+		local selected = GuiService.SelectedObject
+		if selected and selected:IsDescendantOf(self.root) then
+			previous = selected:GetAttribute("CandidateId")
+		end
+	end)
 	for _, child in ipairs(self.root:GetChildren()) do
 		child:Destroy()
 	end
@@ -552,8 +592,12 @@ function Screen:Layout()
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
 	})
+	local cards = {}
 	for index, candidate in ipairs(state.candidates) do
-		self:card(holder, candidate, shape, cardW, cardH, index, decidedId, enabled)
+		table.insert(cards, self:card(holder, candidate, shape, cardW, cardH, index, decidedId, enabled))
+	end
+	if enabled then
+		self:padFocus(cards, previous)
 	end
 	y += holder.Size.Y.Offset + Space.SM
 
