@@ -2388,7 +2388,7 @@ PLANTS = [
        "TeamBattleground.RoadReach = TeamBattleground.Radius + TeamBattleground.Margin + 30")], ["build"], "was cut"),
     ("road ends left raw", "bg",
      [("local built = roadEnd(model, spec.road, spec.cut, spec.outward, centre)", "local built = nil")], ["build"], "finished road ends"),
-    ("gateway beam under the tallest van", "bg", [("local GATEWAY_CLEAR = 12.3", "local GATEWAY_CLEAR = 9.5")], ["build"], "tallest vehicle"),
+    ("gateway beam under the tallest van", "bg", [("ROAD.GATEWAY_CLEAR = 12.3", "ROAD.GATEWAY_CLEAR = 9.5")], ["build"], "tallest vehicle"),
     ("pavements left open", "bg", [('box(model, "Kerb", math.min(x0, x1)', 'box(model, "KerbCap", math.min(x0, x1)')], ["build"], "kerbs across"),
     ("objective A on the crack", "bg",
      [('\tbox(middle, "Paving", -3.9, 3.9, 0.5, KF, -3.9, 3.9, BASALT_LIGHT, MAT.Slate, NEVER)\n', ""),
