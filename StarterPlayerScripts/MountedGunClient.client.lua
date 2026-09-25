@@ -118,7 +118,18 @@ local function stateOf(model)
 	return s
 end
 
+-- Every tagged model, kept from the tag's signals rather than a GetTagged call each frame (a fresh
+-- table of every armed vehicle sixty times a second). STRONG keys, dropped when the tag goes.
+local tagged = {}
+for _, model in ipairs(CollectionService:GetTagged(TAG)) do
+	tagged[model] = true
+end
+CollectionService:GetInstanceAddedSignal(TAG):Connect(function(model)
+	tagged[model] = true
+end)
+
 CollectionService:GetInstanceRemovedSignal(TAG):Connect(function(model)
+	tagged[model] = nil
 	local s = guns[model]
 	if s and s.steam then
 		s.steam:Destroy()
@@ -238,10 +249,23 @@ end
 -- The gunner, seen from outside
 --------------------------------------------------------------------------------
 
-local jointsOf = setmetatable({}, { __mode = "k" })
+-- STRONG keys: a weak-keyed table with Instance keys drops live entries, and every drop re-walked the
+-- gunner's whole body on the next frame. Bodies that have left the world are swept out whenever a
+-- new one is added, so the table never outgrows the gunners actually seen.
+local jointsOf = {}
 local function jointsFor(character)
 	local joints = jointsOf[character]
+	-- A body whose rig was rebuilt in place (its root joint gone from it) is looked at afresh, once.
+	local cachedRoot = joints and (joints.Root or joints.RootJoint)
+	if cachedRoot and not cachedRoot.Parent then
+		joints = nil
+	end
 	if not joints then
+		for seen in pairs(jointsOf) do
+			if not seen.Parent then
+				jointsOf[seen] = nil
+			end
+		end
 		joints = {}
 		for _, d in ipairs(character:GetDescendants()) do
 			if d:IsA("Motor6D") then
@@ -532,7 +556,7 @@ RunService.Stepped:Connect(function(_, dt)
 	local now = workspace:GetServerTimeNow()
 	local focus = camera.CFrame.Position
 	local mine = nil
-	for _, model in ipairs(CollectionService:GetTagged(TAG)) do
+	for model in pairs(tagged) do
 		local s = model.Parent and stateOf(model)
 		if s then
 			local near = (model:GetPivot().Position - focus).Magnitude < POSE_DISTANCE

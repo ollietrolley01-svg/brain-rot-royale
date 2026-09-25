@@ -1593,11 +1593,22 @@ local function eliminate(token, killerToken, method, weaponId)
 	end
 
 	if Combatants.IsPlayer(killerToken) and killerToken ~= token and participants[killerToken] then
-		RewardService.AwardKill(killerToken, Combatants.IsBot(token))
+		-- Wrapped, as the respawn path above wraps them: alive[token] is already cleared, so a throw here
+		-- would skip the victim's spectate, broadcast() and concludeIfOver() and could leave the match
+		-- with nobody to end it.
+		local ok, err = pcall(RewardService.AwardKill, killerToken, Combatants.IsBot(token))
+		if not ok then
+			warn("[MatchService] kill reward failed: " .. tostring(err))
+		end
 		-- Set by Bootstrap to ProgressionService.OnKillCredited (gun mastery). It ignores anything
 		-- that isn't a WeaponData gun: companions, barrels and mines.
 		if MatchService.OnKillCredited then
-			MatchService.OnKillCredited(killerToken, token, weaponId)
+			local credited, creditErr = pcall(function()
+				MatchService.OnKillCredited(killerToken, token, weaponId)
+			end)
+			if not credited then
+				warn("[MatchService] kill credit failed: " .. tostring(creditErr))
+			end
 		end
 
 		-- Rapid consecutive kills escalate. `count` resets outside the window so a slow

@@ -698,40 +698,45 @@ end
 
 -- Posed in Stepped, the same slot the gun poses use: after physics has placed the root and
 -- before the frame renders.
-RunService.Stepped:Connect(function()
-	local eye = cameraAt()
-	local t = now()
-	for model, rig in pairs(rigs) do
-		if not model.Parent or not alive(rig) then
-			rigs[model] = nil
-		elseif eye and (rig.root.Position - eye).Magnitude >= CAPS.ANIMATE_DISTANCE then
-			-- Out of range: settle into the rest pose once, rather than freezing mid-move (a Bonk
-			-- caught mid-leap would otherwise hang in the air until it came back into range).
-			if not rig.resting then
-				rig.resting = true
-				rig.clip, rig.cheer = nil, nil
-				CompanionAnimations.Rest(rig)
-			end
-		else
-			rig.resting = false
-			local pose = CompanionAnimations.Idle(rig, t)
-			for _, key in ipairs({ "clip", "cheer" }) do
-				local clip = rig[key]
-				if clip then
-					if clip.world then
-						-- The target in the frame the pose is in, redone every frame because the
-						-- companion keeps following its owner through the move.
-						clip.target = restFrame(rig):PointToObjectSpace(clip.world)
-					end
-					if not CompanionAnimations.Layer(pose, rig.body, clip, t - clip.start, rig.scale) then
-						rig[key] = nil
+-- The two layered clip slots on a rig: one shared list, not a new table per rig per frame. In a
+-- do-block so the main chunk gains no local.
+do
+	local RIG_CLIP_KEYS = { "clip", "cheer" }
+	RunService.Stepped:Connect(function()
+		local eye = cameraAt()
+		local t = now()
+		for model, rig in pairs(rigs) do
+			if not model.Parent or not alive(rig) then
+				rigs[model] = nil
+			elseif eye and (rig.root.Position - eye).Magnitude >= CAPS.ANIMATE_DISTANCE then
+				-- Out of range: settle into the rest pose once, rather than freezing mid-move (a Bonk
+				-- caught mid-leap would otherwise hang in the air until it came back into range).
+				if not rig.resting then
+					rig.resting = true
+					rig.clip, rig.cheer = nil, nil
+					CompanionAnimations.Rest(rig)
+				end
+			else
+				rig.resting = false
+				local pose = CompanionAnimations.Idle(rig, t)
+				for _, key in ipairs(RIG_CLIP_KEYS) do
+					local clip = rig[key]
+					if clip then
+						if clip.world then
+							-- The target in the frame the pose is in, redone every frame because the
+							-- companion keeps following its owner through the move.
+							clip.target = restFrame(rig):PointToObjectSpace(clip.world)
+						end
+						if not CompanionAnimations.Layer(pose, rig.body, clip, t - clip.start, rig.scale) then
+							rig[key] = nil
+						end
 					end
 				end
+				CompanionAnimations.Apply(rig, pose)
 			end
-			CompanionAnimations.Apply(rig, pose)
 		end
-	end
-end)
+	end)
+end
 
 --------------------------------------------------------------------------------
 -- Pieces every move shares

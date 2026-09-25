@@ -363,6 +363,11 @@ function DropPicker.DrawImage(parent, data, px)
 			Parent = parent,
 		})
 		label.ImageContent = Content.fromObject(image)
+		-- An EditableImage holds its pixels (up to 640x640x4) against a per-client budget until it is
+		-- destroyed; the map is redrawn every round and on every resize, so it goes with its label.
+		label.Destroying:Connect(function()
+			image:Destroy()
+		end)
 		return { label = label, pixels = W, roads = drawn }
 	end)
 	if ok then

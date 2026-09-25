@@ -250,6 +250,15 @@ local function onPlayerAdded(player)
 
 	player.CharacterRemoving:Connect(function(character)
 		Combatants.Unregister(character)
+		-- The engine parents an old body to nil on respawn but does not always Destroy it (Workspace
+		-- PlayerCharacterDestroyBehavior is left at Default), so every connection made on it -- the
+		-- humanoid's Died, the attribute and DescendantAdded watchers, the nameplate -- and the whole
+		-- model stayed in memory for every respawn of a team-mode match. Destroyed once it is out.
+		task.delay(2, function()
+			if character.Parent == nil then
+				character:Destroy()
+			end
+		end)
 	end)
 
 	-- Spawn BEFORE loading the profile. PlayerData.Load can sit there for many seconds

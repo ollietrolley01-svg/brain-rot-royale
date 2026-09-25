@@ -154,7 +154,8 @@ end
 local BLOOM_PER_SHOT = 0.2
 local BLOOM_MAX = 1.5
 local BLOOM_RECOVER = 5
-local bloom = setmetatable({}, { __mode = "k" })
+-- Strong, cleared in ForgetToken: weak-keyed on Player instances lost live entries (heat reset mid-spray).
+local bloom = {}
 
 local function bloomHeat(token)
 	local entry = bloom[token]
@@ -210,6 +211,12 @@ end
 
 local function watchPlayer(player)
 	player.CharacterAdded:Connect(characterAdded)
+	-- A player's old body is not always Destroyed on respawn (it can just be parented to nil), so
+	-- Destroying alone let every respawn leave its character held in these two tables.
+	player.CharacterRemoving:Connect(function(character)
+		steady[character] = nil
+		watchedCrouch[character] = nil
+	end)
 	if player.Character then
 		characterAdded(player.Character)
 	end
@@ -546,10 +553,14 @@ local function combatantsInRadius(position, radius, excludeToken)
 	local found = {}
 	for character, token in pairs(Combatants.All()) do
 		if token ~= excludeToken and character.Parent then
-			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			-- Distance first: most bodies are out of range, and the mine poll asks this ten times a second
+			-- per mine, so the humanoid lookup is only paid for the ones that are near.
 			local root = character:FindFirstChild("HumanoidRootPart")
-			if humanoid and root and humanoid.Health > 0 and (root.Position - position).Magnitude <= radius then
-				table.insert(found, { token = token, humanoid = humanoid, root = root })
+			if root and (root.Position - position).Magnitude <= radius then
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					table.insert(found, { token = token, humanoid = humanoid, root = root })
+				end
 			end
 		end
 	end
@@ -1269,6 +1280,7 @@ function CombatService.ForgetToken(token)
 	thirst[token] = nil
 	streaks[token] = nil
 	aiming[token] = nil
+	bloom[token] = nil
 	stats[token] = nil
 	recent[token] = nil
 	for victim, record in pairs(lastAttacker) do

@@ -943,6 +943,13 @@ function MovementService.TryParkour(character, forward, options)
 		-- CanParkour puts its reason where the plan would be.
 		return nil, "nothing to climb now: " .. tostring(plan)
 	end
+	-- Looked up before anything is spent: the Heartbeat below indexes both every frame, and a nil one
+	-- there would throw each frame forever, never disconnecting and never clearing running[character].
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid then
+		return nil, "no body to move"
+	end
 	local token = Combatants.FromCharacter(character)
 	if not MovementService.SpendStamina(token, plan.cost, plan.kind == "mantle") then
 		local fallback = type(options) == "table" and table.clone(options) or {}
@@ -957,8 +964,6 @@ function MovementService.TryParkour(character, forward, options)
 		end
 	end
 
-	local root = character:FindFirstChild("HumanoidRootPart")
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	-- You stand to climb, exactly as a player does (MovementClient's startMove): the plan was measured
 	-- from the feet, so it works either way, but a body that pulled itself onto a ledge still folded
 	-- would land a stud low and be drawn crouching through the climb.

@@ -269,6 +269,31 @@ local byFrame = {}
 local connection
 local swingClock = 0
 
+-- Whether a gui is drawn at all: every GuiObject above it Visible, up to an Enabled LayerCollector.
+-- The menu closes by hiding its panel and keeps its rows, so without this every preview on the last
+-- tab opened (a death effect's parts stepping, an aura's specks) kept animating through the match.
+-- The memo is shared by every preview in one frame; they sit under the same few ancestors.
+local shownMemo = {}
+local function isShown(node)
+	if node == nil then
+		return false
+	end
+	local known = shownMemo[node]
+	if known ~= nil then
+		return known
+	end
+	local result
+	if node:IsA("LayerCollector") then
+		result = node.Enabled
+	elseif node:IsA("GuiObject") and not node.Visible then
+		result = false
+	else
+		result = isShown(node.Parent)
+	end
+	shownMemo[node] = result
+	return result
+end
+
 -- Far enough back that the whole model stays in frame through the turn: the bounding sphere, rather
 -- than the box, because the box's width changes as it rotates and the sphere's does not.
 local function frameCamera(preview)
@@ -443,6 +468,12 @@ function CosmeticPreview.Fill(frame, id, options)
 	}
 
 	function preview:Destroy()
+		-- The frame can outlive its preview (the Death Effects stage is refilled on every PREVIEW
+		-- press), so the watch on it goes with the preview rather than piling up on the frame.
+		if self.ancestryConnection then
+			self.ancestryConnection:Disconnect()
+			self.ancestryConnection = nil
+		end
 		for index = #live, 1, -1 do
 			if live[index] == self then
 				table.remove(live, index)
@@ -461,7 +492,7 @@ function CosmeticPreview.Fill(frame, id, options)
 		end
 	end
 
-	frame.AncestryChanged:Connect(function()
+	preview.ancestryConnection = frame.AncestryChanged:Connect(function()
 		if not frame:IsDescendantOf(game) then
 			preview:Destroy()
 		end
@@ -476,13 +507,14 @@ function CosmeticPreview.Fill(frame, id, options)
 			swingClock += dt
 			local now = swingClock
 			local builtOne = false
+			table.clear(shownMemo)
 			for index = #live, 1, -1 do
 				local entry = live[index]
 				if not entry.viewport or not entry.viewport:IsDescendantOf(game) then
 					entry:Destroy()
 				else
 					local size = entry.viewport.AbsoluteSize
-					if size.X > 0 and size.Y > 0 then
+					if size.X > 0 and size.Y > 0 and isShown(entry.viewport) then
 						-- One build per frame: twenty rows of real parts all at once is a visible hitch.
 						if not entry.built and not builtOne then
 							builtOne = true

@@ -316,6 +316,22 @@ local function invoke(remote, ...)
 	end, ...)
 end
 
+-- Photos are redrawn on every profile push, and a creature is hundreds of procedural parts, so each
+-- is built once and cloned after. Keyed on the override model too, so one that streams in later
+-- replaces the procedural template instead of being hidden by it.
+local photoTemplates = {}
+local function photoModel(def)
+	local overrides = ReplicatedStorage:FindFirstChild("BrainrotModelOverrides")
+	local source = (overrides and def.name and overrides:FindFirstChild(def.name)) or false
+	local key = def.name or def
+	local cached = photoTemplates[key]
+	if not cached or cached.source ~= source then
+		cached = { source = source, model = BrainrotModels.Build(def) }
+		photoTemplates[key] = cached
+	end
+	return cached.model:Clone() or BrainrotModels.Build(def)
+end
+
 -- A live 3D portrait: the same model the companion uses, in a ViewportFrame. No image assets.
 -- `silhouette` blacks it out, for brainrots you haven't found yet.
 local function brainrotPhoto(parent, def, size, silhouette)
@@ -329,7 +345,7 @@ local function brainrotPhoto(parent, def, size, silhouette)
 		Parent = parent,
 	}, { rounded(10) })
 
-	local model = BrainrotModels.Build(def)
+	local model = photoModel(def)
 	if silhouette then
 		for _, part in ipairs(model:GetDescendants()) do
 			if part:IsA("BasePart") and part.Transparency < 1 then
@@ -3323,6 +3339,8 @@ crateOpened.OnClientEvent:Connect(function(result)
 	local start = os.clock()
 	local last = start
 	local prize = nil
+	local prizeScale = nil
+	local crateFade = nil
 	local climbed = 0
 	local shake = 0
 	local particles = {}
@@ -3473,15 +3491,23 @@ crateOpened.OnClientEvent:Connect(function(result)
 		-- Then the whole crate, open lid and all, fades away beneath the prize -- starting once this
 		-- tier's lid is most of the way up, so a slow Prestige swing isn't fading while it opens.
 		local fade = math.clamp((since - lidSwing * 0.75) / 0.5, 0, 1)
-		for part in pairs(crateBase) do
-			part.Transparency = fade
+		if fade ~= crateFade then
+			crateFade = fade
+			for part in pairs(crateBase) do
+				part.Transparency = fade
+			end
 		end
 
 		-- The prize grows as it rises, then keeps turning. Rarer prizes come out a little bigger.
 		local rise = math.clamp(since / 0.55, 0, 1)
 		local eased = 1 - (1 - rise) ^ 3
 		local finalScale = 1.1 + tierIndex * 0.04
-		prize:ScaleTo(math.max(0.05, eased * finalScale))
+		-- Only while it grows: ScaleTo resizes every part, and after the rise the scale is constant.
+		local scaleNow = math.max(0.05, eased * finalScale)
+		if scaleNow ~= prizeScale then
+			prizeScale = scaleNow
+			prize:ScaleTo(scaleNow)
+		end
 		local bob = math.sin(since * 2.2) * 0.12 * rise
 		prize:PivotTo(CFrame.new(0, 0.8 + eased * 1.2 + bob, 0) * CFrame.Angles(0, since * (1.6 + tierIndex * 0.15), 0))
 

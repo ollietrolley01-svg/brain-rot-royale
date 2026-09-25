@@ -492,10 +492,17 @@ local function stepMines(now)
 	end
 end
 
+-- Each poll in a pcall: one mine whose explode throws (a damage listener, a quest hook) must not kill
+-- this coroutine and with it every mine for the rest of the server's life. Named once.
+local warnedPollError = false
 task.spawn(function()
 	while true do
 		task.wait(MINE_POLL)
-		stepMines(clockNow())
+		local ok, err = pcall(stepMines, clockNow())
+		if not ok and not warnedPollError then
+			warnedPollError = true
+			warn("[HazardService] mine poll failed: " .. tostring(err))
+		end
 	end
 end)
 

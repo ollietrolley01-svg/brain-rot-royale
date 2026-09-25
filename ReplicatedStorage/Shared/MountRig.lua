@@ -118,10 +118,42 @@ end
 -- moment ago is noted (NoteStanding, sampled by MountedGunClient for everyone on foot), and for BLEND_TIME
 -- after they first appear in a gun's seat the body is shown on its way from there to the grips.
 MountRig.BlendTime = 0.35
-local standing = setmetatable({}, { __mode = "k" }) -- character -> CFrame; a cache of where they stood
-local blends = setmetatable({}, { __mode = "k" }) -- character -> { seat, from, at }
+-- Strong tables, cleared when the character leaves the game: weak Instance keys drop live entries
+-- whenever Luau collects the wrapper, which restarted a blend half way through (a visible snap).
+local standing = {} -- character -> CFrame; a cache of where they stood
+local blends = {} -- character -> { seat, from, at }
+local watching = {} -- character -> the connections that clear the two above
+
+local function forget(character)
+	local connections = watching[character]
+	if connections then
+		for _, connection in ipairs(connections) do
+			connection:Disconnect()
+		end
+	end
+	watching[character] = nil
+	standing[character] = nil
+	blends[character] = nil
+end
+
+local function watch(character)
+	if watching[character] or typeof(character) ~= "Instance" then
+		return
+	end
+	watching[character] = {
+		character.Destroying:Connect(function()
+			forget(character)
+		end),
+		character.AncestryChanged:Connect(function(_, parent)
+			if parent == nil then
+				forget(character)
+			end
+		end),
+	}
+end
 
 function MountRig.NoteStanding(character, cframe)
+	watch(character)
 	standing[character] = cframe
 	blends[character] = nil
 end
@@ -133,6 +165,7 @@ function MountRig.Blend(character, want, rootWorld, seat)
 	if not blend or blend.seat ~= seat then
 		local from = standing[character]
 		blend = { seat = seat, from = from, at = os.clock() }
+		watch(character)
 		blends[character] = blend
 	end
 	local t = blend.from and (os.clock() - blend.at) / MountRig.BlendTime or 1

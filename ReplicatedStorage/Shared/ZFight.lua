@@ -160,6 +160,8 @@ local function refresh(entry)
 	entry.y0, entry.y1 = p.Y - ey, p.Y + ey
 	entry.z0, entry.z1 = p.Z - ez, p.Z + ez
 	entry.faces = nil
+	-- Moved or resized: its tops have to be checked against the ground again.
+	entry.groundClear = nil
 end
 
 local function entriesFor(parts)
@@ -514,8 +516,13 @@ local function liftOffGround(entries, opts, stats)
 	local params = terrainParams()
 	local lifted = 0
 	for index, entry in ipairs(entries) do
-		if opts.all or entry.part.Anchored then
+		-- A part already found clear of the ground and not moved since is still clear (the terrain
+		-- doesn't change during a Fix), so later passes only raycast under what a pass moved.
+		if not entry.groundClear and (opts.all or entry.part.Anchored) then
 			local lift = terrainLift(entry, params, opts)
+			if not lift then
+				entry.groundClear = true
+			end
 			if lift then
 				local part = entry.part
 				part.CFrame += Vector3.new(0, lift, 0)

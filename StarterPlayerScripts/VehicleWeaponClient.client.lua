@@ -378,7 +378,18 @@ local function swingMount(vehicle, mount, spec, yawTarget, pitchTarget, dt)
 	pitchJoint.Transform = CFrame.Angles(math.rad(swing.pitch), 0, 0)
 end
 
+-- Every armed vehicle, kept from the tag's signals rather than a GetTagged call each frame (a fresh
+-- table of every one of them sixty times a second). STRONG keys, dropped when the tag goes.
+local armedVehicles = {}
+for _, vehicle in ipairs(CollectionService:GetTagged(TAG)) do
+	armedVehicles[vehicle] = true
+end
+CollectionService:GetInstanceAddedSignal(TAG):Connect(function(vehicle)
+	armedVehicles[vehicle] = true
+end)
+
 CollectionService:GetInstanceRemovedSignal(TAG):Connect(function(vehicle)
+	armedVehicles[vehicle] = nil
 	swings[vehicle] = nil
 end)
 
@@ -578,7 +589,7 @@ RunService.RenderStepped:Connect(function(dt)
 	-- Everyone else's mounts (and this player's other one), from what their users last sent; an
 	-- unmanned one settles to rest.
 	local eye = camera.CFrame.Position
-	for _, vehicle in ipairs(CollectionService:GetTagged(TAG)) do
+	for vehicle in pairs(armedVehicles) do
 		if vehicle.PrimaryPart and (vehicle.PrimaryPart.Position - eye).Magnitude < 400 then
 			local modelId = vehicle:GetAttribute("VehicleModel")
 			for _, other in ipairs(VehicleWeaponData.Mounts) do

@@ -291,6 +291,22 @@ local function cellIcon(parent, size, position)
 	return icon
 end
 
+-- Photos are redrawn on every profile push, and a creature is hundreds of procedural parts, so each
+-- is built once and cloned after. Keyed on the override model too, so one that streams in later
+-- replaces the procedural template instead of being hidden by it.
+local photoTemplates = {}
+local function photoModel(def)
+	local overrides = ReplicatedStorage:FindFirstChild("BrainrotModelOverrides")
+	local source = (overrides and def.name and overrides:FindFirstChild(def.name)) or false
+	local key = def.name or def
+	local cached = photoTemplates[key]
+	if not cached or cached.source ~= source then
+		cached = { source = source, model = BrainrotModels.Build(def) }
+		photoTemplates[key] = cached
+	end
+	return cached.model:Clone() or BrainrotModels.Build(def)
+end
+
 local function photo(parent, def, size, silhouette)
 	local viewport = create("ViewportFrame", {
 		Size = UDim2.fromOffset(size, size),
@@ -301,7 +317,7 @@ local function photo(parent, def, size, silhouette)
 		LightDirection = Vector3.new(-0.4, -1, 0.6),
 		Parent = parent,
 	}, { rounded(10) })
-	local model = BrainrotModels.Build(def)
+	local model = photoModel(def)
 	if silhouette then
 		for _, part in ipairs(model:GetDescendants()) do
 			if part:IsA("BasePart") and part.Transparency < 1 then

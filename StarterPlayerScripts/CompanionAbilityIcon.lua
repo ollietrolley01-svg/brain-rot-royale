@@ -249,7 +249,13 @@ function CompanionAbilityIcon:SetBrainrot(def)
 		return
 	end
 	self.def = def
-	self.portrait:ClearAllChildren()
+	-- Only the old creature goes: ClearAllChildren also took the round UICorner (leaving a square
+	-- portrait from the first companion on) and the camera FrameViewport points.
+	for _, child in ipairs(self.portrait:GetChildren()) do
+		if not child:IsA("UICorner") and not child:IsA("Camera") then
+			child:Destroy()
+		end
+	end
 	self.frame.Visible = def ~= nil
 	if not def then
 		return
