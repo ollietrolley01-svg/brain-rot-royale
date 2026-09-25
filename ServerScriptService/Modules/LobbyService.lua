@@ -26,6 +26,11 @@
 --                   pier, the how-to board at the market, and a Walk of Fame of the top three
 --   Ambience        lamp posts, lanterns floating over the
 --                   plaza, fireflies, and fireworks over the tree every so often
+--   Wayfinding      (lobby v2) the Rot Road, a raised purple-stone road with glowing studs from the
+--                   pier head to the statue and on to every district, and a gate over each
+--                   district's way in (FIRING RANGE, PLAY BALL, MARKET ROW, CRATES + SPIN, and ALL
+--                   ABOARD at the gangway), each in its colour with a Rotling on top and swinging
+--                   banners (tools/lobby_layout_check.py walks it from the spawn)
 --
 -- Layout, relative to the centre (+X east, +Z the pier and spawn side); angles are degrees
 -- with 0 = +X and 90 = +Z: plaza r100, grass rim r132, tree at the centre, statue (0, 30),
@@ -3445,6 +3450,182 @@ local function buildCloudClimb(lobby, base)
 end
 
 --------------------------------------------------------------------------------
+-- Wayfinding (lobby v2): the Rot Road and the district gates
+--------------------------------------------------------------------------------
+-- A new player lands on the pier facing a plaza full of things. The Rot Road takes them round it:
+-- a raised purple-stone road with glowing studs down its middle, from the pier head to the statue,
+-- then forking east to the firing range, west past the pitch and on to Market Row, and along the
+-- stalls to the crates and the Daily Spin. Each district has a gate over its way in, in the
+-- district's colour, its name on a board both ways, a Rotling (the island's goggle-eyed blob
+-- mascot) on top and two banners swinging under the lintel (AmbientSway, on the client). Nothing
+-- here is interactive and nothing moves on the server.
+--
+-- Everything stands clear of the showcase podiums' slots (tools/showcase_layout_check.py) and of
+-- every other set piece, rests on the paving or the pier, and is held to its own part budget
+-- (tools/lobby_layout_check.py, which also walks the island from the spawn to every prompt).
+
+local ROAD_BED = Color3.fromRGB(86, 66, 112)
+local ROAD_KERB = Color3.fromRGB(58, 44, 78)
+local VIOLET = Color3.fromRGB(176, 124, 255)
+local ROAD_TOP = 0.36
+local ROAD_WIDTH = 3.4
+local STUD_SPACING = 8
+
+-- Road legs as points on the plaza (x, z from the centre). Clear of the podium slots by 10 studs or
+-- more, of the gold ring round the tree, and of the arena's ramps.
+local ROAD_LEGS = {
+	{ color = GOLD, points = { { 0, 95 }, { 0, 44 } } },
+	{ color = SKY, points = { { 0, 52 }, { 28, 8 } } },
+	{ color = GREEN, points = { { 0, 52 }, { -18, 26 }, { -22, 23 }, { -39.5, 22 }, { -41.5, 16 }, { -42, -29 } } },
+	{ color = PINK, points = { { -42, -29 }, { -47.3, -35 }, { -46.2, -38.6 } } },
+	{ color = PINK, arc = { radius = 60, from = 220, to = 245, step = 5 } },
+	{ color = GOLD, arc = { radius = 60, from = 245, to = 280, step = 5 } },
+}
+
+-- The district gates: where (x, z), the way a player walks through (degrees, 0 = +X), the span
+-- between the pillars, and what they say.
+local GATES = {
+	{ key = "Range", x = 31, z = 0, heading = 0, span = 38, height = 13, color = SKY, title = "FIRING RANGE",
+		subtitle = "Take a gun off the podium, shoot the targets" },
+	{ key = "Pitch", x = -47, z = 0, heading = 180, span = 14, height = 8, floor = 0.25, color = GREEN, title = "PLAY BALL",
+		subtitle = "Kick a ball into the goal for coins" },
+	{ key = "Market", degrees = 240, radius = 60, tangent = true, span = 11, height = 11, color = PINK, title = "MARKET ROW",
+		subtitle = "Trading Hall  -  Cosmetics" },
+	{ key = "Crates", degrees = 270, radius = 60, tangent = true, span = 11, height = 11, color = GOLD, title = "CRATES + SPIN",
+		subtitle = "Open crates at the altar, spin the wheel daily" },
+	{ key = "Ship", x = 0, z = 125.5, heading = 90, span = 12, height = 11, floor = 0.55, color = GREEN, title = "ALL ABOARD",
+		subtitle = "Stand on the pad on deck to ready up" },
+}
+
+-- Banners hang this far under the lintel's underside (0 = from it).
+local BANNER_DROP = 0
+
+local function roadSegment(lobby, base, a, b, color)
+	local from = base + Vector3.new(a[1], 0, a[2])
+	local to = base + Vector3.new(b[1], 0, b[2])
+	local length = (to - from).Magnitude
+	-- One stud of overlap each end so legs meet without a gap at the corners.
+	local frame = CFrame.lookAt(from:Lerp(to, 0.5), to)
+	local bed = part(lobby, Vector3.new(ROAD_WIDTH, ROAD_TOP - 0.05, length + 1), frame + Vector3.new(0, 0.05 + (ROAD_TOP - 0.05) / 2, 0),
+		ROAD_BED, Enum.Material.Slate)
+	bed.Name = "RotRoad"
+	for _, side in ipairs({ -1, 1 }) do
+		decor(part(lobby, Vector3.new(0.3, ROAD_TOP - 0.02, length + 1),
+			frame * CFrame.new(side * (ROAD_WIDTH / 2 + 0.1), 0.05 + (ROAD_TOP - 0.02) / 2, 0), ROAD_KERB, Enum.Material.Cobblestone))
+	end
+	local studs = math.max(1, math.floor(length / STUD_SPACING))
+	for index = 1, studs do
+		local at = from:Lerp(to, (index - 0.5) / studs)
+		local glow = decor(part(lobby, Vector3.new(1.1, 0.12, 1.1),
+			CFrame.lookAt(at, at + (to - from)) * CFrame.new(0, ROAD_TOP + 0.02, 0) * CFrame.Angles(0, math.rad(45), 0), color, Enum.Material.Neon))
+		glow.Name = "RoadStud"
+	end
+end
+
+local function buildRoad(lobby, base)
+	for _, leg in ipairs(ROAD_LEGS) do
+		if leg.arc then
+			local points = {}
+			for degrees = leg.arc.from, leg.arc.to, leg.arc.step do
+				local angle = math.rad(degrees)
+				table.insert(points, { math.cos(angle) * leg.arc.radius, math.sin(angle) * leg.arc.radius })
+			end
+			for index = 1, #points - 1 do
+				roadSegment(lobby, base, points[index], points[index + 1], leg.color)
+			end
+		else
+			for index = 1, #leg.points - 1 do
+				roadSegment(lobby, base, leg.points[index], leg.points[index + 1], leg.color)
+			end
+		end
+	end
+end
+
+-- The Rotling: a round blob in the district's colour with two goggle eyes, sat on the lintel.
+local function rotling(lobby, seatFrame, color, size)
+	local body = part(lobby, Vector3.one * size, seatFrame * CFrame.new(0, size * 0.5 - 0.25, 0), color, Enum.Material.SmoothPlastic,
+		Enum.PartType.Ball)
+	body.Name = "Rotling"
+	for _, side in ipairs({ -1, 1 }) do
+		local eyeAt = seatFrame * CFrame.new(side * size * 0.2, size * 0.62, -size * 0.36)
+		decor(part(lobby, Vector3.one * size * 0.32, eyeAt, WHITE, Enum.Material.SmoothPlastic, Enum.PartType.Ball))
+		decor(part(lobby, Vector3.one * size * 0.14, eyeAt * CFrame.new(side * 0.03 * size, -0.02 * size, -size * 0.12), DARK,
+			Enum.Material.SmoothPlastic, Enum.PartType.Ball))
+	end
+	pointLight(body, color, 22, 1.4)
+	return body
+end
+
+local function buildGate(lobby, base, gate)
+	local centre, frame
+	if gate.degrees then
+		centre = spot(base, gate.degrees, gate.radius)
+		-- Facing the plaza's centre, or back along the road (tangent) where the road runs through.
+		local look = facingCentre(centre, base)
+		frame = gate.tangent and look * CFrame.Angles(0, math.rad(-90), 0) or look
+	else
+		centre = base + Vector3.new(gate.x, 0, gate.z)
+		local heading = math.rad(gate.heading)
+		frame = CFrame.lookAt(centre, centre - Vector3.new(math.cos(heading), 0, math.sin(heading)))
+	end
+	-- Either way the gate's front (-Z) faces the players walking up to it.
+	local floor = gate.floor or 0.17
+	frame = frame + Vector3.new(0, floor, 0)
+	local half = gate.span / 2
+	local top = gate.height
+	-- Pillars: a stone plinth, a round column, a capital; the lintel sits on the capitals.
+	for _, side in ipairs({ -1, 1 }) do
+		local foot = frame * CFrame.new(side * half, 0, 0)
+		part(lobby, Vector3.new(3, 1, 3), foot * CFrame.new(0, 0.45, 0), STONE, Enum.Material.Slate)
+		column(lobby, top - 1.3, 2, foot.Position + Vector3.new(0, 0.8, 0), IRON, Enum.Material.Metal)
+		part(lobby, Vector3.new(2.8, 0.8, 2.8), foot * CFrame.new(0, top - 0.4, 0), gate.color, Enum.Material.SmoothPlastic)
+		-- A glowing band a third of the way up.
+		decor(disc(lobby, 2.3, 0.5, foot.Position + Vector3.new(0, top * 0.35, 0), gate.color, Enum.Material.Neon))
+	end
+	local lintel = part(lobby, Vector3.new(gate.span + 3.6, 2.4, 2.4), frame * CFrame.new(0, top + 1.2 - 0.05, 0), DARK, Enum.Material.Metal)
+	lintel.Name = "GateLintel"
+	for _, face in ipairs({ -1, 1 }) do
+		decor(part(lobby, Vector3.new(gate.span + 3.4, 0.3, 0.2), frame * CFrame.new(0, top + 0.35, face * 1.25), gate.color, Enum.Material.Neon))
+	end
+	-- The name board stands on the lintel, readable from both ways.
+	local board = part(lobby, Vector3.new(math.min(gate.span + 2, 22), 3.4, 0.5), frame * CFrame.new(0, top + 2.4 + 1.7 - 0.05, 0), DARK, Enum.Material.Metal)
+	board.Name = "GateSign"
+	for _, face in ipairs({ Enum.NormalId.Front, Enum.NormalId.Back }) do
+		surfaceText(board, face, {
+			{ y = 0.04, h = 0.6, text = gate.title, color = gate.color },
+			{ y = 0.64, h = 0.3, text = gate.subtitle, color = WHITE, font = Enum.Font.GothamBold },
+		}, 30)
+	end
+	decor(part(lobby, Vector3.new(board.Size.X + 0.4, 0.3, 0.7), board.CFrame * CFrame.new(0, 1.7 + 0.1, 0), gate.color, Enum.Material.Neon))
+	-- The Rotling sits on the board's end, looking down the way in.
+	rotling(lobby, frame * CFrame.new(board.Size.X / 2 - 0.2, top + 2.4 + 3.4 - 0.1, 0), gate.color, 2.6)
+	-- Two banners on sway rods under the lintel, halfway to the pillars.
+	for _, side in ipairs({ -1, 1 }) do
+		local rodAt = frame * CFrame.new(side * half * 0.5, top - 0.1 - BANNER_DROP, 0)
+		local rod = part(lobby, Vector3.new(3.4, 0.3, 0.3), rodAt, WOOD_DARK, Enum.Material.Wood)
+		rod.Name = "BannerRod"
+		rod.CanCollide = false
+		rod:SetAttribute("SwayAxis", "X")
+		rod:SetAttribute("SwayAngle", 7)
+		rod:SetAttribute("SwaySpeed", 1.3)
+		rod:SetAttribute("SwayPhase", side + gate.span)
+		CollectionService:AddTag(rod, "AmbientSway")
+		local cloth = decor(part(rod, Vector3.new(3, 4.6, 0.15), rodAt * CFrame.new(0, -2.4, 0), gate.color:Lerp(DARK, 0.25), Enum.Material.Fabric))
+		cloth.Name = "Banner"
+		decor(part(rod, Vector3.new(3.05, 0.5, 0.2), rodAt * CFrame.new(0, -4.5, 0), gate.color, Enum.Material.Neon))
+		decor(part(rod, Vector3.new(1.2, 1.2, 0.2), rodAt * CFrame.new(0, -2.2, 0) * CFrame.Angles(0, 0, math.rad(45)), WHITE, Enum.Material.Neon))
+	end
+	return lintel
+end
+
+local function buildWayfinding(lobby, base)
+	buildRoad(lobby, base)
+	for _, gate in ipairs(GATES) do
+		buildGate(lobby, base, gate)
+	end
+end
+
+--------------------------------------------------------------------------------
 -- Ambience: lanterns, string lights, fireflies, fireworks, signposts
 --------------------------------------------------------------------------------
 
@@ -3602,7 +3783,7 @@ function LobbyService.Build(lobby, base)
 		{ "Statue", buildStatue }, { "TradingHall", buildTradingHall }, { "Cosmetics", buildCosmeticsStall },
 		{ "CrateAltar", buildCrateAltar }, { "DailySpin", buildDailySpin },
 		{ "Boards", buildBoards }, { "Arena", buildArena }, { "Pitch", buildPitch }, { "Balls", buildPlayBalls },
-		{ "CloudClimb", buildCloudClimb }, { "Ambience", buildAmbience },
+		{ "CloudClimb", buildCloudClimb }, { "Wayfinding", buildWayfinding }, { "Ambience", buildAmbience },
 	}) do
 		currentGroup = step[1]
 		step[2](lobby, base)
