@@ -78,8 +78,9 @@ local SHOOTER = Vector3.new(0, 3, 0)
 local STEP = 1 / 60
 
 -- One run: a victim 40 studs downrange crossing square on at `speed`, sampled at 60 Hz for half a
--- second. The shooter fires at `fireAt` at whatever `aim` names on the victim AS IT WAS THEN; the
--- shot arrives `ping` later. Returns the struck part's name (or nil) and the result.
+-- second. The shooter fires at `fireAt` at whatever `aim` names on the victim AS THEIR SCREEN SHOWED
+-- IT: Roblox draws other players Lag.InterpolationDelay behind (#97 F1), so that is the pose from
+-- `fireAt - delay` (`opts.seenDelay` overrides it). The shot arrives `ping` later. Returns the struck part's name (or nil) and the result.
 local function run(opts)
     for k in pairs(registered) do registered[k] = nil end
     for i = #M.workspace._children, 1, -1 do table.remove(M.workspace._children, i) end
@@ -95,13 +96,14 @@ local function run(opts)
     if opts.wall then M.wall("Cover", opts.wall.centre, opts.wall.size) end
 
     local fireAt, aimPoint = opts.fireAt or 0.25, nil
+    local seen = fireAt - (opts.seenDelay or Lag.InterpolationDelay)
     local t = 0
     local arrival = fireAt + (opts.ping or 0)
     while t <= arrival + 1e-9 do
         M.clock = t
         rawget(root, "_props").CFrame = CFrame.new(-6 + opts.speed * t, 3, -40)
         heartbeat()
-        if not aimPoint and t >= fireAt - 1e-9 then
+        if not aimPoint and t >= seen - 1e-9 then
             if opts.aim == "HeadTop" then
                 -- the top of the head, where a hat sits over it
                 aimPoint = victim:FindFirstChild("Head").CFrame.Position + Vector3.new(0, 0.5, 0)
@@ -122,7 +124,7 @@ local function run(opts)
     -- How far the rewound root is from where the victim really stood when the shot was fired.
     local error = nil
     if at then
-        error = (Lag.RootAt(victim, at, arrival).Position - Vector3.new(-6 + opts.speed * fireAt, 3, -40)).Magnitude
+        error = (Lag.RootAt(victim, at, arrival).Position - Vector3.new(-6 + opts.speed * seen, 3, -40)).Magnitude
     end
     return result and result.Instance.Name or nil, result, at, arrival, error
 end
@@ -168,7 +170,8 @@ do
     table.sort(other)
     note(reads.GetNetworkPing == true and #other == 0, "keys read off the shooting Player: GetNetworkPing" .. (#other > 0 and (" AND " .. table.concat(other, ", ")) or " only"))
     local _, _, at, arrival = run({ speed = SPEED, ping = 0.1 })
-    note(at and math.abs((arrival - at) - 0.1) < 1e-9, string.format("rewind = arrival - ping exactly (%.3f s)", at and (arrival - at) or -1))
+    local want = 0.1 + Lag.InterpolationDelay
+    note(at and math.abs((arrival - at) - want) < 1e-9, string.format("rewind = arrival - ping - InterpolationDelay exactly (%.3f s, want %.3f)", at and (arrival - at) or -1, want))
 end
 
 -- 5. Bots are never rewound.
@@ -348,9 +351,10 @@ def accessories(root, src):
 
 PLANTS = [
     ("rewind the wrong way", [("return arrival - ping", "return arrival + ping")]),
+    ("interpolation delay left out (#97 F1)", [("return arrival - ping - LagCompensation.InterpolationDelay", "return arrival - ping")]),
     ("no cap", [("ping > LagCompensation.Cap", "ping > 10")]),
     ("rewind to the cap instead of the present", [("or ping > LagCompensation.Cap then\n\t\treturn nil", "then\n\t\treturn nil\n\telseif ping > LagCompensation.Cap then\n\t\treturn arrival - LagCompensation.Cap")]),
-    ("resolve to the victim, not the part (headshots lost)", [("best, bestPart, bestNormal = t, part, normal", "best, bestPart, bestNormal = t, root, normal")]),
+    ("resolve to the victim, not the part (headshots lost)", [("best, bestPart, bestNormal, bestCarry = t, part, normal, carry", "best, bestPart, bestNormal, bestCarry = t, root, normal, carry")]),
     ("read a client timestamp", [("return arrival - ping", "return (shooterToken.ShotSentAt or arrival) - ping")]),
     ("rewind bots too", [("if not Combatants.IsPlayer(shooterToken) then\n\t\treturn nil\n\tend", "if false then end")]),
     ("ignore the shot's filter", [("if character.Parent and not excluded[character] then", "if character.Parent then"), ("if not skip then", "if true then")]),

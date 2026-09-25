@@ -561,8 +561,16 @@ RunService.RenderStepped:Connect(function(dt)
 			end
 		end
 
-		if firing and now - lastShotAt >= 1 / spec.fireRate and ready then
-			lastShotAt = now
+		local interval = 1 / spec.fireRate
+		if firing and now - lastShotAt >= interval and ready then
+			-- Advance by a whole interval, never reset to `now` (#97, as CombatClient's tryFire): this runs
+			-- on RenderStepped, and resetting threw the leftover away, so a 10/s gun fired 14% slow at 30 fps.
+			-- The server's shot budget (VehicleWeapons -> CombatService.ShotCredit) absorbs the jitter.
+			lastShotAt += interval
+			if now - lastShotAt > interval then
+				-- A fresh pull of the trigger, or a frame hitch: start from now, bank no burst.
+				lastShotAt = now
+			end
 			lastAimAt = now -- the server takes the aim from the shot too
 			fireRemote:FireServer(target)
 			if view then
