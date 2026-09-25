@@ -647,18 +647,16 @@ function ModeTeams.BuildAccessRoads(mapInfo)
 			local ground = terrainAt(mid.X, mid.Z) or ruin.height
 			local frame = CFrame.lookAt(Vector3.new(mid.X, ground + 7, mid.Z), Vector3.new(b.X, ground + 7, b.Z))
 			for _, part in ipairs(workspace:GetPartBoundsInBox(frame, Vector3.new(ACCESS_CLEAR * 2, 16, length), params)) do
-				if lootFolder and part:IsDescendantOf(lootFolder) then
-					-- A pickup is always cleared, never a blocker: its whole entry under the Loot folder goes.
-					local pickup = part
-					while pickup.Parent ~= lootFolder do
-						pickup = pickup.Parent
-					end
-					if clear then
-						clear[pickup] = true
-					end
-					continue
+				-- A pickup is always cleared, never a blocker: its whole entry under the Loot folder goes.
+				-- (No `continue`: the Python checks load this file into plain Lua.)
+				local pickup = lootFolder and part:IsDescendantOf(lootFolder) and part or nil
+				while pickup and pickup.Parent ~= lootFolder do
+					pickup = pickup.Parent
 				end
-				local item = mapItemOf(part, map)
+				if pickup and clear then
+					clear[pickup] = true
+				end
+				local item = not pickup and mapItemOf(part, map) or nil
 				local top = item and item.Parent
 				if item and not (top and keep[top.Name]) and item ~= ruin.model and not item:IsDescendantOf(ruin.model) then
 					-- mapItemOf returns the map's grandchild, so a compound or the battleground is its container
