@@ -4088,6 +4088,9 @@ local function renderBanner()
 		if matchState.dropSelect then
 			bannerTitle.Text = "CHOOSE YOUR DROP  " .. (matchState.countdown or 0)
 			bannerSub.Text = "Click the map, or leave it and land somewhere random"
+		elseif matchState.teamSelect then
+			bannerTitle.Text = "CHOOSE YOUR SIDE  " .. (matchState.countdown or 0)
+			bannerSub.Text = "Pick a team, or leave it on AUTO"
 		else
 			bannerTitle.Text = "BUILDING MAP…"
 			bannerSub.Text = "Generating terrain, towns and loot"
