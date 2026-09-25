@@ -2489,6 +2489,34 @@ local function craterAt(position, reach, damage, map)
 			workspace.Terrain:FillCylinder(CFrame.new(surface.X, middle, surface.Z), CELL, FLOOR_RADIUS + (middle - apexY) * WALL_RUN, Enum.Material.Air)
 		end
 	end
+	-- The rings leave 4-stud stairs that the terrain rounds to ~37 degrees at each riser. Then every
+	-- voxel over the cone is thinned to the cone's height in its column (a voxel's occupancy is how
+	-- full of ground it is), so the wall follows the designed slope more closely. Only ever lowers.
+	pcall(function()
+		local terrain = workspace.Terrain
+		local lo = Vector3.new(math.floor((surface.X - rim) / CELL) * CELL, math.floor(apexY / CELL) * CELL, math.floor((surface.Z - rim) / CELL) * CELL)
+		local hi = Vector3.new(math.ceil((surface.X + rim) / CELL) * CELL, math.ceil(top / CELL) * CELL, math.ceil((surface.Z + rim) / CELL) * CELL)
+		local region = Region3.new(lo, hi)
+		local materials, occupancies = terrain:ReadVoxels(region, CELL)
+		for i = 1, #occupancies do
+			for k = 1, #occupancies[i][1] do
+				local x, z = lo.X + (i - 0.5) * CELL, lo.Z + (k - 0.5) * CELL
+				local r = math.sqrt((x - surface.X) ^ 2 + (z - surface.Z) ^ 2)
+				local height = apexY + math.max(0, r - FLOOR_RADIUS) / WALL_RUN
+				for j = 1, #occupancies[i] do
+					local bottom = lo.Y + (j - 1) * CELL
+					local want = math.clamp((height - bottom) / CELL, 0, 1)
+					if want < occupancies[i][j][k] and materials[i][j][k] ~= Enum.Material.Water then
+						occupancies[i][j][k] = want
+						if want <= 0 then
+							materials[i][j][k] = Enum.Material.Air
+						end
+					end
+				end
+			end
+		end
+		terrain:WriteVoxels(region, CELL, materials, occupancies)
+	end)
 	forgetAround(surface, rim, map)
 	tellBroken(CFrame.new(Vector3.new(surface.X, (apexY + top) / 2, surface.Z)), Vector3.new(rim * 2, top - apexY + 2, rim * 2))
 	craterFx:FireAllClients({ surface, math.max(size, FLOOR_RADIUS + (target - depthNow) * WALL_RUN), hit.Material, hit.Normal, target })
