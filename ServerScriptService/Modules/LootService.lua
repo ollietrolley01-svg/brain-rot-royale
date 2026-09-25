@@ -275,8 +275,24 @@ end
 -- Pickups
 --------------------------------------------------------------------------------
 
-local function spawnGroundWeapon(position, forcedDef, ammo)
-	local def = forcedDef or WeaponData.RollGroundWeapon()
+-- Rolls `rollFn` `times` times and keeps the best rarity seen, the way spawnChest already rerolls
+-- for LootService.ChestRarityFloor. Picks within whatever pool `rollFn` already draws from -- no new
+-- rarity tier, no new odds table -- just a better chance at what was already possible there.
+local function bestOf(rollFn, times)
+	local best = rollFn()
+	for _ = 2, times do
+		local candidate = rollFn()
+		if (Rarity.Index[candidate.rarity] or 0) > (Rarity.Index[best.rarity] or 0) then
+			best = candidate
+		end
+	end
+	return best
+end
+
+-- `rerolls`: shed loot's remoteness nudge (MapWilds' addShedLoot / mapInfo.lootSpots.rarityBoost) --
+-- 0 or nil for every ordinary spot, which behaves exactly as before.
+local function spawnGroundWeapon(position, forcedDef, ammo, rerolls)
+	local def = forcedDef or ((rerolls and rerolls > 0) and bestOf(WeaponData.RollGroundWeapon, rerolls + 1) or WeaponData.RollGroundWeapon())
 	local color = Rarity.Color(def.rarity)
 
 	-- On whatever is really under the spot, the way a chest is. Spots arrive at the height their
@@ -669,13 +685,22 @@ function LootService.Populate(mapInfo)
 			return true
 		end
 
+		-- Shed loot's remoteness nudge: MapWilds keys it by the exact spot position it inserted
+		-- (see addShedLoot in MapWilds.lua), so ordinary spots (no entry here) are unaffected.
+		local rarityBoost = spots.rarityBoost
+		local function boostAt(position)
+			return rarityBoost and rarityBoost[string.format("%.3f,%.3f,%.3f", position.X, position.Y, position.Z)]
+		end
+
 		if not place(spots.weapon, WEAPON_FRACTION, function(position)
-			spawnGroundWeapon(position)
+			spawnGroundWeapon(position, nil, nil, boostAt(position))
 		end) then
 			return
 		end
 		if not place(spots.heal, HEAL_FRACTION, function(position)
-			spawnConsumable(position, ItemData.RollRecovery().id)
+			local boost = boostAt(position)
+			local def = (boost and boost > 0) and bestOf(ItemData.RollRecovery, boost + 1) or ItemData.RollRecovery()
+			spawnConsumable(position, def.id)
 		end) then
 			return
 		end

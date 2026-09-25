@@ -699,7 +699,7 @@ function InventoryPanel:_paintCard(refs, slot, state)
 			refs.count.Text = "x" .. tostring(slot.count or 1)
 			refs.count.TextColor3 = C.Text
 		else
-			refs.sub.Text = string.format("%s  •  %d reserve", string.upper(slot.rarity or ""), slot.reserve or 0)
+			refs.sub.Text = string.format("%s  •  ∞ ammo", string.upper(slot.rarity or ""))
 			refs.count.Text = string.format("%d/%d", slot.mag or 0, slot.magSize or 0)
 			refs.count.TextColor3 = (slot.mag or 0) == 0 and C.Red or C.Text
 		end

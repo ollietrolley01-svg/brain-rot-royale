@@ -16,7 +16,10 @@
 -- climbs, the same distance to both objectives. Only parts that sit ON that plane and are their own
 -- reflection (the fountain, the mast, the objective mosaic) are built once.
 --
--- THE LAYOUT (local studs, the half toward team 1; the disc is 126 across the middle, flattened):
+-- THE LAYOUT (local studs, the half toward team 1). The core below is the 126-radius disc it was; since
+-- 2026-09-24 the disc is 172 in radius and an outer ring surrounds it (see "The outer ring" below):
+-- the checkpoint, the tram depot and the signal box on the ways in, the freight dock on the cut, the
+-- rail yard and the scrap yard out on the flanks, and ten gun emplacements (GUN EMPLACEMENTS).
 --
 --                                   z = 0  (the mirror: team 2's half is this, reflected)
 --     -110        -84        -48  -30 -22     0      22 30        61   74 84  98   110
@@ -47,8 +50,9 @@
 -- WHAT BREAKS (DestructibleService). The perimeter ruin and the market's shop ruin are parts named
 -- "Wall"; sandbags, crates, containers, the wreck, barriers, tyres and the stalls are tagged pools
 -- ("Sandbags:bg12s" and so on: every pool string is numbered and carries its half, so no two pools on
--- the map ever share a key). NEVER breaks: the keep, the gatehouse, the pit, the gantry and the bridge
--- (each a Model tagged false), every floor, stair, ramp, pier and the paving.
+-- the map ever share a key). Since 2026-09-24 EVERYTHING breaks (DestructibleService is opt-out and
+-- keeps only spawns, the lobby, the storm and the map's edges): the NEVER flags below are history, the
+-- keep, the pit, the stairs and the floors come down too.
 --
 -- WHAT IS PROVED OFFLINE (tools/team_battleground_check.py runs this module's real source and the real
 -- ZFight, DestructibleService and BotNav): the mirror, no coplanar faces, nothing floating, cylinders
@@ -60,6 +64,7 @@
 -- looks: tools/team_battleground_gallery.lua renders it.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
 
 local ZFight = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("ZFight"))
 local MapTerrain = require(script.Parent:WaitForChild("MapTerrain"))
@@ -68,7 +73,8 @@ local TeamBattleground = {}
 
 -- The flattened disc (its radius), the flat kept round it, and the ring beyond that ClearSite empties
 -- of buildings and scenery so vehicles can drive all the way round.
-TeamBattleground.Radius = 126
+-- 172 since 2026-09-24 (Oliver: "the battle ground is too small"): it was 126, 1.86x the ground now.
+TeamBattleground.Radius = 172
 TeamBattleground.Margin = 4
 TeamBattleground.Apron = 24
 -- Distinct things standing in the footprint that ClearSite removes whole. A town building is 20-50
@@ -1003,6 +1009,64 @@ end
 -- The gatehouse: two towers and a wall-walk across the centre lane, each team's own perch
 --------------------------------------------------------------------------------
 
+-- A frame at (x, y, z) facing (tx, tz) (LookVector along it), for the busts.
+local function facing(x, y, z, tx, tz)
+	local dx, dz = tx - x, tz - z
+	return CFrame.new(x, y, z) * CFrame.Angles(0, math.atan2(-dx, -dz), 0)
+end
+
+--------------------------------------------------------------------------------
+-- GUN EMPLACEMENTS (Oliver 2026-09-24: "put the mountable guns in strategic locations")
+--------------------------------------------------------------------------------
+-- Each is an anchored, invisible, non-colliding Part named "GunEmplacement", tagged "GunEmplacement":
+-- its CFrame is the gun's base on a walkable floor, its LookVector the way the gun faces. The gun
+-- itself is the mounted-guns work's; these are only where it goes. Five in each half, each the
+-- other's reflection, on real positions: overwatch on raised ground over a lane or an objective, a
+-- choke point, a flank. Every one fires ACROSS the fight or into it with its back to a wall, never
+-- down the team axis at a base: a gun that faces along X has a steel mantlet 6.2 high up each side
+-- (over a gunner's eye, so neither base is in any line past it), and the one that faces up the
+-- centre lane (the gatehouse's bay) has the gatehouse's hoarding behind it and the keep in front.
+-- tools/team_battleground_check.py casts the rays that prove it (and that none sees a whole lane,
+-- that each has cover and a covered way in for the other team).
+TeamBattleground.EmplacementTag = "GunEmplacement"
+-- The gunner's eye over the base, and the arc the nest leaves open (degrees, the whole of it).
+TeamBattleground.GunEye = 3.6
+TeamBattleground.GunArc = 110
+local NEST_HALF, NEST_HIGH = 3.0, 6.2
+
+local function emplacement(parent, name, frame, covers)
+	local part = put(parent, "GunEmplacement", Vector3.new(2, 0.2, 2), frame, HAZARD, MAT.SmoothPlastic,
+		{ trim = true, transparency = 1 })
+	local id = name .. (B.mirror and "N" or "S")
+	part:SetAttribute("Emplacement", id)
+	part:SetAttribute("Covers", covers)
+	part:SetAttribute("ArcDegrees", TeamBattleground.GunArc)
+	-- Whose half it stands in (1 toward team 1's base); either team can take it.
+	part:SetAttribute("Half", B.mirror and 2 or 1)
+	CollectionService:AddTag(part, TeamBattleground.EmplacementTag)
+	table.insert(B.emplacements, { name = id, frame = B.mirror and mirrored(frame) or frame, covers = covers })
+	return part
+end
+
+-- A gun nest round an emplacement at `frame`: a steel mantlet up each side (`sides` false: none), a
+-- canvas awning over the gunner, a tread plate under the gun. One pool, tough.
+local function gunNest(parent, frame, sides)
+	local opts = pool("Prop")
+	opts.health = 700
+	local dressing = trimWith({ tag = opts.tag })
+	if sides ~= false then
+		for _, side in ipairs({ -1, 1 }) do
+			put(parent, "NestMantlet", Vector3.new(0.6, NEST_HIGH + 0.5, 4.8), frame * CFrame.new(side * NEST_HALF, (NEST_HIGH - 0.5) / 2, 0.25),
+				mix(STEEL, RUST, 0.35), MAT.CorrodedMetal, opts)
+			put(parent, "NestStripe", Vector3.new(0.12, 0.5, 4.2), frame * CFrame.new(side * (NEST_HALF + 0.36), NEST_HIGH - 0.7, 0.25), HAZARD,
+				MAT.SmoothPlastic, dressing)
+		end
+		put(parent, "NestAwning", Vector3.new(2 * NEST_HALF + 0.8, 0.2, 5.2), frame * CFrame.new(0, NEST_HIGH + 0.08, 0.25) * CFrame.Angles(0.05, 0, 0),
+			CANVAS, MAT.Fabric, dressing)
+	end
+	put(parent, "NestPlate", Vector3.new(4.4, 0.12, 4.0), frame * CFrame.new(0, 0.1, 0.3), STEEL_DARK, MAT.DiamondPlate, dressing)
+end
+
 local function buildGatehouse(root)
 	local gate = folder(root, "Gatehouse", true)
 	box(gate, "GateTower", -20, -13, -1, GATE_TOP, -72, -65, STONE, MAT.Limestone, NEVER)
@@ -1017,7 +1081,24 @@ local function buildGatehouse(root)
 	facePlate(gate, "ArchBand", "z", -65.5, 0.12, -12.6, 12.6, GATE_TOP - 0.9, GATE_TOP - 0.5, BASALT, MAT.Basalt)
 	box(gate, "Keystone", -1, 1, GATE_TOP - 1.9, GATE_TOP - 0.3, -71.75, -65.25, BASALT_LIGHT, MAT.Basalt, TRIM)
 	-- Merlons on the side that faces the fight.
-	merlons(gate, "x", -65.9, -12.4, 12.4, 0.8, GATE_TOP, 1.8)
+	-- (Open over the bay: x -10.2..-2.6.)
+	merlons(gate, "x", -65.9, -12.4, -9.8, 0.8, GATE_TOP, 1.8)
+	merlons(gate, "x", -65.9, -2.6, 12.4, 0.8, GATE_TOP, 1.8)
+	-- The gun bay: a stone balcony out over the forecourt on two corbels, sandbagged at its sides, its
+	-- gun facing up the centre lane at the keep's south door; the timber hoarding along the back of
+	-- the wall-walk is what stands between it and this team's own way in.
+	box(gate, "GateBay", -10.2, -2.6, GATE_TOP - 1, GATE_TOP, -65.5, -60.5, STONE_DARK, MAT.Cobblestone, NEVER)
+	for _, x in ipairs({ -9.6, -3.2 }) do
+		box(gate, "BayCorbel", x - 0.5, x + 0.5, 6.4, GATE_TOP - 1, -65.5, -62.4, STONE, MAT.Limestone, NEVER)
+		sandbags(gate, x, -65.1, x, -60.9, 3, GATE_TOP, true)
+	end
+	box(gate, "Hoarding", -13, 0.4, GATE_TOP, GATE_TOP + 5.4, -71.5, -70.9, WOOD_DARK, MAT.WoodPlanks)
+	for _, x in ipairs({ -11, -6.4, -1.8 }) do
+		box(gate, "HoardingBrace", x - 0.25, x + 0.25, GATE_TOP, GATE_TOP + 5.1, -70.9, -70.5, WOOD, MAT.Wood, TRIM)
+	end
+	local bayGun = facing(-6.4, GATE_TOP, -62.6, -6.4, 0)
+	gunNest(gate, bayGun, false)
+	emplacement(gate, "GateBay", bayGun, "the forecourt, the keep's south door (objective A)")
 	merlons(gate, "x", -65.5, -19.8, -13.2, 1, GATE_TOP, 1.8)
 	merlons(gate, "x", -65.5, 13.2, 19.8, 1, GATE_TOP, 1.8)
 	-- A stair up the outside of each tower, from the team's own side.
@@ -1098,7 +1179,6 @@ local function buildEntry(root)
 	wreck(entry, -21, -97, 0.45)
 	hedgehog(entry, 12, -112)
 	teeth(entry, 3.2, -116, 2)
-	teeth(entry, -6.4, -104, 2)
 	teeth(entry, 3.2, -94, 2)
 	crates(entry, 12.5, -84, 2, 0, 0)
 	sandbags(entry, -9, -86, -2.6, -86, 3, 0)
@@ -1121,11 +1201,6 @@ end
 -- The pit (objective B): a plaza walled in by a rim above eye height, centred on (PX, 0)
 --------------------------------------------------------------------------------
 
--- A frame at (x, y, z) facing (tx, tz) (LookVector along it), for the busts.
-local function facing(x, y, z, tx, tz)
-	local dx, dz = tx - x, tz - z
-	return CFrame.new(x, y, z) * CFrame.Angles(0, math.atan2(-dx, -dz), 0)
-end
 
 -- A stone bust on a plinth in a corner of the pit, looking at the fountain. Kind 1 is the Brr bust
 -- (a round head in a tall hat), kind 2 the Croc bust (a flat head and a long snout), both with the
@@ -1188,7 +1263,7 @@ local function buildPit(root)
 		box(pit, "RimParapet", -102.8, -102, RIM, RIM + 2.4, run[1], run[2], LIME, MAT.Sandstone, NEVER)
 		table.insert(B.cover, here(-104.4, RIM, (run[1] + run[2]) / 2))
 	end
-	for _, run in ipairs({ { -108.6, -94 }, { -84, -77.6 } }) do
+	for _, run in ipairs({ { -108.6, -99.4 }, { -84, -77.6 } }) do
 		box(pit, "RimParapet", run[1], run[2], RIM, RIM + 1.2, -26, -25.2, LIME, MAT.Sandstone, NEVER)
 	end
 	-- Two ways up from outside: a stair up the south face, one up the west.
@@ -1468,7 +1543,6 @@ local function buildApproach(root)
 		MAT.Limestone, NEVER)
 	disc(monolith, "MonolithEye", Vector3.new(-48.1, 7.6, -11.7), Vector3.new(0, 0, 1), 0.08, 2.0, WHITE_PAINT, MAT.SmoothPlastic)
 	disc(monolith, "MonolithPupil", Vector3.new(-48.1, 7.6, -11.54), Vector3.new(0, 0, 1), 0.08, 0.9, ROT_GREEN, MAT.Neon)
-	coverAt(-48.1, -18.9, 0)
 	coverAt(-43.2, -14, 0)
 	-- A billboard out on the tram approach, facing the centre lane over the field: the tallest thing on
 	-- this side after the keep, lit from above at night, the approach's landmark.
@@ -1497,7 +1571,7 @@ end
 -- bends. Each straight is under 40 long and every bend has a container on its outside, so neither a
 -- car nor a rifle gets a long straight run down it.
 local LANE = {
-	Vector3.new(70, 0, -114), Vector3.new(70, 0, -80), Vector3.new(88, 0, -56),
+	Vector3.new(104, 0, -150), Vector3.new(70, 0, -116), Vector3.new(70, 0, -80), Vector3.new(88, 0, -56),
 	Vector3.new(88, 0, -28), Vector3.new(67, 0, -10), Vector3.new(67, 0, 0),
 }
 TeamBattleground.LaneHalfWidth = 8
@@ -1638,7 +1712,7 @@ local function buildLane(root)
 	drums(lane, { { 62.6, -40.8 }, { 64.6, -41.4 }, { 63.3, -43.2 } })
 	rubble(lane, 96.5, -58, 2.2, 5, 0, { RUST, STEEL_DARK, mix(RUST, SOOT, 0.4) })
 	lootSpot("LaneWest", 56, 0, -100, "weapon")
-	lootSpot("LaneEast", 99, 0, -44, "heal")
+	lootSpot("LaneEast", 98.5, 0, -36, "heal")
 	return lane
 end
 
@@ -1713,6 +1787,372 @@ local function buildBridge(root)
 end
 
 --------------------------------------------------------------------------------
+-- The outer ring (Oliver 2026-09-24: "the battle ground is too small ... needs to be larger")
+--------------------------------------------------------------------------------
+-- The disc went from 126 to 172 across its radius (1.86x the ground), for 25 a side and their cars.
+-- The core is as it was; round it, in each half:
+--   the CHECKPOINT on the centre lane's way in (blast walls in a chicane, the booth, a fallen head),
+--   the TRAM DEPOT on the pit lane's (a roofless shed you go through), the SIGNAL BOX (a roof over the
+--   west lane, a gangway to the pit's rim), the FREIGHT DOCK and the cut's new first bend on the east,
+--   and out on the flanks the RAIL YARD (west) and the SCRAP YARD (east): rows of wagons and
+--   containers across the flank with the gaps staggered, so the flank route zig-zags and no line
+--   runs down it, and the yard's deck on stilts over the cut.
+
+-- A freight box: a body and two stencilled plates, one pool. `ends` puts the plates on its end
+-- faces (for the ones standing across the mirror, which must be their own reflections).
+local function boxcar(parent, x0, x1, z0, z1, color, label, base, height, ends)
+	base = base or 0
+	height = height or 7
+	local opts = pool("Container")
+	opts.health = 900
+	box(parent, "Container", x0, x1, base - 0.3, base + height, z0, z1, color, MAT.Metal, opts)
+	local dressing = trimWith({ tag = opts.tag })
+	local alongX = (x1 - x0) >= (z1 - z0)
+	local faceAxis = (alongX ~= (ends == true)) and "z" or "x"
+	local faces = faceAxis == "z" and { z0, z1 } or { x0, x1 }
+	local u0, u1 = faceAxis == "z" and x0 or z0, faceAxis == "z" and x1 or z1
+	local inset = math.min(2.2, (u1 - u0) / 4)
+	for _, face in ipairs(faces) do
+		local plate = facePlate(parent, "ContainerStencil", faceAxis, face, 0.06, u0 + inset, u1 - inset, base + height * 0.52, base + height * 0.86,
+			mix(color, SOOT, 0.3), MAT.Metal, dressing)
+		if label then
+			signText(plate, label, mix(WHITE_PAINT, color, 0.2))
+		end
+	end
+	if alongX then
+		coverLine(x0 + 2, (z0 + z1) / 2, x1 - 2, (z0 + z1) / 2, base, (z1 - z0) / 2 + 1.8)
+	else
+		coverLine((x0 + x1) / 2, z0 + 2, (x0 + x1) / 2, z1 - 2, base, (x1 - x0) / 2 + 1.8)
+	end
+end
+
+-- A precast blast wall on its foot, `height` high, with a painted band. One pool.
+local function blastWall(parent, x0, x1, z0, z1, height)
+	local opts = pool("Prop")
+	opts.health = 520
+	box(parent, "BlastWall", x0, x1, -0.3, height, z0, z1, CONCRETE, MAT.Concrete, opts)
+	local alongX = (x1 - x0) >= (z1 - z0)
+	if alongX then
+		box(parent, "BlastWallFoot", x0 + 0.15, x1 - 0.15, -0.45, 0.7, z0 - 0.55, z1 + 0.55, CONCRETE_DARK, MAT.Concrete, opts)
+		facePlate(parent, "BlastWallBand", "z", z0, 0.06, x0 + 0.4, x1 - 0.4, height - 1.2, height - 0.7, HAZARD, MAT.SmoothPlastic,
+			trimWith({ tag = opts.tag }))
+		coverLine(x0, (z0 + z1) / 2, x1, (z0 + z1) / 2, 0, (z1 - z0) / 2 + 1.6)
+	else
+		box(parent, "BlastWallFoot", x0 - 0.55, x1 + 0.55, -0.45, 0.7, z0 + 0.15, z1 - 0.15, CONCRETE_DARK, MAT.Concrete, opts)
+		facePlate(parent, "BlastWallBand", "x", x0, 0.06, z0 + 0.4, z1 - 0.4, height - 1.2, height - 0.7, HAZARD, MAT.SmoothPlastic,
+			trimWith({ tag = opts.tag }))
+		coverLine((x0 + x1) / 2, z0, (x0 + x1) / 2, z1, 0, (x1 - x0) / 2 + 1.6)
+	end
+end
+
+-- Two rails along X under a row of wagons (dressing, flush with nothing: they sit 0.05 proud).
+local function sidings(parent, x0, x1, z)
+	for _, dz in ipairs({ -0.75, 0.75 }) do
+		box(parent, "Rail", x0, x1, 0.02, 0.2, z + dz - 0.1, z + dz + 0.1, STEEL, MAT.Metal, TRIM)
+	end
+end
+
+-- A way up on stilts and a sign: shared by the signal box's gangway and the yard's deck.
+local function stilt(parent, x, z, top)
+	rod(parent, "Stilt", Vector3.new(x, -0.4, z), Vector3.new(x, top, z), 0.8, STEEL_DARK, MAT.Metal)
+end
+
+local ROOF = 9 -- the signal box's roof
+local DECK = 8.5 -- the sentry post's and the scrap yard's decks
+
+local function buildCheckpoint(root)
+	local cp = folder(root, "Checkpoint")
+	-- A chicane of blast walls across the way in, the gaps at alternate ends: the centre lane's first
+	-- cover off the town, and nothing down it at eye height.
+	blastWall(cp, -3, 11.5, -127.2, -126.2, 6)
+	blastWall(cp, -12, 4, -145, -144, 6)
+	boxcar(cp, -32, -11, -140, -134, mix(OLIVE_DRAB, STEEL, 0.3), "ROT FREIGHT CO.")
+	-- The checkpoint's booth: a concrete office with a flat roof, its windows blown, the boom still down.
+	local booth = folder(cp, "Booth")
+	booth:SetAttribute("Destructible", "Shelter")
+	box(booth, "BoothWall", 11.5, 22, -0.5, 7.4, -156, -150, CONCRETE, MAT.Concrete)
+	box(booth, "BoothRoof", 11.1, 22.4, 7.4, 7.9, -156.4, -149.6, CONCRETE_DARK, MAT.Concrete)
+	facePlate(booth, "BoothWindow", "z", -150, 0.1, 12.6, 20.8, 3.4, 6.2, SOOT, MAT.Glass)
+	facePlate(booth, "BoothStripe", "z", -150, 0.14, 11.7, 21.8, 1.2, 1.8, HAZARD, MAT.SmoothPlastic)
+	local sign = box(booth, "BoothSign", 12.4, 21.2, 7.95, 9.3, -150.4, -150.1, PURPLE_DARK, MAT.Metal, TRIM)
+	signText(sign, "CHECKPOINT · SHOW YOUR ROT", WHITE_PAINT)
+	rod(booth, "BoomArm", Vector3.new(11.4, 3.2, -151.5), Vector3.new(-2, 3.2, -151.5), 0.3, HAZARD, MAT.SmoothPlastic, TRIM)
+	coverAt(9.6, -153, 0)
+	coverAt(16.7, -158, 0)
+	-- The colossus's fallen head on the entry road, face down: the centre lane's line off the town stops
+	-- at it (it stands where two rows of tank teeth used to).
+	local head = folder(cp, "FallenHead")
+	head:SetAttribute("Destructible", "Rock")
+	put(head, "StatueHead", Vector3.new(6.4, 6.2, 6.2), CFrame.new(-5.6, 2.8, -103) * CFrame.Angles(0, 0.18, 0.12), BRONZE, MAT.Metal)
+	disc(head, "StatueEye", Vector3.new(-2.35, 3.6, -103.6), Vector3.new(1, 0, 0), 0.06, 2.2, WHITE_PAINT, MAT.SmoothPlastic,
+		trimWith({ tag = "Rock" }))
+	coverAt(-5.6, -107.8, 0)
+	coverAt(-5.6, -98.2, 0)
+	teeth(cp, -3, -158, 1)
+	lampPost(cp, -16, -129, 0, 0)
+	lampPost(cp, 25, -140, 0, math.pi)
+	lootSpot("Booth", 17, 0, -159, "heal")
+	return cp
+end
+
+local function buildDepot(root)
+	local depot = folder(root, "TramDepot")
+	local brick = { name = "Wall", health = 200, color = BRICK, material = MAT.Brick, brick = false, bottom = -1 }
+	local brickZ = { name = "Wall", health = 200, color = BRICK_DARK, material = MAT.Brick, brick = false, bottom = -1.1 }
+	-- A roofless shed 24 x 18, a door in every side: the pit lane runs in the east door and out the north.
+	wallRun(depot, -88, -144, -80, -144, 1.2, 7.6, 8.4, brick)
+	wallRun(depot, -73, -144, -64, -144, 1.2, 7.6, 8.4, brick)
+	wallRun(depot, -88, -126, -76, -126, 1.2, 7.6, 8.4, brick)
+	wallRun(depot, -70, -126, -64, -126, 1.2, 7.6, 8.4, brick)
+	wallRun(depot, -88, -144, -88, -138, 1.2, 6.4, 7.2, brickZ)
+	wallRun(depot, -88, -132, -88, -126, 1.2, 6.4, 7.2, brickZ)
+	wallRun(depot, -64, -144, -64, -136, 1.2, 6.4, 7.2, brickZ)
+	wallRun(depot, -64, -130, -64, -126, 1.2, 6.4, 7.2, brickZ)
+	doorway("DepotSouth", -80, -73, -144.6, -143.4, 0, 40)
+	doorway("DepotNorth", -76, -70, -126.6, -125.4, 0, 40)
+	doorway("DepotWest", -88.6, -87.4, -138, -132, 0, 40)
+	doorway("DepotEast", -64.6, -63.4, -136, -130, 0, 40)
+	tramCar(depot, -86, -72, -137.5, -132.5, "DepotTram", false)
+	local board = facePlate(depot, "DepotSign", "z", -144.6, 0.1, -86.5, -81, 4.2, 5.6, mix(HAZARD, WOOD, 0.4), MAT.Wood, TRIM)
+	signText(board, "ROT TRAMWAYS · DEPOT 3", SOOT)
+	sidings(depot, -86.5, -65.5, -135)
+	-- The pit lane off the town: a wall across it south of the shed, one north of the tram stop's field.
+	blastWall(depot, -63, -48, -131, -130, 6)
+	blastWall(depot, -61, -53, -89, -88, 6)
+	blastWall(depot, -88, -67, -100, -99, 6)
+	teeth(depot, -53, -152, 1)
+	teeth(depot, -64, -116, 1)
+	teeth(depot, -55, -78, 1)
+	lampPost(depot, -52, -142, 0, math.pi)
+	lootSpot("Depot", -78, TILE, -129.5, "weapon")
+	return depot
+end
+
+local function buildSignalBox(root)
+	local sb = folder(root, "SignalBox")
+	-- The box: brick, 12 x 10 and 9 up, the roof its floor. Its windows and door are dressing.
+	box(sb, "SignalBoxWall", -98, -86, -1, ROOF, -66, -56, BRICK, MAT.Brick)
+	facePlate(sb, "PlinthCourse", "x", -86, 0.2, -65.8, -56.2, -0.3, 1.4, BASALT_LIGHT, MAT.Slate)
+	facePlate(sb, "PlinthCourse", "z", -56, 0.2, -97.8, -86.2, -0.3, 1.4, BASALT_LIGHT, MAT.Slate)
+	for _, z in ipairs({ -64, -59.5 }) do
+		facePlate(sb, "BoxWindow", "x", -86, 0.12, z, z + 2.5, 4.4, 7.2, SOOT, MAT.Glass)
+	end
+	facePlate(sb, "BoxWindow", "z", -56, 0.12, -91.5, -88, 4.4, 7.2, SOOT, MAT.Glass)
+	facePlate(sb, "BoxDoor", "x", -98, 0.12, -62.5, -59.5, 0, 6.6, WOOD_DARK, MAT.WoodPlanks)
+	local name = facePlate(sb, "BoxName", "x", -86, 0.16, -64.5, -57.5, 7.5, 8.6, WHITE_PAINT, MAT.SmoothPlastic)
+	signText(name, "SIGNAL BOX 7", SOOT)
+	-- The roof's parapet, knee-high, open where the stair and the gangway come on.
+	box(sb, "Parapet", -86.6, -86, ROOF, ROOF + 1.1, -66, -56, BRICK_DARK, MAT.Brick)
+	box(sb, "Parapet", -92, -86.6, ROOF, ROOF + 1.1, -56.6, -56, BRICK_DARK, MAT.Brick)
+	box(sb, "Parapet", -90.4, -86.6, ROOF, ROOF + 1.1, -66, -65.4, BRICK_DARK, MAT.Brick)
+	box(sb, "Parapet", -98, -97.4, ROOF, ROOF + 1.1, -66, -60, BRICK_DARK, MAT.Brick)
+	-- Up the south face from the east, onto a landing, onto the roof.
+	flightX(sb, "SignalStair", -71.5, -66.2, -80, -92, 0, ROOF, 12, STONE_DARK, MAT.Cobblestone, -0.5)
+	box(sb, "SignalLanding", -98, -92, -0.5, ROOF, -71.5, -66, STONE_DARK, MAT.Cobblestone)
+	-- The gangway north to the pit's rim: a second way up, and a flank over the tram approach.
+	local a, b = Vector3.new(-95.5, ROOF - 0.3, -56.3), Vector3.new(-95.5, RIM - 0.3, -25.7)
+	plateBetween(sb, "Gangway", a, b, 6, 0.6, STEEL, MAT.DiamondPlate)
+	local function deckY(z)
+		return a.Y + (b.Y - a.Y) * (z - a.Z) / (b.Z - a.Z) - 0.32
+	end
+	for _, z in ipairs({ -48, -38 }) do
+		for _, x in ipairs({ -98, -93 }) do
+			stilt(sb, x, z, deckY(z) - 0.5)
+		end
+		box(sb, "GangwayBeam", -98.4, -92.6, deckY(z) - 0.5, deckY(z) - 0.02, z - 0.3, z + 0.3, RUST, MAT.CorrodedMetal, TRIM)
+	end
+	for _, x in ipairs({ -98.3, -92.7 }) do
+		rod(sb, "GangwayRail", Vector3.new(x, ROOF + 1.1, -56.1), Vector3.new(x, RIM + 1.1, -26.2), 0.14, STEEL_DARK, MAT.Metal, TRIM)
+		for _, z in ipairs({ -48, -38, -30 }) do
+			rod(sb, "GangwayPost", Vector3.new(x, deckY(z) + 0.3, z), Vector3.new(x, deckY(z) + 1.8, z), 0.12, STEEL_DARK, MAT.Metal, TRIM)
+		end
+	end
+	light(ball(sb, "GangwayLamp", Vector3.new(-92.7, deckY(-43) + 1.45, -43), 0.5, ROT_GREEN, MAT.Neon, TRIM), ROT_GREEN, 14, 0.7)
+	-- A semaphore signal at the box's corner, its arm at danger: the west's landmark.
+	local mast = folder(sb, "Semaphore")
+	mast:SetAttribute("Destructible", "Lamp")
+	rod(mast, "SignalPole", Vector3.new(-83.5, -0.3, -53.5), Vector3.new(-83.5, 17, -53.5), 0.6, STEEL_DARK, MAT.Metal)
+	box(mast, "SignalArm", -83.2, -82.8, 14.6, 15.4, -58.5, -53.9, MAROON, MAT.SmoothPlastic)
+	light(ball(mast, "SignalLamp", Vector3.new(-83.5, 16.2, -54.3), 0.8, ROT_GREEN, MAT.Neon, TRIM), ROT_GREEN, 20, 1)
+	coverBox(-84.6, -82.4, -54.6, -52.4, 0, 1.4)
+	-- The roof's gun, facing east across the west lane and the tram approach.
+	local frame = facing(-89.8, ROOF, -61, -60, -61)
+	gunNest(sb, frame)
+	emplacement(sb, "SignalBox", frame, "west lane, tram approach")
+	table.insert(B.cover, here(-95, ROOF, -63.5))
+	table.insert(B.cover, here(-95, ROOF, -58.5))
+	coverAt(-99.8, -61, 0)
+	coverAt(-84.2, -61, 0)
+	lootSpot("SignalRoof", -95.5, ROOF, -61.5, "heal")
+	return sb
+end
+
+local function buildSentry(root)
+	local sentry = folder(root, "SentryPost")
+	-- A steel catwalk off the head of the gatehouse's east stair, out to a platform over the market's
+	-- gate, and a stair down from it: a third way onto the gatehouse and a post over the cut.
+	box(sentry, "Catwalk", 26, 34, DECK - 0.6, DECK, -70.2, -65.2, STEEL, MAT.DiamondPlate)
+	box(sentry, "SentryDeck", 34, 47, DECK - 0.6, DECK, -73, -61, STEEL, MAT.DiamondPlate)
+	for _, leg in ipairs({ { 30, -69.6 }, { 30, -65.8 }, { 34.6, -72.4 }, { 46.4, -72.4 }, { 34.6, -61.6 }, { 46.4, -61.6 } }) do
+		stilt(sentry, leg[1], leg[2], DECK - 0.62)
+	end
+	flightZ(sentry, "SentryStair", 34.5, 40, -84, -73, 0, DECK, 11, CONCRETE_DARK, MAT.Concrete, -0.5)
+	-- The market's sign along the deck's back edge, to the south: read from this team's way in, and
+	-- the gun's back (neither base in a line past it).
+	local board = box(sentry, "SentrySign", 40.5, 47, DECK, DECK + 6, -73, -72.6, PURPLE_DARK, MAT.Metal)
+	signText(board, "ROT MARKET", WHITE_PAINT)
+	box(sentry, "SentryRail", 34, 39.4, DECK, DECK + 1.1, -61.3, -61, STEEL_DARK, MAT.Metal)
+	for _, z in ipairs({ -70.05, -65.35 }) do
+		rod(sentry, "CatwalkRail", Vector3.new(26.2, DECK + 1.05, z), Vector3.new(33.8, DECK + 1.05, z), 0.12, STEEL_DARK, MAT.Metal, TRIM)
+		for _, x in ipairs({ 27, 33 }) do
+			rod(sentry, "CatwalkPost", Vector3.new(x, DECK, z), Vector3.new(x, DECK + 1.1, z), 0.1, STEEL_DARK, MAT.Metal, TRIM)
+		end
+	end
+	-- Festoon bulbs along the catwalk: the market's warm light carried out to the gate.
+	for k, x in ipairs({ 28, 30.5, 33 }) do
+		local bulb = ball(sentry, "FestoonBulb", Vector3.new(x, DECK + 1.25, -65.35), 0.3, k == 2 and mix(WARM, ROT_GREEN, 0.35) or WARM, MAT.Neon, TRIM)
+		if k == 2 then
+			light(bulb, WARM, 16, 0.8)
+		end
+	end
+	-- Its gun faces up the market at the keep's east door, the bridge's deck and the keep behind it
+	-- standing across every line to the far base.
+	local frame = facing(43, DECK, -66, 43, 0)
+	gunNest(sentry, frame)
+	emplacement(sentry, "SentryPost", frame, "the market, the keep's east door")
+	table.insert(B.cover, here(36.5, DECK, -63))
+	return sentry
+end
+
+local function buildDock(root)
+	local dock = folder(root, "FreightDock")
+	-- A loading dock knee-high (walkable straight on), a wagon on it, crates.
+	box(dock, "DockSlab", 48, 64, -0.5, 1.3, -152, -136, CONCRETE, MAT.Concrete)
+	facePlate(dock, "DockEdge", "x", 48, 0.1, -151.8, -136.2, 0.9, 1.25, HAZARD, MAT.SmoothPlastic)
+	boxcar(dock, 50, 62, -148.5, -144, MAROON, "ROT FREIGHT CO.", 1.3)
+	crates(dock, 57, -139, 1, 1, 1.3)
+	-- The cut's new first bend (from the south-east, then north): a wagon on each side of it, so the
+	-- straight into it and the straight out of it both end against steel.
+	boxcar(dock, 62, 80, -143, -137, NAVY, "ROT FREIGHT CO.")
+	boxcar(dock, 54, 62, -128, -116, mix(RUST, MAROON, 0.4), nil)
+	barrier(dock, 46.5, -126, 5)
+	teeth(dock, 39, -147, 1)
+	teeth(dock, 36, -157, 1)
+	-- North of the bend, between the cut and the scrap yard: two lines of wagons across the lines down
+	-- the east side.
+	boxcar(dock, 86, 106, -118, -112, mix(STEEL, NAVY, 0.4), "ROT FREIGHT CO.")
+	boxcar(dock, 88.5, 111, -74, -68, mix(OLIVE_DRAB, RUST, 0.3), "ROT FREIGHT CO.")
+	lampPost(dock, 32, -150, 0, 0)
+	lootSpot("Dock", 53, 1.3, -139.5, "item")
+	return dock
+end
+
+-- The flank rows: wagons standing on sidings (west) and containers (east), each row with a gap, the
+-- gaps staggered so the flank route zig-zags through them and no line runs down the flank.
+local WEST_ROWS = {
+	{ z = -26, runs = { { -166, -150 }, { -144, -112 } } },
+	{ z = -50, runs = { { -162, -128 }, { -122, -104 } } },
+	{ z = -72, runs = { { -144, -98.2 } }, stub = { -154.5, -150 }, stack = "last" },
+}
+local EAST_ROWS = {
+	{ z = -30, runs = { { 116, 150 }, { 156, 165 } } },
+	{ z = -58, runs = { { 112, 130 }, { 142, 158 } }, stack = "first" },
+	{ z = -84, runs = { { 118, 146 } } },
+}
+local WAGON = { MAROON, mix(OLIVE_DRAB, STEEL, 0.3), NAVY, mix(RUST, MAROON, 0.4), mix(STEEL, NAVY, 0.4) }
+
+local function wagonRow(parent, row, index, label)
+	for k, run in ipairs(row.runs) do
+		local length = run[2] - run[1]
+		local pieces = math.max(1, math.floor(length / 17 + 0.5))
+		for p = 1, pieces do
+			local x0 = run[1] + length * (p - 1) / pieces + (p > 1 and 0.6 or 0)
+			local x1 = run[1] + length * p / pieces
+			-- Beside a deck (the signal box's landing, the scrap yard's), stacked two high: nobody steps
+			-- or drops off the deck onto its roof.
+			local stacked = (row.stack == "first" and k == 1 and p == 1) or (row.stack == "last" and k == #row.runs and p == pieces)
+			boxcar(parent, x0, x1, row.z - 3, row.z + 3, WAGON[(index + k + p) % #WAGON + 1], label, 0, stacked and 13.6 or 7)
+		end
+	end
+	if row.stub then
+		blastWall(parent, row.stub[1], row.stub[2], row.z - 1, row.z + 1, 6)
+	end
+end
+
+local function buildRailYard(root)
+	local yard = folder(root, "RailYard")
+	for index, row in ipairs(WEST_ROWS) do
+		wagonRow(yard, row, index, "ROT FREIGHT CO.")
+		sidings(yard, row.runs[1][1] - 1, row.runs[#row.runs][2] + 1, row.z)
+	end
+	-- The yard's water tower, off the flank route: four legs, the tank, its cap.
+	local tower = folder(yard, "WaterTower")
+	tower:SetAttribute("Destructible", "Prop")
+	local cx, cz = -108.2, -101.6
+	for _, c in ipairs({ { -3, -3 }, { 3, -3 }, { 3, 3 }, { -3, 3 } }) do
+		rod(tower, "TowerLeg", Vector3.new(cx + c[1], -0.4, cz + c[2]), Vector3.new(cx + c[1] * 0.8, 16.2, cz + c[2] * 0.8), 0.7, STEEL_DARK, MAT.Metal)
+	end
+	rod(tower, "TowerTank", Vector3.new(cx, 16, cz), Vector3.new(cx, 23, cz), 8, mix(RUST, WOOD, 0.3), MAT.CorrodedMetal)
+	put(tower, "TowerCap", Vector3.new(6.2, 1.2, 6.2), CFrame.new(cx, 23.5, cz) * CFrame.Angles(0, 0.785, 0), STEEL_DARK, MAT.Metal)
+	rod(tower, "TowerBand", Vector3.new(cx, 19.2, cz), Vector3.new(cx, 20.4, cz), 8.2, PURPLE_DARK, MAT.SmoothPlastic, TRIM)
+	coverBox(cx - 3.4, cx + 3.4, cz - 3.4, cz + 3.4, 0, 1.4)
+	teeth(yard, -134, -91.5, 1)
+	teeth(yard, -101, -125.5, 1)
+	teeth(yard, -106.5, -114.5, 1)
+	teeth(yard, -133, -16.5, 1)
+	teeth(yard, -136, -41.5, 1)
+	teeth(yard, -116.5, -97, 1)
+	lootSpot("RailYard", -125, 0, -45, "weapon")
+	lootSpot("RailYardB", -147, 0, -60, "heal")
+	return yard
+end
+
+local function buildScrapYard(root)
+	local yard = folder(root, "ScrapYard")
+	for index, row in ipairs(EAST_ROWS) do
+		wagonRow(yard, row, index + 2, "BRAINROT SALVAGE")
+	end
+	teeth(yard, 140, -22.5, 1)
+	teeth(yard, 118.5, -100, 1)
+	teeth(yard, 124, -20, 1)
+	-- The yard's deck on stilts, over the cut: up a stair from the cut's side and one from the yard's.
+	box(yard, "YardDeck", 112, 126, DECK - 0.6, DECK, -54, -40, STEEL, MAT.DiamondPlate)
+	for _, leg in ipairs({ { 112.6, -53.4 }, { 125.4, -53.4 }, { 112.6, -40.6 }, { 125.4, -40.6 } }) do
+		stilt(yard, leg[1], leg[2], DECK - 0.62)
+	end
+	flightX(yard, "YardStair", -46.5, -41, 100, 112, 0, DECK, 11, CONCRETE_DARK, MAT.Concrete, -0.5)
+	flightX(yard, "YardStair", -54, -48.5, 136, 126, 0, DECK, 11, CONCRETE_DARK, MAT.Concrete, -0.5)
+	box(yard, "YardRail", 125.7, 126, DECK, DECK + 1.1, -48, -40, STEEL_DARK, MAT.Metal)
+	box(yard, "YardRail", 112, 125.7, DECK, DECK + 1.1, -40.3, -40, STEEL_DARK, MAT.Metal)
+	local sign = box(yard, "YardSign", 115, 123, DECK + 1.1, DECK + 2.4, -40.25, -40.05, mix(HAZARD, WOOD, 0.4), MAT.Wood, TRIM)
+	signText(sign, "BRAINROT SALVAGE", SOOT)
+	local frame = facing(116, DECK, -50.5, 90, -50.5)
+	gunNest(yard, frame)
+	emplacement(yard, "ScrapYard", frame, "vehicle cut, gantry approach")
+	table.insert(B.cover, here(121, DECK, -44))
+	tyres(yard, 131, -76, 3)
+	drums(yard, { { 150, -44 }, { 151.8, -42.6 }, { 149.4, -42.2 } })
+	lampPost(yard, 132, -40, 0, math.pi / 2)
+	lootSpot("ScrapYard", 145, 0, -44, "weapon")
+	lootSpot("YardDeck", 122.5, DECK, -45, "item")
+	return yard
+end
+
+-- The berm's battery: a platform on the berm's keep side at the ridge's height, its gun facing west
+-- over the ridge into the pit and its cut (objective B).
+local function buildBattery(root)
+	local battery = folder(root, "BermBattery")
+	box(battery, "BatteryPlatform", -55.8, -46, -0.6, RIM, -25.7, -19.3, LIME_DARK, MAT.Sandstone)
+	facePlate(battery, "RimCoping", "x", -46, 0.12, -25.5, -19.5, RIM - 0.55, RIM - 0.15, LIME, MAT.Marble)
+	-- Up its back from the keep's side: the way in the pit's defenders cannot see from the gun.
+	flightX(battery, "BatteryStair", -25.4, -20.4, -39.4, -46, 0, RIM, 8, LIME_DARK, MAT.Sandstone, -0.5)
+	local frame = facing(-52.7, RIM, -22.5, -90, -22.5)
+	gunNest(battery, frame)
+	emplacement(battery, "BermBattery", frame, "the pit (objective B) and its cut")
+	return battery
+end
+
+--------------------------------------------------------------------------------
 -- The perimeter: broken walls round the edge of the disc between the lanes' ways in
 --------------------------------------------------------------------------------
 
@@ -1776,15 +2216,21 @@ end
 
 local ROUTES = {
 	-- The centre lane: in off the town, under the gatehouse, round the colossus, in at the door.
-	Centre = { { 0, 0, -124 }, { 0, 0, -86 }, { 0, 0, -68.5 }, { 0, 0, -58 }, { -11, 0, -57 }, { -11, 0, -44 }, { -4.5, TILE, -40 },
+	Centre = { { -4, 0, -168 }, { 8, 0, -150 }, { 8, 0, -138 }, { -8, 0, -134 }, { -8, 0, -122 }, { 4, 0, -110 }, { -1, 0, -98 }, { 0, 0, -86 }, { 0, 0, -68.5 }, { 0, 0, -58 }, { -11, 0, -57 }, { -11, 0, -44 }, { -4.5, TILE, -40 },
 		{ -4.5, TILE, -27 }, { -12, TILE, -27 }, { -12, KF, -21 }, { -12, KF, -14 }, { -3, KF, -3 }, { 0.5, KF, -0.4 } },
 	-- The left lane: past the tram stop, between the tram and the chapel, along the berm's foot and in
 	-- through the cut to the fountain.
-	Pit = { { -62, 0, -108 }, { -56, 0, -70 }, { -54.5, 0, -56 }, { -48, 0, -50 }, { -48, 0, -29 }, { -64, 0, -28.5 },
+	Pit = { { -56, 0, -160 }, { -56, 0, -146 }, { -60, 0, -134 }, { -68, 0, -133 }, { -73, 0, -128 }, { -73, 0, -121 }, { -62, 0, -108 }, { -66, 0, -92 }, { -62, 0, -84 }, { -56, 0, -70 }, { -54.5, 0, -56 }, { -48, 0, -50 }, { -48, 0, -29 }, { -64, 0, -28.5 },
 		{ -71, 0, -24 }, { -71, TILE, -21 }, { -76, TILE, -12 }, { -84, TILE, -6.4 } },
 	-- The market flank: up the east side, between the stalls, to the keep's east door.
-	Market = { { 40, 0, -116 }, { 47, 0, -96 }, { 47, 0, -80 }, { 53, 0, -60 }, { 50.7, TILE, -46 }, { 50.7, TILE, -33 }, { 47, TILE, -26 },
+	Market = { { 38, 0, -166 }, { 44, 0, -140 }, { 40, 0, -116 }, { 47, 0, -96 }, { 47, 0, -80 }, { 53, 0, -60 }, { 50.7, TILE, -46 }, { 50.7, TILE, -33 }, { 47, TILE, -26 },
 		{ 47, TILE, -10 }, { 36, 0, -4 }, { 30, 0, -1 }, { 21, KF, -1 }, { 8, KF, -1 }, { 1, KF, -0.4 } },
+	-- The flanks (2026-09-24): through the rail yard's gaps to the foot of the pit's west stair, and
+	-- through the scrap yard's to the foot of the gantry's.
+	WestFlank = { { -100, 0, -136 }, { -122, 0, -92 }, { -147, 0, -82 }, { -147, 0, -64 }, { -125, 0, -58 }, { -125, 0, -42 },
+		{ -147, 0, -36 }, { -147, 0, -18 }, { -121, 0, -8 } },
+	EastFlank = { { 108, 0, -132 }, { 114, 0, -100 }, { 115, 0, -90 }, { 115, 0, -76 }, { 138, 0, -66 }, { 140, 0, -48 }, { 153, 0, -40 },
+		{ 153, 0, -20 }, { 122, 0, -16 }, { 112, 0, -24 }, { 107, 0, -30 } },
 }
 
 local function recordRoutes()
@@ -1804,6 +2250,12 @@ local function recordRoutes()
 	-- The high ground in this half (the pieces that cross the mirror are the middle's).
 	table.insert(B.power, { name = "Gatehouse" .. suffix, point = here(0, GATE_TOP, -68.5),
 		box = B.mirror and { -20, 20, 65, 72 } or { -20, 20, -72, -65 }, minY = 7 })
+	table.insert(B.power, { name = "SignalBox" .. suffix, point = here(-94.5, ROOF, -61),
+		box = B.mirror and { -98, -86, 56, 66 } or { -98, -86, -66, -56 }, minY = 8.5 })
+	table.insert(B.power, { name = "SentryPost" .. suffix, point = here(37, DECK, -67),
+		box = B.mirror and { 34, 47, 61, 73 } or { 34, 47, -73, -61 }, minY = 8 })
+	table.insert(B.power, { name = "YardDeck" .. suffix, point = here(121, DECK, -47),
+		box = B.mirror and { 112, 126, 40, 54 } or { 112, 126, -54, -40 }, minY = 8 })
 	table.insert(B.power, { name = "BermRidge" .. suffix, point = here(-57, RIM, -15),
 		box = B.mirror and { -66, -48, 4, 26 } or { -66, -48, -26, -4 }, minY = 5 })
 	-- The ziplines: off the balcony's mast down over the market to this half's end of the cut, and off
@@ -1842,6 +2294,13 @@ local function buildMiddle(root)
 	light(ball(middle, "MastBeacon", Vector3.new(106, GAL + 22.6, 0), 1.6, ROT_GREEN, MAT.Neon, TRIM), ROT_GREEN, 34, 1.6)
 	rod(middle, "MastDish", Vector3.new(106.45, GAL + 12, 0), Vector3.new(107.05, GAL + 12, 0), 3.4, WHITE_PAINT, MAT.Metal, TRIM)
 
+	-- The flanks' middle rows, across the mirror: wagons on the west (a gap by the pit's stair), containers
+	-- on the east (a gap in the middle). Their stencils on their ends, so each is its own reflection.
+	boxcar(middle, -168, -148.6, -3, 3, MAROON, "ROT FREIGHT CO.", 0, 7, true)
+	boxcar(middle, -148, -128, -3, 3, NAVY, "ROT FREIGHT CO.", 0, 7, true)
+	boxcar(middle, 112, 134, -3, 3, mix(OLIVE_DRAB, STEEL, 0.3), "BRAINROT SALVAGE", 0, 7, true)
+	boxcar(middle, 140, 168, -3, 3, mix(RUST, MAROON, 0.4), "BRAINROT SALVAGE", 0, 7, true)
+
 	-- The high ground that crosses the mirror.
 	table.insert(B.power, { name = "KeepGallery", point = Vector3.new(0, GAL, -15), box = { -20, 20, -20, 20 }, minY = 9.5 })
 	table.insert(B.power, { name = "PitRim", point = Vector3.new(-106, RIM, -8), box = { -110, -76, -26, 26 }, minY = 5.5 })
@@ -1865,7 +2324,7 @@ end
 -- The whole battleground in `frame` (its origin on the ground at the centre, LookVector to team 1),
 -- parented to nothing. Returns the model and its lists in local space as well as world.
 function TeamBattleground.Layout(frame, seed)
-	B = { frame = frame, cover = {}, loot = {}, doorways = {}, routes = {}, power = {}, zips = {}, lanes = {} }
+	B = { frame = frame, cover = {}, loot = {}, doorways = {}, routes = {}, power = {}, zips = {}, lanes = {}, emplacements = {} }
 	local model = Instance.new("Model")
 	model.Name = "TeamBattleground"
 	for _, mirror in ipairs({ false, true }) do
@@ -1886,6 +2345,14 @@ function TeamBattleground.Layout(frame, seed)
 		buildBridge(half)
 		buildPerimeter(half)
 		buildLamps(half)
+		buildCheckpoint(half)
+		buildDepot(half)
+		buildSignalBox(half)
+		buildSentry(half)
+		buildDock(half)
+		buildRailYard(half)
+		buildScrapYard(half)
+		buildBattery(half)
 		recordRoutes()
 	end
 	B.mirror = false
@@ -1903,7 +2370,11 @@ function TeamBattleground.Layout(frame, seed)
 		power = B.power,
 		lanes = B.lanes,
 		zips = {},
+		emplacements = {},
 	}
+	for _, e in ipairs(B.emplacements) do
+		table.insert(info.emplacements, { name = e.name, covers = e.covers, cframeLocal = e.frame, cframe = frame * e.frame })
+	end
 	for _, spot in ipairs(B.loot) do
 		table.insert(info.lootSpots, { name = spot.name, localPosition = spot.at, position = frame * spot.at, kind = spot.kind, floor = spot.floor })
 	end
@@ -2619,10 +3090,12 @@ function TeamBattleground.GroundMaterial(x, z)
 		return PAINT.Asphalt
 	elseif x >= 33 and x <= 66 and z >= -58 and z <= -6 then
 		return PAINT.Sandstone
-	elseif math.abs(x) <= 26 and z <= -22 and z >= -122 then
+	elseif math.abs(x) <= 26 and z <= -22 and z >= -168 then
 		return PAINT.Sandstone
-	elseif x <= -30 and x >= -112 and z <= -28 then
+	elseif x <= -30 and z <= -28 then
 		return PAINT.Mud
+	elseif x >= 112 then
+		return PAINT.Asphalt
 	end
 	return PAINT.Ground
 end

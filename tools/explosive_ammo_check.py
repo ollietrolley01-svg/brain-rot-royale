@@ -103,6 +103,8 @@ local env = setmetatable({
         IsAlive = function() return true end,
         GetRoot = function() return nil end,
     },
+    -- Nobody here rides a vehicle (VehicleCover: no cover to apply).
+    VehicleCover = { SeatOf = function() return nil end },
     LagCompensation = { Raycast = function(origin, vector, params, at)
         table.insert(rays, at)
         return table.remove(queue, 1)
@@ -259,6 +261,7 @@ local env = setmetatable({
     SafeValue = { Vector3 = function() return true end },
     MovementService = { Launch = function() end },
     VehicleService = {},
+    VehicleCover = { BlastShareFor = function() return 1 end },
     Combatants = { Exists = function() return true end },
     CombatService = {
         InRadius = function(position, r)
