@@ -56,7 +56,7 @@ Pack.Weapons = {
 		name = "Silenzio Sussurrone", rarity = "Rare", style = "sniper",
 		damage = 91, headshotMultiplier = 2.4, fireRate = 0.85, magSize = 6,
 		reserveAmmo = 30, reloadTime = 3.0, range = 1250, spread = 0.09, pellets = 1,
-		ability = "pierce", groundWeight = 0, chestWeight = 3.5, killEffect = "freeze",
+		round = "sniperRound", ability = "pierce", groundWeight = 0, chestWeight = 3.5, killEffect = "freeze",
 		description = "Slate precision rifle. A visible hand-worked bolt rewards measured shots.",
 	},
 	RatioPDW = {
@@ -119,7 +119,7 @@ Pack.Weapons = {
 		name = "Nanna Nanna Puff", rarity = "Mythic", style = "sniper",
 		damage = 96, headshotMultiplier = 2.35, fireRate = 0.78, magSize = 4,
 		reserveAmmo = 24, reloadTime = 3.3, range = 1350, spread = 0.06, pellets = 1,
-		ability = "lifesteal", lifestealRatio = 0.16,
+		round = "sniperRound", ability = "lifesteal", lifestealRatio = 0.16,
 		groundWeight = 0, chestWeight = 1.5, killEffect = "freeze",
 		description = "Long fluted bolt rifle with dark plum furniture and a moon insignia.",
 	},

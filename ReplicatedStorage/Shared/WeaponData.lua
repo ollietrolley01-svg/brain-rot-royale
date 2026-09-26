@@ -286,6 +286,8 @@ WeaponData.Weapons = {
 		range = 1200,
 		spread = 0.1,
 		pellets = 1,
+		-- The bullet flies (Ballistics "sniperRound"): travel time and a little drop, not hitscan.
+		round = "sniperRound",
 		ability = "pierce",
 		groundWeight = 0,
 		chestWeight = 6,
@@ -450,6 +452,7 @@ WeaponData.Weapons = {
 		range = 900,
 		spread = 0.2,
 		pellets = 1,
+		round = "sniperRound",
 		ability = "pierce",
 		-- Bank shots (the gun rework): a round that stops on the map glances off it once, with the range it has
 		-- left, at 0.8 of its damage. A direct hit is exactly what it was.

@@ -56,7 +56,7 @@ Pack.Weapons = {
 		name = "Hose Down", rarity = "Rare", style = "sniper",
 		damage = 85, headshotMultiplier = 2.0, fireRate = 0.9, magSize = 5,
 		reserveAmmo = 30, reloadTime = 2.6, range = 420, spread = 0.4, pellets = 1,
-		staged = true, groundWeight = 0, chestWeight = 0, plannedGroundWeight = 18, plannedChestWeight = 9,
+		round = "sniperRound", staged = true, groundWeight = 0, chestWeight = 0, plannedGroundWeight = 18, plannedChestWeight = 9,
 		chill = { slow = 0.22, duration = 2.0, stacks = 2 },
 		killEffect = "freeze",
 		description = "A garden hose reel with a brass nozzle and a jam-jar scope. A lance of cold water.",

@@ -1992,6 +1992,26 @@ local function shootAt(bot, target, targetRoot, distance, head)
 		and targetRoot.Position
 		or targetRoot.Position + Vector3.new(math.random(-12, 12), math.random(-5, 9), math.random(-12, 12))
 
+	-- A sniper's bullet flies (WeaponData `round`, task 17), a bot's as well as a player's, so a player can
+	-- step out of a bot's shot. The roll above still decides where the bot aims: a hit leads the target by
+	-- the flight time (at the head, one time in ten), a miss goes where the roll put it. What it meets is
+	-- ruled as a player's round is (CombatService.RuleBullet), at the bot's damage scale.
+	if def.round and CombatService.LaunchProjectile then
+		local aimAt = endPoint
+		if hit then
+			local targetHead = targetRoot.Parent and targetRoot.Parent:FindFirstChild("Head")
+			aimAt = (math.random() < BOT_HEADSHOT_CHANCE and targetHead) and targetHead.Position or targetRoot.Position
+			local projectiles = lazy("ProjectileService")
+			if projectiles and projectiles.LeadAim then
+				aimAt = projectiles.LeadAim(def.id, head.Position, aimAt, targetRoot.AssemblyLinearVelocity)
+			end
+		end
+		local scaled = setmetatable({ damage = def.damage * MatchConfig.BotDamageScale }, { __index = def })
+		CombatService.LaunchProjectile(bot, scaled, head.Position, aimAt - head.Position)
+		CombatService.BroadcastShot(bot, head.Position, {}, def.rarity)
+		return
+	end
+
 	-- Hit or miss, the shot was fired along this line: any window it crosses breaks.
 	CombatService.BreakGlassAlong(bot, head.Position, endPoint)
 	CombatService.BroadcastShot(bot, head.Position, { endPoint }, def.rarity)
