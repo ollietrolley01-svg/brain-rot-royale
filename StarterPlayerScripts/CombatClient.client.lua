@@ -306,12 +306,18 @@ local function setThirdPerson(active, nextIsFirstPerson)
 end
 
 local function updateCameraMode()
-	-- In a vehicle its own chase camera drives the view and the mouse: ours stands down, leaving the camera
-	-- Classic and the mouse alone. VehicleService owns the InVehicle attribute (it clears it on leaving,
-	-- death and respawn); VehicleClient sets it early on the driver so the handover isn't a beat late.
+	-- In a vehicle its own chase camera drives the view: ours stands down, leaving the camera Classic.
+	-- VehicleService owns the InVehicle attribute (it clears it on leaving, death and respawn);
+	-- VehicleClient sets it early on the driver so the handover isn't a beat late.
 	if player:GetAttribute("InVehicle") then
 		setThirdPerson(false, false)
 		player.CameraMode = Enum.CameraMode.Classic
+		-- The mouse is freed too: the driver's gun aims at the cursor only while it's free
+		-- (VehicleWeaponClient.aimScreen), and combat's LockCenter from before boarding would otherwise ride
+		-- along and pin it mid-screen (Oliver, 09-25 playtest). A gunner's GunnerView keeps its own lock.
+		if not player:GetAttribute("GunnerView") then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
 		return
 	end
 	if inCombat() then
