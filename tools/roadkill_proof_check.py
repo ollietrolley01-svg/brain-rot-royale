@@ -26,6 +26,11 @@ Oliver's rules of 2026-09-25 (report findings 2-4, each with a planted fault too
       them); a rider of an open car still is;
   I9  a car nobody drives deals the same CombatDamageScale'd hit as a driven one, credited to nobody;
   I10 no mode grants spawn protection (GameModes, "get rid of spawn prot").
+Task 30 (roadkill one-shot a full player; a planted fault aimed at each part):
+  I11 a full player (100 health, 100 shield) survives any one pass of one car and loses at most 150 in
+      it: every model at 1x, 1.5x and 2x its top speed by the bot sweep, the player report and Touched;
+      a body carried at the nose through a second contact; a body thrown into a wall and pinned. After
+      the pass window the same car hurts that body again (a new pass).
 Things it finds but does not fail on are printed as FINDING lines (the report says what they mean).
 
     python tools/roadkill_proof_check.py [root]            the checks
@@ -52,6 +57,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # retune shows up as a failure and the table gets redone. The scale was 0.92 when the report was written;
 # main moved it to 0.736 (pc/ttk-plus-25), so the report's numbers are these times 0.8.
 PIN_FLOOR, PIN_PER, PIN_SCALE = 12, 1.8, 0.736
+# Task 30: the most one pass may deal (after the scale), and how long after a contact the next one is
+# still the same pass (VehicleService's ROADKILL_PASS_MAX and ROADKILL_PASS_WINDOW).
+PIN_PASS_MAX, PIN_WINDOW = 150, 1.5
 
 
 # ---------------------------------------------------------------------------------------------- Luau
@@ -223,6 +231,8 @@ local CS = w.module("CombatService")
 local Combatants = w.module("Combatants")
 local RoadkillPass = w.module("RoadkillPass")
 VS.Start()
+-- DealDamage refuses every hit until the match turns combat on (the lag/bug sweep's gate).
+CS.SetEnabled(true)
 
 -- Team mode's rules, cut from the real ModeTeams: `mt.active`, `mt.teamOf`, `mt.protectedUntil` are
 -- the file's own upvalues.
@@ -928,6 +938,180 @@ do
     clear()
 end
 
+--------------------------------------------------------------------------------
+-- I11 (task 30): a full player, 100 health and 100 shield, survives any one pass, whatever the speed
+--------------------------------------------------------------------------------
+-- A pass is one car's first contact with a body and every contact after it that comes less than
+-- pins.window seconds after the one before (a body carried along, pinned, or hit again on the way
+-- through). Nothing in a pass deals more than pins.passMax in total.
+local passes, passBad, passWorst, passModels = 0, {}, 0, {}
+local function fullPlayer(name, at)
+    local p, model, hum = player(name, at)
+    W.shield[p] = 100
+    return p, model, hum
+end
+local function taken(p, hum)
+    return (100 - hum.Health) + (100 - (W.shield[p] or 0))
+end
+-- One pass judged: the full player lived, and lost no more than the cap; `want` (when given) is what
+-- the formula says for that speed under the cap, so the check can't pass by dealing nothing.
+local function judgePass(label, p, hum, want)
+    local t = taken(p, hum)
+    passes = passes + 1
+    passWorst = math.max(passWorst, t)
+    if hum.Health <= 0 or t > pins.passMax + 1e-6 or (want and math.abs(t - want) > 1e-6) or t <= 0 then
+        table.insert(passBad, string.format("%s took %s%s", label, f(t), want and (" want " .. f(want)) or ""))
+    end
+    return t
+end
+local function capped(speed)
+    return math.min(expected(speed), pins.passMax)
+end
+
+-- Every model at 1x, 1.5x and 2x its top speed (downhill, off a ramp, after a blast), by each path:
+-- a bot's car (the server's sweep, judged at the car's real speed), a player's car (the driver's
+-- report, judged at most at what the server saw it doing, * 1.15 + 4), and the server's Touched.
+local SPEEDS = { 1, 1.5, 2 }
+for _, id in ipairs(ids) do
+    passModels[id] = true
+    local top = w.VehicleDynamics.Handling[id].topSpeed
+    for _, mult in ipairs(SPEEDS) do
+        local speed = top * mult
+        local entry = vehicle(id, nextPlace())
+        local driver = bot("fast_bot_" .. id .. mult, entry.seat.Position)
+        sitBot(driver, entry, entry.seat)
+        run(0.1)
+        local victim, _, hum = fullPlayer("fast_victim_" .. id .. mult, ahead(entry, 20))
+        drive(entry, speed)
+        run(0.6)
+        judgePass(string.format("%s bot-driven at %.1fx (%s)", id, mult, f(speed)), victim, hum, capped(speed))
+        clear()
+
+        entry = vehicle(id, nextPlace())
+        local pDriver = player("fast_driver_" .. id .. mult, entry.seat.Position)
+        sitPlayer(pDriver, entry, entry.seat)
+        startDriving(pDriver, entry)
+        run(0.1)
+        local pVictim, _, pHum = fullPlayer("fast_pvictim_" .. id .. mult, ahead(entry, 20))
+        drive(entry, speed)
+        run(0.6)
+        -- VehicleService.onRoadkillReport: what the server saw, held to what checkHonest lets any car keep.
+        local seen = math.min(top * 1.35 + 10, speed)
+        judgePass(string.format("%s player-driven at %.1fx (%s)", id, mult, f(speed)), pVictim, pHum,
+            capped(math.min(speed, seen * 1.15 + 4)))
+        clear()
+    end
+    -- The server's Touched at 2x, a body right at the nose.
+    local entry = vehicle(id, nextPlace())
+    local driver = bot("touch2_bot_" .. id, entry.seat.Position)
+    sitBot(driver, entry, entry.seat)
+    run(0.1)
+    drive(entry, top * 2)
+    local victim, victimModel, hum = fullPlayer("touch2_victim_" .. id, ahead(entry, 400))
+    run(0.05)
+    placeAt(victimModel, ahead(entry, 3))
+    entry.rig.chassis.Touched:Fire(victimModel.Torso)
+    judgePass(id .. " Touched at 2x (" .. f(top * 2) .. ")", victim, hum, capped(top * 2))
+    clear()
+end
+
+-- A body carried through a second contact: the fastest bike at its top speed (one hit alone leaves a
+-- full player 65; the question is only what the contacts after it add), then the body held at
+-- its nose for 2 s, touching it every frame, and its driver's client reporting it every frame too.
+local carriedOk, carriedDetail = true, {}
+for _, path in ipairs({ "bot", "player" }) do
+    local entry = vehicle("BrrStreetfighter", nextPlace())
+    local driver
+    if path == "bot" then
+        driver = bot("carry_bot", entry.seat.Position)
+        sitBot(driver, entry, entry.seat)
+    else
+        driver = player("carry_driver", entry.seat.Position)
+        sitPlayer(driver, entry, entry.seat)
+        startDriving(driver, entry)
+    end
+    run(0.1)
+    local victim, victimModel, hum = fullPlayer("carry_victim_" .. path, ahead(entry, 20))
+    local remote = w.replicatedStorage.Remotes:FindFirstChild("VehicleRoadkill")
+    drive(entry, 114)
+    run(2, function()
+        -- Carried on the bonnet: kept at the nose whatever the throw said, touching every frame.
+        if taken(victim, hum) > 0 then
+            placeAt(victimModel, ahead(entry, entry.rig.chassis.Size.Z / 2 + 0.5))
+            entry.rig.chassis.Touched:Fire(victimModel.Torso)
+            if path == "player" then
+                remote.OnServerEvent:Fire(driver, entry.model, victimModel, 114)
+            end
+        end
+        return hum.Health <= 0
+    end)
+    judgePass("carried 2 s on a " .. path .. "'s Streetfighter at 114", victim, hum)
+    table.insert(carriedDetail, path .. " " .. f(taken(victim, hum)))
+    carriedOk = carriedOk and hum.Health > 0 and taken(victim, hum) <= pins.passMax + 1e-6
+
+    -- And a second pass is a second hit: the same car back into them after the window has gone.
+    now.t = now.t + pins.window + 1
+    local before = taken(victim, hum)
+    placeAt(victimModel, ahead(entry, entry.rig.chassis.Size.Z / 2 + 0.5))
+    entry.rig.chassis.Touched:Fire(victimModel.Torso)
+    local again = taken(victim, hum) - before
+    table.insert(carriedDetail, "then a new pass " .. f(again))
+    carriedOk = carriedOk and (again > 0 or hum.Health <= 0)
+    clear()
+end
+check("I11 a body carried through a second contact (Touched and the driver's report every frame for 2 s) is one pass: a full player lives and loses at most the cap; after the window a new pass hits again",
+    carriedOk, table.concat(carriedDetail, ", "))
+
+-- Thrown into a wall: the fastest bike at its top speed into a full player a stud from a wall; the body flown
+-- along the throw into it and pinned there by the car, which stops dead on the wall, for 2 s.
+do
+    local entry = vehicle("BrrStreetfighter", nextPlace())
+    local driver = bot("wall_bot", entry.seat.Position)
+    sitBot(driver, entry, entry.seat)
+    run(0.1)
+    local at = ahead(entry, 20)
+    local wall = w.Instance.new("Part", w.workspace)
+    wall.Name = "Wall"
+    wall.Anchored = true
+    wall.Size = V3(40, 20, 2)
+    wall.CFrame = CF(at - V3(0, 0, 2))
+    local wallModel = w.Instance.new("Model", w.workspace)
+    wall.Parent = wallModel
+    local victim, victimModel, hum = fullPlayer("wall_victim", at)
+    entry.stopAtZ = at.Z - 1
+    local launchesBefore = #W.launches
+    drive(entry, 114)
+    local thrown = nil
+    run(2, function()
+        for index = launchesBefore + 1, #W.launches do
+            if W.launches[index].character == victimModel then
+                thrown = W.launches[index].velocity
+            end
+        end
+        if thrown then
+            -- Flown along the throw, stopped flat against the wall, touching the car and the wall.
+            local p = victimModel.HumanoidRootPart.Position + thrown * DT
+            placeAt(victimModel, V3(p.X, math.max(p.Y, 3), math.max(p.Z, at.Z - 0.5)))
+            entry.rig.chassis.Touched:Fire(victimModel.Torso)
+        end
+        return hum.Health <= 0
+    end)
+    judgePass("thrown into a wall by a Streetfighter at 114", victim, hum)
+    check("I11 thrown into a wall and pinned there by the car: a full player lives and loses at most the cap (nothing hurts a body that lands or strikes a wall)",
+        thrown ~= nil and hum.Health > 0 and taken(victim, hum) <= pins.passMax + 1e-6,
+        string.format("thrown %s, took %s, health %s", tostring(thrown ~= nil), f(taken(victim, hum)), f(hum.Health)))
+    clear()
+end
+
+local modelCount = 0
+for _ in pairs(passModels) do
+    modelCount = modelCount + 1
+end
+check("I11 a full player (100 + 100) survives every single pass and loses at most " .. pins.passMax .. ", whatever the speed",
+    #passBad == 0,
+    string.format("%d passes over %d models (1x, 1.5x, 2x top speed; bot sweep, player report, Touched; carried; into a wall), worst %s%s",
+        passes, modelCount, f(passWorst), #passBad > 0 and (": " .. table.concat(passBad, "; ")) or ""))
+
 for _, warning in ipairs(w.warnings) do
     finding("a module warned", warning)
 end
@@ -945,7 +1129,8 @@ def run(root, swaps=None):
     c = cuts(tree)
     ctable = lua.table_from({k: v for k, v in c.items() if k != "models"})
     ctable["models"] = lua.table_from([lua.table_from(list(m)) for m in c["models"]])
-    pins = lua.table_from({"floor": PIN_FLOOR, "per": PIN_PER, "scale": PIN_SCALE})
+    pins = lua.table_from({"floor": PIN_FLOOR, "per": PIN_PER, "scale": PIN_SCALE,
+                          "passMax": PIN_PASS_MAX, "window": PIN_WINDOW})
     results, findings, rows = lua.execute(SCENES, world, ctable, pins)
     out = [(r[1], bool(r[2]), r[3]) for r in results.values()]
     # I10: GameModes grants nobody spawn protection (ModeTeams.grantProtection does nothing at 0).
@@ -992,7 +1177,15 @@ PLANTS = [
      sub("RoadkillPass", "\t\t\t\t\tand not RoadkillPass.Sheltered(humanoid) then", "\t\t\t\t\tthen")),
     ("I8: every seated rider sheltered", sub("VehicleService", "\tif VehicleService.ShieldingVehicle(victimToken) then\n",
                                              "\tif humanoid.SeatPart then\n")),
-    ("I9: a driverless car unscaled", sub("VehicleService", "\tif driverToken == nil then\n\t\tamount *=", "\tif false then\n\t\tamount *=")),
+    ("I9: a driverless car unscaled", sub("VehicleService", "\tif driverToken ~= nil then\n\t\tamount /= scale", "\tif true then\n\t\tamount /= scale")),
+    ("I11: the cap removed (a hit is the formula at any speed)",
+     sub("VehicleService", "math.min((flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER * scale, ROADKILL_PASS_MAX - pass.dealt)",
+         "(flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER * scale")),
+    ("I11: each hit capped, but a pass never adds its hits up",
+     sub("VehicleService", "\tpass.dealt += amount\n", "\n")),
+    ("I11: the cap raised to a full player's 200", sub("VehicleService", "local ROADKILL_PASS_MAX = 150", "local ROADKILL_PASS_MAX = 200")),
+    ("I11: a pass never ends (the same car can never hurt that body again)",
+     sub("VehicleService", "if not pass or now - pass.last >= ROADKILL_PASS_WINDOW then", "if not pass then")),
     ("I10: a mode grants spawn protection again", sub("GameModes", "spawnProtection = 0, -- none", "spawnProtection = 3, -- none")),
 ]
 
