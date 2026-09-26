@@ -198,8 +198,8 @@ mocks.GameModes = {
 	TeamCount = 2,
 	Modes = {
 		BattleRoyale = { id = "BattleRoyale" },
-		TeamDeathmatch = { id = "TeamDeathmatch", respawn = true, respawnDelay = 5, scoreTarget = 100000, timeLimit = 480, bounds = false },
-		KingOfTheHill = { id = "KingOfTheHill", respawn = true, respawnDelay = 6, scoreTarget = 100000, timeLimit = 480, bounds = false },
+		TeamDeathmatch = { id = "TeamDeathmatch", respawn = true, respawnDelay = 5, scoreTarget = 100000, timeLimit = 720, bounds = false },
+		KingOfTheHill = { id = "KingOfTheHill", respawn = true, respawnDelay = 6, scoreTarget = 100000, timeLimit = 720, bounds = false },
 	},
 	Loadout = { items = {} },
 	TeamName = function(i) return "Team" .. tostring(i) end,
@@ -399,7 +399,7 @@ do
 	local a = W.bot("AssistMe", 2); W.damage(p1, a, 30); W.advance(3); mode.OnDeath(a, mate, "Gun")
 	local b = W.bot("Scratch", 2); W.damage(p1, b, 10); W.advance(1); mode.OnDeath(b, mate, "Gun")
 	local c = W.bot("Stale", 2); W.damage(p1, c, 40); W.advance(12); mode.OnDeath(c, mate, "Gun")
-	-- More bot kills, 10 s apart (inside the 8-minute limit) (no streaks), to one past the cap: cap bots and the one player.
+	-- More bot kills, 10 s apart (inside the 12-minute limit) (no streaks), to one past the cap: cap bots and the one player.
 	for i = 1, T.kill.cap - 3 do W.advance(10); walk(p1); W.move(enemy, vec(-200, 0, i * 10)); killBot(mode, p1, 2) end
 	-- Idle: killed once and respawned somewhere else. The teleport must not read as moving.
 	mode.OnDeath(p2, enemy, "Gun"); p2.downed = nil
@@ -489,12 +489,12 @@ do
 	-- Raider back on A (Holder's) and killed there: a defend. Killed again off every objective: no defend.
 	W.move(e, vec(3, 0, 0)); mode.OnDeath(e, p, "Gun"); e.downed = nil
 	W.advance(7); W.move(e, vec(-600, 0, 0)); mode.OnDeath(e, p, "Gun"); e.downed = nil
-	stay(p, 300, 200) -- Holder takes B back and holds it
+	stay(p, 300, T.hold.capSeconds) -- Holder takes B back and holds it, past the cap with A's time
 	local L = I.ledgers[p]
 	check(L.captures == 2, "Holder captured A once and B once: want 2 captures, got " .. tostring(L.captures))
 	check((I.ledgers[e] or {}).captures == 1, "Raider captured B once, got " .. tostring((I.ledgers[e] or {}).captures))
 	check(L.defends == 1, "one kill on Holder's objective is a defend, one off it is not: got " .. tostring(L.defends))
-	check(L.holdSeconds >= 300, "Holder stood ~330 s on owned objectives, counted " .. tostring(L.holdSeconds))
+	check(L.holdSeconds > T.hold.capSeconds, "Holder stood past the hold cap on owned objectives, counted " .. tostring(L.holdSeconds))
 	local rewards = finish(mode, { p, e })
 	local hold = lineOf(rewards[p], "hold")
 	check(hold and hold.count == T.hold.capSeconds, "time on objective is paid to its cap " .. T.hold.capSeconds .. ", got " .. tostring(hold and hold.count))
@@ -504,8 +504,10 @@ end
 
 -- ======================================================================== caps, straight through the breakdown
 do
+	-- A whole match active: one participation check per sampleSeconds of the clock the pay is sized for.
+	local fullSamples = math.floor(T.matchSeconds / T.participation.sampleSeconds)
 	local huge = { playerKills = 999, botKills = 999, assists = 999, revenges = 999, streakCoins = 99999, captures = 999,
-		holdSeconds = 99999, defends = 999, activeSamples = 32, mvp = true }
+		holdSeconds = 99999, defends = 999, activeSamples = fullSamples, mvp = true }
 	local lines, coins, xp = RS.TeamBreakdown(huge, "win", 1)
 	local want = {
 		kills = T.kill.cap, assists = T.assist.cap, revenge = T.revenge.cap, captures = T.capture.cap,
@@ -520,7 +522,7 @@ do
 	check(byId.kills.coins == T.kill.cap * MC.CoinsPerKill, "all-player kills pay the player rate to the cap")
 	local ceiling = T.win.coins + T.kill.cap * MC.CoinsPerKill + T.assist.cap * T.assist.coins + T.revenge.cap * T.revenge.coins
 		+ T.streak.cap + T.capture.cap * T.capture.coins + T.hold.capSeconds * T.hold.coinsPerSecond + T.defend.cap * T.defend.coins
-		+ T.mvp.coins + 32 * T.participation.sampleSeconds / 60 * T.participation.coinsPerMinute
+		+ T.mvp.coins + fullSamples * T.participation.sampleSeconds / 60 * T.participation.coinsPerMinute
 	check(coins <= ceiling, "the total never passes the sum of the caps")
 	local c2, x2 = 0, 0
 	for _, line in ipairs(lines) do c2 = c2 + line.coins; x2 = x2 + line.xp end
@@ -742,7 +744,7 @@ PLANTS = [
 def main():
     failures, counts = run()
     print(f"team_rewards_check: {counts.get('checks', 0)} checks, {len(failures)} failed"
-          f" (the most an 8-minute match can pay, every cap hit and MVP: {counts.get('maxMatch', '?')} coins)")
+          f" (the most a full-length match can pay, every cap hit and MVP: {counts.get('maxMatch', '?')} coins)")
     for f in failures:
         print("  FAIL: " + f)
     ok = not failures
