@@ -174,18 +174,38 @@ GameModes.Loadout = {
 	slotsUsed = 6,
 }
 
+-- What a team-mode BOT spawns with instead of looting its base (Oliver, relayed by Jacob, task 26):
+-- 1 gun, 2 explosives, 2 defenses, 2 heals and 1 movement item. The gun is the players' Uncommon
+-- roll (ModeTeams.RollGreenWeapon). Each pool holds only what a bot can use, going by the kit
+-- handler in BotService's spawn: the Rot Mine has no bot thrower, the Brainrot Fortress stacks to
+-- 1 (so it can't be 2), and the Rot Rocket is the one movement item a bot knows how to fire
+-- (tryRocket). Players keep `Loadout` above.
+GameModes.BotLoadout = {
+	items = {
+		{ id = "Bandage", count = 2 },
+	},
+	pools = {
+		{ ids = { "CookedCoconut", "ClingyCrumpet" }, kinds = 1, count = 2 },
+		{ ids = { "RotBarricade", "PopupBunker" }, kinds = 1, count = 2 },
+		{ ids = { "RotRocket" }, kinds = 1, count = 1 },
+	},
+	fullShield = true,
+}
+
 -- One life's kit: the fixed items plus `kinds` different ids drawn from each pool. `random(n)`
 -- returns 1..n; the default is a module Random so two players spawning together differ.
+-- `loadout` defaults to the players' `Loadout`; bots pass `BotLoadout`.
 local kitRandom = Random and Random.new()
-function GameModes.RollLoadout(random)
+function GameModes.RollLoadout(random, loadout)
+	loadout = loadout or GameModes.Loadout
 	random = random or function(n)
 		return kitRandom and kitRandom:NextInteger(1, n) or math.random(n)
 	end
 	local list = {}
-	for _, entry in ipairs(GameModes.Loadout.items) do
+	for _, entry in ipairs(loadout.items) do
 		table.insert(list, { id = entry.id, count = entry.count })
 	end
-	for _, pool in ipairs(GameModes.Loadout.pools) do
+	for _, pool in ipairs(loadout.pools) do
 		local left = table.clone and table.clone(pool.ids) or { table.unpack(pool.ids) }
 		for _ = 1, math.min(pool.kinds, #left) do
 			local id = table.remove(left, random(#left))
