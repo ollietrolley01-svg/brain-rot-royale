@@ -1,0 +1,6 @@
+[sniper_round_probe] FLIGHT 0.02s z-15 y-0.04 | 0.05s z-45 y-0.12 | 0.10s z-90 y-0.26 | 0.15s z-135 y-0.43 | 0.20s z-180 y-0.62 | 0.25s z-225 y-0.83 | 0.30s z-270 y-1.07 | 0.35s z-315 y-1.34 | 0.40s z-360 y-1.62 | 0.45s z-405 y-1.94 | 0.50s z-450 y-2.28 | 0.55s z-495 y-2.64 | 0.60s z-540 y-3.03 | 0.65s z-585 y-3.44 | 0.70s z-630 y-3.87 | 0.75s z-675 y-4.33 | 0.80s z-720 y-4.82 | 0.85s z-765 y-5.33 | 0.90s z-810 y-5.86 | 0.95s z-855 y-6.42 | 1.00s z-900 y-7.01 | 1.05s z-945 y-7.61 | 1.10s z-990 y-8.25 | 1.15s z-1035 y-8.90 | 1.20s z-1080 y-9.58 | 1.25s z-1125 y-10.29 | 1.30s z-1170 y-11.02 | 1.35s z-1215 y-11.77 | 1.40s z-1260 y-12.55 | 1.45s z-1305 y-13.36 | 1.50s z-1350 y-14.19 | 1.55s z-1395 y-15.04 | 1.60s z-1440 y-15.92
+[sniper_round_probe] FLIGHT hit Target for 70 after 0.333 s (300 studs at 900 studs/s is 0.333 s), headshot false
+[sniper_round_probe] HEAD dealt 175, headshot true
+[sniper_round_probe] WALL 0.5-stud wall at 200 studs, 0.1 s steps: 0 hit(s) on the target behind it
+[sniper_round_probe] veto set by the loaded mode: false (cleared for this probe)
+[sniper_round_probe] SUMMARY 0 problem(s)
