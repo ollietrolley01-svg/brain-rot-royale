@@ -11,4 +11,7 @@ Cut from `origin/pc/lag-bug-sweep` at `cf35aa3`. What changed from there:
   wall) and four planted faults. The I9 plant is re-anchored on the new code.
 - `tools/roadkill_check.py`: its hand-built vehicle entry gains `roadkillPasses = {}`. It still crashes
   where it did on the sweep (F118's `entry.rig.handling`), which isn't this branch's to fix.
+- `tools/roadkill_oneshot_probe.lua` (new): a Run-mode Studio probe. A bot's car at 1x, 1.5x and 2x top
+  speed hits a bot with 100 health and 100 shield. Under the gallery it replays the Streetfighter's 1.5x
+  hit frame by frame, with the target's health and shield drawn (the proof GIF on `proof/roadkill`).
 - `reports/roadkill-proof.md`: the Task 30 section (causes, fix, counts, what isn't proven).

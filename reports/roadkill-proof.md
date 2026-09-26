@@ -395,6 +395,12 @@ fix, 14 of the 66 passes killed the full player and 30 dealt more than 150. Afte
 150.00. Plants: 22/22 caught, four of them aimed at I11 (cap removed, hits in a pass not added up, cap
 raised to 200, a pass that never ends).
 
+**Studio, real physics** (`tools/roadkill_oneshot_probe.lua`, Run mode, Linux harness): a bot's car hits a
+bot with 100 + 100, 7 rows. Its speed is written every frame through the hit and for 1.5 s after it.
+Before (`cf35aa3`): 5 of 7 targets died, and 6 rows lost more than 150 (TralalaGT at 1.5x left 5.3
+health). After: every row but the 1x Streetfighter (135.1) lost exactly 150 and kept 50 health. Every
+row took one hit. Physics never brought a body back for a second contact.
+
 **Not proven:** whether a real car reaches 1.5x or 2x its top speed in Roblox. The code allows it, but
 nothing here measures a ramp or a blast. Whether a carried body really touches the chassis again is also
 unmeasured. A "ratio'd" victim (`StatusEffects`) takes its scale times the cap, by design.
