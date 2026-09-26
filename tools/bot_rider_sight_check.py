@@ -134,6 +134,7 @@ local all, characters = {}, {}
 Combatants = {
     All = function() return all end,
     IsPlayer = function() return false end,
+    IsBot = function() return true end,
     GetCharacter = function(token) return characters[token] end,
 }
 hostile = assert(load(hostileSrc, "hostile", "t", _ENV))()
@@ -406,7 +407,7 @@ PLANTS = [
     (BOTSERVICE, "if not (result and CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(result.Instance)) then",
      "if not result or result.Instance:IsDescendantOf(toCharacter) then",
      "wall: everything but the target is looked past like glass"),
-    (BOTSERVICE, "if seat and seat.Parent == ride.model then", "if seat and seat.Parent == nil then",
+    (BOTSERVICE, "seat.Parent == ride.model", "seat.Parent == nil",
      "truce: a bot targets its fellow rider"),
     (BOTSERVICE, "\tif coverModel and coverModel ~= node then\n", "\tif false then\n",
      "open: the target's car is a wall for its rider again"),
