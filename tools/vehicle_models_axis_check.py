@@ -869,11 +869,11 @@ def main(repo="."):
         ("the scout car's HMG tipped to 45 up (grips down through the cabin roof)", "TartarugaScout", VWD,
          "pitchMin = -12,\n\t\tpitchMax = 34,", "pitchMin = -12,\n\t\tpitchMax = 45,", "turret runs into"),
         ("the Rotster's roof gun tipped to 30 down (barrel through its own roof)", "Rotster", VWD,
-         "pitchMin = -18,\n\t\tpitchMax = 36,", "pitchMin = -30,\n\t\tpitchMax = 36,", "turret runs into RoofPanel"),
+         "pitchMin = -17,\n\t\tpitchMax = 36,", "pitchMin = -30,\n\t\tpitchMax = 36,", "turret runs into RoofPanel"),
         ("the Ranger's front guard dropped (a rocket out through its own cab)", "CrocodiloRanger", VWD,
-         "\t\tfrontGuard = { arc = 60, pitchMin = 4 },\n", "", "turret shot meets its own"),
+         "\t\tfrontGuard = { arc = 58, pitchMin = 4 },\n", "", "turret shot meets its own"),
         ("the carrier's rear guard dropped (grenades into its own hump)", "CameloCarrier", VWD,
-         "\t\trearGuard = { arc = 45, pitchMin = -5 },\n", "", "turret shot meets its own"),
+         "\t\trearGuard = { arc = 30, pitchMin = -5 },\n", "", "turret shot meets its own"),
     ]
     for label, model_id, module, old, new, tag, *more in plants:
         src = sources[module]
