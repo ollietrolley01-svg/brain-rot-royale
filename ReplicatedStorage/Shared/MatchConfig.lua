@@ -89,8 +89,11 @@ MatchConfig.VoteCandidates = 3
 -- they landed in, nothing from the brackets below. Paying out a crate rather than a fixed
 -- brainrot means every placement ends on a roll — a Legendary Crate is only 42% to actually
 -- cough up a Legendary or better, and 8% to reach Mythic.
+-- `mythicChance` (Task 24, Oliver 2026-09-25: "winning should have a chance of giving a Mythic Crate"): a
+-- second roll, on top of the bracket's crate, for a Mythic Crate (250,000 coins). RewardService.AwardPlacement
+-- rolls it, and the results card shows this same number (RewardService.MythicLine), so it is never typed twice.
 MatchConfig.PlacementBrackets = {
-	{ maxRank = 1,  crate = "Legendary", coins = 2500, xp = 900 },
+	{ maxRank = 1,  crate = "Legendary", coins = 2500, xp = 900, mythicChance = 0.01 },
 	{ maxRank = 5,  crate = "Epic",      coins = 1200, xp = 550 },
 	{ maxRank = 10, crate = "Rare",      coins = 600,  xp = 340 },
 	{ maxRank = 20, crate = "Uncommon",  coins = 260,  xp = 190 },
@@ -147,6 +150,10 @@ MatchConfig.TeamModeRewards = {
 	loss = { crate = "Uncommon", coins = 250, xp = 230 },
 	-- Idle for most of the match: this and nothing else.
 	afk = { coins = 25, xp = 20 },
+
+	-- A win's chance of a Mythic Crate on top of the win's crate, as the battle royale's rank 1
+	-- (PlacementBrackets `mythicChance`). Rolled in AwardTeamResult; the card's line reads this number.
+	mythicChance = 0.01,
 
 	-- MatchService's live kill path. Kills are paid on the results card, so the live payment is 0; the live
 	-- call still counts the kill for Stats.kills, the kills quest and gun mastery, up to maxPaidKills.
@@ -355,6 +362,12 @@ MatchConfig.BotGunnerWait = 25
 
 MatchConfig.CoinsPerBotKill = 40
 MatchConfig.XpPerBotKill = 32
+
+-- A chance as the player reads it: 0.01 -> "1%", 0.005 -> "0.5%". Every place that shows a reward's odds
+-- formats the rolled field through this, so the shown number and the rolled one can't drift.
+function MatchConfig.ChanceText(chance)
+	return string.format("%g%%", (tonumber(chance) or 0) * 100)
+end
 
 function MatchConfig.GetBracket(rank)
 	for _, bracket in ipairs(MatchConfig.PlacementBrackets) do

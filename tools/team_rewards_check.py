@@ -318,6 +318,8 @@ game = { GetService = function(_, name) return servicesByName[name] end }
 
 W.MatchConfig = load_("MatchConfig")
 W.RewardService = load_("RewardService")
+-- A win's Mythic Crate roll never drops here, so the crates a win gives are fixed (tools/mythic_crate_check.py runs the roll).
+W.RewardService.Roll = function() return 1 end
 W.GameMode = load_("GameMode")
 W.KOTH = load_("ModeKingOfTheHill")
 W.CosmeticData = load_("CosmeticData")

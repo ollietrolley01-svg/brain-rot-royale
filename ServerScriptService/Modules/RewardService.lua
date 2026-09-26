@@ -73,8 +73,30 @@ function RewardService.AwardBonusCoins(player, amount, reason)
 	end
 end
 
+-- A number in [0, 1) for the win's Mythic Crate roll. tools/mythic_crate_check.py seeds it.
+RewardService.Roll = math.random
+
+-- The results card's line for a win's Mythic Crate roll (MatchConfig `mythicChance`): the chance, read from
+-- the field the roll used, and whether it dropped. `crate` is set only when it did; the payouts give exactly
+-- that, so the card's line and the crate given can't disagree. The team card lists it as a breakdown line
+-- (`label`, and `note` where a line's pay goes; the label is kept short to fit its cell); the battle royale
+-- card, which has no breakdown, shows `chip`.
+function RewardService.MythicLine(chance, won)
+	local odds = MatchConfig.ChanceText(chance)
+	return {
+		id = "mythic",
+		label = string.format("Mythic %s chance", odds),
+		note = won and "+1 CRATE" or "not this time",
+		chip = won and string.format("+1 MYTHIC CRATE (%s CHANCE)", odds)
+			or string.format("MYTHIC CRATE %s CHANCE: NOT THIS TIME", odds),
+		crate = won and "Mythic" or nil,
+		coins = 0,
+		xp = 0,
+	}
+end
+
 -- Placement rewards do not stack: one crate, from the bracket you landed in. Open it from
--- the menu to find out what's inside.
+-- the menu to find out what's inside. A bracket with `mythicChance` (the win) also rolls for a Mythic Crate.
 function RewardService.AwardPlacement(player, rank)
 	local data = PlayerData.Get(player)
 	if not data then
@@ -102,6 +124,13 @@ function RewardService.AwardPlacement(player, rank)
 	end
 
 	CrateService.Give(player, bracket.crate, 1)
+	local mythic = nil
+	if bracket.mythicChance then
+		mythic = RewardService.MythicLine(bracket.mythicChance, RewardService.Roll() < bracket.mythicChance)
+		if mythic.crate then
+			CrateService.Give(player, mythic.crate, 1)
+		end
+	end
 
 	local coins = RewardService.AddCoins(player, math.floor(bracket.coins * RewardService.PlacementMultiplier))
 	BattlePassService.AddXp(player, bracket.xp)
@@ -112,6 +141,7 @@ function RewardService.AwardPlacement(player, rank)
 		crate = bracket.crate,
 		coins = coins,
 		xp = bracket.xp,
+		mythic = mythic,
 	}
 end
 
@@ -121,7 +151,8 @@ end
 --
 -- summary = { playerKills, botKills, assists, revenges, streakCoins, captures, holdSeconds, defends,
 --             activeSamples, mvp (bool), afk (bool),
---             and the TEAM BONUS inputs AwardTeamResult adds: firstWin (bool), winStreak (n), unlock (id) };
+--             and the TEAM BONUS inputs AwardTeamResult adds: firstWin (bool), winStreak (n), unlock (id),
+--             and mythic (bool), whether a win's Mythic Crate roll came up };
 --             every field optional.
 -- Each line is { id, label, count?, coins, xp, bonus? }. `bonus` marks the TEAM BONUS lines -- what only the
 -- team modes pay (MVP, first win of the day, win streak, a team cosmetic) -- which the card highlights and
@@ -153,6 +184,10 @@ function RewardService.TeamBreakdown(summary, outcome, multiplier)
 
 	local result = rules[outcome] or rules.loss or {}
 	add("result", RESULT_LABEL[outcome] or "Defeat", nil, (result.coins or 0) * multiplier, result.xp or 0)
+	-- A win's Mythic Crate roll, shown on every win whether it dropped or not: the odds are part of the pay.
+	if outcome == "win" and rules.mythicChance then
+		table.insert(lines, RewardService.MythicLine(rules.mythicChance, summary.mythic == true))
+	end
 
 	-- Kills at the battle royale's own rate, a real player's first (they pay more), then bots, to the cap.
 	local cap = (rules.kill and rules.kill.cap) or 15
@@ -281,6 +316,7 @@ function RewardService.AwardTeamResult(player, outcome, rank, summary)
 			record.wins += 1
 			record.streak += 1
 			summary.winStreak = record.streak
+			summary.mythic = rules.mythicChance ~= nil and RewardService.Roll() < rules.mythicChance
 			local quests = QuestData.Ensure(data.Quests, StateSync.CurrentDay())
 			if not quests.progress[RewardService.FirstTeamWinKey] then
 				quests.progress[RewardService.FirstTeamWinKey] = 1
@@ -305,6 +341,11 @@ function RewardService.AwardTeamResult(player, outcome, rank, summary)
 	end
 	if bonusCrate then
 		CrateService.Give(player, bonusCrate, 1)
+	end
+	for _, line in ipairs(lines) do
+		if line.id == "mythic" and line.crate then
+			CrateService.Give(player, line.crate, 1)
+		end
 	end
 	local granted = RewardService.AddCoins(player, coins)
 	if granted > coins then
