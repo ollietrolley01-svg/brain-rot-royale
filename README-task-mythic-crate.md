@@ -22,3 +22,5 @@ Cut from `origin/main` at d1e4f73. The brief is `tasks/24-mythic-crate-chance-on
 - **`tools/mythic_crate_check.py`** (new): runs the real AwardPlacement and AwardTeamResult 100,000 times each
   with a seeded roll, with 8 planted faults.
 - **`tools/team_rewards_check.py`**: pins the roll to "no drop", so its exact crate list stays deterministic.
+- **`tools/mythic_crate_gallery.lua`** (new): renders the real results card with the real Mythic lines, a battle
+  royale win and a team win, each with the crate dropped and not (`tools/gallery.ps1 -Gallery ...`).
