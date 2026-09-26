@@ -176,9 +176,7 @@ for _, row in pairs(rows) do
 	row.bot.ride = { role = "passenger", model = row.vehicle, seat = row.seat, purpose = "ride", boardedAt = now,
 		lastTargetAt = now, burstLeft = 0, nextShotAt = 0 }
 	say("%s: bot seated %s", row.lane.key, tostring(row.bot.humanoid.SeatPart == row.seat))
-	-- Pushed apart sideways, so the two counts never overlap on screen.
-	row.label = board(row.vehicle.PrimaryPart or row.seat, UDim2.fromOffset(250, 78),
-		Vector3.new(row.lane.key == "bike" and -4 or 4, 8, 0))
+	row.label = board(row.vehicle.PrimaryPart or row.seat, UDim2.fromOffset(220, 72), Vector3.new(0, 8, 0))
 end
 
 -- Every shot a bot takes goes through BroadcastShot (BotService.shootAt): count it by where the bot sat.
@@ -220,7 +218,7 @@ local camera = workspace.CurrentCamera
 camera.CameraType = Enum.CameraType.Scriptable
 camera.FieldOfView = 60
 -- Behind and above the two rides, close; the shot lines run out to the targets either side.
-local eye, look = C + Vector3.new(0.5, 10, 19), C + Vector3.new(0.5, 2, -4)
+local eye, look = C + Vector3.new(0.5, 11, 23), C + Vector3.new(0.5, 2, -4)
 local film = RunService.Heartbeat:Connect(function()
 	camera.CFrame = CFrame.lookAt(eye, look)
 	refresh()
