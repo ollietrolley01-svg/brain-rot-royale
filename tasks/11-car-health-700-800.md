@@ -38,9 +38,9 @@ At 700-800 health, worked from the same numbers (the 620-health scooter is 5.6 s
 So a car goes from 4 rockets to 2, and from about 13 s of the rifle to about 6. Confirm these with the
 check once the numbers move; they are estimates from its printed rates.
 
-## Ask Oliver before changing numbers
+## Questions for Oliver
 
-This undoes Oliver's 09-24 health bands, so send him these questions through the mailbox first:
+This undoes Oliver's 09-24 health bands, so send him these questions through the mailbox. Work to the default below until he answers:
 
 1. Does 700-800 apply to every car, or only the four ordinary ones? What happens to bikes (600-660
    today, which would sit close to a car) and the armoured pair? Should they keep their ratios to a
@@ -54,6 +54,10 @@ This undoes Oliver's 09-24 health bands, so send him these questions through the
 Crash damage follows health on its own (`VehicleArmor.CollisionScale` divides by `CrashBasis`), so a
 crash keeps its share. Bot bail and retreat (`BotDriveTactics.BAIL_HEALTH` 0.15, `RETREAT_HEALTH`
 0.35) are shares of health and need no change.
+
+## Default
+
+Until Oliver answers: the four ordinary cars at 700-800 (TralalaGT 700, Rotster 740, CrocodiloRanger 780, SahurVan 800). Bikes and the armoured pair keep their ratios to an average car (bikes about 0.45x, which puts them near 340; armoured 2-2.5x). A wreck behaves as today plus PR #60's blast.
 
 ## Conflicts
 
@@ -69,3 +73,5 @@ This one is fully provable offline. `vehicle_ttk_check.py` recomputes every time
 the health, and paste the table before and after. Plant a fault: one car's health set outside the
 new band must turn the check red. `mounted_guns_check.py` and `team_vehicles_check.py` also read
 vehicle damage, so run them and paste their lines.
+
+Status: ready to start

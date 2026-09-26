@@ -54,3 +54,5 @@ one prop.
 Real physics: `tools/bot_driving_probe.lua` on a real map. Bots are server-side, so runtest's Run
 mode is enough. Count `"stuck"` reports per bot-minute over 3 reps before and after. The coordinator
 runs it.
+
+Status: ready to start

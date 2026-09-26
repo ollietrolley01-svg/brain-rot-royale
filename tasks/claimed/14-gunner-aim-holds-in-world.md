@@ -50,3 +50,5 @@ it goes red.
 **The feel cannot be proven offline.** GunnerView runs from a LocalScript. It needs a Studio **Play**
 test with a client, a gunner on a turret, and a driver turning hard. The coordinator runs it, with the
 camera on the gunner's view.
+
+Status: fixed in PR #69 (open, awaiting Oliver's merge)

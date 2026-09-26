@@ -1,9 +1,9 @@
 # Task 21: bots don't shoot at cars
 
 **Files you own for this task:** in `ServerScriptService/Modules/BotService.lua`, `hasLineOfSight`
-(line 1023) and the target scoring in `findTarget` (line 1340), plus a new check under `tools/`.
+(line 1023) only, plus a new check under `tools/`.
 **Read only:** `CombatService.lua`, `VehicleService.lua`, `VehicleArmor.lua`, `VehicleModels.lua`.
-Ask Jacob before starting: his `task/lag-findtarget` changed `findTarget`.
+`findTarget` is read only too: Jacob's `task/lag-findtarget` changed it.
 
 ## What was reported
 
@@ -32,6 +32,10 @@ its own. Confirm it with a count of candidates dropped by sight while seated in 
   so a bot with a launcher is the natural counter.
 - Should an empty car ever be a target? Probably not, apart from denying a base car in team modes.
 
+## Default
+
+Riders only: the target's car body stops blocking the sight ray to its riders, the way window glass already does, except an armoured cabin, which keeps protecting them (Oliver's roadkill decision 3 and the bullet rule). A bot shooting the car itself is a follow-up for Oliver. With this default the task changes `hasLineOfSight`, not `findTarget`, so it doesn't wait on `task/lag-findtarget`.
+
 ## Conflicts
 
 Jacob's `task/lag-findtarget` (d96479d, "findTarget holds the four lowest scores instead of sorting
@@ -51,3 +55,5 @@ show it goes red. Report how many candidate rays you examined.
 
 Real behaviour: bots are server-side, so a runtest probe with a player-less car driven past a bot
 squad can count shots at the car or its driver per pass, over 3 reps. The coordinator runs it.
+
+Status: ready to start

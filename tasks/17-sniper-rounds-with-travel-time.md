@@ -52,7 +52,11 @@ This is most of the task. List each item and decide it, with Oliver where it is 
 ## Ask Oliver
 
 The speed and drop are a feel decision. Send him two or three numbered options (for example 600,
-900 and 1,200 studs a second, with how far the round drops at 300 studs for each) before settling.
+900 and 1,200 studs a second, with how far the round drops at 300 studs for each). Work to the default below until he picks.
+
+## Default
+
+A round at 900 studs a second with a small drop (for example `gravityScale` 0.05), direct damage and headshots as today, the freeze kept. The round flies against present positions, and the PR says plainly what that costs a high-ping shooter compared with hitscan's rewind. Offer Oliver the speed options in the PR.
 
 ## Conflicts
 
@@ -72,3 +76,5 @@ an invariant (a round never passes a solid part it crosses) and show it goes red
 
 **The feel cannot be proven offline.** It needs a Studio **Play** test with a client firing at a
 moving bot at range, plus a ping test for the rewind. The coordinator runs it.
+
+Status: ready to start

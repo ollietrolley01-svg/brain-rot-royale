@@ -47,3 +47,5 @@ invariant (a gunner never fires outside the mount's arc or into its own splash) 
 
 Real behaviour: bots are server-side, so runtest's Run mode is enough for a probe that counts gunner
 shots and hits per minute over 3 reps. The coordinator runs it. Whether it feels fair is Oliver's call.
+
+Status: waiting on pc/lag-bug-sweep merging: it rewrites `gunnerThink` and takes bots off vehicle guns in battle royale, so the task's scope isn't known until it lands

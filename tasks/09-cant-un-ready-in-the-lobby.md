@@ -47,3 +47,5 @@ invariant (an un-ready overwritten while nothing new happened) and show it goes 
 The mock assumes that `Touched` repeats for a standing character. That is Roblox behaviour, not
 this code's, so state it as an assumption. A Studio **Play** test with a client standing on the pad
 would confirm it, and the coordinator can queue one.
+
+Status: ready to start

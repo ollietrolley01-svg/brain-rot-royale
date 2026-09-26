@@ -60,3 +60,5 @@ and paste their lines.
 **The look needs a render.** A gun that clears the hull by the numbers can still look wrong. The
 coordinator runs `tools/gunner_fp_gallery.lua` (its `_fp_swung` view) and `tools/mount_gallery.lua` at
 the new extremes.
+
+Status: fixed in PR #71 (open, awaiting Oliver's merge)

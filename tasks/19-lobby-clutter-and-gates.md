@@ -47,6 +47,10 @@ seen from the plaza or that a gate stands in front of it. That is a gap to close
 gates, gates moved off the line of sight to each booth, or the road without the gates. Don't move any
 interactive piece.
 
+## Default
+
+Treat both the Cosmetics stall and the Crate Altar as the booth. Move the MARKET ROW and CRATES + SPIN gates off the line from the plaza to each, and cut the road's studs and the banners by half. Ask Jacob in the PR which booth he meant.
+
 ## Conflicts
 
 `pc/lag-bug-sweep` changes `LobbyService` (the ready-pad comment, `buildPitch`, the PlayerRemoving
@@ -63,3 +67,5 @@ show it goes red.
 
 **Clutter cannot be proven offline.** It needs a render. The coordinator runs
 `tools/lobby_v2_gallery.lua` before and after, and Oliver judges it.
+
+Status: ready to start

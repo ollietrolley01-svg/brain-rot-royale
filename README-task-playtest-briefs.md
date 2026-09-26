@@ -36,3 +36,19 @@ Adds five more open briefs (17-21) from feedback Jacob relayed:
 - `tasks/19-lobby-clutter-and-gates.md`: the lobby v2 road and gates are cluttered and block a booth.
 - `tasks/20-bot-gunners-engage-better.md`: bots in gunner seats fight better.
 - `tasks/21-bots-dont-target-cars.md`: bots never target a car, and rarely see its riders.
+
+Adds nine more open briefs (22-30) from Oliver, relayed by Jacob:
+
+- `tasks/22-no-shooting-on-bikes.md`: no firing from any seat on a bike.
+- `tasks/23-bots-drive-across-bridges.md`: bot drivers get across bridges.
+- `tasks/24-mythic-crate-chance-on-a-win.md`: a win has a chance of a Mythic Crate, with the odds shown.
+- `tasks/25-improve-the-launch-pad.md`: the Launch Pad launches you at once.
+- `tasks/26-team-bots-spawn-with-a-kit.md`: team-mode bots spawn with a fixed-shape kit and skip base
+  looting.
+- `tasks/27-declutter-team-bases-and-battleground.md`: fewer parts in the battleground, then the bases.
+- `tasks/28-loading-screen-for-new-maps.md`: a loading screen while a map builds and streams in.
+- `tasks/29-fewer-armed-cars-in-battle-royale.md`: armed cars from 81% to 25% of battle royale cars.
+- `tasks/30-roadkill-never-one-shots.md`: one pass never kills a full-health, full-shield player.
+
+Every brief from 08 on now ends with a `Status:` line. Briefs that used to wait on a question now give
+a default to work to, and say what to ask in the PR.

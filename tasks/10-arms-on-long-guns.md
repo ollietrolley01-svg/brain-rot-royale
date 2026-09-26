@@ -12,7 +12,8 @@ first-person arms; GunPoseClient reads its reload tables, so a change there move
 ## First: which view
 
 He doesn't say whether it's first person or third person, and they are different code. Ask him
-through the mailbox which view, and which gun, before changing anything. A screenshot would be better.
+through the mailbox which view, and which gun; a screenshot would be better. Until he answers, work
+to the default below.
 
 - **First person** is `Viewmodel.lua`. It solves each arm as two bones reaching the hand, brings the
   shoulder forward for long guns (`REACH_COMFORT`, `SHOULDER_TRAVEL`), and swings the elbow toward a
@@ -27,6 +28,10 @@ through the mailbox which view, and which gun, before changing anything. A scree
   `fps_arms_body_check.py`'s own docstring records this: "The held pose's fixed angles leave hands
   short of their keypoints anyway, 0.4 studs and more on some guns; that is not this check's to
   judge."
+
+## Default
+
+Third person, on the three longest guns: the held, sprint and aimed poses reach the `SupportHand` keypoint. Ask Oliver which view he meant in the PR, and switch to first person if he says so.
 
 ## Conflicts
 
@@ -45,3 +50,5 @@ LocalScript, so a gallery cannot require it and runtest's Run mode does not run 
 **Play** test with a client, looking at another body (a bot will do) holding the three longest guns
 at the hip, aimed and sprinting. The coordinator runs it, with the camera on the arms. Oliver judges
 the result.
+
+Status: ready to start

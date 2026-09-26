@@ -47,3 +47,5 @@ Studio **Play** test with a client, because runtest's Run mode runs no LocalScri
 runs it. The Play test needs a car driven in third-person combat with the mouse moved to each corner,
 the same in first person, and a gunner seat, so the fix does not undo the gunner's locked aim. Write
 the steps into the PR.
+
+Status: ready to start

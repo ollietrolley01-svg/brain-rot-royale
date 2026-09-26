@@ -47,3 +47,5 @@ and show the check goes red.
 
 **Whether the view looks clear cannot be proven offline.** It needs a render. The coordinator runs
 `tools/gunner_fp_gallery.lua` (`_fp_rest` and `_fp_swung`) for every armed model, and Oliver judges it.
+
+Status: fixed in PR #70 (open, awaiting Oliver's merge)

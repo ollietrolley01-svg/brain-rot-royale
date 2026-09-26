@@ -32,6 +32,10 @@ measured TDM length and two or three options. Longer matches also change coins p
 playtime pay (Task 07's economy model, `tools/economy_model.py`, and `tools/team_rewards_check.py`),
 so say what each option does to those.
 
+## Default
+
+Both team modes' clocks from 480 to 720 s; TDM's target from 100 to 150 kills; Objective Capture's target from 250 to 400, so one team holding both objectives needs 200 s instead of 125. Adjust from the measured TDM kill rate and the economy model, and say what moved.
+
 ## Conflicts
 
 `pc/lag-bug-sweep` and `pc/teambase-v2` both change `GameModes.lua` (a new block near
@@ -46,3 +50,5 @@ fastest possible end, before and after. For TDM, add a kill-rate estimate from t
 team-battleground harness logs if one exists, and say where the number came from. Plant a fault (a
 target the clock can never reach at the measured rate) and show it goes red. Run `verify.py` for the
 description check. Whether the new length feels right is Oliver's call after a playtest.
+
+Status: ready to start

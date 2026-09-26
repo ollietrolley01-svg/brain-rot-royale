@@ -19,13 +19,17 @@ It also draws the river. It draws nothing else of a town, and no roads.
 on every town, and the minimap reads none of them. A town is often 100 studs or more across, which
 is 10 px or more on the minimap. It currently shows as a dot the same size for every town.
 
-## Ask Oliver first
+## Questions for Oliver
 
 "Improvements" doesn't say what is wrong. Send Oliver a few numbered mockups through the mailbox and
 let him pick. For example: each town as a filled area from `TownRadius`, the town's buildings as
 small blocks, or the roads through it. If an option needs data the map doesn't publish (building
 footprints, the road lines), ask the build machine for it as one attribute through the mailbox. Do
 not edit `MapGenerator`.
+
+## Default
+
+Each town drawn as a filled, faint disc of `TownRadius` in the town marker's colour, under its dot and name, with the label rules unchanged. Offer Oliver the other options as mockups in the PR.
 
 ## Conflicts
 
@@ -42,3 +46,5 @@ show it goes red. Report how many towns you checked.
 
 **Whether it looks better cannot be proven offline.** It needs a render, and the coordinator runs
 renders (`tools/hud_overlap_gallery.lua` is the nearest existing one). Oliver judges the result.
+
+Status: ready to start
