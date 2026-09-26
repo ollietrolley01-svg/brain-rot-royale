@@ -1220,6 +1220,7 @@ local DRIVE_FEELER_BESIDE = 4    -- a corner feeler's hit this far clear of the 
 local DRIVE_BESIDE_TURN = math.rad(20) -- ...judged only while it points this near that way (turning harder, the nose sweeps across)
 local DRIVE_BACK_SAME = math.rad(2) -- going round something, the way back is only taken as swept by sweep 1 this near it
 local DRIVE_SWEEP_TILT = math.rad(8) -- the sweeps lie along a chassis leaning more than this (roads are under 6)
+local DRIVE_SWEEP_GRADE = 0.15     -- ...and climb at the ground's grade ahead up to this (roads are under 10%)
 local DRIVE_STUCK_SPEED = 2.5     -- slower than this while wanting to go is not going
 local DRIVE_STUCK_AFTER = 1.5     -- seconds of it before reversing out
 local DRIVE_REVERSE_FOR = 1.4
@@ -1976,8 +1977,9 @@ function BotNav.DriveSense(drive, now)
 	-- box meets rising ground (a 5% road, 26 studs on) or a bank inside the car's own length, and that
 	-- face turned up (not `blocking`) is all a sweep reports, whatever stands behind it; on the way down
 	-- it passes over what is low. So it climbs at the grade the last look's ground probe found ahead
-	-- (as far off as this sweep reaches), and on ground steeper than DRIVE_SWEEP_TILT (a bank, a dune)
-	-- it lies along the chassis. Not the chassis on gentler ground: the nose dips under the brakes.
+	-- (as far off as this sweep reaches; DRIVE_SWEEP_GRADE at most), and on ground steeper than
+	-- DRIVE_SWEEP_TILT (a bank, a dune) it lies along the chassis. Not along the chassis on gentler
+	-- ground: the nose dips under the brakes.
 	local width = drive.halfWidth * 2 + 1
 	local up = frame.UpVector
 	local tilted = up.Y <= math.cos(DRIVE_SWEEP_TILT)
@@ -2191,9 +2193,13 @@ function BotNav.DriveSense(drive, now)
 		hazard = true
 	else
 		local drop = groundHere - below.Position.Y
-		-- The grade the next look's sweeps climb at (backing, the ground behind says nothing about ahead).
+		-- The grade the next look's sweeps climb at, from the ground only: the terrain, or a road's slab
+		-- (nothing collides with those). A roof, a tree's leaves or a car under the ray is no grade, and
+		-- would tip the sweep up over what is in the way. Backing, the ground behind says nothing ahead.
+		local part = below.Instance
 		if not reversing then
-			drive.groundGrade = math.clamp(-drop / math.max(flatDistance(position, probeAt), 1), -DRIVE_DROP_GRADE, DRIVE_DROP_GRADE)
+			local ground = part and (part:IsA("Terrain") or (part:IsA("BasePart") and not part.CanCollide))
+			drive.groundGrade = ground and math.clamp(-drop / math.max(flatDistance(position, probeAt), 1), -DRIVE_SWEEP_GRADE, DRIVE_SWEEP_GRADE) or 0
 		end
 		if drop > math.max(DRIVE_DROP, probeDistance * DRIVE_DROP_GRADE) then
 			hazard = true

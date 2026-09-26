@@ -230,10 +230,16 @@ P.BotNav.DriveSense = function(drive, now)
 		local cf = chassis.CFrame
 		local look = P.flat(cf.LookVector)
 		look = look.Magnitude > 0.05 and look.Unit or Vector3.new(0, 0, -1)
-		local ground = cf.Position.Y - drive.rideHeight
-		local boxAt = Vector3.new(cf.Position.X, ground + 2.6, cf.Position.Z)
+		-- Laid as DriveSense lays it: along a chassis leaning over 8 degrees, else climbing at drive.groundGrade.
+		local up = cf.UpVector
+		local tilted = up.Y <= math.cos(math.rad(8))
+		if not tilted then
+			up = Vector3.new(0, 1, 0)
+		end
+		local along = tilted and (look - up * look:Dot(up)).Unit or (look + Vector3.new(0, drive.groundGrade or 0, 0)).Unit
+		local boxAt = cf.Position + up * (2.6 - drive.rideHeight)
 		local reach = math.clamp(math.abs(chassis.AssemblyLinearVelocity:Dot(cf.LookVector)) * 1.1 + 16, 20, 90)
-		local first = workspace:Blockcast(CFrame.lookAt(boxAt, boxAt + look), Vector3.new(drive.halfWidth * 2 + 1, 2.6, 1), look * reach, drive.params)
+		local first = workspace:Blockcast(CFrame.lookAt(boxAt, boxAt + along, up), Vector3.new(drive.halfWidth * 2 + 1, 2.6, 1), along * reach, drive.params)
 		st.hist = st.hist or {}
 		table.insert(st.hist, string.format("%s%s@%.0f/v%.0f%s", first and (first.Instance:IsA("Terrain") and "T" or first.Instance.Name) or "-",
 			first and (P.counts(first) and "!" or "~") or "", first and first.Distance - drive.halfLength or reach, speed, drive.avoid and "A" or ""))
