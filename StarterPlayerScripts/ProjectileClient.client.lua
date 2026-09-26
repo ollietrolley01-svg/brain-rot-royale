@@ -711,13 +711,14 @@ local function throwHeld()
 		or UserInputService:IsGamepadButtonDown(Enum.UserInputType.Gamepad1, Enum.KeyCode.ButtonR2)
 end
 
--- At the wheel of a vehicle (a VehicleSeat; passengers sit on plain Seats): no throwing. The server
--- refuses it too; this just keeps the click from doing anything.
+-- At the wheel of a vehicle (a VehicleSeat; passengers sit on plain Seats) or anywhere on a bike: no
+-- throwing. The server refuses it too (CombatService.SeatBarsWeapons); this just keeps the click from
+-- doing anything.
 local function driving()
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local seat = humanoid and humanoid.SeatPart
-	return seat ~= nil and seat:IsA("VehicleSeat")
+	return seat ~= nil and (seat:IsA("VehicleSeat") or (seat.Parent ~= nil and seat.Parent:GetAttribute("VehicleKind") == "bike"))
 end
 
 -- The phone's COOK button (see ON A PHONE below); declared here so the handler can tell its presses apart.

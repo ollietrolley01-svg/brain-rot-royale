@@ -4432,12 +4432,17 @@ function Vehicles.gunnerThink(bot, root, head, ride, now)
 end
 
 -- A passenger (team modes): its own gun out of the window, as a player passenger may. No launchers
--- (a round's flight only leaves out the bot, not the car it is sitting in). Out when the driver is.
+-- (a round's flight only leaves out the bot, not the car it is sitting in). Out when the driver is,
+-- and off a seat no player could shoot from either (a bike's pillion: CombatService.SeatBarsWeapons).
 function Vehicles.passengerThink(bot, root, head, ride, now)
 	local model = ride.model
 	local driverSeat = model:FindFirstChild("DriverSeat")
 	if model:GetAttribute("Wrecked") or not (driverSeat and driverSeat.Occupant) then
 		Vehicles.leaveRide(bot, "driver gone", 6)
+		return
+	end
+	if CombatService.SeatBarsWeapons(ride.seat) then
+		Vehicles.leaveRide(bot, "no hands free", 6)
 		return
 	end
 	finishReload(bot, now)
@@ -4626,8 +4631,9 @@ function Vehicles.pickSeat(bot, root, now)
 					return seats.gunner, "gunner", "gunner"
 				end
 				if team ~= nil and ride and ride.offerUntil and now < ride.offerUntil and not fighting then
+					-- A passenger rides along to shoot, so never on a bike's pillion, where nobody can.
 					for _, passenger in ipairs(seats.passengers) do
-						if not passenger.Occupant then
+						if not passenger.Occupant and not CombatService.SeatBarsWeapons(passenger) then
 							ride.riderComing = true
 							return passenger, "passenger", "ride"
 						end
