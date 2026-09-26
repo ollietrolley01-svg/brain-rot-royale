@@ -303,9 +303,11 @@ def audit(rt, dump, handling, arcs, model_id, verbose=True, driver_arcs=None):
             for names, table, step, what in ((("TurretYaw", "TurretPitch"), arcs, 30, "turret"),
                                              (("DriverGunYaw", "DriverGunPitch"), driver_arcs or {}, 10, "driver gun")):
                 if names[0] in model.by and model_id in table:
-                    yaw_limit, pmin, pmax, guard = table[model_id]
+                    yaw_limit, pmin, pmax, guard, rear = table[model_id]
                     for yaw in range(-int(yaw_limit), int(yaw_limit) + 1, step):
                         low = max(pmin, guard[1]) if guard and abs(yaw) < guard[0] else pmin
+                        if rear and abs(yaw) > 180 - rear[0]:
+                            low = max(pmin, rear[1])
                         for pitch in (low, (low + pmax) / 2, pmax):
                             poses.append((f"{what} yaw {yaw}, pitch {pitch:g}", model.chassis["rest"],
                                           {names[0]: angles(0, math.radians(yaw), 0), names[1]: angles(math.radians(pitch), 0, 0)}))

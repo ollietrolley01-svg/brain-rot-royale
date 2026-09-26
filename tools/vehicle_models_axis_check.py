@@ -34,9 +34,15 @@ Invariants, each aimed at something the models must refuse forever:
          the bar's top), and the straps touch both bat and bar,
        - nothing else overlaps it except the straps and the bars it rests on.
   6. An armed build's weapons clear the rest of the vehicle through their WHOLE aim arcs (yaw and
-     pitch limits from VehicleWeaponData, 5 degree steps): no part of the turret comes within 0.05 of
-     a visible part that is not the turret's own, and the same for the driver's gun (DriverGun*,
-     VehicleModels.DriverMounts, VehicleWeaponData.DriverByModel).
+     pitch limits from VehicleWeaponData, front and rear guards included; 5 degree steps of yaw, at
+     most 2 of pitch): no part of the turret comes within 0.05 of a visible part that is not the
+     turret's own, and the same for the driver's gun (DriverGun*, VehicleModels.DriverMounts,
+     VehicleWeaponData.DriverByModel).
+  7. At every one of those poses the shot's first stretch -- from the pitch pivot out through the
+     muzzle and SHOT_REACH studs beyond, the line tools/vehicle_weapons_gallery.lua's sweep casts in
+     Studio -- meets no visible part of the vehicle that is not the mount's own: a gun never fires
+     into its own cab, roof, hump or rails. (Riders are not in it: the server leaves the vehicle and
+     everyone in it out of every shot and round, and a model build has no riders to test.)
 
 Planted faults travel the same pipeline as the real input: the module SOURCE is edited and rebuilt.
     python3 tools/vehicle_models_axis_check.py [repo]        -> exit 0 when clean
@@ -227,6 +233,9 @@ end
 ROD_THIN, ROD_RATIO = 0.6, 2.5
 BAT_COAXIAL_TOL, BAT_ALONG_TOL = 1.0, 3.0
 PROTRUDE, HELD, ZFIGHT_DRIFT, CLEAR = 0.3, 0.06, 0.05, 0.05
+# Invariant 7: how far past the muzzle the shot's line is followed (the gallery sweep's 4), and the
+# largest pitch step the arc sweep takes (the old 11 even steps left 3.8 degrees between poses).
+SHOT_REACH, PITCH_STEP = 4.0, 2.0
 # A bare end longer than both of these reads as a pole. Under 0.4 it is a trim end at a panel's
 # edge: the arch lips' last segments on the van and the GT stop 0.07 past the arch panel's back
 # edge, 0.36 of their 0.67 clear of it.
@@ -253,17 +262,18 @@ def load_sources(repo):
 
 
 def weapon_arcs(data_src, table="ByModel"):
-    """{modelId: (yawLimit, pitchMin, pitchMax, guard)} read from VehicleWeaponData's source: the
-    turrets (ByModel) or, with table="DriverByModel", the drivers' guns. `guard` is the spec's
-    frontGuard as (arc, pitchMin), or None: inside that arc the barrel never goes below its floor."""
+    """{modelId: (yawLimit, pitchMin, pitchMax, guard, rear)} read from VehicleWeaponData's source:
+    the turrets (ByModel) or, with table="DriverByModel", the drivers' guns. `guard` and `rear` are
+    the spec's frontGuard and rearGuard as (arc, pitchMin), or None: inside that arc of straight ahead
+    (behind) the barrel never goes below the guard's floor (VehicleWeaponData.PitchFloor)."""
     arcs, specs = {}, {}
     for m in re.finditer(r"\n\t(\w+) = \{(.*?)\n\t\}", data_src, re.S):
         body = m.group(2)
         vals = [re.search(rf"\n\t\t{k} = (-?[\d.]+)", body) for k in ("yawLimit", "pitchMin", "pitchMax")]
-        guard = re.search(r"frontGuard = \{ arc = (-?[\d.]+), pitchMin = (-?[\d.]+) \}", body)
+        guards = [re.search(k + r" = \{ arc = (-?[\d.]+), pitchMin = (-?[\d.]+) \}", body) for k in ("frontGuard", "rearGuard")]
         if all(vals):
-            specs[m.group(1)] = tuple(float(v.group(1)) for v in vals) + (
-                (float(guard.group(1)), float(guard.group(2))) if guard else None,)
+            specs[m.group(1)] = tuple(float(v.group(1)) for v in vals) + tuple(
+                (float(g.group(1)), float(g.group(2))) if g else None for g in guards)
     block = re.search(r"\nVehicleWeaponData\." + table + r" = \{(.*?)\n\}", data_src, re.S)
     for model_id, spec in re.findall(r"\n\t(\w+) = \"(\w+)\",", block.group(1) if block else ""):
         if spec in specs:
@@ -657,6 +667,38 @@ def posed(p, pivot, axis, a):
     return dict(p, pos=add(pivot, rotate(sub(p["pos"], pivot), axis, a)), cols=tuple(rotate(c, axis, a) for c in p["cols"]))
 
 
+def shot_blockers(a, b, boxes):
+    """The parts the segment a->b passes through: a box by the exact slab test, a round part or a
+    wedge (whose box is bigger than it) walked in 0.05 steps against its real solid."""
+    lo_s, hi_s = [min(a[k], b[k]) for k in range(3)], [max(a[k], b[k]) for k in range(3)]
+    d = sub(b, a)
+    out = []
+    for q, (lo, hi) in boxes:
+        if any(lo[k] > hi_s[k] or lo_s[k] > hi[k] for k in range(3)):
+            continue
+        if q["shape"] == "Block" and q.get("cls") != "WedgePart":
+            h, rel = half_sizes(q), sub(a, q["pos"])
+            t0, t1 = 0.0, 1.0
+            for k in range(3):
+                o, v = dot(rel, q["cols"][k]), dot(d, q["cols"][k])
+                if abs(v) < 1e-12:
+                    if abs(o) > h[k]:
+                        t0, t1 = 1.0, 0.0
+                        break
+                    continue
+                ta, tb = sorted(((-h[k] - o) / v, (h[k] - o) / v))
+                t0, t1 = max(t0, ta), min(t1, tb)
+                if t0 > t1:
+                    break
+            if t0 <= t1:
+                out.append(q)
+        else:
+            n = max(1, int(length(d) / 0.05))
+            if any(point_distance(q, add(a, mul(d, i / n))) <= 0 for i in range(n + 1)):
+                out.append(q)
+    return out
+
+
 def audit_turret(parts, label, arc, verbose, mount="turret"):
     """Invariant 6: a weapon clears the vehicle through its whole arc."""
     faults = []
@@ -671,18 +713,39 @@ def audit_turret(parts, label, arc, verbose, mount="turret"):
     # stands on). The turret's sweep meets the driver's gun like any other part, and the other way round.
     own = (lambda n: TURRET.match(n) and not DRIVER_GUN.match(n)) if mount == "turret" else DRIVER_GUN.match
     fixed = [p for p in visible(parts) if not own(p["name"])]
-    yaw_limit, pmin, pmax, guard = arc
-    worst, hits = 1e9, {}
+    yaw_limit, pmin, pmax, guard, rear = arc
+    hits, shots = {}, {}
     yaws = [math.radians(y) for y in range(-int(yaw_limit), int(yaw_limit) + 1, 5)]
+    # The guards' edges themselves, where the floor steps: the last pose inside a guard and the first
+    # outside it (a hair past the edge, as PitchFloor's strict < and > put it).
+    for g, behind in ((guard, False), (rear, True)):
+        if g:
+            for edge in (g[0] - 0.01, g[0] + 0.01):
+                deg = 180 - edge if behind else edge
+                if deg <= yaw_limit:
+                    yaws += [math.radians(deg), math.radians(-deg)]
 
     def pitches_at(yaw):
-        low = max(pmin, guard[1]) if guard and abs(math.degrees(yaw)) < guard[0] else pmin
-        return [math.radians(low + (pmax - low) * i / 10) for i in range(11)]
-    pitches = pitches_at(math.pi)
+        # VehicleWeaponData.PitchFloor: the front guard inside its arc, the rear guard inside its arc
+        # of straight behind, pitchMin elsewhere.
+        a = abs(math.degrees(yaw))
+        low = pmin
+        if guard and a < guard[0]:
+            low = max(pmin, guard[1])
+        elif rear and a > 180 - rear[0]:
+            low = max(pmin, rear[1])
+        n = max(10, math.ceil((pmax - low) / PITCH_STEP))
+        return [math.radians(low + (pmax - low) * i / n) for i in range(n + 1)]
+    pitches = pitches_at(math.pi / 2)
+    muzzle_p = byname.get("TurretMuzzle" if mount == "turret" else "DriverGunMuzzle")
     up, right = yaw_p["cols"][1], pitch_p["cols"][0]
     # Only parts that could possibly be reached: within the turret's swing radius of the yaw pivot.
     reach = max(length(sub(p["pos"], yaw_p["pos"])) + length(p["size"]) / 2 for p in yaw_parts + pitch_parts)
     near = [q for q in fixed if length(sub(q["pos"], yaw_p["pos"])) - length(q["size"]) / 2 <= reach + CLEAR]
+    fixed_boxes = [(q, world_extent(q)) for q in fixed]
+    # The nearby parts' boxes once, not once per pair: a moving part is only measured exactly against
+    # the ones its own box comes within CLEAR of.
+    near_boxes = [(q, world_extent(q)) for q in near]
     for yaw in yaws:
         pitch_pivot = add(yaw_p["pos"], rotate(sub(pitch_p["pos"], yaw_p["pos"]), up, yaw))
         right_now = rotate(right, up, yaw)
@@ -691,19 +754,37 @@ def audit_turret(parts, label, arc, verbose, mount="turret"):
             # Positive pitch is up: CFrame.Angles(pitch, 0, 0) about the pivot's X, front -Z.
             moving2 = moving + [posed(posed(p, yaw_p["pos"], up, yaw), pitch_pivot, right_now, pitch) for p in pitch_parts]
             for m in moving2:
-                for q in near:
+                mlo, mhi = world_extent(m)
+                for q, (qlo, qhi) in near_boxes:
+                    if any(mlo[k] > qhi[k] + CLEAR or qlo[k] > mhi[k] + CLEAR for k in range(3)):
+                        continue
                     if overlaps(m, q, CLEAR):
                         hits.setdefault((m["name"], q["name"]), (round(math.degrees(yaw)), round(math.degrees(pitch))))
+            # Invariant 7: the shot's first stretch, pivot -> muzzle -> SHOT_REACH beyond.
+            if muzzle_p:
+                mouth = posed(posed(muzzle_p, yaw_p["pos"], up, yaw), pitch_pivot, right_now, pitch)["pos"]
+                end = add(mouth, mul(norm(sub(mouth, pitch_pivot)), SHOT_REACH))
+                for q in shot_blockers(pitch_pivot, end, fixed_boxes):
+                    shots.setdefault(q["name"], (round(math.degrees(yaw)), round(math.degrees(pitch))))
     for (m, q), (y, pt) in sorted(hits.items()):
         faults.append(f"{label}/{m}: {'turret' if mount == 'turret' else 'driver gun'} runs into {q} (first at yaw {y}, pitch {pt})")
+    for q, (y, pt) in sorted(shots.items()):
+        faults.append(f"{label}/{mount} shot meets its own {q} (first at yaw {y}, pitch {pt})")
     if verbose:
-        print(f"  {mount}: {len(yaws)} yaws x {len(pitches)} pitches over yaw +-{yaw_limit:g}, pitch {pmin:g}..{pmax:g}; "
-              f"{len(near)} nearby parts checked, {len(hits)} contacts")
+        guards = "".join(f", {name} guard {g[1]:g} within {g[0]:g}" for name, g in (("front", guard), ("rear", rear)) if g)
+        print(f"  {mount}: {len(yaws)} yaws x up to {len(pitches)} pitches over yaw +-{yaw_limit:g}, pitch {pmin:g}..{pmax:g}{guards}; "
+              f"{len(near)} nearby parts checked, {len(hits)} contacts; shot line {len(fixed)} parts, {len(shots)} met")
     return faults
 
 
-def audit_model(rt, rt_raw, arcs, model_id, verbose=True, driver_arcs=None):
+def audit_model(rt, rt_raw, arcs, model_id, verbose=True, driver_arcs=None, arcs_only=False):
     faults = []
+    if arcs_only:
+        # A planted weapon limit changes nothing but the arcs: only invariants 6 and 7 are rerun.
+        parts = rt.build(model_id, "drive", 1)
+        label = f"{model_id}[drive s1]"
+        return (audit_turret(parts, label, arcs.get(model_id), verbose)
+                + audit_turret(parts, label, (driver_arcs or {}).get(model_id), verbose, "driver"))
     for scheme in range(1, rt.schemes[model_id] + 1):
         hows = ["drive", "static"] + (["unarmed"] if model_id in rt.mounts else [])
         for how in hows:
@@ -720,7 +801,7 @@ def audit_model(rt, rt_raw, arcs, model_id, verbose=True, driver_arcs=None):
     return faults
 
 
-def run(sources, only=None, verbose=True):
+def run(sources, only=None, verbose=True, arcs_only=False):
     rt, raw = Runtime(sources), Runtime(sources, zfight=False)
     arcs = weapon_arcs(sources["VehicleWeaponData"])
     driver_arcs = weapon_arcs(sources["VehicleWeaponData"], "DriverByModel")
@@ -728,7 +809,7 @@ def run(sources, only=None, verbose=True):
     for model_id in rt.ids:
         if only and model_id != only:
             continue
-        found = audit_model(rt, raw, arcs, model_id, verbose, driver_arcs)
+        found = audit_model(rt, raw, arcs, model_id, verbose, driver_arcs, arcs_only)
         if verbose:
             for f in found:
                 print("  FAULT " + f)
@@ -742,7 +823,7 @@ def main(repo="."):
     failed = bool(run(sources))
 
     # Planted faults, each through the real pipeline (edited source, rebuilt, audited).
-    VM, ZF = "VehicleModels", "ZFight"
+    VM, ZF, VWD = "VehicleModels", "ZFight", "VehicleWeaponData"
     plants = [
         ("cylinder length in Y (the X-axis lesson)", "SahurVan", VM,
          'local part = self:make("Part", name, V(length, diameter, diameter), at, role, anchor)',
@@ -783,6 +864,16 @@ def main(repo="."):
         ("leaning pole with a free end (inside the envelope)", "CrocodiloRanger", VM,
          'b:box("BumperStep"',
          'b:tube("PlantPole", V(0, 4.5, 3), V(1.2, 6.2, 3.8), 0.2, "trim")\n\t\tb:box("BumperStep"', "PlantPole: rod end"),
+        # Weapon limits that would put a gun into its own vehicle (invariants 6 and 7): each is a limit
+        # the data must never be allowed to hold, however the arcs are widened later.
+        ("the scout car's HMG tipped to 45 up (grips down through the cabin roof)", "TartarugaScout", VWD,
+         "pitchMin = -12,\n\t\tpitchMax = 34,", "pitchMin = -12,\n\t\tpitchMax = 45,", "turret runs into"),
+        ("the Rotster's roof gun tipped to 30 down (barrel through its own roof)", "Rotster", VWD,
+         "pitchMin = -18,\n\t\tpitchMax = 36,", "pitchMin = -30,\n\t\tpitchMax = 36,", "turret runs into RoofPanel"),
+        ("the Ranger's front guard dropped (a rocket out through its own cab)", "CrocodiloRanger", VWD,
+         "\t\tfrontGuard = { arc = 60, pitchMin = 4 },\n", "", "turret shot meets its own"),
+        ("the carrier's rear guard dropped (grenades into its own hump)", "CameloCarrier", VWD,
+         "\t\trearGuard = { arc = 45, pitchMin = -5 },\n", "", "turret shot meets its own"),
     ]
     for label, model_id, module, old, new, tag, *more in plants:
         src = sources[module]
@@ -795,7 +886,7 @@ def main(repo="."):
             planted[ZF] = planted[ZF].replace("\treturn stats\nend\n\n-- The pairs",
                 "\tif ZFight.PlantBat then for _, r in pairs(roots) do for _, p in ipairs(r:GetChildren()) do if p.Name == \"BatThroat\" then p.CFrame = p.CFrame + Vector3.new(0.3, 0, 0) end end end end\n\treturn stats\nend\n\n-- The pairs", 1)
             assert "PlantBat then" in planted[ZF]
-        faults = run(planted, only=model_id, verbose=False)
+        faults = run(planted, only=model_id, verbose=False, arcs_only=module == VWD)
         caught = [f for f in faults if tag in f]
         print(f"plant [{label}] on {model_id}: {'CAUGHT -- ' + caught[0] if caught else 'MISSED'}")
         failed |= not caught
