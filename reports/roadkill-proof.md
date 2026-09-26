@@ -391,7 +391,7 @@ cap is unchanged (the table above is the same). A contact after the window is a 
 1.5x and 2x its top speed by three paths: the bot's server sweep, the player's report and the server's
 `Touched` (Touched at 2x only). There's also a body carried at the nose for 2 s, with `Touched` and the
 report firing every frame, on a bot's and a player's Streetfighter, and a throw into a wall. Before the
-fix, 14 of the 66 passes killed the full player and 30 dealt more than 150. After it: 0 and 0, worst
+fix, 14 of the 66 passes killed the full player and 32 dealt more than 150. After it: 0 and 0, worst
 150.00. Plants: 22/22 caught, four of them aimed at I11 (cap removed, hits in a pass not added up, cap
 raised to 200, a pass that never ends).
 
