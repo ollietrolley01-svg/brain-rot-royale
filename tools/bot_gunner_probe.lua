@@ -96,13 +96,47 @@ local rows = {}
 local byBot = {}
 local scale = MatchConfig.CombatDamageScale or 1
 
+-- For the pictures: no client runs in Run mode, so the game's tracers and the turret's swing (both drawn by
+-- clients) never show. The probe draws its own: a yellow line from the gun's muzzle to where each shot was
+-- aimed (a rolled miss is aimed off to the side), and the target's torso flashes white on a hit. Neither can
+-- be hit or cast against (CanQuery off).
+local function drawShot(row, aim)
+	local from = row.muzzle and row.muzzle.Position
+	if not from then
+		return
+	end
+	local length = (aim - from).Magnitude
+	local line = Instance.new("Part")
+	line.Anchored, line.CanCollide, line.CanQuery, line.CanTouch = true, false, false, false
+	line.Material = Enum.Material.Neon
+	line.Color = Color3.fromRGB(255, 220, 60)
+	line.Size = Vector3.new(0.35, 0.35, length)
+	line.CFrame = CFrame.lookAt((from + aim) / 2, aim)
+	line.Parent = arena
+	task.delay(0.12, function()
+		line:Destroy()
+	end)
+end
+local function flashHit(row)
+	local torso = row.parts.torso
+	torso.Color = Color3.new(1, 1, 1)
+	torso.Material = Enum.Material.Neon
+	task.delay(0.15, function()
+		torso.Color = Color3.fromRGB(220, 60, 60)
+		torso.Material = Enum.Material.Plastic
+	end)
+end
+
 -- Taps: the mount's shots, and damage to the probe's targets (counted, not applied).
 local realFire = VehicleWeapons.Fire
 VehicleWeapons.Fire = function(token, aim, ...)
 	local ok, why = realFire(token, aim, ...)
 	local row = byBot[token]
-	if row and row.measuring and ok then
-		row.shots += 1
+	if row and ok then
+		if row.measuring then
+			row.shots += 1
+		end
+		drawShot(row, aim)
 	end
 	return ok, why
 end
@@ -110,6 +144,7 @@ local realDeal = CombatService.DealDamage
 CombatService.DealDamage = function(attacker, victim, amount, ...)
 	local row = byBot[attacker]
 	if row and victim == row.token then
+		flashHit(row)
 		if row.measuring and row.onGun then
 			row.hits += 1
 			row.damage += amount * scale
@@ -198,6 +233,7 @@ for index, case in ipairs(CASES) do
 		local token, model, parts = standIn("Target" .. index, base)
 		teamOf[token] = 2
 		row.token, row.parts, row.base, row.gun = token, parts, base, gun
+		row.muzzle = gun:FindFirstChild("TurretMuzzle", true)
 		local at = seat.Position + Vector3.new(6, 1, 6)
 		local bot = BotService.Spawn(1, function()
 			return CFrame.lookAt(at, Vector3.new(base.X, at.Y, base.Z))
@@ -291,7 +327,9 @@ for index, case in ipairs(CASES) do
 end
 say("done")
 
--- Under the gallery: the camera behind each gun, down its line at the runner.
+-- Under the gallery: the camera behind each gun, down its line at the runner; then CLIP_FRAMES frames in a
+-- row of the two cases past the old 260-stud look (tools stitch them into a GIF), about 0.4 s apart.
+local CLIP_FRAMES = 36
 local views = {}
 for _, v in ipairs(VIEWS) do
 	table.insert(views, {
@@ -305,5 +343,31 @@ for _, v in ipairs(VIEWS) do
 			camera.CFrame = CFrame.lookAt(eye, v.base)
 		end,
 	})
+end
+for _, key in ipairs({ "hmg_400", "car_300" }) do
+	for _, v in ipairs(VIEWS) do
+		if v.name == key then
+			for frame = 1, CLIP_FRAMES do
+				table.insert(views, {
+					name = string.format("clip_%s_%03d", key, frame),
+					settle = 0.05,
+					hold = 0.35,
+					setup = function(_, camera)
+						local pivot = v.gun:GetPivot().Position
+						if key == "car_300" then
+							-- Behind and above the car's gunner, so their head sits under the line rather than on it,
+							-- looking a little way down the line so the car and the runner are both in frame.
+							local down = Vector3.new(v.base.X - pivot.X, 0, v.base.Z - pivot.Z).Unit
+							camera.FieldOfView = 55
+							camera.CFrame = CFrame.lookAt(pivot + Vector3.new(0, 13, 20), pivot + down * 60 + Vector3.new(0, 2, 0))
+						else
+							camera.FieldOfView = 30
+							camera.CFrame = CFrame.lookAt(pivot + Vector3.new(4, 9, 22), v.base)
+						end
+					end,
+				})
+			end
+		end
+	end
 end
 return views
