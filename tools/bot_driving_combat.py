@@ -16,13 +16,16 @@ to where they pass or land.
 
 Checks:
   DIAL      per shot, the roof gun's hits over its shots, at 20/60/150 studs, standing and strafing,
-            against the on-foot dial at the same moments (the mean of shootAt's chance): within
-            0.75x..1.2x of it. Not a laser, not a pushover.
+            against the on-foot dial at the same moments (the mean of shootAt's chance, at the distance
+            stretched over the gun's reach, Vehicles.gunReach): within 0.75x..1.2x of it. Not a laser, not
+            a pushover.
   SAME      vehicleHitChance equals shootAt's chance at every range, moment and target speed, with the
-            vehicle standing and no spread (the numbers are the on-foot dial, not a copy of it).
+            vehicle standing, no spread and no range beyond the bots' vision (the numbers are the on-foot
+            dial, not a copy of it).
   ROUNDS    rocket pod and mortar: rolled hits pass within half a blast of the target (led, lobbed),
             rolled misses stay clear of the blast; the mortar holds fire inside its reach.
-  BURSTS    a 30 s engagement: shots come in bursts with rests between, never a dry "ammo" refusal,
+  BURSTS    a 30 s engagement: shots come in bursts with rests of three shots' worth or more at the gun's
+            rate between them, never a dry "ammo" refusal,
             the belt never run to empty, a round never fired into its own blast.
   ARC       a target in the rocket pod's blind arc (behind it) is not fired at.
   SEATS     the gun's own seat (GunnerSeat) fires; the driver is refused while it is manned and
@@ -65,6 +68,9 @@ def bot_pieces(bot_src):
     settle = re.search(r"^local AIM_SETTLE_DELAY = .*$", bot_src, re.M).group(0)
     body = re.search(r"^VEHICLE\.BODY_RADIUS = .*$", bot_src, re.M).group(0)
     chance = re.search(r"^function Vehicles\.vehicleHitChance.*?^end$", bot_src, re.M | re.S).group(0)
+    # The gun's reach, which the chance stretches the distance falloff over (task 20).
+    reach = re.search(r"^function Vehicles\.gunReach.*?^end$", bot_src, re.M | re.S)
+    chance = (reach.group(0) + "\n" if reach else "") + chance
     trigger = re.search(r"^function Vehicles\.vehicleTrigger.*?^end$", bot_src, re.M | re.S).group(0)
     foot = between(bot_src, "\tlocal chance = accuracyAt(distance)", "\tlocal hit = math.random() < chance")
     return "\n".join([
@@ -161,7 +167,9 @@ function engage(model, distance, bearing, strafe, seconds, seed)
       if e.what == "shot" or e.what == "round" then
         if e.what == "round" or #e.endPoints > 0 then
           out.shots = out.shots + 1
-          out.dial = out.dial + footChance({ acquiredAt = ride.fight.acquiredAt }, CLOCK, (parts[3].Position - v.PrimaryPart.Position).Magnitude, parts[3])
+          local _, spec = VW.AmmoOf(v)
+          local stretch = Vehicles.gunReach and MatchConfig.BotVisionRange / Vehicles.gunReach(spec) or 1
+          out.dial = out.dial + footChance({ acquiredAt = ride.fight.acquiredAt }, CLOCK, (parts[3].Position - v.PrimaryPart.Position).Magnitude * stretch, parts[3])
           if lastShot then table.insert(out.gaps, CLOCK - lastShot) end
           lastShot = CLOCK
         end
@@ -377,12 +385,14 @@ def run(vw_src, data_src, bot_src, cfg_src):
     # BURSTS: 30 s on the roof gun.
     o = G.engage("Rotster", 60, 0, 0, 30, 5)
     gaps = sorted(o.gaps.values())
-    rests = sum(1 for g in gaps if g >= 0.4)
-    fast = sum(1 for g in gaps if g < 0.2)
+    step = 1 / G.MODULES.VehicleWeaponData.Weapons.RotsterRoofGun.fireRate
+    rests = sum(1 for g in gaps if g >= 3 * step)
+    fast = sum(1 for g in gaps if g < 1.6 * step)
     res["bursts"] = (o.shots, rests, fast, o.dry, o.minAmmo)
-    # A burst is 6 to 10 shots, so a rest at least every 12 (the belt's own cool-downs alone are far fewer).
-    if rests < max(5, o.shots / 12) or fast < rests:
-        P.append(f"BURSTS: {o.shots} shots, {rests} rests of 0.4 s or more, {fast} shots back to back: not bursts")
+    # A burst is about a second of the gun's fire (10-14 shots at 12 a second), so a rest at least every
+    # 16 (the belt's own cool-downs alone are far fewer).
+    if rests < max(5, o.shots / 16) or fast < rests:
+        P.append(f"BURSTS: {o.shots} shots, {rests} rests of three shots' worth or more, {fast} shots back to back: not bursts")
     if o.dry > 0 or o.minAmmo < 1:
         P.append(f"BURSTS: {o.dry} dry pulls, the belt down to {o.minAmmo:.1f}: fired it empty")
     o = G.engage("CrocodiloRanger", 10, 0, 0, 5, 3)
@@ -426,7 +436,7 @@ PLANTS = [
     ("no lead on a running target", VW, "point += (targetVelocity or Vector3.zero) * flight * BOT_LEAD", "point += Vector3.zero"),
     ("no lob: the mortar aimed straight", VW, "\t\tlocal angle = round.speed and lobAngle(spec, round, origin, point)", "\t\tlocal angle = nil"),
     ("the belt fired dry", BOT, "\tif ammo < 1 or (spec.magazine >= 10 and ammo < spec.magazine * 0.15) then", "\tif ammo < 0 then"),
-    ("no rest between bursts", BOT, "ride.nextShotAt = now + (rounds and 1.0 + math.random() * 0.8 or MatchConfig.BotBurstRest + math.random() * 0.35)",
+    ("no rest between bursts", BOT, "ride.nextShotAt = now + (rounds and 1.5 + math.random() or 3 + math.random() * 2) / spec.fireRate",
      "ride.nextShotAt = now"),
     ("the arc ignored", BOT, "\tif not VehicleWeapons.InArc(vehicle, targetRoot.Position, mount) then\n\t\treturn\n\tend\n", ""),
     ("the gun seat ignored", VW, 'if child:IsA("Seat") and (child.Name == "GunnerSeat" or child:GetAttribute("Gunner") == true) then',

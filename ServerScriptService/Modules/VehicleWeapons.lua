@@ -566,17 +566,19 @@ function VehicleWeapons.InArc(vehicle, point, mount)
 	return pitch >= VehicleWeaponData.PitchFloor(spec, yaw) - 0.02 and pitch <= math.rad(spec.pitchMax) + 0.02
 end
 
--- How much of a moving target's run a bot leads a round by: most of the way, not all of it. A bot
--- that led perfectly would put every rocket on a running player; a real gunner doesn't.
-local BOT_LEAD = 0.7
+-- How much of a moving target's run a bot leads a round by: all of it. Whether the round hits is
+-- already BotService's hit roll (a rolled miss is aimed a blast's width away, below), so a short lead
+-- was a second penalty: at 0.7 a rolled hit on a runner 250 studs off came down 5-7 studs behind
+-- them, past half the Camelo's blast (task 20, tools/bot_gunner_engage_check.py LEAD and HITS).
+local BOT_LEAD = 1
 -- A body's root stands about this far above its feet: where a lobbed round is brought down.
 local LOB_DROP = 2.5
 
 -- Where a bot aims a shot from `vehicle` at a target standing at `targetPosition`, moving at
 -- `targetVelocity`. `hit` is the bot's roll (BotService decides it, from the same aim dials as a bot
 -- on foot): true aims at the target, false aims clear of it, a bullet to one side, a round a blast's
--- width and more away so its splash does not turn every miss into a hit. A round is led by BOT_LEAD
--- of the target's run over its flight, and a lobbed one (the mortar) aimed so its arc comes down
+-- width and more away so its splash does not turn every miss into a hit. A round is led by the
+-- target's whole run over its flight (BOT_LEAD), and a lobbed one (the mortar) aimed so its arc comes down
 -- where it should, not where the barrel points. The mount's own spread and clamp still apply in Fire.
 function VehicleWeapons.BotAimPoint(vehicle, targetPosition, targetVelocity, hit, mount)
 	local spec = VehicleWeaponData.ForModel(vehicle:GetAttribute("VehicleModel"), mount)
