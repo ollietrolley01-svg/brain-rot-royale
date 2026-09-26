@@ -172,6 +172,9 @@ function flat(v) return Vector3.new(v.X, 0, v.Z) end
 function flatLook() return Vector3.new(0, 0, -1) end
 function hostile(bot, token) return token ~= bot end
 function reportSighting() end
+-- A tree with task 21's rider sight (PR #74) asks VehicleCover whether a target sits in a vehicle: here
+-- every target is on foot.
+VehicleCover = { SeatOf = function() return nil end }
 StormService = { IsOutside = function() return false end }
 ALL = {}
 Combatants = MODULES.Combatants
