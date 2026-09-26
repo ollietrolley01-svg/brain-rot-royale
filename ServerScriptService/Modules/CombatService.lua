@@ -1107,13 +1107,24 @@ function CombatService.Raycast(shooterToken, origin, vector, params)
 	return LagCompensation.Raycast(origin, vector, params, rewindTo)
 end
 
--- True while `player` sits in a vehicle's driving seat. Drivers are VehicleSeats; passengers sit
--- on plain Seats and can shoot. Takes a Player or a probe's stand-in table with a Character.
+-- True while `player` sits where no hand is free for a weapon (SeatBarsWeapons): a vehicle's driving
+-- seat, or any seat on a bike. Fire, throws (ProjectileService) and the range (RangeService) refuse
+-- on it. Takes a Player or a probe's stand-in table with a Character.
 function CombatService.IsDriving(player)
 	local character = (typeof(player) == "table" or typeof(player) == "Instance" and player:IsA("Player")) and player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local seat = humanoid and humanoid.SeatPart
-	return seat ~= nil and seat ~= false and seat:IsA("VehicleSeat")
+	return CombatService.SeatBarsWeapons(humanoid and humanoid.SeatPart)
+end
+
+-- The seat rule for players and bots (BotService's passengers). Drivers are VehicleSeats, hands on
+-- the wheel. Passengers sit on plain Seats and shoot out of the window, except a bike's pillion,
+-- who is holding on (task 22). CombatClient and ProjectileClient mirror this for the local player.
+function CombatService.SeatBarsWeapons(seat)
+	if not seat then
+		return false
+	end
+	local vehicle = seat.Parent
+	return seat:IsA("VehicleSeat") or (vehicle ~= nil and vehicle:GetAttribute("VehicleKind") == "bike")
 end
 
 -- SHOTS ARE BUDGETED, NOT SPACED.
