@@ -455,6 +455,11 @@ GUNS = [
 # The pod's rockets and the Camelo's grenades straight ahead pass over the cab's front floor: the cars'
 # targets stand 60 degrees off the nose (bot_driving_combat does the same); the emplacements' dead ahead.
 BEARING = {"vehicle": 60, "gun": 0}
+# LEAD and HITS put a car's runner square to its side (90 degrees): at 60 the rocket pod's led point can cross
+# into its front guard (54 degrees, no lower than +4), where the barrel is clamped and a rolled hit flies over.
+# That edge is the arc check's (vehicleTrigger asks InArc of where the target stands, not of the led point),
+# reported in the PR, and not what these two checks measure.
+LEAD_BEARING = {"vehicle": 90, "gun": 0}
 SEEDS = (3, 17, 41)
 TABLE_SEEDS = (3, 17, 41, 59, 83, 97)  # the before/after table: a launcher fires ~35 rounds a run, so more runs
 
@@ -572,7 +577,7 @@ def checks(sources):
         distance = 250 if kind == "vehicle" else 200
         misses, rolled_near, rolled, turned = [], 0, 0, 0
         for seed in SEEDS + (59, 83):
-            o = G.engage(kind, model, distance, BEARING[kind], 16, 20, seed, False)
+            o = G.engage(kind, model, distance, LEAD_BEARING[kind], 16, 20, seed, False)
             for a in o.aims.values():
                 if a.yaw is None:
                     continue
