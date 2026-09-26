@@ -3694,10 +3694,12 @@ BotService.IsUnderArmed = isUnderArmed
 -- cannot work the turret.
 -- Every shot goes through VehicleWeapons.Fire, the very function a player's trigger reaches, with the
 -- same seat, rate, ammo and team checks. Where the bot aims comes from the same aim
--- dials as a bot on foot (Vehicles.vehicleHitChance, which is shootAt's chance line for line, and
--- tools/bot_driving_combat.py fails if the two ever differ) with the mount's own spread allowed for,
--- and a miss aimed clear of the target. It fires in bursts, lets the belt cool rather than run it dry,
--- holds fire outside the mount's arc, and a round is led by most of the target's run.
+-- dials as a bot on foot (Vehicles.vehicleHitChance, which is shootAt's chance line for line with the
+-- distance falloff stretched over the gun's reach, and tools/bot_driving_combat.py fails if the two ever
+-- differ) with the mount's own spread allowed for, and a miss aimed clear of the target. A gunner looks
+-- for targets out to its gun's reach (Vehicles.gunnerTarget), fires in bursts at the gun's own rhythm,
+-- lets the belt cool rather than run it dry, holds fire outside the mount's arc, turns the turret to
+-- where its shot will go, and leads a round by the target's whole run.
 --
 -- A player who wants a bot's seat triggers its prompt ("Take over", see VehicleService's TAKING OVER):
 -- VehicleService asks BotService.YieldSeat, which applies BotService.TakeoverAllowed (a teammate always
@@ -3903,14 +3905,23 @@ function Vehicles.yieldServo(bot, ride, now)
 	return false
 end
 
+-- How far a mounted gun reaches (task 20): its spec's range, and never short of a bot's vision. A round's
+-- spec has no range (InArc and the lob decide where it can land), so a launcher keeps the vision range.
+-- The gunner looks this far for a target (Vehicles.gunnerTarget) and holds its aim this far (vehicleHitChance).
+function Vehicles.gunReach(spec)
+	return math.max(MatchConfig.BotVisionRange, spec and spec.range or 0)
+end
+
 -- The shot's chance, from the same dials as shootAt's (these lines are shootAt's, and
 -- tools/bot_driving_combat.py fails if the two ever give different numbers): accuracy by distance, aim
--- settling on a target, a fast target harder to hit. Then what is particular to a mounted gun: firing
+-- settling on a target, a fast target harder to hit. Then what is particular to a mounted gun: the
+-- distance falloff is stretched over the gun's reach (a gun reaching half again a bot's vision holds its
+-- aim half again as far; a gun with the vision range, or a launcher, is the hand-gun dial exactly), firing
 -- from a moving vehicle is harder, and a bullet aimed at a body still scatters by the mount's spread
 -- (VehicleWeapons.Fire), so the roll is divided by the share of that cone a body covers, and what
 -- lands is the dial rather than the dial times the cone.
 function Vehicles.vehicleHitChance(ride, now, distance, targetRoot, spec)
-	local chance = accuracyAt(distance)
+	local chance = accuracyAt(distance * MatchConfig.BotVisionRange / Vehicles.gunReach(spec))
 	local settle = math.clamp((now - AIM_SETTLE_DELAY - (ride.fight.acquiredAt or now)) / 1.5, 0, 1)
 	chance *= 0.9 + 0.15 * settle
 	local velocity = targetRoot.AssemblyLinearVelocity
@@ -3939,7 +3950,11 @@ end
 
 -- One pull of the mounted gun's trigger, called every frame while `ride.trigger` is set: bursts at
 -- the gun's rate with rests between, the belt left to cool back up rather than fired dry, nothing
--- outside the mount's arc or into a round's own blast.
+-- outside the mount's arc or into a round's own blast. The rhythm is the gun's own (task 20): a burst is
+-- about a second of its fire (6 bullets at least, 2-3 rounds), and the rest after it a few shots' worth
+-- at its rate (3-5 bullets, 1.5-2.5 rounds), so a fast gun rests briefly and a slow launcher longer. What paces a long
+-- fight is the belt: the cooling below, the same for every gun.
+-- tools/bot_gunner_engage_check.py measures the rhythm, the hits and the time to kill for every gun.
 function Vehicles.vehicleTrigger(bot, ride, now)
 	local fight = ride.fight
 	if not fight or not fight.root.Parent or now < (ride.nextShotAt or 0) then
@@ -3971,8 +3986,9 @@ function Vehicles.vehicleTrigger(bot, ride, now)
 	end
 	if (ride.burstLeft or 0) <= 0 then
 		local rounds = spec.kind == "round"
-		ride.burstLeft = rounds and math.random(1, 2) or math.random(6, 10)
-		ride.nextShotAt = now + (rounds and 1.0 + math.random() * 0.8 or MatchConfig.BotBurstRest + math.random() * 0.35)
+		local second = math.max(6, math.floor(spec.fireRate + 0.5))
+		ride.burstLeft = rounds and math.random(2, 3) or math.random(second - 2, second + 2)
+		ride.nextShotAt = now + (rounds and 1.5 + math.random() or 3 + math.random() * 2) / spec.fireRate
 		return
 	end
 	local targetRoot = fight.root
@@ -4374,8 +4390,51 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 	-- Stuck, lost or flipped: BotDriveTactics answers on the next think (go round once, else out).
 end
 
--- On the gun: find a target and hold the trigger (the servo fires). Nothing to shoot for a while
--- with nobody at the wheel, get down.
+-- The gunner's target: findTarget's pick (people within the bots' vision range), else, for a gun that
+-- reaches further (Vehicles.gunReach), the nearest enemy past it and inside the mount's arc that it can
+-- see, whoever is shooting at it first. At most two fresh sight rays a think (sightOf's budget and cache),
+-- and a far look only on a think findTarget found nobody. Returns a row like findTarget's, or nil.
+function Vehicles.gunnerTarget(bot, root, head, ride, now, vehicle, mount, spec)
+	local candidate = findTarget(bot, root, head, now)
+	local reach = Vehicles.gunReach(spec)
+	local VehicleWeapons = lazy("VehicleWeapons")
+	if candidate or not vehicle or not VehicleWeapons or reach <= MatchConfig.BotVisionRange then
+		return candidate
+	end
+	local threat = now - bot.lastHurtAt < THREAT_WINDOW and CombatService.GetLastAttacker(bot) or nil
+	local far = ride.farLook or {}
+	ride.farLook = far
+	table.clear(far)
+	local near, count = combatantsNear(root.Position, reach)
+	for index = 1, count do
+		local entry = near[index]
+		local distance = (entry.position - root.Position).Magnitude
+		if distance > MatchConfig.BotVisionRange and entry.token ~= bot and entry.humanoid.Health > 0
+			and hostile(bot, entry.token) and VehicleWeapons.InArc(vehicle, entry.position, mount) then
+			table.insert(far, { token = entry.token, character = entry.character, root = entry.root, distance = distance,
+				score = entry.token == threat and 0 or distance })
+		end
+	end
+	table.sort(far, scratch.byScore)
+	local fresh = 0
+	for _, row in ipairs(far) do
+		local visible, computed = sightOf(bot, head, row.token, row.character, now, false)
+		if visible then
+			return row
+		end
+		if computed then
+			fresh += 1
+		end
+		if fresh >= 2 then
+			break
+		end
+	end
+	return nil
+end
+
+-- On the gun: find a target (Vehicles.gunnerTarget, out to the gun's reach), turn the mount to where the
+-- shot will go (a round's lead, a lob's arc: VehicleWeapons.BotAimPoint as for a rolled hit) and hold the
+-- trigger (the servo fires). Nothing to shoot for a while with nobody at the wheel, get down.
 function Vehicles.gunnerThink(bot, root, head, ride, now)
 	local model = ride.model
 	local maxHealth = model:GetAttribute("VehicleMaxHealth") or 1
@@ -4400,7 +4459,13 @@ function Vehicles.gunnerThink(bot, root, head, ride, now)
 		return
 	end
 	Vehicles.refreshFoes(bot, now)
-	local candidate = findTarget(bot, root, head, now)
+	local VehicleWeapons = lazy("VehicleWeapons")
+	local vehicle, spec, mount = nil, nil, nil
+	if VehicleWeapons then
+		local found, foundSpec, _, _, which = VehicleWeapons.DrivenBy(bot)
+		vehicle, spec, mount = found, foundSpec, which
+	end
+	local candidate = Vehicles.gunnerTarget(bot, root, head, ride, now, vehicle, mount, spec)
 	-- A stationary gun (BotGunner): off when idle, flanked, broken or hurt, and on to something else.
 	local BotGunner = lazy("BotGunner")
 	if BotGunner and BotGunner.IsGun(model) then
@@ -4417,9 +4482,10 @@ function Vehicles.gunnerThink(bot, root, head, ride, now)
 	if candidate then
 		Vehicles.noteFight(bot, ride, candidate, now)
 		ride.trigger = true
-		local VehicleWeapons = lazy("VehicleWeapons")
-		if VehicleWeapons and VehicleWeapons.Aim then
-			VehicleWeapons.Aim(bot, candidate.root.Position)
+		if vehicle and VehicleWeapons.Aim then
+			local targetRoot = candidate.root
+			VehicleWeapons.Aim(bot, VehicleWeapons.BotAimPoint(vehicle, targetRoot.Position,
+				targetRoot.AssemblyLinearVelocity, true, mount))
 		end
 	else
 		ride.fight = nil
@@ -4698,20 +4764,42 @@ function Vehicles.pickSeat(bot, root, now)
 	return nil
 end
 
+-- Walking to a seat, a bot still fights (task 21's finding: it looked for nobody for up to VEHICLE.WALK
+-- seconds): whoever it sees within its gun's range is shot at on the way, as a passenger shoots.
+function Vehicles.fightOnTheWay(bot, root, head, now)
+	finishReload(bot, now)
+	local candidate = bot.weapon and findTarget(bot, root, head, now) or nil
+	if candidate and candidate.distance <= bot.weapon.range then
+		if bot.target ~= candidate.token then
+			bot.acquiredAt = now
+		end
+		bot.target = candidate.token
+		bot.lastCombatAt = now
+		shootAt(bot, candidate.token, candidate.root, candidate.distance, head)
+	else
+		bot.target = nil
+	end
+end
+
 -- On foot: walking to a seat already, or looking for one. True while this think went on that.
-function Vehicles.considerVehicle(bot, humanoid, root, now)
+function Vehicles.considerVehicle(bot, humanoid, root, head, now)
 	local boarding = bot.boarding
 	if boarding then
 		local seat = boarding.seat
-		-- A gun ("fight": jumped on, or roaming past) is given up once the storm presses (pickSeat).
+		local VehicleService = lazy("VehicleService")
+		local seats = VehicleService and VehicleService.SeatsOf and VehicleService.SeatsOf(seat.Parent)
+		-- A gun ("fight": jumped on, or roaming past) is given up once the storm presses (pickSeat), and
+		-- any vehicle seat once someone the bot doesn't share a vehicle with has got in (pickSeat's own rule,
+		-- asked again on the way: an enemy at the wheel would get a gunner at truce with them).
 		if now > boarding.giveUpAt or seat.Occupant or not seat:IsDescendantOf(workspace)
 			or (boarding.role == "driver" and not Vehicles.driverRoom(bot))
-			or (boarding.purpose == "fight" and Vehicles.stormPressed(bot, root)) then
+			or (boarding.purpose == "fight" and Vehicles.stormPressed(bot, root))
+			or (seats and Vehicles.strangerAboard(Vehicles.teamOf(bot), seats)) then
 			bot.boarding = nil
 			bot.noVehicleUntil = now + VEHICLE.CHECK_EVERY * 2
 			return false
 		end
-		local VehicleService = lazy("VehicleService")
+		Vehicles.fightOnTheWay(bot, root, head, now)
 		local MountedGuns = lazy("MountedGuns")
 		local onGun = MountedGuns and MountedGuns.IsGunSeat and MountedGuns.IsGunSeat(seat)
 		if (onGun and MountedGuns.BotSit(humanoid, seat)) or (not onGun and VehicleService and VehicleService.BotSit(humanoid, seat)) then
@@ -4796,7 +4884,7 @@ function Vehicles.botVehicleThink(bot, humanoid, root, head, now)
 		humanoid.Sit = false
 		return false
 	end
-	return Vehicles.considerVehicle(bot, humanoid, root, now)
+	return Vehicles.considerVehicle(bot, humanoid, root, head, now)
 end
 
 --------------------------------------------------------------------------------
