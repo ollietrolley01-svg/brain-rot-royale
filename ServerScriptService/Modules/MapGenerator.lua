@@ -1180,13 +1180,16 @@ function MapGenerator.Build(mapId)
 	end
 	local wantedVehicles = math.clamp(math.floor(radius / 95), 6, 16)
 	local LOT_DRIVABLE_SHARE, LOT_DRIVABLE_MOST = 0.25, 0.6
+	-- Cars with guns are a quarter of the parked cars, not the 81% the plain weights give (task 29,
+	-- Oliver: rarer in battle royale). Team bases' vehicles and the kerbside props don't pass it.
+	local ARMED_SHARE = 0.25
 	-- Most of them in the towns' car parks first (#31); the verge takes whatever is left.
 	local parked = 0
 	-- A quarter of any one car park at most (LOT_DRIVABLE_SHARE: one car in four or six bays, two in
 	-- eight or ten): each car park has its own fill (ParkingLots.DealFills; the quietest a sixth full),
 	-- which MapDecor.ParkBays tops up to with parked scenery, and the drivable ones spread round every
 	-- town first rather than filling one.
-	local okPark, inLots = pcall(VehicleService.ParkInTowns, vehicles, map, math.ceil(wantedVehicles * 0.6), nil, LOT_DRIVABLE_SHARE)
+	local okPark, inLots = pcall(VehicleService.ParkInTowns, vehicles, map, math.ceil(wantedVehicles * 0.6), nil, LOT_DRIVABLE_SHARE, ARMED_SHARE)
 	if okPark and type(inLots) == "number" then
 		parked = inLots
 	elseif not okPark then
@@ -1223,7 +1226,7 @@ function MapGenerator.Build(mapId)
 					-- `inward`: level ground lies toward the road if the spot isn't level (#39), and a spot
 					-- that has to step aside steps along the road, never across it (parkOn).
 					local model = VehicleService.Create(vehicles, Vector3.new(at.X, MapGenerator.GroundHeightAt(at.X, at.Z), at.Z),
-						yaw, math.random() < 0.38 and "bike" or "car", { inward = -side * 1.5 })
+						yaw, math.random() < 0.38 and "bike" or "car", { inward = -side * 1.5, armedShare = ARMED_SHARE })
 					-- If it had to move, where it stands now is claimed too, so nothing grows into it.
 					if model then
 						local now = model:GetPivot().Position
@@ -1241,7 +1244,7 @@ function MapGenerator.Build(mapId)
 	-- parks after all, up to LOT_DRIVABLE_MOST of each (under the 0.7 no car park is ever filled past),
 	-- rather than go short of vehicles.
 	if parked < wantedVehicles then
-		local okMore, more = pcall(VehicleService.ParkInTowns, vehicles, map, wantedVehicles - parked, nil, LOT_DRIVABLE_MOST)
+		local okMore, more = pcall(VehicleService.ParkInTowns, vehicles, map, wantedVehicles - parked, nil, LOT_DRIVABLE_MOST, ARMED_SHARE)
 		if okMore and type(more) == "number" then
 			parked += more
 		end

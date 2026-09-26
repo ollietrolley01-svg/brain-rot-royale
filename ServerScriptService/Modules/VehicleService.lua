@@ -1,7 +1,8 @@
 -- Vehicles: drivable cars and motorbikes parked along the roads and around the towns.
 --
 --   VehicleService.Create(parent, position, yaw, kind, options) -> model   kind "car" or "bike";
---       options: model, scheme, rng, inward, exact (stand exactly at `position`, no parkOn)
+--       options: model, scheme, rng, inward, exact (stand exactly at `position`, no parkOn),
+--       armedShare (passed to VehicleModels.Pick)
 --     (an optional fifth argument { model = "TralalaGT", scheme = 2 } picks both, for tests;
 --      { inward = Vector3 } says which way, and how far, level ground lies if the spot is not level)
 --   VehicleService.Start()                                         (once, from Bootstrap)
@@ -1284,7 +1285,8 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		end
 	else
 		-- A drivable one can be an armoured car (rare: VehicleModels' weights); a parked prop never is.
-		local modelId = VehicleModels.Pick(kind == "bike" and "bike" or "car", rng, { drivable = true })
+		local modelId = VehicleModels.Pick(kind == "bike" and "bike" or "car", rng,
+			{ drivable = true, armedShare = type(options) == "table" and options.armedShare or nil })
 		if type(options) == "table" and VehicleModels.Models[options.model] then
 			modelId = options.model
 		end
@@ -1791,8 +1793,8 @@ local function centreModel(model, centre)
 end
 
 -- `share` (optional, default LOT_DRIVABLE_SHARE) is the most of any one car park, counting what's
--- already in it, that this call may fill.
-function VehicleService.ParkInTowns(parent, map, wanted, rng, share)
+-- already in it, that this call may fill. `armedShare` (optional) goes to each Create.
+function VehicleService.ParkInTowns(parent, map, wanted, rng, share, armedShare)
 	if not parent or not map or (wanted or 0) <= 0 then
 		return 0
 	end
@@ -1864,7 +1866,7 @@ function VehicleService.ParkInTowns(parent, map, wanted, rng, share)
 				local spread, _ = footingAt(bay.cf.Position, yaw, size)
 				if spread and spread <= FOOTING_TOLERANCE then
 					local model = VehicleService.Create(parent, bay.cf.Position, yaw, roll:NextNumber() < 0.3 and "bike" or "car",
-						{ rng = roll, exact = true }) -- the bay's footing was just checked (critic C4)
+						{ rng = roll, exact = true, armedShare = armedShare }) -- the bay's footing was just checked (critic C4)
 					if model then
 						centreModel(model, (bay.cf * CFrame.new(0, 0, roll:NextNumber(-BAY_JITTER, BAY_JITTER))).Position)
 						-- Moved after it was parked: parked again where it now stands.
