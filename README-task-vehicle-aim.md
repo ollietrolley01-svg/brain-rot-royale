@@ -19,4 +19,9 @@ dont work in 3rd person sometimes and locks your cursor in the middle of screen"
   first-person rider. Run against main's CombatClient (d1e4f73) the walk fails 8 cases, third and first
   person; on this branch it fails none.
 
-Nothing else. `VehicleWeaponClient.aimScreen` is unchanged.
+No other game file. `VehicleWeaponClient.aimScreen` is unchanged.
+- `tools/vehicle_aim_gallery.lua` (new): the Studio render for the PR. It reads the built place's own
+  CombatClient and VehicleWeaponClient sources, walks the real `updateCameraMode` from combat into the
+  car, and draws where the driver's gun aims with the mouse on an off-centre target. A main build draws
+  main's behaviour (gun through the middle), a branch build the branch's (gun through the cursor).
+  `python tools/linux/studio.py gallery -Gallery tools/vehicle_aim_gallery.lua -OutDir <folder>`.
