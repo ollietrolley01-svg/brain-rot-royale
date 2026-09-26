@@ -14,6 +14,9 @@ dont work in 3rd person sometimes and locks your cursor in the middle of screen"
   and the `InVehicle` listener out of CombatClient and runs them in the HUD mock world beside the real
   VehicleWeaponClient and GunnerView. It walks combat on foot, board, drive, leave, the gunner's seat,
   gunner to driver and driver to gunner, in third and first person. It also adds three planted faults
-  aimed at the invariant.
+  aimed at the invariant. Roblox's camera module is modelled on its real mouse logic (CameraUtils'
+  override/restore, BaseCamera:UpdateMouseBehavior), because on main its restore is what re-locks a
+  first-person rider. Run against main's CombatClient (d1e4f73) the walk fails 8 cases, third and first
+  person; on this branch it fails none.
 
 Nothing else. `VehicleWeaponClient.aimScreen` is unchanged.

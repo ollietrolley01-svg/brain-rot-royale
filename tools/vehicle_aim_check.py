@@ -170,19 +170,39 @@ def camera_harness(combat_src):
 local W = ...
 local player, UserInputService = W.player, W.UserInputService
 local S = { combat = true, third = true }
-local camera = { CFrame = { LookVector = Vector3.new(0, 0, -1) } }
+local camera = W.camera  -- workspace.CurrentCamera, shared with GunnerView as in the game
 local bound = {}
 local RunService = {}
 function RunService:BindToRenderStep(name, _, fn) bound[name] = fn end
 function RunService:UnbindFromRenderStep(name) bound[name] = nil end
+-- Roblox's camera module, the part of it that touches the mouse, in the logic of PlayerModule's
+-- CameraUtils.setMouseBehaviorOverride / restoreMouseBehavior and BaseCamera:UpdateMouseBehavior. A
+-- controller runs only while the camera isn't Scriptable (disabling one runs Cleanup -> restore). A running
+-- one locks the mouse in first person and restores it otherwise, and a restore writes only while the mouse
+-- still holds its own override. On main that restore is what re-locks a first-person rider: the value it
+-- saved before its first override was combat's own LockCenter. First person here is LockFirstPerson:
+-- VehicleClient's 6-stud zoom floor keeps the car's camera out of it.
+local saved, lastOverride, controllerOn = Enum.MouseBehavior.Default, nil, false
+local function setOverride(value)
+    if UserInputService.MouseBehavior ~= lastOverride then saved = UserInputService.MouseBehavior end
+    UserInputService.MouseBehavior = value
+    lastOverride = value
+end
+local function restore()
+    if UserInputService.MouseBehavior == lastOverride then UserInputService.MouseBehavior = saved end
+    lastOverride = nil
+end
 W.RenderStepped:Connect(function(dt)
     for _, fn in pairs(bound) do fn(dt) end
-    -- Roblox's camera module, the one part of it this walk meets: in first person it locks the mouse every
-    -- frame (CameraModule:Update -> BaseCamera:UpdateMouseBehavior -> setMouseBehaviorOverride(LockCenter)).
-    -- Only under LockFirstPerson, which a vehicle never is, so it can't hide a lock left on in the car.
-    if player.CameraMode == Enum.CameraMode.LockFirstPerson
-        and W.workspace.CurrentCamera.CameraType ~= Enum.CameraType.Scriptable then
-        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    local on = camera.CameraType ~= Enum.CameraType.Scriptable
+    if controllerOn and not on then restore() end
+    controllerOn = on
+    if on then
+        if player.CameraMode == Enum.CameraMode.LockFirstPerson then
+            setOverride(Enum.MouseBehavior.LockCenter)
+        else
+            restore()
+        end
     end
 end)
 local thirdPersonActive, aiming = false, false
