@@ -8,13 +8,15 @@ as v8); the PR is against `pc/lag-bug-sweep`. Briefs: `tasks/13-*` and `tasks/23
 ## What changed from cf35aa3
 
 **`ServerScriptService/Modules/BotNav.lua`, DRIVING section only** (`NewDrive`, `DriveSense`,
-`DriveControl`, eight new `DRIVE_*` constants):
+`DriveControl`, nine new `DRIVE_*` constants):
 
 - The sweeps and feelers look past what nothing collides with (`RespectCanCollide` on the drive's sweep
   params, set in `NewDrive`). A cast reports only its first hit, and a sign's board, a road marking or
   another car's chassis box in front of a post hid the post.
-- The sweep box follows the ground: it climbs at the grade the last look's ground probe found ahead
-  (a level box met a 5% road 26 studs on and saw nothing past it), and on ground steeper than 8 degrees
+- The sweep box follows the ground: it climbs at the grade the last look's ground probe found ahead,
+  taken only from the terrain or a road's slab and at most 15% (`DRIVE_SWEEP_GRADE`; a roof or a tree's
+  leaves under the ray tipped it up over what was in the way). Level, it met a 5% road 26 studs on and
+  saw nothing past it. On ground steeper than 8 degrees
   (`DRIVE_SWEEP_TILT`: a bank, a dune) it lies along the chassis. Not along the chassis on gentler
   ground, where the nose dips under the brakes.
 - A face the front sweep meets side-on, standing clear of the way the car steers (a bridge parapet met
