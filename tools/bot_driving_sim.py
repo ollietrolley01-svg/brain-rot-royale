@@ -34,8 +34,10 @@ Scenarios (each car model unless noted):
 
 Planted faults (always run, each aimed at an invariant): steering sign, obstacle sweep ignored,
 water not seen, drop not seen, no reverse recovery, teammates not guarded, no corner speed,
-an extra query per look (the budget), the lane on the wrong side. The run fails unless every one is
-caught by the check aimed at it.
+an extra query per look (the budget), the lane on the wrong side, the sweep lifted over bumper
+height (a solid part at bumper height is always seen), every face met taken as beside the way (a
+wall across the road is always seen), sweeps stopped by what nothing collides with (a solid part is
+seen whatever stands in front of it). The run fails unless every one is caught by the check aimed at it.
 
 Usage:  python3 tools/bot_driving_sim.py [--verbose] [--quick]
 Exit 0 when the real source passes every scenario and every planted fault is caught.
@@ -107,13 +109,54 @@ HILL = { x0 = 440, x1 = 560, z0 = 60, z1 = 340, top = 25 }
 PLATEAU = { x0 = -420, x1 = -80, z0 = -300, z1 = 300, top = 20 }
 RIVER = { x = 250, half = 14, z0 = 300, z1 = 1200, bed = -8, level = -1 }
 BOXES = {}
+BALLS = {}      -- rounded props (a rock, a bush, a pebble): { c = centre, r = radius, part }
 ROADSEGS = {}   -- centre-line pieces { ax, az, bx, bz }
 WATERON = true
+-- A real bridge on the south road (scenario "crossing"): nil, or { x0, x1 (the deck's ends), z (the centre
+-- line), half (the deck's half-width), grade, base (the road's ground at the span's middle) }. The road's
+-- ground is a straight line across the deck and RUN either side (RoadNetwork's BRIDGE_RUN), easing back
+-- to the plain at the same grade; the deck carries it over the river.
+REALBRIDGE = nil
+-- A slope for the prop course (scenario "props"): nil, or { x0, x1, z, half, grade, across }. Along x
+-- (`across` false) the ground climbs `grade` from x0 to x1 and stays up, fading out over 20 studs past
+-- `half` either side of z. Across (true) it is a bank between x0 and x1: level ground `half` either
+-- side of z, the far side higher by `grade` all the way across.
+RAMP = nil
+
+function rampHeight(x, z)
+	local R = RAMP
+	if R.across then
+		local ends = 1 - math.max(0, math.min(1, math.max(R.x0 - x, x - R.x1) / 20))
+		return R.grade * (math.max(-R.half, math.min(R.half, R.z - z)) + R.half) * ends
+	end
+	local side = 1 - math.max(0, math.min(1, (math.abs(z - R.z) - R.half) / 20))
+	return R.grade * (math.max(R.x0, math.min(R.x1, x)) - R.x0) * side
+end
 
 local function smooth(t) t = math.max(0, math.min(1, t)); return t * t * (3 - 2 * t) end
 
+function bridgeRoad(x)
+	local B = REALBRIDGE
+	local mid = (B.x0 + B.x1) / 2
+	local w, e = B.x0 - B.run, B.x1 + B.run
+	local function line(at) return B.base + B.grade * (at - mid) end
+	if x < w then return math.max(0, line(w) - 0.05 * (w - x)) end
+	if x > e then return math.max(0, line(e) - 0.05 * (x - e)) end
+	return line(x)
+end
+
 function terrainHeight(x, z)
+	local B = REALBRIDGE
+	if B and x >= B.x0 and x <= B.x1 and abs(z - B.z) <= B.half then
+		return bridgeRoad(x)
+	end
 	local h = 0
+	if B then
+		h = bridgeRoad(x) * (1 - smooth((abs(z - B.z) - 13) / 20))
+	end
+	if RAMP then
+		h = h + rampHeight(x, z)
+	end
 	if x >= HILL.x0 and x <= HILL.x1 then
 		local t
 		if z < 200 then t = (z - HILL.z0) / (200 - HILL.z0) else t = (HILL.z1 - z) / (HILL.z1 - 200) end
@@ -156,6 +199,7 @@ local function terrainNormal(x, z)
 end
 
 local function excluded(part, params)
+	if params and params.RespectCanCollide and part.CanCollide == false then return true end
 	if not params or not params.FilterDescendantsInstances then return false end
 	for _, x in ipairs(params.FilterDescendantsInstances) do
 		if part == x or (part.model and part.model == x) then return true end
@@ -199,10 +243,44 @@ local function obbHit(o, d, car, grow)
 	return t, c:VectorToWorldSpace(n)
 end
 
+-- The cast's shape (a point, or a box of half extents `grow`) against a ball: the first t where the
+-- ball's centre comes within its radius of the shape, marched then bisected, and the ball's surface
+-- normal where they meet (from its centre toward the nearest point of the shape), as a Roblox cast
+-- that meets a Ball part reports it. Started inside: nothing, as with a box.
+local function ballGap(p, ball, grow)
+	local d = ball.c - p
+	local q = V(math.max(-grow.X, math.min(grow.X, d.X)), math.max(-grow.Y, math.min(grow.Y, d.Y)), math.max(-grow.Z, math.min(grow.Z, d.Z)))
+	return (d - q).Magnitude - ball.r, p + q
+end
+function ballHit(o, dir, ball, grow)
+	local len = dir.Magnitude
+	-- Out of reach of the whole cast: skip the march.
+	local mid = o + dir * 0.5
+	if (ball.c - mid).Magnitude > len / 2 + ball.r + grow.Magnitude + 0.5 then return nil end
+	if ballGap(o, ball, grow) <= 0 then return nil end
+	local steps = math.max(8, math.ceil(len / 0.2))
+	local prev = 0
+	for i = 1, steps do
+		local t = i / steps
+		if ballGap(o + dir * t, ball, grow) <= 0 then
+			local a, b = prev, t
+			for _ = 1, 10 do
+				local m = (a + b) / 2
+				if ballGap(o + dir * m, ball, grow) <= 0 then b = m else a = m end
+			end
+			local _, near = ballGap(o + dir * b, ball, grow)
+			local n = near - ball.c
+			return b, n.Magnitude > 1e-6 and n.Unit or V(0, 1, 0)
+		end
+		prev = t
+	end
+	return nil
+end
+
 CARS = {}
 RAYCASTS = 0
 
-local function castWorld(origin, direction, params, radius, box)
+local function castWorld(origin, direction, params, radius, box, obb)
 	RAYCASTS = RAYCASTS + 1
 	local grow = box or V(radius or 0, radius or 0, radius or 0)
 	local growMax = math.max(grow.X, grow.Z)
@@ -224,13 +302,30 @@ local function castWorld(origin, direction, params, radius, box)
 			if t then offer(t, car.chassis, n, "Metal") end
 		end
 	end
+	for _, ball in ipairs(BALLS) do
+		if not excluded(ball.part, params) then
+			local t, n = ballHit(origin, direction, ball, grow)
+			if t then offer(t, ball.part, n, ball.part.Material) end
+		end
+	end
 	-- Terrain: march, then bisect.
 	local step = math.max(0.25, math.min(1.0, len / 12))
 	local steps = math.ceil(len / step)
 	local prevT = 0
+	-- A turned box meets the ground where a corner of its underside does (`obb`: its half axes); a
+	-- point or a ball, straight below it.
 	local function below(t)
 		local p = origin + direction * t
-		return p.Y - grow.Y <= terrainHeight(p.X, p.Z)
+		if obb then
+			for _, sx in ipairs({ -1, 1 }) do
+				for _, sz in ipairs({ -1, 1 }) do
+					local c = p - obb.u + obb.r * sx + obb.l * sz
+					if c.Y <= terrainHeight(c.X, c.Z) then return true, c end
+				end
+			end
+			return false
+		end
+		return p.Y - grow.Y <= terrainHeight(p.X, p.Z), p
 	end
 	if not below(0) then
 		for i = 1, steps do
@@ -242,10 +337,11 @@ local function castWorld(origin, direction, params, radius, box)
 					local m = (a + b) / 2
 					if below(m) then b = m else a = m end
 				end
-				local p = origin + direction * b
+				local _, p = below(b)
+				p = p or origin + direction * b
 				local material = onRoad(p.X, p.Z) and "Asphalt" or "Grass"
 				local part = TERRAIN
-				if material == "Asphalt" and not radius and not box then part = ROADPART end
+				if material == "Asphalt" and not radius and not box and not (params and params.RespectCanCollide) then part = ROADPART end
 				offer(b, part, terrainNormal(p.X, p.Z), material)
 				break
 			end
@@ -272,12 +368,21 @@ end
 workspace = { Gravity = 196.2 }
 function workspace:Raycast(origin, direction, params) return castWorld(origin, direction, params, nil) end
 function workspace:Spherecast(origin, radius, direction, params) return castWorld(origin, direction, params, radius) end
--- A box turned about Y only (a vehicle's sweep): its half extents on the world axes.
+-- A turned box (a vehicle's sweep, tilted with the chassis): its half extents on the world axes.
 function workspace:Blockcast(cf, size, direction, params)
-	local look, right = cf.LookVector, cf.RightVector
-	local hx = abs(right.X) * size.X / 2 + abs(look.X) * size.Z / 2
-	local hz = abs(right.Z) * size.X / 2 + abs(look.Z) * size.Z / 2
-	return castWorld(cf.Position, direction, params, nil, V(hx, size.Y / 2, hz))
+	local look, right, up = cf.LookVector, cf.RightVector, cf.UpVector
+	local hx = abs(right.X) * size.X / 2 + abs(up.X) * size.Y / 2 + abs(look.X) * size.Z / 2
+	local hy = abs(right.Y) * size.X / 2 + abs(up.Y) * size.Y / 2 + abs(look.Y) * size.Z / 2
+	local hz = abs(right.Z) * size.X / 2 + abs(up.Z) * size.Y / 2 + abs(look.Z) * size.Z / 2
+	return castWorld(cf.Position, direction, params, nil, V(hx, hy, hz), { r = right * (size.X / 2), u = up * (size.Y / 2), l = look * (size.Z / 2) })
+end
+-- CFrame.lookAt with Roblox's optional up vector (the stability sim's takes the world's).
+local lookAtLevel = CFrame.lookAt
+CFrame.lookAt = function(at, target, up)
+	if not up then return lookAtLevel(at, target) end
+	local look = (target - at).Unit
+	local x = look:Cross(up).Unit
+	return CFrame.fromMatrix(at, x, x:Cross(look), -look)
 end
 RaycastParams = { new = function() return { FilterDescendantsInstances = {}, IgnoreWater = false } end }
 
@@ -286,6 +391,39 @@ function addBox(name, x0, y0, z0, x1, y1, z1, material)
 		Position = V((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2) })
 	table.insert(BOXES, { min = V(x0, y0, z0), max = V(x1, y1, z1), part = part, name = name })
 	return part
+end
+
+-- A Ball part (Roblox makes a ball round whatever its size says: the smallest side is its diameter).
+function addBall(name, cx, cy, cz, r, material)
+	local part = inst(name, { Material = material or "Rock", Size = V(r * 2, r * 2, r * 2), Position = V(cx, cy, cz), Shape = "Ball" })
+	table.insert(BALLS, { c = V(cx, cy, cz), r = r, part = part, name = name })
+	return part
+end
+
+-- The real bridge (MapDecor.Bridge's sizes) on the south road: the deck is the height field (above),
+-- the parapets (1 wide, 3 tall, the inner face `half` - 1 from the centre line) and the four lamp posts
+-- (0.5 square, from the coping's top 3.35 over the deck to 7.85, at each end of each parapet, on its
+-- line) are boxes, the parapets in 2-stud steps up the grade. The coping and the lamps are clutter
+-- (nothing collides with them or casts meet them) and aren't built. The old flat box goes.
+function buildRealBridge(B)
+	REALBRIDGE = B
+	for i = #BOXES, 1, -1 do
+		if BOXES[i].name == "Bridge" then table.remove(BOXES, i) end
+	end
+	for _, side in ipairs({ -1, 1 }) do
+		local z = B.z + side * (B.half - 0.5)
+		local x = B.x0
+		while x < B.x1 - 1e-6 do
+			local x2 = math.min(B.x1, x + 2)
+			local y = bridgeRoad((x + x2) / 2)
+			addBox("BridgeParapet", x, y - 0.5, z - 0.5, x2, y + 3, z + 0.5, "Cobblestone")
+			x = x2
+		end
+		for _, px in ipairs({ B.x0 + 2, B.x1 - 2 }) do
+			local y = bridgeRoad(px)
+			addBox("BridgeLampPost", px - 0.25, y + 3.35, z - 0.25, px + 0.25, y + 7.85, z + 0.25, "Metal")
+		end
+	end
 end
 """
 
@@ -417,7 +555,7 @@ local function physics(now)
 			-- Boxes: out along the shallowest side face (or up, onto a low box).
 			for bi, box in ipairs(BOXES) do
 				local mn, mx = box.min, box.max
-				if at.X > mn.X and at.X < mx.X and at.Y > mn.Y and at.Y < mx.Y and at.Z > mn.Z and at.Z < mx.Z then
+				if box.part.CanCollide ~= false and at.X > mn.X and at.X < mx.X and at.Y > mn.Y and at.Y < mx.Y and at.Z > mn.Z and at.Z < mx.Z then
 					local cands = { { at.X - mn.X, V(-1, 0, 0) }, { mx.X - at.X, V(1, 0, 0) }, { at.Z - mn.Z, V(0, 0, -1) },
 						{ mx.Z - at.Z, V(0, 0, 1) }, { mx.Y - at.Y, V(0, 1, 0) } }
 					table.sort(cands, function(a, b) return a[1] < b[1] end)
@@ -453,11 +591,70 @@ local function physics(now)
 				end
 			end
 		end
+		-- A box no hull point is inside (a post thinner than the gap between them): the chassis's footprint
+		-- against the box's, seen from above, out along whichever axis (the box's or the car's) is shallowest,
+		-- where they overlap in height.
+		local right = V(c.RightVector.X, 0, c.RightVector.Z).Unit
+		local fwd = V(c.LookVector.X, 0, c.LookVector.Z).Unit
+		local hx, hz = g.sx / 2, g.sz / 2
+		local flatP = V(p.X, 0, p.Z)
+		for bi, box in ipairs(BOXES) do
+			local mn, mx = box.min, box.max
+			if box.part.CanCollide ~= false and not touching["b" .. bi] and p.Y - g.sy / 2 < mx.Y and p.Y + g.sy / 2 > mn.Y then
+				local bc = V((mn.X + mx.X) / 2, 0, (mn.Z + mx.Z) / 2)
+				local bx, bz = (mx.X - mn.X) / 2, (mx.Z - mn.Z) / 2
+				if (bc - flatP).Magnitude < sqrt(bx * bx + bz * bz) + sqrt(hx * hx + hz * hz) then
+					local depth, n = math.huge, nil
+					for _, axis in ipairs({ V(1, 0, 0), V(0, 0, 1), right, fwd }) do
+						local d = (flatP - bc):Dot(axis)
+						local overlap = hx * abs(right:Dot(axis)) + hz * abs(fwd:Dot(axis)) + bx * abs(axis.X) + bz * abs(axis.Z) - abs(d)
+						if overlap <= 0 then depth = nil; break end
+						if overlap < depth then depth, n = overlap, d >= 0 and axis or axis * -1 end
+					end
+					if depth then
+						local at = V(max(mn.X, min(mx.X, p.X)), p.Y, max(mn.Z, min(mx.Z, p.Z)))
+						local pv = v + w:Cross(at - p)
+						local vn = pv:Dot(n)
+						local push = max(0, mass * (3000 * depth - 150 * vn) / 4)
+						F = F + n * push
+						T = T + (at - p):Cross(n * push)
+						touching["b" .. bi] = max(touching["b" .. bi] or 0, -vn)
+					end
+				end
+			end
+		end
+		-- Balls: the chassis box's nearest point to the ball's centre, pushed out along the ball's normal.
+		for bi, ball in ipairs(BALLS) do
+			if (ball.c - p).Magnitude < ball.r + g.sz then
+				local s = ch.Size
+				local lc = c:PointToObjectSpace(ball.c)
+				local cl = V(max(-s.X / 2, min(s.X / 2, lc.X)), max(-s.Y / 2, min(s.Y / 2, lc.Y)), max(-s.Z / 2, min(s.Z / 2, lc.Z)))
+				local d = (cl - lc).Magnitude
+				if d < ball.r and d > 1e-6 then
+					local at = c:PointToWorldSpace(cl)
+					local n = (at - ball.c).Unit
+					local pv = v + w:Cross(at - p)
+					local vn = pv:Dot(n)
+					local push = max(0, mass * (3000 * (ball.r - d) - 150 * vn) / 4)
+					F = F + n * push
+					T = T + (at - p):Cross(n * push)
+					touching["ball" .. bi] = max(touching["ball" .. bi] or 0, -vn)
+				end
+			end
+		end
 		-- Impacts: a contact that begins with any real closing speed.
 		for key, speed in pairs(touching) do
 			if not car.contacts[key] and speed > 2 then
 				table.insert(car.impacts, { key = key, speed = speed, at = now })
 				if TRACE and car == CARS[1] then table.insert(TRACE, string.format("  IMPACT t%.2f %s %.1f", now, key, speed)) end
+			end
+			-- Every contact that starts, at any speed, by what it was with (a scrape along a parapet counts).
+			if not car.contacts[key] then
+				local name = key
+				if key:sub(1, 4) == "ball" then name = BALLS[tonumber(key:sub(5))].name
+				elseif key:sub(1, 1) == "b" then name = BOXES[tonumber(key:sub(2))].name end
+				car.touches = car.touches or {}
+				table.insert(car.touches, { name = name, speed = speed, at = now })
 			end
 		end
 		car.contacts = touching
@@ -546,6 +743,8 @@ function runWorld(seconds, plan, guards)
 							.. (drive.obstacle and now < drive.obstacle.untilTime and string.format(" OBS(%.0f,%.0f)", drive.obstacle.point.X, drive.obstacle.point.Z) or "")
 							.. (drive.avoid and now < drive.avoid.untilTime and string.format(" AV%d(%.2f,%.2f)", drive.avoid.side, drive.avoid.dir.X, drive.avoid.dir.Z) or "")
 							.. (drive.hazard and now < drive.hazard.untilTime and " HAZ" or "")
+							.. (drive.front and now < drive.front.untilTime and string.format(" FRONT(%.0f,%.0f)", drive.front.point.X, drive.front.point.Z) or "")
+							.. (drive.shift and string.format(" SHIFT%.1f@(%.0f,%.0f)", drive.shift.amount, drive.shift.point.X, drive.shift.point.Z) or "")
 							.. string.format(" road%.1f%s", ROAD_DISTANCE(p.X, p.Z), drive.roadLeg[drive.index] and "R" or ""))
 					end
 					car.maxSpeed = max(car.maxSpeed or 0, car.chassis.AssemblyLinearVelocity.Magnitude)
@@ -728,6 +927,7 @@ SCENARIOS = r"""
 local NAV = ...
 local R = {}
 local V = Vector3.new
+local abs = math.abs
 
 -- BotService's reaction to a look, for a travelling bot: next goal on arrival, the roads after a
 -- hazard, out on anything it cannot drive through.
@@ -765,12 +965,181 @@ local function impacts(car, floor)
 	return n, worst
 end
 
-function scenario(name, modelId, g)
+-- What a car did round a stretch of the world, from BotService's side (each look): stops (from moving
+-- to under 2.5 studs/s), reverses (from going forward to backing), and the statuses. `near(p)` says
+-- whether a position is on the stretch that counts.
+local function watcher(base, near)
+	local w = { stops = 0, reverses = 0, stuck = 0, hazards = 0, fronts = 0, avoids = 0, looks = 0 }
+	w.plan = function(car, status, now)
+		local ch = car.chassis
+		local p = ch.Position
+		local along = ch.AssemblyLinearVelocity:Dot(ch.CFrame.LookVector)
+		if near(p) then
+			w.looks = w.looks + 1
+			if along < 2.5 and (w.lastAlong or 0) >= 6 and status ~= "arrived" and status ~= "stopping" then w.stops = w.stops + 1 end
+			if along < -1 and (w.lastAlong or 0) >= -1 then w.reverses = w.reverses + 1 end
+			if status == "stuck" then w.stuck = w.stuck + 1 end
+			if status == "hazard" then w.hazards = w.hazards + 1 end
+			local d = car.drive
+			if d.front then w.fronts = w.fronts + 1 end
+			if d.avoid and now < d.avoid.untilTime then w.avoids = w.avoids + 1 end
+		end
+		w.lastAlong = along
+		base(car, status, now)
+	end
+	return w
+end
+
+-- Contacts that started with parts named in `names` (any speed), and all contacts.
+local function touchesOf(car, names)
+	local n, all = 0, 0
+	for _, t in ipairs(car.touches or {}) do
+		if not t.name:find("^car") then
+			all = all + 1
+			if names[t.name] then n = n + 1 end
+		end
+	end
+	return n, all
+end
+
+function scenario(name, modelId, g, seed, variant)
 	resetWorld()
 	BUDGET_OFF_AT = nil
+	math.randomseed(seed or 1)
 	local out = { name = name, model = modelId }
 	local useRoads = true
-	if name == "lap" or name == "bike" then
+	if name == "crossing" then
+		-- The real bridge on the south road, crossed along the road from 100-120 studs before one end to
+		-- 150 past the other, starting a little off the lane's line and a little askew (the seed).
+		local B = { x0 = 220, x1 = 280, z = 400, half = 10.5, grade = BRIDGE_GRADE or 0.05, base = 3.1, run = 20 }
+		buildRealBridge(B)
+		for _, e in ipairs(ROADS.edges) do
+			-- The SE-SW edge runs from x 500 toward x 0.
+			if e.bridges then e.bridges = { { s0 = 500 - B.x1, s1 = 500 - B.x0 } } end
+		end
+		local dir = variant == "west" and -1 or 1
+		if variant == "wall" then
+			-- The invariant: a wall across the whole road at mid-span, parapet to parapet, 3 tall.
+			local y = bridgeRoad(250)
+			addBox("RoadWall", 249.5, y - 0.5, B.z - B.half + 1, 250.5, y + 3, B.z + B.half - 1, "Concrete")
+		end
+		local lane = B.z + dir * 3.5
+		local startX = (dir > 0 and B.x0 - 100 or B.x1 + 100) - dir * math.random() * 20
+		local car = makeVehicle(modelId, g, startX, lane + (math.random() - 0.5) * 2.4,
+			-dir * math.pi / 2 + math.rad((math.random() - 0.5) * 12))
+		makeDrive(car)
+		local goals = { V(dir > 0 and B.x1 + 150 or B.x0 - 150, 0, lane) }
+		start(car, goals, true)
+		local enter, exit = dir > 0 and B.x0 or B.x1, dir > 0 and B.x1 or B.x0
+		local w = watcher(traveller(goals, true), function(p) return abs(p.Z - B.z) < 30 and p.X > B.x0 - 40 and p.X < B.x1 + 40 end)
+		local enteredAt, leftAt
+		local t = runWorld(50, function(c, status, now)
+			local x = c.chassis.Position.X
+			if not enteredAt and (x - enter) * dir > 0 then enteredAt = now end
+			if enteredAt and not leftAt and (x - exit) * dir > 0 then leftAt = now end
+			w.plan(c, status, now)
+		end)
+		out.crossed = leftAt ~= nil
+		out.deckTime = leftAt and enteredAt and (leftAt - enteredAt) or -1
+		out.reached = car.reached or 0
+		out.stops, out.reverses, out.stuck, out.hazards = w.stops, w.reverses, w.stuck, w.hazards
+		out.fronts, out.avoids, out.looks = w.fronts, w.avoids, w.looks
+		out.parapet, out.contacts = touchesOf(car, { BridgeParapet = true, BridgeLampPost = true })
+		out.wallHits = touchesOf(car, { RoadWall = true })
+		out.impacts, out.worst = impacts(car)
+		out.inWater = car.inWater
+		out.out = car.out
+		out.time = t
+	elseif name == "props" then
+		-- Open ground west of everything: across country from x -1000 to a goal at -700 (z 800), with one of
+		-- the things the maps' logged stops were against (tools/bot_driving_maps_probe.lua) 150 studs on,
+		-- at its logged size. The seed moves the start across and askew, and the prop across the line.
+		local z0, X = 800, -850
+		local off = (math.random() - 0.5) * 3
+		local z = z0 + off
+		local kind = variant or "post"
+		local names = {}
+		local function solid(label, x0, y0, z0_, x1, y1, z1)
+			names[label] = true
+			return addBox(label, x0, y0, z0_, x1, y1, z1, "Concrete")
+		end
+		if kind == "slope" then
+			RAMP = { x0 = -930, x1 = -760, z = z0, half = 60, grade = 0.15 }
+		elseif kind == "bank" then
+			RAMP = { x0 = -1200, x1 = -500, z = z0, half = 40, grade = 0.3, across = true }
+		end
+		local y = RAMP and rampHeight(X, z) or 0
+		if kind == "post" then
+			-- LampPost (Town/ParkingLot): a Cylinder 0.7 across, 15.5 tall.
+			solid("LampPost", X - 0.35, 0, z - 0.35, X + 0.35, 15.5, z + 0.35)
+		elseif kind == "hedge" then
+			-- Hedge (Town/ParkingLot): 14.3 x 3.4 x 1.5, across the way.
+			solid("Hedge", X - 0.75, 0, z - 7.15, X + 0.75, 3.4, z + 7.15)
+		elseif kind == "fence" then
+			-- A lot's post-and-rail fence across the way: FencePost 0.6 across and 3.8 tall every 6 studs, a
+			-- rail along the tops.
+			for k = -2, 3 do solid("FencePost", X - 0.3, 0, z + k * 6 - 0.3, X + 0.3, 3.8, z + k * 6 + 0.3) end
+			solid("FenceRail", X - 0.2, 3.0, z - 12.3, X + 0.2, 3.4, z + 18.3)
+		elseif kind == "sign" then
+			-- SignPost (0.4 across, 5 tall) behind its ParkingSign plate, which nothing collides with.
+			solid("SignPost", X - 0.2, 0, z - 0.2, X + 0.2, 5.0, z + 0.2)
+			addBox("ParkingSign", X - 0.35, 2.4, z - 1.3, X - 0.25, 4.6, z + 1.3, "Metal").CanCollide = false
+		elseif kind == "rock" then
+			-- A rock (MapDecor's, size 12): a Ball 9.6 across, its centre 3 up.
+			names.Rock = true
+			addBall("Rock", X, 3, z, 4.8, "Rock")
+		elseif kind == "pebble" then
+			-- A rock's pebble (size 8): a Ball 1.96 across, centre 0.56 up, top 1.5: under the sweep's floor,
+			-- which meets it on its shoulder, a face turned up.
+			names.Pebble = true
+			addBall("Pebble", X, 0.56, z, 0.98, "Rock")
+		elseif kind == "low" then
+			-- A low wall across the way, 1.0 tall (a bus shelter's base wall is 1.02): under the sweep.
+			solid("LowWall", X - 0.15, 0, z - 4.8, X + 0.15, 1.0, z + 4.8)
+		elseif kind == "bumper" then
+			-- The invariant: a solid block at bumper height square in the way.
+			solid("Block", X - 0.75, 0, z - 0.75, X + 0.75, 2.5, z + 0.75)
+		elseif kind == "clutter" then
+			-- A car park's or a town square's clutter across the way, at the logged sizes: on a 16-stud grid
+			-- jittered by the seed (a car's width free between any two), lamp posts (0.7), bollards (0.7 by
+			-- 3.2), fence posts (0.6 by 3.8), shrubs (Balls 2.1 across, top 2.5), parked cars (6.5 x 5 x 14).
+			for gx = 0, 5 do
+				for gz = -3, 3 do
+					local px, pz = X - 40 + gx * 16 + (math.random() - 0.5) * 5, z0 + gz * 16 + (math.random() - 0.5) * 5
+					local pick = math.random(1, 5)
+					if pick == 1 then
+						solid("LampPost", px - 0.35, 0, pz - 0.35, px + 0.35, 15.5, pz + 0.35)
+					elseif pick == 2 then
+						solid("Bollard", px - 0.35, 0, pz - 0.35, px + 0.35, 3.2, pz + 0.35)
+					elseif pick == 3 then
+						solid("FencePost", px - 0.3, 0, pz - 0.3, px + 0.3, 3.8, pz + 0.3)
+					elseif pick == 4 then
+						names.Shrub = true
+						addBall("Shrub", px, 1.45, pz, 1.05, "Grass")
+					elseif gx % 2 == 0 then
+						solid("ParkedCar", px - 7, 0, pz - 3.25, px + 7, 5, pz + 3.25)
+					end
+				end
+			end
+		elseif kind == "slope" or kind == "bank" then
+			-- A tree's trunk (the Props trees', 2.6 across) standing on the slope.
+			solid("Trunk", X - 1.3, y - 1, z - 1.3, X + 1.3, y + 14, z + 1.3)
+		end
+		local car = makeVehicle(modelId, g, -1000, z0 + (math.random() - 0.5) * 6, -math.pi / 2 + math.rad((math.random() - 0.5) * 16))
+		makeDrive(car)
+		local goals = { V(-700, 0, z0) }
+		start(car, goals, false)
+		local w = watcher(traveller(goals, false), function() return true end)
+		out.time = runWorld(40, w.plan)
+		out.reached = car.reached or 0
+		out.stops, out.reverses, out.stuck, out.hazards = w.stops, w.reverses, w.stuck, w.hazards
+		out.fronts, out.avoids = w.fronts, w.avoids
+		out.parapet, out.contacts = touchesOf(car, names)
+		out.touched = out.parapet
+		out.impacts, out.worst = impacts(car)
+		out.recoveries = car.drive.stats.recoveries
+		out.out = car.out
+	elseif name == "lap" or name == "bike" then
 		-- Start on the west road heading north, then a lap: the tee, the hill, the bridge, home.
 		local car = makeVehicle(modelId, g, 3.5, 300, 0)
 		makeDrive(car)
@@ -930,7 +1299,10 @@ def load(dynamics_src, botnav_src):
 
 
 CAR_MODELS = ["Rotster", "CrocodiloRanger", "TralalaGT", "SahurVan"]
-ALL_SCENARIOS = ["lap", "field", "river", "bridge", "cliff", "wedge", "boxed", "blind", "teammates", "meet"]
+ALL_SCENARIOS = ["lap", "field", "river", "bridge", "cliff", "wedge", "boxed", "blind", "teammates", "meet",
+                 # The real bridge both ways, a wall across it, and the prop course (seed 1 of --measure's).
+                 "crossing:east", "crossing:west", "crossing:wall"] + ["props:" + kind for kind in
+                 ["post", "hedge", "fence", "sign", "rock", "pebble", "low", "bumper", "slope", "bank"]]
 
 
 def geometry(lua, model):
@@ -943,9 +1315,9 @@ def geometry(lua, model):
                                sz=g["size"][2], cy=g["c"][0], cz=g["c"][1], rho=g["rho"]))
 
 
-def run_one(lua, scenario, model):
+def run_one(lua, scenario, model, seed=1, variant=None):
     g = geometry(lua, model)
-    result = lua.globals().scenario(scenario, model, g)
+    result = lua.globals().scenario(scenario, model, g, seed, variant)
     out = {k: result[k] for k in result}
     for key in ("out", "aZ", "bZ", "replans", "recoveries", "time", "worst", "minGuard"):
         out.setdefault(key, None)
@@ -955,7 +1327,27 @@ def run_one(lua, scenario, model):
 # The bar each scenario is held to.
 def judge(name, r):
     p = []
-    if name in ("lap", "bike"):
+    if name == "crossing:wall":
+        # Invariant: a wall across the road is always seen (stopped short of, never driven through).
+        if r["wallHits"] > 0 or r["crossed"]:
+            p.append(f"ran into a wall across the bridge ({r['wallHits']} contacts, crossed {r['crossed']})")
+    elif name.startswith("crossing:"):
+        if not r["crossed"] or r["reached"] < 1:
+            p.append(f"never got across the bridge (out: {r['out']}, stuck {r['stuck']}, hazards {r['hazards']})")
+        if r["parapet"] > 0 or r["impacts"] > 0:
+            p.append(f"{r['parapet']} parapet or lamp post contacts, {r['impacts']} impacts")
+        if r["stops"] > 0 or r["reverses"] > 0:
+            p.append(f"{r['stops']} stops and {r['reverses']} reverses crossing")
+    elif name.startswith("props:"):
+        kind = name.split(":")[1]
+        if r["reached"] < 1:
+            p.append(f"never got past the {kind} (out: {r['out']}, recoveries {r['recoveries']})")
+        if r["impacts"] > 0:
+            p.append(f"{r['impacts']} impacts over 4 studs/s (worst {r['worst']:.1f})")
+        # Invariant: a solid part in the car's path at bumper height is always seen, so never touched.
+        if kind == "bumper" and r["touched"] > 0:
+            p.append(f"touched a solid block at bumper height square in its path ({r['touched']} contacts)")
+    elif name in ("lap", "bike"):
         if r["reached"] < r["goals"]:
             p.append(f"reached {r['reached']}/{r['goals']} goals (out: {r['out']})")
         if r["impacts"] > 0:
@@ -1026,10 +1418,11 @@ def judge(name, r):
 def sweep(dynamics_src, botnav_src, models, scenarios, verbose=False):
     results = {}
     for scenario in scenarios:
+        name, _, variant = scenario.partition(":")
         for model in (["BrrStreetfighter"] if scenario == "bike" else models):
             lua, _ = load(dynamics_src, botnav_src)
             t0 = time.time()
-            r = run_one(lua, scenario, model)
+            r = run_one(lua, name, model, 1, variant or None)
             r["wall"] = time.time() - t0
             results[(scenario, model)] = r
             if verbose:
@@ -1049,7 +1442,7 @@ def report(results):
 def row(scenario, model, r):
     bits = []
     for key in ("reached", "goals", "time", "impacts", "offShare", "maxOff", "recoveries", "maxCasts", "minGuard", "out",
-                "inWater", "fell", "replans", "aZ", "bZ", "z", "speed"):
+                "inWater", "fell", "replans", "aZ", "bZ", "z", "speed", "crossed", "stops", "reverses", "stuck", "parapet", "wallHits", "touched"):
         if key in r and r[key] is not None:
             v = r[key]
             if key == "offShare":
@@ -1057,7 +1450,7 @@ def row(scenario, model, r):
             elif isinstance(v, float):
                 v = f"{v:.1f}"
             bits.append(f"{key} {v}")
-    return f"  {scenario:9} {model:17} " + "  ".join(bits)
+    return f"  {scenario:14} {model:17} " + "  ".join(bits)
 
 
 # Planted faults, each aimed at an invariant, and the scenario whose check must catch it.
@@ -1072,7 +1465,68 @@ PLANTS = [
     ("ray budget ignored", "\tif BotNav.CastRemaining(\"navigation\") < DRIVE_CASTS_PER_SENSE then", "\tif false then", ("blind", "Rotster")),
     ("query budget", "\t-- 2: the way it would like to go.", "\tcast(drive, position, nil, look, drive.params)\n\t-- 2: the way it would like to go.", ("lap", "Rotster")),
     ("lane on the wrong side", "local DRIVE_LANE = 3.5", "local DRIVE_LANE = -3.5", ("meet", "Rotster")),
+    # A solid part in the car's path at bumper height is always seen: the sweep lifted clear of it.
+    ("sweep over bumper height", "local boxAt = position + up * (2.6 - drive.rideHeight)", "local boxAt = position + up * (4.6 - drive.rideHeight)",
+     ("props:bumper", "Rotster")),
+    # A wall across the road is always seen: the side-on rule taking anything met as beside the way.
+    ("a face in the way taken as beside", "if normal.Magnitude > 0.3 and math.abs(normal.Unit:Dot(steering)) < DRIVE_SIDE_ON and besideBy(front.Position) > DRIVE_BESIDE then",
+     "if true then", ("crossing:wall", "Rotster")),
+    # A solid part in the path is seen whatever nothing-collides part stands in front of it (a sign's plate).
+    ("sweeps stop at what nothing collides with", "options.params.RespectCanCollide = true", "options.params.RespectCanCollide = false",
+     ("props:sign", "Rotster")),
 ]
+
+
+# Scenarios measured over seeds (each model, each variant, seeds 1..N) and reported as counts, before
+# against after: --measure NAME --seeds N [--botnav OTHER_BOTNAV.lua]. For each: its variants, the counts
+# summed, and what the totals are grouped by.
+PROP_KINDS = ["post", "hedge", "fence", "sign", "rock", "pebble", "low", "bumper", "slope", "bank", "clutter"]
+MEASURED = {
+    "crossing": (["east", "west"], ["crossed", "reached", "stops", "reverses", "stuck", "hazards", "parapet", "contacts", "impacts",
+                                    "fronts", "avoids"], ("model", "variant")),
+    "props": (PROP_KINDS, ["reached", "stops", "reverses", "stuck", "hazards", "touched", "impacts", "fronts", "avoids"], ("variant", "model")),
+}
+
+
+def measure(dynamics_src, botnav_src, scenario, models, seeds, variants, grade=None, verbose=False):
+    rows = {}
+    keys = MEASURED[scenario][1]
+    for model in models:
+        for variant in variants:
+            for seed in range(1, seeds + 1):
+                lua, _ = load(dynamics_src, botnav_src)
+                if grade is not None:
+                    lua.globals().BRIDGE_GRADE = grade
+                r = run_one(lua, scenario, model, seed, variant)
+                rows[(model, variant, seed)] = r
+                if verbose:
+                    print("  ", model, variant, seed, {k: (round(v, 2) if isinstance(v, float) else v) for k, v in r.items()
+                                                  if k in keys + ["deckTime", "out"]}, flush=True)
+    return rows
+
+
+def measure_report(rows, scenario):
+    """Totals per group (MEASURED's grouping) and overall, as printed lines."""
+    keys, by = MEASURED[scenario][1], MEASURED[scenario][2]
+    lines = []
+    groups = {}
+    for (model, variant, seed), r in rows.items():
+        names = {"model": model, "variant": variant}
+        groups.setdefault((names[by[0]], names[by[1]]) if scenario == "crossing" else (names[by[0]], ""), []).append(r)
+        if scenario != "crossing":
+            groups.setdefault((names[by[1]], ""), []).append(r)
+        groups.setdefault(("ALL", ""), []).append(r)
+    for (a, b), rs in groups.items():
+        total = {k: sum(int(bool(r.get(k))) if isinstance(r.get(k), bool) else (r.get(k) or 0) for r in rs) for k in keys}
+        times = [r["deckTime"] for r in rs if r.get("deckTime", -1) > 0]
+        outs = {}
+        for r in rs:
+            if r.get("out"):
+                outs[r["out"]] = outs.get(r["out"], 0) + 1
+        lines.append(f"  {a:16} {b:5} runs {len(rs):3}  " + "  ".join(f"{k} {total[k]}" for k in keys)
+                     + ((f"  s/crossing {sum(times) / len(times):.1f}" if times else "  s/crossing -") if scenario == "crossing" else "")
+                     + (f"  gave up: {outs}" if outs else ""))
+    return lines
 
 
 def main():
@@ -1080,19 +1534,35 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--quick", action="store_true", help="one car model, and the planted faults")
     parser.add_argument("--only", default=None)
-    parser.add_argument("--trace", default=None, help="scenario:model to trace")
+    parser.add_argument("--trace", default=None, help="scenario:model[:seed[:variant]] to trace")
+    parser.add_argument("--measure", default=None, help="a scenario in MEASURED, run over --seeds")
+    parser.add_argument("--seeds", type=int, default=10)
+    parser.add_argument("--grade", type=float, default=None, help="the crossing's bridge grade (default 0.05)")
+    parser.add_argument("--models", default=None, help="comma-separated car models (default all four)")
+    parser.add_argument("--botnav", default=None, help="run against this BotNav.lua instead (a before)")
     args = parser.parse_args()
     dynamics = open(DYNAMICS, encoding="utf-8").read()
-    botnav = open(BOTNAV, encoding="utf-8").read()
+    botnav = open(args.botnav or BOTNAV, encoding="utf-8").read()
+    if args.measure:
+        models = args.models.split(",") if args.models else CAR_MODELS
+        t0 = time.time()
+        rows = measure(dynamics, botnav, args.measure, models, args.seeds, MEASURED[args.measure][0], args.grade, args.verbose)
+        print(f"bot driving sim, measured: {args.measure}, {len(rows)} runs ({args.seeds} seeds), {time.time() - t0:.0f} s")
+        for line in measure_report(rows, args.measure):
+            print(line)
+        return 0
     models = ["Rotster"] if args.quick else CAR_MODELS
     scenarios = ALL_SCENARIOS + ["bike"]
     if args.only:
         scenarios = args.only.split(",")
     if args.trace:
-        sc, md = args.trace.split(":")
+        bits = args.trace.split(":")
+        sc, md = bits[0], bits[1]
         lua, _ = load(dynamics, botnav)
         lua.execute("TRACE = {}")
-        r = run_one(lua, sc, md)
+        if args.grade is not None:
+            lua.globals().BRIDGE_GRADE = args.grade
+        r = run_one(lua, sc, md, int(bits[2]) if len(bits) > 2 else 1, bits[3] if len(bits) > 3 else None)
         for line in lua.globals().TRACE.values():
             print(line)
         print(r)

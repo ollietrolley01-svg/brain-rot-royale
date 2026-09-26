@@ -1214,6 +1214,12 @@ local DRIVE_LOOK_MIN = 9          -- pure pursuit: the point steered at is this 
 local DRIVE_LOOK_PER = 0.42       -- ...plus this many seconds of the current speed
 local DRIVE_AVOID_TURN = math.rad(150) -- the most a detour turns from the route (past square: round the back of a wall)
 local DRIVE_FEELER_ANGLE = math.rad(28)
+local DRIVE_SIDE_ON = math.sin(math.rad(15)) -- a face whose normal is this near square to the way it steers runs along that way
+local DRIVE_BESIDE = 1.5          -- studs clear of the car's side, square to the way it steers: beside its way, not in it
+local DRIVE_FEELER_BESIDE = 4    -- a corner feeler's hit this far clear of the car's side isn't eased away from (the far parapet's lamps)
+local DRIVE_BESIDE_TURN = math.rad(20) -- ...judged only while it points this near that way (turning harder, the nose sweeps across)
+local DRIVE_BACK_SAME = math.rad(2) -- going round something, the way back is only taken as swept by sweep 1 this near it
+local DRIVE_SWEEP_TILT = math.rad(8) -- the sweeps lie along a chassis leaning more than this (roads are under 6)
 local DRIVE_STUCK_SPEED = 2.5     -- slower than this while wanting to go is not going
 local DRIVE_STUCK_AFTER = 1.5     -- seconds of it before reversing out
 local DRIVE_REVERSE_FOR = 1.4
@@ -1228,6 +1234,8 @@ local DRIVE_STEEP_DOWN = -0.2     -- a grade ahead steeper than this, downhill, 
 local DRIVE_STOPPED = 3           -- studs/s: stopped, for arriving and for a hazard
 local DRIVE_GUARD_HOLD = 2.5      -- seconds stopped for someone on foot before going round them
 local DRIVE_DETOUR_SPEED = 32     -- studs/s going round something (a look every ~8 studs at this pace)
+local DRIVE_DETOUR_TURN_SPEED = 14 -- ...and while still turning onto the way round, more than DRIVE_DETOUR_SIGHT off it
+local DRIVE_DETOUR_SIGHT = math.rad(15)
 local DRIVE_OVERTAKE_CLEAR = 140  -- studs of the other lane that must be free of traffic to pull out
 local WATER = Enum.Material.Water
 
@@ -1583,6 +1591,12 @@ end
 function BotNav.NewDrive(chassis, handling, options)
 	options = options or {}
 	local size = chassis.Size
+	-- The sweeps and feelers look past what nothing collides with (a sign's plate, another car's chassis
+	-- box, foliage): a cast reports only the first thing it meets, so what `blocking` ignores must not
+	-- hide what stands behind it. (A ground probe with params of its own, as BotService's is, is untouched.)
+	if options.params then
+		options.params.RespectCanCollide = true
+	end
 	return {
 		chassis = chassis,
 		handling = handling,
@@ -1944,6 +1958,10 @@ function BotNav.DriveSense(drive, now)
 		drive.avoid = nil
 	end
 	local steering = avoid and avoid.dir or heading
+	-- How far clear of the car's side a point stands, square to the way it steers.
+	local function besideBy(point)
+		return math.abs(rightOf(steering):Dot(flat(point - position))) - drive.halfWidth
+	end
 	local reach = math.clamp(math.abs(speed) * 1.1 + 16, 20, 90)
 	local groundHere = position.Y - drive.rideHeight
 	local bumper = Vector3.new(0, 1.2, 0)
@@ -1954,13 +1972,27 @@ function BotNav.DriveSense(drive, now)
 	-- 1: the car's own width swept straight ahead of it, from a stud above the ground up to head
 	-- height: buildings, trees, walls, other vehicles; not a kerb, not the road. That is the way it
 	-- is going now, and what DriveControl brakes for. While backing out of somewhere, swept behind
-	-- instead, so it stops backing before it backs into something.
+	-- instead, so it stops backing before it backs into something. The box follows the ground: a level
+	-- box meets rising ground (a 5% road, 26 studs on) or a bank inside the car's own length, and that
+	-- face turned up (not `blocking`) is all a sweep reports, whatever stands behind it; on the way down
+	-- it passes over what is low. So it climbs at the grade the last look's ground probe found ahead
+	-- (as far off as this sweep reaches), and on ground steeper than DRIVE_SWEEP_TILT (a bank, a dune)
+	-- it lies along the chassis. Not the chassis on gentler ground: the nose dips under the brakes.
 	local width = drive.halfWidth * 2 + 1
-	local boxAt = Vector3.new(position.X, groundHere + 2.6, position.Z)
+	local up = frame.UpVector
+	local tilted = up.Y <= math.cos(DRIVE_SWEEP_TILT)
+	if not tilted then
+		up = Vector3.new(0, 1, 0)
+	end
+	local boxAt = position + up * (2.6 - drive.rideHeight)
 	local boxSize = Vector3.new(width, 2.6, 1)
+	local function sweep(dir, length)
+		local along = tilted and (dir - up * dir:Dot(up)).Unit or (dir + Vector3.new(0, drive.groundGrade or 0, 0)).Unit
+		return cast(drive, CFrame.lookAt(boxAt, boxAt + along, up), boxSize, along * length, drive.params)
+	end
 	local frontDir = backing and -look or look
 	local frontReach = backing and drive.halfLength + 8 or reach
-	local front = cast(drive, CFrame.lookAt(boxAt, boxAt + frontDir), boxSize, frontDir * frontReach, drive.params)
+	local front = sweep(frontDir, frontReach)
 	if backing then
 		if blocking(front) and front.Distance < drive.halfLength + 3 + math.abs(speed) * 0.3 then
 			drive.reverseUntil = now
@@ -1971,6 +2003,15 @@ function BotNav.DriveSense(drive, now)
 			end
 		end
 		front = nil
+	end
+	-- A face the sweep met side-on, standing clear of the way the car steers (a bridge's parapet or a
+	-- wall along the road, met by a sweep cast a few degrees off the road): the car passes it, so it is
+	-- neither braked for nor gone round. Something across the way is face-on, and always counts.
+	if front and not backing and look:Dot(steering) > math.cos(DRIVE_BESIDE_TURN) then
+		local normal = flat(front.Normal)
+		if normal.Magnitude > 0.3 and math.abs(normal.Unit:Dot(steering)) < DRIVE_SIDE_ON and besideBy(front.Position) > DRIVE_BESIDE then
+			front = nil
+		end
 	end
 	if blocking(front) then
 		drive.front = { point = boxAt + look * front.Distance, untilTime = now + 0.5 }
@@ -1987,10 +2028,21 @@ function BotNav.DriveSense(drive, now)
 		backOff = sideAngle(heading, avoid.dir, avoid.side)
 		candidate = backOff < math.rad(6) and heading or turnFlat(heading, avoid.side * backOff * 0.55)
 	end
-	local separate = not reversing and look:Dot(candidate) < math.cos(math.rad(10))
+	-- Going round something, the way back is swept along itself unless it is the way the car points: a few
+	-- degrees off, sweep 1 can pass beside what it is going round while the way back runs into it.
+	local separate = not reversing and look:Dot(candidate) < math.cos(avoid and DRIVE_BACK_SAME or math.rad(10))
 	local ahead = front
 	if separate then
-		ahead = cast(drive, CFrame.lookAt(boxAt, boxAt + candidate), boxSize, candidate * reach, drive.params)
+		ahead = sweep(candidate, reach)
+		-- On a road, what it meets past the lane's verge side (a lamp by the road, met 60 studs on by a
+		-- sweep angled back across to the lane) stands beside the lane, not in it: no overtaking it.
+		local route = drive.route
+		local k = math.min(drive.index, #route)
+		local leg = flat(route[k] - route[k - 1])
+		if ahead and drive.roadLeg[drive.index] and leg.Magnitude > 0.01
+			and rightOf(leg.Unit):Dot(flat(ahead.Position - route[k])) > drive.halfWidth + DRIVE_BESIDE then
+			ahead = nil
+		end
 	end
 	-- 2/3: feelers off the front corners, either side of the nose: which way is clearer. With two
 	-- sweeps this look, only the one on the side it is turning toward.
@@ -1999,13 +2051,18 @@ function BotNav.DriveSense(drive, now)
 	local feelerLength = reach * 0.6
 	local turnSide = signedAngle(look, candidate) >= 0 and 1 or -1
 	local leftClear, rightClear = feelerLength, feelerLength
+	-- ...and how far beside the way it steers what each one met stands (a lamp post on the far parapet
+	-- is close along a feeler, and nowhere near the car's path).
+	local leftBeside, rightBeside = math.huge, math.huge
 	if not separate or turnSide < 0 then
 		local hit = cast(drive, nose - side, nil, turnFlat(look, -DRIVE_FEELER_ANGLE) * feelerLength, drive.params)
 		leftClear = blocking(hit) and (hit.Position - (nose - side)).Magnitude or feelerLength
+		leftBeside = blocking(hit) and besideBy(hit.Position) or math.huge
 	end
 	if not separate or turnSide > 0 then
 		local hit = cast(drive, nose + side, nil, turnFlat(look, DRIVE_FEELER_ANGLE) * feelerLength, drive.params)
 		rightClear = blocking(hit) and (hit.Position - (nose + side)).Magnitude or feelerLength
+		rightBeside = blocking(hit) and besideBy(hit.Position) or math.huge
 	end
 
 	-- The way along a face that was met, on `turnTo`'s side, a little away from it.
@@ -2086,9 +2143,11 @@ function BotNav.DriveSense(drive, now)
 		end
 		drive.avoid = { side = turnTo, dir = dir, untilTime = now + 0.9 }
 		drive.obstacle = { point = boxAt + candidate * ahead.Distance, untilTime = now + 0.5 }
-	elseif math.min(leftClear, rightClear) < feelerLength * 0.45 then
-		-- Something close off one corner: ease away from it.
-		local away = leftClear < rightClear and 1 or -1
+	elseif (leftClear < feelerLength * 0.45 and leftBeside < DRIVE_FEELER_BESIDE) or (rightClear < feelerLength * 0.45 and rightBeside < DRIVE_FEELER_BESIDE) then
+		-- Something close off one corner, and near the way it steers: ease away from it (and slow).
+		local nearLeft = leftBeside < DRIVE_FEELER_BESIDE and leftClear or feelerLength
+		local nearRight = rightBeside < DRIVE_FEELER_BESIDE and rightClear or feelerLength
+		local away = nearLeft < nearRight and 1 or -1
 		drive.avoid = { side = away, dir = turnFlat(heading, away * math.rad(10)), untilTime = now + 0.4 }
 	end
 	-- Nose up against something: going forward can't turn it away (a car turns by moving), so that is
@@ -2132,6 +2191,10 @@ function BotNav.DriveSense(drive, now)
 		hazard = true
 	else
 		local drop = groundHere - below.Position.Y
+		-- The grade the next look's sweeps climb at (backing, the ground behind says nothing about ahead).
+		if not reversing then
+			drive.groundGrade = math.clamp(-drop / math.max(flatDistance(position, probeAt), 1), -DRIVE_DROP_GRADE, DRIVE_DROP_GRADE)
+		end
 		if drop > math.max(DRIVE_DROP, probeDistance * DRIVE_DROP_GRADE) then
 			hazard = true
 		elseif drop > DRIVE_DROP then
@@ -2362,6 +2425,13 @@ function BotNav.DriveControl(drive, dt, now)
 	end
 	if avoid and now < avoid.untilTime then
 		cap = math.min(cap, DRIVE_DETOUR_SPEED)
+		-- Still turning onto the way round: no look has swept it yet (sweep 1 is where the nose points),
+		-- so at a walk until the nose is on it. At DRIVE_DETOUR_SPEED a car covers 8 studs a look and
+		-- needs twice that to stop, which in a car park or a town is into the next post.
+		local nose = flat(frame.LookVector)
+		if nose.Magnitude > 0.05 and nose.Unit:Dot(avoid.dir) < math.cos(DRIVE_DETOUR_SIGHT) then
+			cap = math.min(cap, DRIVE_DETOUR_TURN_SPEED)
+		end
 	end
 	-- Behind, at a crawl: back round toward it (a three-point turn) instead of a wide loop, committed
 	-- to one side until the nose is round, so a point straight behind can't flip it from side to side.
