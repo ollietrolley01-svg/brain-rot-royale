@@ -2593,7 +2593,10 @@ VehicleModels.Models.CameloCarrier = {
 -- The gunner's markers (Attachments), read by VehicleWeaponClient's first-person view and by
 -- VehicleClient's third-person pose:
 --   on TurretYaw     GunnerEye     the gunner's eye, facing -Z: where the camera sits in first person
---                                  (it rides the turret round; the gunner's body turns with it)
+--                                  (it rides the turret round; the gunner's body turns with it). It sits
+--                                  high enough that the gun stays under the crosshair at the hip
+--                                  (tools/gunner_hip_view_check.py); SeatEye, where it is set, is where
+--                                  the rider's own eyes go instead, for the seat
 --   on TurretPitch   GunnerSight   the eye behind the sight, looking along the bore (aiming down it)
 --                    GripR, GripL  the palms on the handles (-Z along the fingers, +Y out of the back
 --                                  of the hand, the gun keypoints' own convention)
@@ -2857,7 +2860,11 @@ function MountStyles.ring(b, mount, names)
 		muzzleZ, frames = machineGun(b, "Gun", pitchAt, 1, {})
 	end)
 	return yaw, pitch, pitchAt + V(0, 0.12, -muzzleZ), {
-		GunnerEye = { yaw, CF(yawAt + V(0, 1.13, 0.25)) },
+		-- The hip view looks over the gun, not into its receiver (Jacob 09-25: "the gunners gun obscures your
+		-- view when not in ads"): the eye 1.2 over where the rider's own eyes are (SeatEye), which keeps the
+		-- seat. tools/gunner_hip_view_check.py holds the crosshair clear over the whole pitch arc.
+		GunnerEye = { yaw, CF(yawAt + V(0, 2.33, 0.25)) },
+		SeatEye = { yaw, CF(yawAt + V(0, 1.13, 0.25)) },
 		GunnerSight = { pitch, frames.Sight },
 		GripR = { pitch, frames.GripR },
 		GripL = { pitch, frames.GripL },
@@ -3060,9 +3067,11 @@ function MountStyles.mortar(b, mount, names)
 		frames.Sight = CF(at + V(-0.62, 0.24, 0.12))
 	end)
 	return yaw, pitch, pitchAt + V(0, 0, -2.2), {
-		-- The first-person eye is over the sight, left of the tube (behind it the tube filled the view);
-		-- the kneeling rider stays square behind the mortar (SeatEye: where its own eyes are).
-		GunnerEye = { yaw, CF(yawAt + V(-0.8, 2.9, 1.35)) },
+		-- The first-person eye is over the sight, left of the tube (behind it the tube filled the view), and
+		-- 0.4 higher than the rider's eyes, so the sight's hood stays under a landing on level ground
+		-- (tools/gunner_hip_view_check.py); the kneeling rider stays square behind the mortar (SeatEye:
+		-- where its own eyes are).
+		GunnerEye = { yaw, CF(yawAt + V(-0.8, 3.3, 1.35)) },
 		SeatEye = { yaw, CF(yawAt + V(0, 2.9, 1.35)) },
 		GunnerSight = { pitch, frames.Sight },
 		GripR = { pitch, frames.GripR },
@@ -3116,7 +3125,9 @@ function MountStyles.shielded(b, mount, names)
 		gunShield(b, pitchAt, s, -1.3, -0.34, 0.95)
 	end)
 	return yaw, pitch, pitchAt + V(0, 0.12 * s, -muzzleZ), {
-		GunnerEye = { yaw, CF(yawAt + V(0, 1.32, 0.45)) },
+		-- The hip view over the gun and its shield (as the Rotster's); the rider stays behind the shield.
+		GunnerEye = { yaw, CF(yawAt + V(0, 2.52, 0.45)) },
+		SeatEye = { yaw, CF(yawAt + V(0, 1.32, 0.45)) },
 		GunnerSight = { pitch, frames.Sight },
 		GripR = { pitch, frames.GripR },
 		GripL = { pitch, frames.GripL },
@@ -3205,7 +3216,9 @@ function MountStyles.agl(b, mount, names)
 		}
 	end)
 	return yaw, pitch, pitchAt + V(0, 0.12 * s, -2.32 * s), {
-		GunnerEye = { yaw, CF(yawAt + V(0, 1.62, 0.45)) },
+		-- The hip view over the gun (as the Rotster's).
+		GunnerEye = { yaw, CF(yawAt + V(0, 2.62, 0.45)) },
+		SeatEye = { yaw, CF(yawAt + V(0, 1.62, 0.45)) },
 		GunnerSight = { pitch, frames.Sight },
 		GripR = { pitch, frames.GripR },
 		GripL = { pitch, frames.GripL },

@@ -12,6 +12,8 @@
 --   <Model>_fp_ads      aiming down the sight (the right mouse, L2, the AIM button): the view on the
 --                       sight, zoomed; the launcher's scope glass when its sight is a scope
 --   <Model>_fp_swung    turned 50 degrees left and 8 up: the turret, the view and the hands go together
+--   <Model>_fp_low      at the hip with the barrel at its lowest (pitchMin, or the front guard's floor): the
+--                       gun must sit under the cross, not over it (tools/gunner_hip_view_check.py)
 --   <Model>_3p_back     the gunner from behind, posed as VehicleClient poses them (VehicleModels.Poses
 --   <Model>_3p_front    GunnerStand / GunnerKneel), turned with the turret; and from the front
 -- A small magenta ball is put where GunnerView says the shot lands, so the picture shows whether the
@@ -246,6 +248,7 @@ local MOMENTS = {
 	{ "reload", 0, 0 },
 	{ "ads", 0, 0 },
 	{ "swung", 50, 8 },
+	{ "low", 0, -90 },
 }
 
 local views = {}
