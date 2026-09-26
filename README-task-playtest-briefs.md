@@ -9,7 +9,8 @@ Adds six open task briefs (08-13) from Oliver's 2026-09-25 playtest feedback:
   the cursor stays locked in the middle.
 - `tasks/09-cant-un-ready-in-the-lobby.md`: un-ready doesn't stick.
 - `tasks/10-arms-on-long-guns.md`: the elbow looks wrong on longer guns.
-- `tasks/11-car-health-400-500.md`: cars at 400-500 health, and the questions for Oliver first.
+- `tasks/11-car-health-700-800.md`: cars at 700-800 health (Jacob's revised target), and the questions
+  for Oliver first.
 - `tasks/12-minimap-towns.md`: draw the towns better on the minimap.
 - `tasks/13-bots-drive-into-props.md`: bot drivers hit props and get stuck.
 
@@ -26,3 +27,12 @@ was written:
   pitch range.
 - `tasks/claimed/16-gunner-gun-blocks-view.md` (`task/gunner-view-clear`): the gun blocks the hip
   view.
+
+Adds five more open briefs (17-21) from feedback Jacob relayed:
+
+- `tasks/17-sniper-rounds-with-travel-time.md`: sniper shots become real rounds with travel time and
+  drop, using the existing non-explosive round path.
+- `tasks/18-longer-team-matches.md`: team modes last longer; current targets and clocks listed.
+- `tasks/19-lobby-clutter-and-gates.md`: the lobby v2 road and gates are cluttered and block a booth.
+- `tasks/20-bot-gunners-engage-better.md`: bots in gunner seats fight better.
+- `tasks/21-bots-dont-target-cars.md`: bots never target a car, and rarely see its riders.

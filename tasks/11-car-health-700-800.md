@@ -1,4 +1,4 @@
-# Task 11: cars destroyable at 400-500 health
+# Task 11: cars destroyable at 700-800 health
 
 **Files you own for this task:** `ReplicatedStorage/Shared/VehicleArmor.lua` (the `Models` table and
 `DefaultHealth`) and `tools/vehicle_ttk_check.py` (its bands). **Read only:** `VehicleService.lua`,
@@ -7,7 +7,8 @@
 
 ## What Oliver asked for
 
-"the cars need to be destroyable with like 400-500 health". Playtest, 2026-09-25.
+"the cars need to be destroyable with like 400-500 health". Playtest, 2026-09-25. Jacob has since
+moved the target to **700-800**, and that is the number this brief works to.
 
 ## What already exists
 
@@ -22,17 +23,29 @@ not juggernauts": a car dies to 8-12 s of a Rare rifle and 3 rockets). On 09-25,
 `MatchConfig.CombatDamageScale` 0.736 made every kill 25% slower, so a car now takes 10-15 s of the
 rifle. The header of `VehicleArmor.lua` shows the working.
 
-At 450 health a car dies to about 3 s of the Rare rifle, and one direct rocket does about 445 (93 x
-0.736 x the explosive class's 6.5). So one rocket kills or nearly kills a car.
+`tools/vehicle_ttk_check.py` on main prints what a car takes now, at 0.736: the Rare rifle (Bananini
+Burst) does 171 a second firing and 110 with reloads, about 22.8 a shot and 616 a 27-round magazine,
+and one direct rocket (Cappuccina) does 68.4 x 6.5 = 445. Today's cars take 12.1-13.6 s of the rifle
+and 4 rockets.
+
+At 700-800 health, worked from the same numbers (the 620-health scooter is 5.6 s in that table):
+
+| Health | Rifle shots | Rifle time | Magazines | Rockets |
+|---|---|---|---|---|
+| 700 | 31 | about 6.0 s | 1.14 | 2 |
+| 800 | 36 | about 6.7 s | 1.30 | 2 |
+
+So a car goes from 4 rockets to 2, and from about 13 s of the rifle to about 6. Confirm these with the
+check once the numbers move; they are estimates from its printed rates.
 
 ## Ask Oliver before changing numbers
 
-This undoes two of his earlier decisions, so send him these questions through the mailbox first:
+This undoes Oliver's 09-24 health bands, so send him these questions through the mailbox first:
 
-1. Does 400-500 apply to every car, or only the four ordinary ones? What happens to bikes and the
-   armoured pair? Should they keep their ratios to a car (bikes about 0.45x, armoured 2-2.5x)?
-2. Is one rocket per car what he wants?
-3. Does "destroyable" also mean the wreck should blow apart or disappear? Today a wreck stays
+1. Does 700-800 apply to every car, or only the four ordinary ones? What happens to bikes (600-660
+   today, which would sit close to a car) and the armoured pair? Should they keep their ratios to a
+   car (bikes about 0.45x, armoured 2-2.5x)?
+2. Does "destroyable" also mean the wreck should blow apart or disappear? Today a wreck stays
    standing, and PR #51 found that a wrecked drivable blocks its spot for the rest of the match. PR
    #60 (`task/wreck-blast`) makes the wreck blast fire as soon as `Wrecked` turns true. Before that
    fix, a distant wreck blasted late, when someone walked up to it. If playtesters never saw a car
