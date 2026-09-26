@@ -37,7 +37,6 @@ PLANTED FAULTS (permanent), each must turn a scenario red:
 """
 import os
 import re
-import subprocess
 import sys
 
 try:
