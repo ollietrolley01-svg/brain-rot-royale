@@ -988,7 +988,7 @@ if _ring_calls:
 _explosive_hooks = [
     ("ServerScriptService/Modules/CombatService.lua", "function CombatService.OnDamage(fn)", "the damage listener hook"),
     ("ServerScriptService/Modules/CombatService.lua", "for _, listener in ipairs(CombatService.DamageListeners) do", "the damage listener loop in DealDamage"),
-    ("ServerScriptService/Modules/CombatService.lua", "if def.projectile and CombatService.LaunchProjectile then", "the launcher branch in Fire"),
+    ("ServerScriptService/Modules/CombatService.lua", "if (def.projectile or def.round) and CombatService.LaunchProjectile then", "the launcher (and flying-bullet) branch in Fire"),
     ("ServerScriptService/Modules/CombatService.lua", "CombatService.LaunchProjectile = nil", "the LaunchProjectile hook"),
     ("ServerScriptService/Modules/BotService.lua", "CombatService.SmokeBlocks(fromPart.Position, toPart.Position)", "the smoke check in hasLineOfSight"),
     ("ReplicatedStorage/Shared/ItemModels.lua", 'if item.kind == "throwable" then', "the ThrowableModels delegate"),
@@ -1012,7 +1012,7 @@ def _lua_block_keys(src, header):
     return set(re.findall(r"^\t(\w+) = \{", body, re.M))
 _round_specs = _lua_block_keys(_bal, "Ballistics.Rounds = {")
 _throw_specs = _lua_block_keys(_bal, "Ballistics.Throwables = {")
-# Every gun's `projectile` kind, wherever the gun is declared (WeaponData, the arsenal pack, the creative
+# Every gun's `projectile` kind (and a sniper's flying-bullet `round` kind, task 17), wherever the gun is declared (WeaponData, the arsenal pack, the creative
 # arsenal, any later Shared module), must be a kind registered somewhere: a key of Ballistics.Rounds or
 # a Ballistics.RegisterRound("kind", ...) call in any Shared file. A kind-name typo would otherwise
 # fire nothing, silently. Guns are matched to the nearest `\tName = {` above their `projectile` field.
@@ -1024,7 +1024,7 @@ def _projectile_contract(shared_files):
         for line in text.split("\n"):
             m = re.match(r"^\t(\w+) = \{", line)
             if m: gun = m.group(1)
-            k = re.search(r'\bprojectile = "(\w+)"', line)
+            k = re.search(r'\b(?:projectile|round) = "(\w+)"', line)
             if k and gun: guns[gun] = (k.group(1), rel)
     for gun, (kind, rel) in sorted(guns.items()):
         if kind not in kinds: found.append(f"explosives: {rel}: {gun} fires projectile \"{kind}\", which no Shared module registers (Ballistics.Rounds or Ballistics.RegisterRound)")
@@ -1034,6 +1034,9 @@ _projectile_guns, _round_kinds, _kind_problems = _projectile_contract(_shared_fi
 problems.extend(_kind_problems)
 for _gun in ("CappuccinaLauncher", "TralalaThumper"):
     if _gun not in _projectile_guns: problems.append(f"explosives: {_gun} no longer carries `projectile` (it would be hitscan again)")
+# Task 17: the snipers' bullets fly (`round = "sniperRound"`); losing the field makes one hitscan again, silently.
+for _gun in ("LarilaSniper", "SixSevenMarksman", "DeadAirPrecision", "QuietHours", "HoseDownSniper"):
+    if _projectile_guns.get(_gun, ("",))[0] != "sniperRound": problems.append(f"explosives: sniper {_gun} no longer carries `round = \"sniperRound\"` (it would be hitscan again)")
 # The check has to fire: a planted typo in a copy of WeaponData must be caught, or it's a test that doesn't test.
 _planted = [(rel, text.replace('projectile = "rocket"', 'projectile = "rockett"', 1) if rel.endswith("WeaponData.lua") else text) for rel, text in _shared_files]
 if not _projectile_contract(_planted)[2]: problems.append("explosives: the projectile-kind check missed a planted typo (\"rockett\"); it isn't testing anything")

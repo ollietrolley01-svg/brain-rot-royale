@@ -1107,6 +1107,38 @@ function CombatService.Raycast(shooterToken, origin, vector, params)
 	return LagCompensation.Raycast(origin, vector, params, rewindTo)
 end
 
+-- A bullet that FLIES (WeaponData `round`: the snipers' Ballistics "sniperRound", which ProjectileService
+-- flies) is ruled by the hitscan rules above the moment it meets something: firePellet over the short
+-- stretch `from` -> along `direction` for `reach` studs, ending just inside what the round touched. So the
+-- wall, pane, companion, barricade, barrel, vehicle and the rider behind its cover, the body and its
+-- headshot, fireAbility (lifesteal, streaks) and explosive ammo all go exactly as a hitscan shot's do.
+-- Ruled on the present: a round is not rewound (it was fired at where the target was, and flew).
+-- Pierce and ricochet belong to the round (it flies on through a body, or banks off as a new round), so
+-- the stretch has neither. Returns what `struck` (the part the round's sweep met) is: "body" (a living
+-- combatant), "map" (a wall, the ground, a prop: what a ricochet banks off) or "cover" (anything else).
+function CombatService.RuleBullet(shooterToken, def, from, direction, reach, struck)
+	local leg = setmetatable({
+		range = reach,
+		ability = def.ability ~= "pierce" and def.ability or false,
+		ricochet = false,
+	}, { __index = def })
+	firePellet(shooterToken, Combatants.GetCharacter(shooterToken), from, direction, leg, nil, nil)
+	if not struck then
+		return "cover"
+	end
+	local model = struck:FindFirstAncestorOfClass("Model")
+	local token = model and Combatants.FromCharacter(model) or nil
+	if token then
+		return Combatants.IsAlive(token) and "body" or "cover"
+	elseif CombatService.CompanionFromPart and CombatService.CompanionFromPart(struck)
+		or CombatService.StructureFromPart and CombatService.StructureFromPart(struck)
+		or CombatService.HazardFromPart and CombatService.HazardFromPart(struck)
+		or CombatService.VehicleFromPart and CombatService.VehicleFromPart(struck) then
+		return "cover"
+	end
+	return "map"
+end
+
 -- True while `player` sits in a vehicle's driving seat. Drivers are VehicleSeats; passengers sit
 -- on plain Seats and can shoot. Takes a Player or a probe's stand-in table with a Character.
 function CombatService.IsDriving(player)
@@ -1215,8 +1247,9 @@ function CombatService.Fire(player, aimPoint)
 	CombatService.NoteShot(player)
 
 	-- Launchers fire real rounds that fly, drop and burst (ProjectileService); the shot still broadcasts
-	-- with no end points so everyone gets the flash and report.
-	if def.projectile and CombatService.LaunchProjectile then
+	-- with no end points so everyone gets the flash and report. A sniper's bullet (`round`) flies the same
+	-- way and is ruled by RuleBullet where it lands.
+	if (def.projectile or def.round) and CombatService.LaunchProjectile then
 		-- A gun with several rounds a shot (def.pellets) throws them all, patterned or in the cone.
 		for index = 1, def.pellets or 1 do
 			CombatService.LaunchProjectile(player, def, origin, CombatService.PelletDirection(unit, spread, def, index))

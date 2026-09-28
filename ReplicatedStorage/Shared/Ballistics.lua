@@ -685,4 +685,83 @@ Ballistics.RegisterRound("bananerang", {
 	end,
 })
 
+--------------------------------------------------------------------------------
+-- Sniper rounds (task 17, the 2026-09-25 playtest: snipers are not hitscan)
+--------------------------------------------------------------------------------
+-- A sniper's bullet flies: WeaponData `round = "sniperRound"` (not `projectile`, which would make the gun a
+-- launcher to bots, the reach readout and the hit splats). 900 studs a second with a little drop: 0.33 s and
+-- 0.5 studs of drop at 300 studs, 0.67 s and 2.2 studs at 600. Where it meets something, the hitscan rules
+-- decide what that does (CombatService.RuleBullet, through `api`): walls, panes, vehicles and the rider
+-- behind their cover, headshots, lifesteal. What only a flying bullet has is here:
+--   pierce    (`ability = "pierce"`) it flies on through the first `pierce - 1` bodies, as the hitscan
+--             bullet did (CombatService's PIERCE_TARGETS; tools/sniper_round_check.py holds them equal)
+--   ricochet  a round that stops on the map banks off it as a new round, with the reach it has left, at
+--             the ricochet's `scale` of its damage
+--   reach     past the gun's `range` it does nothing, as a hitscan shot did nothing there
+-- `back`: how far behind the contact the ruling ray starts, so a rider's cover (glass is not in the
+-- round's sweep) lies on it. `pierceClear`: past a pierced body, before a ruling ray may start again.
+Ballistics.SniperRound = { back = 16, minBack = 0.25, past = 0.5, pierce = 2, pierceClear = 3 }
+
+Ballistics.RegisterRound("sniperRound", {
+	motion = "line",
+	speed = 900,
+	gravityScale = 0.05,
+	radius = 0.1,
+	-- The longest sniper reach (Nanna Nanna Puff, 1350) and a little more.
+	maxTime = 1.6,
+	explosive = false,
+	impactBonus = 0,
+	look = { shape = "cylinder", size = 1.4, color = Color3.fromRGB(255, 226, 150), spin = "none" },
+	onContact = function(entry, contact, api)
+		local instance = roundHitInstance(contact)
+		local at = contact and (contact.Position or contact.position)
+		local def = entry.def
+		-- An owner who has left credits nothing and is on no team any more: their round just stops.
+		local owner = api.Creditable and api.Creditable(entry.owner) or nil
+		if not (instance and at and def and owner and api.RuleBullet) then
+			return "stop"
+		end
+		if (at - entry.origin).Magnitude > (def.range or math.huge) then
+			return "stop"
+		end
+		local rules = Ballistics.SniperRound
+		local _, velocity = Ballistics.RoundState(entry.spec, entry.origin, entry.direction, entry.gravity, entry.age)
+		local unit = velocity.Unit
+		local normal = contact.Normal or contact.normal or -unit
+		local back = math.clamp((at - (entry.legStart or entry.origin)):Dot(unit), rules.minBack, rules.back)
+		local from = at - unit * back
+		-- Aimed just inside the surface the round touched, so the ruling ray meets it too.
+		local line = (at - normal * 0.05) - from
+		local struck = api.RuleBullet(owner, def, from, line.Unit, line.Magnitude + rules.past, instance)
+		if struck == "body" then
+			entry.pierced = (type(entry.pierced) == "number" and entry.pierced or 0) + 1
+			if def.ability == "pierce" and entry.pierced < rules.pierce then
+				local model = instance:FindFirstAncestorOfClass("Model")
+				if model and type(entry.filter) == "table" then
+					table.insert(entry.filter, model)
+					entry.params.FilterDescendantsInstances = entry.filter
+				end
+				entry.legStart = at + unit * rules.pierceClear
+				return "pass"
+			end
+		elseif struck == "map" and def.ricochet and api.Launch then
+			local spec = def.ricochet
+			local left = (def.range or 0) - (at - entry.origin).Magnitude
+			if left > 2 then
+				local bank = setmetatable({
+					damage = def.damage * (spec.scale or 0.8),
+					range = left,
+					ricochet = (spec.bounces or 1) > 1 and { bounces = spec.bounces - 1, scale = spec.scale } or false,
+				}, { __index = def })
+				api.Launch(entry.owner, bank, at + normal * 0.05, unit - normal * (2 * unit:Dot(normal)))
+			end
+		end
+		return "stop"
+	end,
+	-- Out of time in the open: it just goes, with no puff in the air.
+	onDetonate = function()
+		return false
+	end,
+})
+
 return Ballistics

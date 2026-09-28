@@ -6,6 +6,8 @@
 -- dud: it bounces and pops a moment later, so firing one into a wall at your feet hurts you rather
 -- than them. Round kinds are a registry (Ballistics.Rounds): a new kind is a spec plus optional
 -- behaviour callbacks, which this loop calls; nothing here needs editing for one.
+-- A sniper's bullet (WeaponData `round`, Ballistics "sniperRound") is launched and flown the same way; where
+-- it meets something, the hitscan rules decide what that does (CombatService.RuleBullet, via `api`).
 --
 -- Throwables (ItemData kind "throwable"): the Cooked Coconut is a frag. Hold the click to cook its
 -- fuse, let go to throw; hold it too long and it goes off in your hand. The Lowkey Latte lands, hisses
@@ -568,14 +570,16 @@ local function burst(entry, position, normal, directToken, headshot)
 	return explode(blast)
 end
 
+-- `def.round`: a hitscan gun whose bullet flies (the snipers), launched the same way as a launcher's round.
 local function launchRound(ownerToken, def, origin, direction)
-	local spec = def and Ballistics.Rounds[def.projectile]
+	local kind = def and (def.projectile or def.round)
+	local spec = kind and Ballistics.Rounds[kind]
 	if not spec or not SafeValue.Vector3(origin) or not SafeValue.Vector3(direction) or direction.Magnitude < 0.5 then
 		return nil
 	end
 	direction = direction.Unit
 	local character = Combatants.GetCharacter(ownerToken)
-	local entry = newEntry(ownerToken, character, def.projectile, spec, def.id)
+	local entry = newEntry(ownerToken, character, kind, spec, def.id)
 	entry.def = def
 	entry.damage = def.damage
 	entry.radius = def.splashRadius or 12
@@ -970,6 +974,10 @@ api = {
 	Clock = function()
 		return clock
 	end,
+	-- For a flying bullet (a sniperRound): the hitscan rules where it lands (CombatService.RuleBullet), and
+	-- a new round (its bank off a wall) launched as a gun's: (ownerToken, def, origin, direction).
+	RuleBullet = CombatService.RuleBullet,
+	Launch = launchRound,
 }
 ProjectileService.Api = api
 
@@ -1046,7 +1054,8 @@ ProjectileService.ThrowableInfo = ProjectileService.ProjectileInfo
 
 function ProjectileService.LeadAim(weaponId, origin, target, targetVelocity)
 	local def = WeaponData.Get(weaponId)
-	local spec = def and def.projectile and Ballistics.Rounds[def.projectile]
+	local kind = def and (def.projectile or def.round)
+	local spec = kind and Ballistics.Rounds[kind]
 	if not spec or (spec.motion or "line") ~= "line" then
 		return target
 	end
