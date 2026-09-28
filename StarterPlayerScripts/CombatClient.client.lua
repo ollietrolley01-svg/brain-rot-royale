@@ -935,7 +935,10 @@ end)
 -- Input
 --------------------------------------------------------------------------------
 
-ContextActionService:BindAction("BRR_Fire", function(_, inputState, inputObject)
+-- Through Settings, not straight to ContextActionService, so its touch button follows the player's
+-- state (PhoneLayout.TouchSet: gone in a driver's or gunner's seat, the lobby and spectating, to leave
+-- room under the seven-button cap for the seat's own) and sits in PhoneLayout's cluster.
+Settings.BindFixed("BRR_Fire", function(_, inputState, inputObject)
 	if inputState == Enum.UserInputState.Begin and drivingVehicle() then
 		return Enum.ContextActionResult.Pass
 	elseif inputState == Enum.UserInputState.Begin then
@@ -959,10 +962,7 @@ ContextActionService:BindAction("BRR_Fire", function(_, inputState, inputObject)
 		firing = false
 	end
 	return Enum.ContextActionResult.Pass
-end, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
-
-ContextActionService:SetTitle("BRR_Fire", "FIRE")
-ContextActionService:SetPosition("BRR_Fire", UDim2.new(1, -140, 1, -180))
+end, { title = "FIRE", position = UDim2.new(1, -140, 1, -180) }, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2)
 
 --------------------------------------------------------------------------------
 -- Aiming down sights
@@ -1066,7 +1066,8 @@ if UserInputService.TouchEnabled then
 	camGui.Parent = player:WaitForChild("PlayerGui")
 end
 
-ContextActionService:BindAction("BRR_Aim", function(_, inputState, inputObject)
+-- Through Settings for the same reason as FIRE.
+Settings.BindFixed("BRR_Aim", function(_, inputState, inputObject)
 	if inputState == Enum.UserInputState.Begin and inCombat() and not drivingVehicle() then
 		if sprinting then
 			setSprinting(false)
@@ -1080,7 +1081,7 @@ ContextActionService:BindAction("BRR_Aim", function(_, inputState, inputObject)
 		setAiming(false)
 	end
 	return Enum.ContextActionResult.Pass
-end, true, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL2)
+end, { title = "AIM", position = UDim2.new(1, -250, 1, -180) }, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL2)
 
 -- The same guard the trigger uses: a cancelled binding never delivers its End, so without this
 -- the scope would stay up after the button was released.
@@ -1091,8 +1092,6 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
-ContextActionService:SetTitle("BRR_Aim", "AIM")
-ContextActionService:SetPosition("BRR_Aim", UDim2.new(1, -250, 1, -180))
 
 --------------------------------------------------------------------------------
 -- Sprinting

@@ -24,7 +24,6 @@
 -- the mouse the moment it moves.
 
 local CollectionService = game:GetService("CollectionService")
-local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -33,6 +32,8 @@ local UserInputService = game:GetService("UserInputService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local VehicleWeaponData = require(Shared:WaitForChild("VehicleWeaponData"))
+-- The mount's touch buttons go through Settings.BindSeat (setBound, below).
+local Settings = require(script.Parent:WaitForChild("Settings"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -321,23 +322,22 @@ local function setBound(want)
 	-- (one crosshair while a vehicle gun is yours, this one) and hides the stamina bar, and BoonHud
 	-- steps out of the phone's driving block, for a gunner as for a driver.
 	player:SetAttribute("VehicleGunActive", want ~= nil or nil)
-	ContextActionService:UnbindAction("BRR_VehicleFire")
-	ContextActionService:UnbindAction("BRR_GunnerAim")
+	-- Through Settings.BindSeat / UnbindSeat: on a phone the on-foot buttons make way for these first
+	-- (ContextActionService draws seven at most, and the on-foot set is seven), and these sit in
+	-- PhoneLayout's cluster: FIRE on the big button, AIM above it.
+	Settings.UnbindSeat("BRR_VehicleFire")
+	Settings.UnbindSeat("BRR_GunnerAim")
 	firing = false
+	-- The desktop-era spots, used only if PhoneLayout is missing. The gunner's row (FIRE, AIM, then
+	-- MountedGunClient's RELOAD, LEAVE) sat above the jump button (tools/mounted_guns_check.py).
+	local fireTouch = { title = "FIRE", position = want == "turret" and UDim2.new(1, -90, 1, -280) or UDim2.new(1, -140, 1, -180) }
 	if want == "driver" then
-		ContextActionService:BindAction("BRR_VehicleFire", onFire, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR1)
+		Settings.BindSeat("BRR_VehicleFire", onFire, fireTouch, nil, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR1)
 	elseif want == "turret" then
 		-- The gunner isn't driving, so the triggers are free: R2 fires as a hand gun does, and L2 aims.
-		ContextActionService:BindAction("BRR_VehicleFire", onFire, true, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonR1)
-		ContextActionService:BindAction("BRR_GunnerAim", onAimSight, true, Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL2)
-		ContextActionService:SetTitle("BRR_GunnerAim", "AIM")
-		-- The gunner's row (FIRE, AIM, then MountedGunClient's RELOAD, LEAVE) sits above the jump button, which
-		-- is 120 px tall on a tablet (tools/mounted_guns_check.py lays them out on phone and tablet sizes).
-		ContextActionService:SetPosition("BRR_GunnerAim", UDim2.new(1, -170, 1, -280))
-	end
-	if want then
-		ContextActionService:SetTitle("BRR_VehicleFire", "FIRE")
-		ContextActionService:SetPosition("BRR_VehicleFire", want == "turret" and UDim2.new(1, -90, 1, -280) or UDim2.new(1, -140, 1, -180))
+		Settings.BindSeat("BRR_VehicleFire", onFire, fireTouch, nil, Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonR1)
+		Settings.BindSeat("BRR_GunnerAim", onAimSight, { title = "AIM", position = UDim2.new(1, -170, 1, -280) }, nil,
+			Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL2)
 	end
 end
 

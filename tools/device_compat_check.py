@@ -197,10 +197,10 @@ LOBBY_PROMPTS = {
 # CAS touch buttons already over the cap (bound while the permanent ones hold every slot).
 # ---------------------------------------------------------------------------------------------------
 
-KNOWN_OVER_CAP = {
-    "VehicleHandbrake", "BRR_VehicleFire", "BRR_GunnerAim",
-    "GUNNER_BUTTONS.reload.action", "GUNNER_BUTTONS.leave.action", "BRR_Cook",
-}
+# Empty since the phone HUD polish (2026-09-28): the six that were here (BRAKE, the vehicle gun's FIRE and
+# AIM, the mounted gun's RELOAD and LEAVE, COOK) are bound through Settings.BindSeat, which takes the
+# on-foot buttons away first (PhoneLayout.TouchSet), so each seat's set is under the cap on its own.
+KNOWN_OVER_CAP = set()
 OVER_CAP_QUESTION = ("the seven permanent combat buttons fill every ContextActionService slot, so these never "
                      "get a drawn, labelled button on a phone. TouchControls (flag off) was built for this; "
                      "flip it and move these into it, or unbind the on-foot buttons while seated?")
@@ -277,7 +277,7 @@ def enum_names(arg, prefix):
 
 def resolve_keys(arg, text):
     """`table.unpack(X.name.keys)` -> the `keys = { ... }` of `name = {` in the same file."""
-    m = re.match(r"table\.unpack\(\w+\.(\w+)\.keys\)", arg)
+    m = re.match(r"table\.unpack\((?:\w+\.)?(\w+)\.keys\)", arg)
     if m:
         k = re.search(m.group(1) + r" = \{[^\n]*\n[^\n]*keys = \{([^}]*)\}", text)
         return k.group(1) if k else ""
@@ -292,7 +292,8 @@ def top_level(text, pos):
 def read_bindings(sources):
     """name -> {file, kbm, touch, pad, keys, permanent, sites}"""
     out = {}
-    pattern = re.compile(r"(Settings\.Bind|ContextActionService:BindActionAtPriority|ContextActionService:BindAction)\(")
+    pattern = re.compile(r"(Settings\.BindFixed|Settings\.BindSeat|Settings\.Bind|ContextActionService:BindActionAtPriority"
+                         r"|ContextActionService:BindAction)\(")
     for rel, text in sources.items():
         if not rel.startswith(CLIENT) or rel.endswith("Settings.lua"):
             continue
@@ -307,6 +308,16 @@ def read_bindings(sources):
                 keys = args[4:]
                 touch = len(args) > 3 and args[3] != "nil"
                 kbm = True  # the Settings key
+            elif kind == "Settings.BindFixed":
+                # (name, handler, touch, inputs...): no rebindable key, the touch button as Settings.Bind's.
+                keys = args[3:]
+                touch = len(args) > 2 and args[2] != "nil"
+                kbm = False
+            elif kind == "Settings.BindSeat":
+                # (name, handler, touch, priority, inputs...): a seat's own action (the phone HUD polish).
+                keys = args[4:]
+                touch = len(args) > 2 and args[2] != "nil"
+                kbm = False
             else:
                 touch = args[2] == "true"
                 keys = args[4:] if kind.endswith("AtPriority") else args[3:]
@@ -317,6 +328,9 @@ def read_bindings(sources):
                 name = "BRR_Slot*"
             elif name == "self.backName":
                 name = "BrrMenuShellBack"
+            elif re.fullmatch(r"(reload|leave)\.action", name):
+                # MountedGunClient's GUNNER_BUTTONS, through its locals.
+                name = "GUNNER_BUTTONS." + name
             elif re.fullmatch(r"[A-Z_]+", name):
                 const = re.search(r"local " + name + r' = "([^"]+)"', text)
                 name = const.group(1) if const else name
@@ -333,7 +347,10 @@ def read_bindings(sources):
             entry["pad"] += [p for p in pad if p not in entry["pad"]]
             entry["sites"] += 1
             entry["permanent"] |= top_level(text, m.start())
-            entry["settings"] = kind == "Settings.Bind"
+            entry["settings"] = kind in ("Settings.Bind", "Settings.BindFixed")
+            # Bound through Settings.BindSeat: the on-foot buttons make way for it (PhoneLayout.TouchSet),
+            # so it is swapped in, not stacked on top of the seven. tools/touch_seat_check.py runs the swap.
+            entry["seat"] = entry.get("seat", False) or kind == "Settings.BindSeat"
             entry["casTouch"] |= touch
     return out
 
@@ -384,7 +401,8 @@ def check(sources, root, verbose=True, table=False):
     if free < 0:
         problems.append(f"C {len(permanent)} touch buttons bound at load, over the cap of {CAS_CAP}: {', '.join(permanent)}")
     if free <= 0:
-        over = set(dynamic)
+        # A seat's own button (Settings.BindSeat) is swapped in for the on-foot ones, not added to them.
+        over = set(n for n in dynamic if not bindings[n].get("seat"))
     for name in sorted(over - KNOWN_OVER_CAP):
         problems.append(f"C {name}: a touch button bound after the {len(permanent)} permanent ones, with no slot left")
     for name in sorted(over & KNOWN_OVER_CAP):
@@ -487,7 +505,8 @@ def check(sources, root, verbose=True, table=False):
         print(f"device_compat_check: {len(bindings)} bindings, {len(ACTIONS)} actions x 3 devices, "
               f"{len(rows_seen)} Settings rows, {raw_total} raw input sites, {len(prompts)} prompts, "
               f"{len(PAD_ENTRY) + len(PAD_ENTRY_OPEN)} modal screens; CAS touch: {len(permanent)} permanent "
-              f"+ {len(dynamic)} later (cap {CAS_CAP}, TouchControls {'on' if tc_on else 'off'})")
+              f"+ {len(dynamic)} later, {sum(1 for n in dynamic if bindings[n].get('seat'))} of them swapped in by "
+              f"Settings.BindSeat (cap {CAS_CAP}, TouchControls {'on' if tc_on else 'off'})")
         for p in problems:
             print(f"device compat PROBLEM: {p}")
         print(f"problems: {len(problems)}")
@@ -522,6 +541,11 @@ PLANTS = [
      "local SLOT_COUNT = 8",
      'ContextActionService:BindAction("BRR_Emote", function() end, true, Enum.KeyCode.K, Enum.KeyCode.ButtonA)\n'
      "local SLOT_COUNT = 8"),
+    # The phone HUD polish: a seat's button bound straight to ContextActionService again is stacked on
+    # the seven instead of swapped in for them.
+    ("BRAKE bound past the cap again", f"{CLIENT}/VehicleClient.client.lua",
+     'Settings.BindSeat("VehicleHandbrake", onHandbrake, { title = "BRAKE", position = UDim2.new(1, -180, 1, -150) },',
+     'ContextActionService:BindActionAtPriority("VehicleHandbrake", onHandbrake, true,'),
     ("the inventory's touch tab is gone", HUD, "tab.Activated:Connect(togglePanel)", "-- no tab"),
     ("a new raw key handler", COMBAT,
      "local SLOT_COUNT = 8",

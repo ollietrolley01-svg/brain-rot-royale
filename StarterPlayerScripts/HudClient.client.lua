@@ -1601,14 +1601,14 @@ end)
 
 local function renderWeapon()
 	if not loadout then
-		weaponFrame.Visible = false
+		hudLayout.show(weaponFrame, false)
 		hudLayout.show(healthFrame, false)
 		showCrosshair(false)
 		updateCompanionWidget()
 		return
 	end
 
-	weaponFrame.Visible = true
+	hudLayout.show(weaponFrame, true)
 	hudLayout.show(healthFrame, true)
 
 	local slot = loadout.equipped and loadout.slots[loadout.equipped]
@@ -3299,6 +3299,7 @@ do
 			end
 			grid.Parent = phone and slotRow or nil
 			slotRow.Position = phone and UDim2.fromOffset(0, 0) or saved[slotRow].position
+			-- Two rows of cells on a phone on its side; one (set below) upright.
 			slotRow.Size = phone and UDim2.new(1, 0, 0, 134) or saved[slotRow].size
 			if phone then
 				-- 4 cells of 78 and 3 gaps of 6 across, 2 of 64 and one gap down, plus the plate's
@@ -3318,6 +3319,9 @@ do
 				local columns = slots and slots > 0 and math.min(slots, 4) or 4
 				local rows = slots and slots > 0 and 1 or 2
 				grid.FillDirectionMaxCells = columns
+				-- The row's box as tall as its rows, not the two-row 134: a one-row box reached 70 below the
+				-- cells, over the top of the upright button cluster.
+				slotRow.Size = UDim2.new(1, 0, 0, rows * 64 + (rows - 1) * 6)
 				for index, cell in ipairs(slotCells or {}) do
 					cell.cell.Visible = not slots or slots <= 0 or index <= slots
 				end
@@ -3514,10 +3518,33 @@ do
 			setHealthShape(phone)
 			setHotbarShape(phone, phone and spots.hotbar or nil, phone and spots.hotbarSlots or nil, phone and spots.inventory or nil)
 			setReadyShape(phone, phone and spots.ready or nil)
+			-- In a driver's or a gunner's seat a phone has no hotbar (PhoneLayout.SeatHidesHotbar): nothing in
+			-- it can be used from there, and it was the biggest thing in the bottom middle of the screen.
+			local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			local seatDrop = phone and PhoneLayout.SeatHidesHotbar[PhoneLayout.SeatOf(humanoid)] == true
+			if seatDrop ~= (hudLayout.dropped[weaponFrame] == true) then
+				if hudLayout.wanted[weaponFrame] == nil then
+					hudLayout.wanted[weaponFrame] = weaponFrame.Visible
+				end
+				hudLayout.dropped[weaponFrame] = seatDrop or nil
+				weaponFrame.Visible = not seatDrop and hudLayout.wanted[weaponFrame] == true
+			end
 		end
 
 		apply()
 		camera:GetPropertyChangedSignal("ViewportSize"):Connect(apply)
+		-- The seat decides the hotbar too, so a change of seat lays the phone HUD out again.
+		local function watchSeat(character)
+			local humanoid = character:WaitForChild("Humanoid", 10)
+			if humanoid then
+				humanoid:GetPropertyChangedSignal("SeatPart"):Connect(apply)
+				apply()
+			end
+		end
+		player.CharacterAdded:Connect(watchSeat)
+		if player.Character then
+			task.spawn(watchSeat, player.Character)
+		end
 		-- A tablet that gains or loses a keyboard changes which layout it should have.
 		UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(apply)
 		PhoneLayout.Reapply = apply

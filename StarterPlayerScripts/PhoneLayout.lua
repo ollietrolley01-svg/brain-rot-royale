@@ -12,9 +12,14 @@
 --   * Roblox owns the lower-left (the dynamic thumbstick's zone is the left 40% below a third of the
 --     way down) and the lower-right (the jump button), and the top-left (its own bar). Nothing of ours
 --     goes in any of them, and nothing tappable of ours goes in the thumbstick's zone at all.
---   * While TouchControls.Enabled is false, ContextActionService draws the game's touch buttons in a
---     frame covering the right 30% of the screen from a quarter of the way down; the bottom band keeps
---     out of that, so this layout holds both before and after that flag is flipped.
+--   * The game's touch buttons are the right thumb's cluster built up from Roblox's jump button (fire,
+--     aim, reload, run, pet, slide, move below). TouchControls draws them there when its flag is on; while
+--     it is off, ContextActionService draws them and PlaceTouchButton puts each on its square, and
+--     TouchSet decides which of them a state has (the seats' buttons swap in for the on-foot ones: see
+--     THE TOUCH BUTTONS, BY WHAT THE PLAYER IS DOING). The bottom band keeps out of the cluster.
+--   * A phone on its side (short side 500 or less) drops the compass, the location line and the driving
+--     hint, stops the hotbar's cells at a little over a finger, and has no hotbar in a driver's or a
+--     gunner's seat (the phone HUD polish, 2026-09-28: reports/phone-hud-polish/AUDIT.md).
 --   * The middle of the screen is for aiming: the crosshair's box stays clear, and the bottom stack
 --     (hotbar, health, stamina) sits below it.
 --   * A finger is 44 pixels wherever it is, so that minimum never scales with the screen (40 on phones
@@ -123,6 +128,14 @@ local function portraitRects(W, H)
 	local out = { k = 1, small = true, portrait = true }
 	local jumpX, jumpY, jumpSize = W - 95, H - 90, 70
 	local stickX, stickY, stickD = 66, H - 56, 74
+	-- Roblox's controls go by the short side, whichever way up (TouchJump: 70 px when it is 500 or less,
+	-- else 120 at W-170, H-210): an upright tablet has the big jump button, and the touch buttons, which
+	-- are laid out from it (TouchButtons), sat on top of it when this assumed the phone's.
+	local bigControls = math.min(W, H) > 500
+	if bigControls then
+		jumpX, jumpY, jumpSize = W - 170, H - 210, 120
+		stickX, stickY, stickD = 132, H - 112, 148
+	end
 	out.jump = rect(jumpX, jumpY, jumpSize, jumpSize)
 	out.stick = rect(stickX - stickD / 2, stickY - stickD / 2, stickD, stickD)
 	out.topBar = rect(0, 0, 200, 52)
@@ -213,6 +226,15 @@ local function portraitRects(W, H)
 		driveTop = math.max(driveTop, out.inventory.y1 + 6)
 	end
 	vehicleRects(out, 16, driveTop, clusterLeft - 6 - 16, math.max(out.health.y - 6 - driveTop, 40))
+	-- No driving hint on an upright phone, as on its side (Rects).
+	if not bigControls then
+		out.vehicleHint = nil
+	end
+	-- An emplacement's gunner panel (MountedGunClient, 240x46): at the use prompt's height, under the
+	-- crosshair (nothing is used from a gun's seat, and the top of an upright screen has no room for it),
+	-- from the left edge and short of the buttons, whose top row reaches that high on a short screen.
+	local gunW = math.min(240, clusterLeft - 6 - 16)
+	out.gunnerPanel = rect(16, out.useBar.y, gunW, 46 * gunW / 240)
 	-- The companion-buffs panel (BoonHud): down the left edge under the pet tile, narrow enough to stay
 	-- left of the crosshair's box, and no lower than the toast. A readout, so the thumbstick's zone is
 	-- allowed; BoonHud scales it down to fit the height when there are many buffs.
@@ -284,6 +306,13 @@ function PhoneLayout.Rects(viewport)
 	local compassY = stormY + 18 * sTop + 2
 	out.compass = rect(bx, compassY, bw, 24 * sTop)
 	local topStripBottom = compassY + 24 * sTop
+	-- A phone drops the compass (the phone HUD polish, 2026-09-28): at 844x390 it was a third strip across
+	-- the top middle, 18 px of bearings nobody reads at that size, and the minimap under Roblox's bar
+	-- already says which way is which. What was under it moves up into the room it leaves.
+	if small then
+		out.compass = nil
+		topStripBottom = stormY + 18 * sTop
+	end
 	out.menu = rect(W - g - m, 6, m, m)
 	out.stackTab = rect(W - g - m - 6 - 52 * k, 6, 52 * k, m)
 	out.cam = rect(camLeft, 6, m, m)
@@ -304,10 +333,13 @@ function PhoneLayout.Rects(viewport)
 	local readyW, readyH = math.max(pillW, 169), 44
 	out.ready = rect(pillRight - readyW, underTop, readyW, readyH)
 	out.eventPillBelow = rect(pillRight - pillW, out.ready.y1 + 6, pillW, pillH)
-	local feedW = math.min(200 * k, pillRight - pillW - 6 - (16 + mm + g))
+	-- Left of the READY pill's width, not just the event pill's: the lobby's pill is 169 wide to the event
+	-- pill's 146, and the feed's box sat 17 px into it (measured once hud_layout_check had a lobby).
+	local cornerW = math.max(pillW, readyW)
+	local feedW = math.min(200 * k, pillRight - cornerW - 6 - (16 + mm + g))
 	local feedBottom
 	if feedW >= 140 then
-		out.killFeed = rect(pillRight - pillW - 6 - feedW, underTop, feedW, feedH)
+		out.killFeed = rect(pillRight - cornerW - 6 - feedW, underTop, feedW, feedH)
 		feedBottom = underTop + math.max(feedH, pillH)
 	else
 		feedW = math.min(200 * k, W - 2 * g - (16 + mm + g))
@@ -329,6 +361,12 @@ function PhoneLayout.Rects(viewport)
 	local textY = math.max(feedBottom, out.toast.y1) + 4
 	out.bounty = rect(textRight - textW, textY, textW, 19 * k)
 	out.location = rect(textRight - textW, textY + 19 * k + 2, textW, 17 * k)
+	-- The location line goes on a phone as well: the town's name is announced in the middle of the screen
+	-- on the way in (HudClient's entering label), and under the bounty it was the fourth line of text in
+	-- that corner. The bounty line stays: it is a target.
+	if small then
+		out.location = nil
+	end
 
 	-- Left edge: the minimap under Roblox's bar, then the two things the owner asked to keep but shrink
 	-- (the coin chip and the companion strip) sharing one row, then the pet tile above the thumbstick's
@@ -357,7 +395,10 @@ function PhoneLayout.Rects(viewport)
 	local cellMin = W >= 700 and 44 or 40
 	-- The crosshair's own 24-pixel box is in the middle of the screen; the stack's top stays below it.
 	local topLimit = H / 2 + 14
-	local cell = math.min((bandW - 3 * cellGap) / 4, 60 * k)
+	-- On a phone the cells stop a little over the finger minimum instead of growing to fill the band:
+	-- anything bigger only pushes the health row and the stamina bar up against the crosshair (at 844x390
+	-- the stack's top was 4 px under the crosshair's box). A tablet keeps the room it has.
+	local cell = math.min((bandW - 3 * cellGap) / 4, small and cellMin + 4 or 60 * k)
 	local healthH, gridW = 0, 0
 	while true do
 		gridW = 4 * cell + 3 * cellGap
@@ -398,9 +439,223 @@ function PhoneLayout.Rects(viewport)
 	-- thumbstick's rest, left of the health row. The buffs panel that shares it hides in a vehicle
 	-- (BoonHud), which is why the block can be this big.
 	vehicleRects(out, boonsX, boonsY, out.health.x - 6 - boonsX, math.max(out.stick.y - 6 - boonsY, 40))
+	-- A phone drops the driving hint ("JUMP get out  BRAKE handbrake"): scaled into this block it was 6 px
+	-- text, and the BRAKE and LEAVE buttons say the same thing on themselves now.
+	if small then
+		out.vehicleHint = nil
+	end
+	-- An emplacement's gunner panel (MountedGunClient: the arc gauge, the range, the way off; 240x46 as
+	-- drawn): at the foot of the bottom band, where the hotbar is on foot -- a gunner has none
+	-- (SeatHidesHotbar). Its desktop-era touch spot, top middle, lay across the banner and the storm line.
+	local gunW = math.min(240, bandW)
+	out.gunnerPanel = rect(bandLeft + (bandW - gunW) / 2, bottom - 46 * gunW / 240, gunW, 46 * gunW / 240)
 
 	out.inset = GuiService:GetGuiInset().Y
 	return out
+end
+
+--------------------------------------------------------------------------------
+-- THE TOUCH BUTTONS, BY WHAT THE PLAYER IS DOING
+--------------------------------------------------------------------------------
+-- ContextActionService draws at most SEVEN touch buttons, and a slot only frees when its action is
+-- unbound. The on-foot set (FIRE, AIM, RELOAD, RUN, PET, CROUCH, MOVE) is seven on its own and used to
+-- stay bound all session, so every button a seat binds later -- the driver's BRAKE and gun, the gunner's
+-- FIRE, AIM, RELOAD and LEAVE, the coconut's COOK -- got no button at all: a phone gunner could not fire
+-- (Jacob's device-compat finding #1). And the seven sat at positions each script picked for itself, which
+-- is not where this layout keeps the button cluster: MOVE landed 30 px above the crosshair on an 844x390
+-- screen and inside the thumbstick's zone on a 667x375 one, PET across the health row, RUN and CROUCH
+-- across the kill feed. They also stayed up in the lobby and while spectating, where none of them does
+-- anything.
+--
+-- So the set of buttons follows what the player is doing, and every one of them sits in this layout's
+-- cluster (Rects().fire, .aim, .reload, .run, .pet, .slide, .move; the same squares TouchControls draws).
+-- The table below is the ONE decision; Settings applies it to the bindings it owns (it drops the touch
+-- button from an on-foot binding the state has no place for, and puts it back after), and each seat's
+-- own script asks `TouchWanted` before it binds, so a state never asks for more than seven.
+--   context  "match" (alive, with a loadout, in a match), "range" (the firing range), "lobby",
+--            "spectate". Anything unknown counts as a match, so nobody is left in one without FIRE.
+--   seat     "foot", "driver" (a car's driving seat), "gunner" (a vehicle's turret or an emplacement),
+--            "passenger" (any other seat, a bike's pillion too), "bike" (a bike's rider).
+-- A driver has nothing in hand (CombatService.SeatBarsWeapons), so the on-foot set goes and the car's
+-- come in. Passengers and bike riders shoot from the seat (the same rule), so they keep FIRE, AIM and
+-- RELOAD, and the rider gets BRAKE. Everyone in a seat gets LEAVE: Roblox's jump button gets you out too,
+-- but a jump icon does not say so, and the gunner's LEAVE (MountedGunClient) was already the answer there.
+PhoneLayout.TouchLabels = {
+	BRR_Fire = "FIRE", BRR_Aim = "AIM", BRR_Reload = "RELOAD", BRR_Sprint = "RUN", BRR_Companion = "PET",
+	BRR_Crouch = "CROUCH", BRR_MovementItem = "MOVE", BRR_Cook = "COOK",
+	VehicleHandbrake = "BRAKE", BRR_VehicleFire = "FIRE", BRR_GunnerAim = "AIM", BRR_GunReload = "RELOAD",
+	BRR_GunLeave = "LEAVE", BRR_SeatLeave = "LEAVE",
+}
+
+-- Action -> slot, per state. FIRE is always the big button by the jump button; LEAVE is always at the
+-- top of the cluster, the square furthest from the thumb's rest, so it is not pressed by accident.
+local ON_FOOT = {
+	{ "BRR_Fire", "fire" }, { "BRR_Aim", "aim" }, { "BRR_Reload", "reload" }, { "BRR_Sprint", "run" },
+	{ "BRR_Companion", "pet" }, { "BRR_Crouch", "slide" }, { "BRR_MovementItem", "move" },
+}
+-- The on-foot actions by name: the ones Settings owns and takes the button from when a state drops them.
+PhoneLayout.OnFoot = {}
+for _, entry in ipairs(ON_FOOT) do
+	PhoneLayout.OnFoot[entry[1]] = true
+end
+PhoneLayout.TouchSets = {
+	foot = ON_FOOT,
+	-- BRAKE above the gas thumb's rest (the thumbstick drives), the driver's gun on the big button.
+	driver = { { "BRR_VehicleFire", "fire", armed = true }, { "VehicleHandbrake", "aim" }, { "BRR_SeatLeave", "move" } },
+	-- VehicleWeaponClient's FIRE and AIM, MountedGunClient's RELOAD and LEAVE.
+	gunner = { { "BRR_VehicleFire", "fire" }, { "BRR_GunnerAim", "aim" }, { "BRR_GunReload", "reload" }, { "BRR_GunLeave", "move" } },
+	passenger = { { "BRR_Fire", "fire" }, { "BRR_Aim", "aim" }, { "BRR_Reload", "reload" }, { "BRR_SeatLeave", "move" } },
+	bike = { { "BRR_Fire", "fire" }, { "BRR_Aim", "aim" }, { "BRR_Reload", "reload" }, { "VehicleHandbrake", "run" }, { "BRR_SeatLeave", "move" } },
+}
+-- Out of a match: the lobby keeps what works there (sprint, the companion's move), the range what its
+-- guns need, and a spectator none (CombatClient draws its own NEXT and LEAVE).
+PhoneLayout.TouchContexts = {
+	lobby = { BRR_Sprint = true, BRR_Companion = true },
+	range = { BRR_Fire = true, BRR_Aim = true, BRR_Reload = true, BRR_Sprint = true, BRR_Companion = true },
+	spectate = {},
+}
+-- ContextActionService's cap, which no state may go over.
+PhoneLayout.TouchCap = 7
+
+-- The seats a phone's hotbar steps out of (HudClient): a driver's hands are on the wheel and a gunner's
+-- on the mount, so nothing in it can be used, and it was the biggest thing in the bottom middle of the
+-- screen. A passenger and a bike's rider shoot their own guns, so they keep it.
+PhoneLayout.SeatHidesHotbar = { driver = true, gunner = true }
+
+-- Which seat a humanoid is in, by the same rules the scripts that own the seats use: VehicleWeaponClient's
+-- gunner seat (a Seat named GunnerSeat, or with a true Gunner attribute), a VehicleSeat on a model whose
+-- VehicleKind is "bike" for the rider (CombatService.SeatBarsWeapons), any other VehicleSeat for a driver.
+function PhoneLayout.SeatOf(humanoid)
+	local seat = humanoid and humanoid.SeatPart
+	if not seat then
+		return "foot"
+	end
+	local vehicle = seat.Parent
+	local bike = vehicle ~= nil and vehicle:GetAttribute("VehicleKind") == "bike"
+	if seat:IsA("VehicleSeat") then
+		return bike and "bike" or "driver"
+	end
+	if seat.Name == "GunnerSeat" or seat:GetAttribute("Gunner") == true then
+		return "gunner"
+	end
+	return "passenger"
+end
+
+-- The buttons a state shows, in order: { action, slot, label }. `flags.cook`: a cookable throwable in
+-- hand, so COOK takes RELOAD's square (nothing reloads a coconut). `flags.armed`: the driver's car has
+-- a gun (it is left out of an unarmed car's set, where nothing binds it).
+function PhoneLayout.TouchSet(context, seat, flags)
+	flags = flags or {}
+	local set = PhoneLayout.TouchSets[seat] or ON_FOOT
+	local allowed = PhoneLayout.TouchContexts[context]
+	local out = {}
+	for _, entry in ipairs(set) do
+		local action, slot = entry[1], entry[2]
+		if entry.armed and flags.armed == false then
+			action = nil
+		elseif action == "BRR_Reload" and flags.cook and seat == "foot" then
+			action = "BRR_Cook"
+		end
+		-- A seat's own buttons show wherever the seat is; the on-foot ones only where the context has them
+		-- (COOK where RELOAD is).
+		local gate = action == "BRR_Cook" and "BRR_Reload" or action
+		if action and (not allowed or not PhoneLayout.OnFoot[gate] or allowed[gate]) then
+			table.insert(out, { action = action, slot = slot, label = PhoneLayout.TouchLabels[action] })
+		end
+	end
+	return out
+end
+
+-- The same with each button's square on a viewport (screen pixels), for the checks and the gallery.
+function PhoneLayout.TouchButtons(viewport, context, seat, flags)
+	local spots = PhoneLayout.Rects(viewport)
+	local out = {}
+	for _, entry in ipairs(PhoneLayout.TouchSet(context, seat, flags)) do
+		local r = spots[entry.slot]
+		table.insert(out, { action = entry.action, slot = entry.slot, label = entry.label, x = r.x, y = r.y, w = r.w, h = r.h })
+	end
+	return out
+end
+
+-- The state right now. Settings keeps it current (the match remotes, the character's seat) and the seats'
+-- scripts read it through TouchWanted. `flags` carries cook and armed.
+PhoneLayout.TouchState = { context = "match", seat = "foot", flags = {} }
+
+-- Whether `action` should have a touch button right now: a touch screen, and the action in the state's set.
+function PhoneLayout.TouchWanted(action)
+	if not UserInputService.TouchEnabled then
+		return false
+	end
+	local state = PhoneLayout.TouchState
+	for _, entry in ipairs(PhoneLayout.TouchSet(state.context, state.seat, state.flags)) do
+		if entry.action == action then
+			return true, entry.slot
+		end
+	end
+	return false
+end
+
+-- Puts a bound action's ContextActionService button on its square in the cluster, at the square's size
+-- (FIRE 72, the rest 48 on a phone; ContextActionService makes them all 45). The button is the
+-- CoreScript's, made a moment after the bind, so the size is set when it turns up; the position goes
+-- through SetPosition at once. Re-placed on a viewport change (a tablet's size follows its short side).
+local ContextActionService = game:GetService("ContextActionService")
+local placed = {}
+local placing = false
+local function placeNow(action)
+	local wanted, slot = PhoneLayout.TouchWanted(action)
+	if not wanted then
+		return true
+	end
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(844, 390)
+	local r = PhoneLayout.Rects(viewport)[slot]
+	if not r then
+		return true
+	end
+	local ok, button = pcall(ContextActionService.GetButton, ContextActionService, action)
+	local size = r.w
+	if not (ok and button) then
+		-- Not drawn yet: the 45 px button it will be, centred on the square meanwhile.
+		size = math.min(45, r.w)
+	end
+	local x, y = r.x + (r.w - size) / 2, r.y + (r.h - size) / 2
+	pcall(ContextActionService.SetPosition, ContextActionService, action, UDim2.new(1, x - viewport.X, 1, y - viewport.Y))
+	if ok and button then
+		pcall(function()
+			button.Size = UDim2.fromOffset(size, size)
+		end)
+		return true
+	end
+	return false
+end
+function PhoneLayout.PlaceTouchButton(action)
+	if not UserInputService.TouchEnabled then
+		return
+	end
+	placed[action] = true
+	if placeNow(action) then
+		return
+	end
+	task.spawn(function()
+		for _ = 1, 20 do
+			task.wait(0.1)
+			if placeNow(action) then
+				return
+			end
+		end
+	end)
+	if not placing then
+		placing = true
+		local camera = workspace.CurrentCamera
+		if camera then
+			camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+				for name in pairs(placed) do
+					placeNow(name)
+				end
+			end)
+		end
+	end
 end
 
 -- A centred panel (the menu, the drop screen, the results card) is authored at one size in pixels, and

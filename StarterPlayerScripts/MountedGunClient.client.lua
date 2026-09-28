@@ -23,7 +23,6 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
-local ContextActionService = game:GetService("ContextActionService")
 local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -33,6 +32,8 @@ local VehicleWeaponData = require(Shared:WaitForChild("VehicleWeaponData"))
 local VehicleModels = require(Shared:WaitForChild("VehicleModels"))
 local Ballistics = require(Shared:WaitForChild("Ballistics"))
 local MountRig = require(Shared:WaitForChild("MountRig"))
+-- The gunner's RELOAD and LEAVE go through Settings.BindSeat (bindGunner, below).
+local Settings = require(script.Parent:WaitForChild("Settings"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -389,12 +390,31 @@ gui.DisplayOrder = 4
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local panel = Instance.new("Frame")
--- Bottom middle on a desktop; on a touch screen along the top, clear of the thumbs' buttons (FIRE, AIM,
--- RELOAD, LEAVE sit bottom right) and inside the safe area (IgnoreGuiInset is off on a phone).
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
+-- Bottom middle on a desktop. On a touch screen, PhoneLayout's slot for it (`Rects().gunnerPanel`, the
+-- foot of the bottom band, where the hotbar is on foot: a gunner's phone HUD has none), clear of the
+-- thumbs' buttons. The old touch spot, along the top, is kept for when PhoneLayout is missing; it lay
+-- across the banner and the storm line.
 local TOUCH_PANEL = { anchor = Vector2.new(0.5, 0), position = UDim2.new(0.5, 0, 0, 8) }
 local DESKTOP_PANEL = { anchor = Vector2.new(0.5, 1), position = UDim2.new(0.5, 0, 1, -96) }
+local phoneLayout = nil
+do
+	local ok, module = pcall(function()
+		return require(script.Parent:WaitForChild("PhoneLayout", 5))
+	end)
+	phoneLayout = ok and type(module) == "table" and module or nil
+end
 local function placePanel()
 	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local viewport = camera.ViewportSize
+	local slot = touch and phoneLayout and phoneLayout.Active(viewport) and phoneLayout.Rects(viewport).gunnerPanel or nil
+	if slot then
+		gui.IgnoreGuiInset = true
+		phoneLayout.Place(panel, slot, Vector2.new(240, 46), panelScale, 0, true)
+		return
+	end
+	panelScale.Scale = 1
 	local spot = touch and TOUCH_PANEL or DESKTOP_PANEL
 	panel.AnchorPoint = spot.anchor
 	panel.Position = spot.position
@@ -402,6 +422,7 @@ local function placePanel()
 end
 placePanel()
 UserInputService:GetPropertyChangedSignal("KeyboardEnabled"):Connect(placePanel)
+camera:GetPropertyChangedSignal("ViewportSize"):Connect(placePanel)
 panel.Size = UDim2.fromOffset(240, 46)
 panel.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 panel.BackgroundTransparency = 0.35
@@ -521,8 +542,10 @@ local function bindGunner(model)
 	end
 	local was = boundTo
 	boundTo = model
-	ContextActionService:UnbindAction(GUNNER_BUTTONS.reload.action)
-	ContextActionService:UnbindAction(GUNNER_BUTTONS.leave.action)
+	-- Through Settings.BindSeat / UnbindSeat: on a phone the on-foot buttons make way first (there is
+	-- room for seven, and the on-foot set is seven), and RELOAD and LEAVE sit in PhoneLayout's cluster.
+	Settings.UnbindSeat(GUNNER_BUTTONS.reload.action)
+	Settings.UnbindSeat(GUNNER_BUTTONS.leave.action)
 	if hiddenPrompt then
 		-- Not on a wreck: the server turned its prompt off when the gun broke, and this would turn it back on.
 		if hiddenPrompt.Parent and was and was.Parent and not was:GetAttribute("Wrecked") then
@@ -538,13 +561,14 @@ local function bindGunner(model)
 		prompt.Enabled = false
 		hiddenPrompt = prompt
 	end
-	ContextActionService:BindActionAtPriority(GUNNER_BUTTONS.reload.action, function(_, state)
+	local reload, leave = GUNNER_BUTTONS.reload, GUNNER_BUTTONS.leave
+	Settings.BindSeat(reload.action, function(_, state)
 		if state == Enum.UserInputState.Begin then
 			reloadRemote:FireServer()
 		end
 		return Enum.ContextActionResult.Sink
-	end, true, Enum.ContextActionPriority.High.Value, table.unpack(GUNNER_BUTTONS.reload.keys))
-	ContextActionService:BindActionAtPriority(GUNNER_BUTTONS.leave.action, function(_, state)
+	end, reload, Enum.ContextActionPriority.High.Value, table.unpack(reload.keys))
+	Settings.BindSeat(leave.action, function(_, state)
 		if state == Enum.UserInputState.Begin then
 			local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 			if humanoid then
@@ -552,11 +576,7 @@ local function bindGunner(model)
 			end
 		end
 		return Enum.ContextActionResult.Sink
-	end, true, Enum.ContextActionPriority.High.Value, table.unpack(GUNNER_BUTTONS.leave.keys))
-	for _, b in pairs(GUNNER_BUTTONS) do
-		ContextActionService:SetTitle(b.action, b.title)
-		pcall(ContextActionService.SetPosition, ContextActionService, b.action, b.position)
-	end
+	end, leave, Enum.ContextActionPriority.High.Value, table.unpack(leave.keys))
 end
 
 local sampleAt = 0

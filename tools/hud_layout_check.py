@@ -73,6 +73,10 @@ SIZES = [
     ("tablet 1024x768", 1024, 768, True),
     ("tablet upright 768x1024", 768, 1024, True),
     ("phone 844x390", 844, 390, True),
+    # The landscape phones either side of it (the phone HUD polish, 2026-09-28): an iPhone SE-class
+    # 667x375 is the tightest landscape screen the game supports, a Pro Max-class 932x430 the widest.
+    ("phone 667x375", 667, 375, True),
+    ("phone 932x430", 932, 430, True),
     ("phone upright 390x844", 390, 844, True),
     ("small phone upright 375x667", 375, 667, True),
 ]
@@ -80,6 +84,8 @@ SIZES = [
 # Pieces the upright HUD drops (PhoneLayout.lua's portraitRects: "no compass, no kill feed, no bounty or
 # location line, no speed pill"), by the HudClient variable that holds them.
 DROPPED_UPRIGHT = ["compass", "bountyLabel", "locationLabel", "feed", "speedPill"]
+# And the pieces a phone on its side drops (PhoneLayout.Rects when the short side is 500 or under).
+DROPPED_PHONE = ["compass", "locationLabel"]
 
 # Drawn at the same place in every mode, on purpose: they are centred on the crosshair or cover the
 # screen, so "desktop position" and "phone position" are the same point. Matched by variable name.
@@ -95,8 +101,13 @@ SAME_EVERYWHERE = {
 # the passenger in the gunner's seat of an armed car (the gun is theirs, the driving HUD is not). Both
 # have a gun in hand, so the HUD's own crosshair would be up if nothing stood it down, and both hear
 # gunfire from eight directions, so the cue chevrons are on the ring.
+# "passenger" sits in a car's plain back seat and "bike" rides a bike: both keep their hand guns (every
+# seat on a bike can shoot, CombatService.SeatBarsWeapons), so both keep the HUD's own crosshair.
+# "lobby" is the waiting lobby: no match, no loadout, so no crosshair and no hotbar.
 SCENARIOS = [("battle royale", "BattleRoyale", False), ("team match", "TeamDeathmatch", False),
-             ("driving", "BattleRoyale", "driver"), ("gunner", "BattleRoyale", "gunner")]
+             ("driving", "BattleRoyale", "driver"), ("gunner", "BattleRoyale", "gunner"),
+             ("passenger", "BattleRoyale", "passenger"), ("bike", "BattleRoyale", "bike"),
+             ("lobby", "BattleRoyale", "lobby"), ("spectate", "BattleRoyale", "spectate")]
 
 # Screens drawn UNDER the HUD on purpose: an overlap with them is allowed only while their DisplayOrder
 # is below the other element's, so the HUD really covers them.
@@ -190,13 +201,31 @@ class World:
         a boost, boons; in a team mode the scoreline; `driving` puts the player in a gun car's seat."""
         self.run("""
             local mode, driving = select(2, ...)
+            -- 'lobby': no match and no loadout. 'spectate': a match on, the player out of it and watching
+            -- (InMatch, no loadout), which is what the HUD sees of a spectator.
+            local spectate = driving == 'spectate'
+            local lobby = driving == 'lobby' or spectate
+            if lobby then
+                driving = false
+            end
+            if spectate then
+                W.player:SetAttribute('InMatch', true)
+            end
             if driving then
                 -- A Rotster (the roof gun): VehicleWeaponData.ForModel knows it.
                 local car = W.Instance.new('Model')
-                car:SetAttribute('VehicleModel', 'Rotster')
+                car:SetAttribute('VehicleModel', driving == 'bike' and 'PatapimScrambler' or 'Rotster')
+                car:SetAttribute('VehicleKind', driving == 'bike' and 'bike' or 'car')
                 local seat = W.Instance.new('VehicleSeat')
                 seat.Name = 'DriverSeat'
                 seat.Parent = car
+                if driving == 'passenger' then
+                    -- A car's back seat: a plain Seat, not the gunner's.
+                    local back = W.Instance.new('Seat')
+                    back.Name = 'PassengerSeat'
+                    back.Parent = car
+                    seat = back
+                end
                 local yaw = W.Instance.new('Part')
                 yaw.Name = 'TurretYaw'
                 yaw.Parent = car
@@ -241,16 +270,21 @@ class World:
                 car.Parent = W.workspace
                 W.special(W.character.Humanoid).SeatPart = seat
             end
-            W.player.Character = W.character
-            W.character.Parent = W.workspace
-            local added = rawget(W.player, '__lazy').CharacterAdded
-            if added then added:Fire(W.character) end
-            local state = { state = 'InProgress', mode = mode, mapRadius = 600, aliveCount = 12, playerCount = 12,
-                countdown = 0, minPlayers = 2, mapName = 'Test', teams = mode ~= 'BattleRoyale' }
+            -- A spectator has no body: the server sends the next one only after Spectate(false).
+            if not spectate then
+                W.player.Character = W.character
+                W.character.Parent = W.workspace
+                local added = rawget(W.player, '__lazy').CharacterAdded
+                if added then added:Fire(W.character) end
+            end
+            local state = { state = (lobby and not spectate) and 'Waiting' or 'InProgress', mode = mode, mapRadius = 600, aliveCount = 12,
+                playerCount = 12, countdown = 0, minPlayers = 2, mapName = 'Test', teams = mode ~= 'BattleRoyale' }
             W.fire('MatchChanged', state)
-            -- A gun in hand, so the HUD's crosshair is wanted.
-            W.fire('LoadoutChanged', { slots = { { kind = 'gun', id = 'Rifle', name = 'Rifle', mag = 12, reserve = 60,
-                rarity = 'Common' } }, equipped = 1, ammo = {}, maxHealth = 100, health = 100 })
+            -- A gun in hand, so the HUD's crosshair is wanted (not in the lobby, where nobody has a loadout).
+            if not lobby then
+                W.fire('LoadoutChanged', { slots = { { kind = 'gun', id = 'Rifle', name = 'Rifle', mag = 12, reserve = 60,
+                    rarity = 'Common' } }, equipped = 1, ammo = {}, maxHealth = 100, health = 100 })
+            end
             W.fire('StormChanged', { phase = 1, closing = false, secondsLeft = 60, label = 'Storm closes in', radius = 300,
                 center = Vector3.new(0, 0, 0), nextRadius = 200, nextCenter = Vector3.new(0, 0, 0), endsAt = W.now + 60 })
             if mode ~= 'BattleRoyale' then
@@ -261,13 +295,15 @@ class World:
             for i = 1, 3 do
                 W.fire('KillFeed', { killer = 'Rival', victim = 'Someone' .. i, method = 'Rifle' })
             end
-            W.fire('Bounty', { name = 'Rival', kills = 5, reward = 250 })
+            if not lobby then
+                W.fire('Bounty', { name = 'Rival', kills = 5, reward = 250 })
+            end
             W.player:SetAttribute('SpeedBoostUntil', W.now + 10)
             W.player:SetAttribute('SpeedBoosted', true)
             W.player:SetAttribute('CompanionBoonName', 'Tralalero')
             W.player:SetAttribute('CompanionBoons', 'Faster reload\\nMore ammo')
             W.frame(3)
-            if driving then
+            if driving == 'driver' or driving == 'gunner' then
                 -- Gunfire all round: a chevron at eight points of the ring.
                 local rival = W.Instance.new('Player')
                 for i = 0, 7 do
@@ -319,6 +355,50 @@ class World:
         """, var_site)
 
 
+# The touch buttons each scene shows (PhoneLayout.TouchButtons: which set, on which squares), Roblox's
+# jump button, and on a spectator's screen CombatClient's own NEXT and LEAVE: all of them things a thumb
+# presses, so no panel of the HUD may lie across them. Scene -> (context, seat).
+TOUCH_STATES = {"battle royale": ("match", "foot"), "team match": ("match", "foot"), "driving": ("match", "driver"),
+                "gunner": ("match", "gunner"), "passenger": ("match", "passenger"), "bike": ("match", "bike"),
+                "lobby": ("lobby", "foot"), "spectate": ("spectate", "foot")}
+
+
+def touch_elements(world, scene, w, h):
+    context, seat = TOUCH_STATES[scene]
+    # A spectator has no body, and Roblox's jump button goes with it.
+    got = world.run("""
+        local context, seat, w, h, bodiless = select(2, ...)
+        local PhoneLayout = require(W.scriptsFolder:WaitForChild('PhoneLayout'))
+        local out = {}
+        if type(PhoneLayout.TouchButtons) ~= 'function' then
+            return out
+        end
+        for _, b in ipairs(PhoneLayout.TouchButtons(Vector2.new(w, h), context, seat, { armed = true })) do
+            table.insert(out, { b.label, b.x, b.y, b.w, b.h })
+        end
+        local jump = PhoneLayout.Rects(Vector2.new(w, h)).jump
+        if not bodiless then
+            table.insert(out, { 'Roblox jump', jump.x, jump.y, jump.w, jump.h })
+        end
+        return out
+    """, context, seat, w, h, scene == "spectate")
+    out = []
+    for i in range(1, len(got) + 1):
+        e = got[i]
+        rect = (round(e[2], 1), round(e[3], 1), round(e[4], 1), round(e[5], 1))
+        out.append({"site": "PhoneLayout.TouchButtons", "var": f"touch:{e[1]}", "gui": "TouchButtons", "name": e[1],
+                    "order": 10, "rect": rect, "full": False, "parts": [rect]})
+    if scene == "spectate":
+        # CombatClient's spectate plate and its two buttons (its literals: 44 tall, 120 wide, 66 either side
+        # of the middle, 80 up; the plate 48 tall, 24 up, the screen less 12 a side up to 620).
+        plate_w = min(w - 24, 620)
+        for name, rect in (("spectate:NEXT", (w / 2 - 126, h - 124, 120, 44)), ("spectate:LEAVE", (w / 2 + 6, h - 124, 120, 44)),
+                           ("spectate:plate", (w / 2 - plate_w / 2, h - 72, plate_w, 48))):
+            out.append({"site": "CombatClient.setSpectating", "var": name, "gui": "SpectateHud", "name": name,
+                        "order": 0, "rect": rect, "full": False, "parts": [rect]})
+    return out
+
+
 def overlap(a, b):
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
@@ -331,7 +411,7 @@ def label(e):
     return f"{e['var']} ({e['site']})"
 
 
-def check(root, sources, dump=False, quiet=False):
+def check(root, sources, dump=False, quiet=False, gallery=None):
     names = site_names(sources)
     sites_by_var = {v: k for k, v in names.items() if k.startswith("HudClient.client:")}
     problems = []
@@ -348,7 +428,13 @@ def check(root, sources, dump=False, quiet=False):
             if "layout" in wmsg.lower() or "PhoneLayout" in wmsg:
                 problems.append(f"[{tag}] layout warning: {wmsg}")
         drawn = world.drawn(names)
+        if touch:
+            drawn += touch_elements(world, scene, w, h)
         examined_elements += len(drawn)
+        if gallery is not None and touch:
+            # The HUD only: the gallery works the buttons out for itself, in the built place.
+            gallery[f"{w}x{h}|{scene}"] = [(e["var"], e["gui"]) + tuple(e["rect"]) for e in drawn
+                                           if not e["full"] and e["gui"] not in ("TouchButtons", "SpectateHud")]
         if dump:
             print(f"--- {tag}, {scene}: {len(drawn)} drawn")
             for e in drawn:
@@ -415,8 +501,13 @@ def check(root, sources, dump=False, quiet=False):
                 problems.append(f"[{tag}, {scene}] two crosshairs: the HUD's is drawn as well as the vehicle gun's")
             if not any(e["gui"] == "GunfireCue" for e in drawn):
                 problems.append(f"[{tag}, {scene}] no gunfire chevron is drawn, so their layering is not being checked")
-        elif "crosshair" not in {e["var"] for e in drawn}:
+        elif scene not in ("lobby", "spectate") and "crosshair" not in {e["var"] for e in drawn}:
             problems.append(f"[{tag}, {scene}] the HUD's crosshair is not drawn with a gun in hand: the one-crosshair check proves nothing")
+        if touch and scene in ("driving", "gunner") and any(e["var"] == "weaponFrame" for e in drawn):
+            problems.append(f"[{tag}, {scene}] the hotbar is drawn in a {scene} seat on a touch screen "
+                            "(PhoneLayout.SeatHidesHotbar)")
+        if touch and scene in ("passenger", "bike") and not any(e["var"] == "weaponFrame" for e in drawn):
+            problems.append(f"[{tag}, {scene}] no hotbar in a seat that shoots its own gun")
         if scene in ("driving", "gunner"):
             guis = {e["gui"] for e in drawn}
             for need in (("VehicleHud", "VehicleWeaponHud") if scene == "driving" else ("VehicleWeaponHud",)):
@@ -447,10 +538,16 @@ def check(root, sources, dump=False, quiet=False):
                     problems.append(f"[{tag}] {label(e)} is drawn at its desktop position {e['rect']} on an upright phone")
             # 2b. turning the phone on its side brings them back, and upright again hides them
             world.rotate(h, w)
-            for var in ("bountyLabel", "speedPill", "compass"):
+            for var in ("bountyLabel", "speedPill"):
                 site = sites_by_var.get(var)
                 if site and not world.visible_var(site):
                     problems.append(f"[{tag}] {var} did not come back when the phone turned on its side")
+            # A phone on its side has no compass or location line either (PhoneLayout: the phone HUD
+            # polish); only a tablet's landscape HUD brings them back.
+            for var in (DROPPED_PHONE if min(w, h) <= 500 else []):
+                site = sites_by_var.get(var)
+                if site and world.visible_var(site):
+                    problems.append(f"[{tag}] {var} is drawn on a phone on its side, which has no place for it")
             world.rotate(w, h)
             world.run("W.frame(3)")
             for var in DROPPED_UPRIGHT:
@@ -829,6 +926,15 @@ def check_match_map(root, sources, sites_by_var):
 
 # Planted faults, each aimed at an invariant the code must keep forever, not at the bug as it was.
 PLANTS = [
+    # The phone HUD polish (2026-09-28).
+    ("the hotbar left up in a driver's or gunner's seat on a phone",
+     "HudClient.client.lua", "PhoneLayout.SeatHidesHotbar[PhoneLayout.SeatOf(humanoid)] == true", "false"),
+    ("the kill feed placed beside the event pill, not the wider READY pill",
+     "PhoneLayout.lua", "local cornerW = math.max(pillW, readyW)", "local cornerW = pillW"),
+    ("the touch buttons slid left over the hotbar",
+     "PhoneLayout.lua", "\tlocal fireX = jumpX - g - F\n", "\tlocal fireX = jumpX - g - F - 140\n"),
+    ("the compass kept on a phone on its side",
+     "PhoneLayout.lua", "\tif small then\n\t\tout.compass = nil", "\tif false then\n\t\tout.compass = nil"),
     ("the HUD's crosshair staying up while the vehicle gun is yours",
      "HudClient.client.lua", 'and not player:GetAttribute("VehicleGunActive")', ""),
     ("the gunfire chevrons drawn over the HUD",
@@ -874,6 +980,27 @@ PLANTS = [
 ]
 
 
+def write_gallery(root, gallery, out):
+    """--gallery OUT: tools/phone_hud_gallery.lua with its HUD table filled in from what was drawn here."""
+    template = open(os.path.join(root, "tools", "phone_hud_gallery.lua"), encoding="utf-8").read()
+    lines = ["local HUD = {"]
+    for key in sorted(gallery):
+        lines.append(f'\t["{key}"] = {{')
+        for var, gui, x, y, w, h in gallery[key]:
+            lines.append(f'\t\t{{ "{var}", "{gui}", {x}, {y}, {w}, {h} }},')
+        lines.append("\t},")
+    lines.append("}")
+    phase = "after" if "function PhoneLayout.TouchButtons" in open(
+        os.path.join(root, "StarterPlayerScripts", "PhoneLayout.lua"), encoding="utf-8").read() else "before"
+    filled = template.replace("local HUD = {}\n", "\n".join(lines) + "\n", 1)
+    filled = filled.replace('local PHASE = "?"', f'local PHASE = "{phase}"', 1)
+    if filled == template:
+        sys.exit("hud_layout_check: the gallery template has no `local HUD = {}` line to fill")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(filled)
+    print(f"hud_layout_check: wrote {out} ({len(gallery)} screens, {phase})")
+
+
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "."
     sources = {n: read(root, n) for n in SCRIPTS}
@@ -895,7 +1022,10 @@ def main():
             missed += 0 if problems else 1
         print("plants missed:", missed)
         sys.exit(1 if missed else 0)
-    problems = check(root, sources, dump="--dump" in sys.argv)
+    gallery = {} if "--gallery" in sys.argv else None
+    problems = check(root, sources, dump="--dump" in sys.argv, gallery=gallery)
+    if gallery is not None:
+        write_gallery(root, gallery, sys.argv[sys.argv.index("--gallery") + 1])
     for p in problems:
         print("PROBLEM", p)
     print(f"problems: {len(problems)}")

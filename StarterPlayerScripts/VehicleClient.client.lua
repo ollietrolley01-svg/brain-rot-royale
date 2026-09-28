@@ -13,7 +13,6 @@
 -- Controls while driving: W/S or the triggers to drive and brake, A/D or the stick to steer, Shift
 -- (L1, or the on-screen button) for the handbrake, Space to get out.
 
-local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -28,6 +27,9 @@ local Remotes = require(Shared:WaitForChild("Remotes"))
 -- bodies ahead are let through here, before the physics meets them (the server is told of each hit).
 local RoadkillPass = require(Shared:WaitForChild("RoadkillPass"))
 local Sfx = require(script.Parent:WaitForChild("Sfx"))
+-- BRAKE's touch button goes through Settings.BindSeat: the on-foot buttons make room for it first
+-- (ContextActionService draws seven at most) and it sits in PhoneLayout's cluster.
+local Settings = require(script.Parent:WaitForChild("Settings"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -262,6 +264,11 @@ do
 			local spots = PhoneLayout.Active(viewport) and PhoneLayout.Rects(viewport) or nil
 			for _, piece in ipairs(pieces) do
 				local spot = spots and spots[piece.key]
+				-- The hint is the one piece a phone may have no room for (PhoneLayout drops it there: the
+				-- BRAKE and LEAVE buttons carry its words); nothing else shows or hides it.
+				if piece.key == "vehicleHint" then
+					piece.gui.Visible = spot ~= nil or spots == nil
+				end
 				if spot then
 					-- Drawn at its natural size and scaled to the slot. The hint's natural box is the 300 its
 					-- touch wording needs, not its 420-wide desktop box; the text lines up on the block's
@@ -352,7 +359,7 @@ local function stopDriving()
 	end
 	driving = nil
 	gui.Enabled = false
-	ContextActionService:UnbindAction("VehicleHandbrake")
+	Settings.UnbindSeat("VehicleHandbrake")
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -391,10 +398,8 @@ local function startDriving(model, seat)
 	local def = VehicleModels.Models[model:GetAttribute("VehicleModel")]
 	nameLabel.Text = string.upper(def and def.displayName or "")
 	gui.Enabled = true
-	ContextActionService:BindActionAtPriority("VehicleHandbrake", onHandbrake, true, Enum.ContextActionPriority.High.Value,
-		Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonL1)
-	ContextActionService:SetTitle("VehicleHandbrake", "BRAKE")
-	pcall(ContextActionService.SetPosition, ContextActionService, "VehicleHandbrake", UDim2.new(1, -180, 1, -150))
+	Settings.BindSeat("VehicleHandbrake", onHandbrake, { title = "BRAKE", position = UDim2.new(1, -180, 1, -150) },
+		Enum.ContextActionPriority.High.Value, Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonL1)
 	Sfx.Play("VehicleStart", 0.05)
 	-- CombatClient stands its camera and mouse lock down while this is set. The server sets it too,
 	-- and is the one that clears it, but waiting for that to come back down the wire leaves the

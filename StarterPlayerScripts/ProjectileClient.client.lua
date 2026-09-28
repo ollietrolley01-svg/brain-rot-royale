@@ -796,15 +796,14 @@ local function refreshCookButton()
 	if wanted then
 		-- Bound to a key nobody presses, so only the drawn button fires it. Bound to Touch it took every
 		-- touch on the screen (a camera swipe, a tap on the world), cooking and throwing on each one and
-		-- sinking the camera's drag.
-		ContextActionService:BindActionAtPriority(COOK_ACTION, onThrowInput, true,
+		-- sinking the camera's drag. The "cook" flag first: it takes RELOAD's button away (nothing reloads a
+		-- coconut) so COOK is the seventh, on RELOAD's square beside FIRE (PhoneLayout.TouchSet).
+		Settings.SetTouchFlag("cook", true)
+		Settings.BindSeat(COOK_ACTION, onThrowInput, { title = "COOK", position = UDim2.new(1, -140, 1, -400) },
 			Enum.ContextActionPriority.High.Value, Enum.KeyCode.World95)
-		pcall(function()
-			ContextActionService:SetTitle(COOK_ACTION, "COOK")
-			ContextActionService:SetPosition(COOK_ACTION, UDim2.new(1, -140, 1, -400))
-		end)
 	else
-		ContextActionService:UnbindAction(COOK_ACTION)
+		Settings.UnbindSeat(COOK_ACTION)
+		Settings.SetTouchFlag("cook", false)
 	end
 end
 

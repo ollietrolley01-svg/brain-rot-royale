@@ -989,8 +989,11 @@ def input_checks(repo, client_source=None, weapon_source=None, verbose=True):
     vc = weapon_source or (Path(repo) / "StarterPlayerScripts/VehicleWeaponClient.client.lua").read_text(encoding="utf-8")
     turret = re.search(r'elseif want == "turret" then(.*?)\n\tend', vc, re.S)
     turret = turret.group(1) if turret else ""
-    fire = re.search(r'BindAction\("BRR_VehicleFire"[^\n]*', turret)
-    aim = re.search(r'BindAction\("BRR_GunnerAim"[^\n]*', turret)
+    # Bound through Settings.BindSeat (the phone HUD polish): the touch table is its third argument, and
+    # the live squares are PhoneLayout's (tools/touch_seat_check.py); the positions read here are the
+    # fallbacks used if PhoneLayout is missing, which must still hold together.
+    fire = re.search(r'BindSeat\("BRR_VehicleFire"[^\n]*', turret)
+    aim = re.search(r'BindSeat\("BRR_GunnerAim"[^\n]*\n[^\n]*', turret)
     reload = re.search(r"reload = \{[^\n]*\n[^\n]*keys = \{([^}]*)\}", mc)
     leave = re.search(r"leave = \{[^\n]*\n[^\n]*keys = \{([^}]*)\}", mc)
     found = {"fire": fire and fire.group(0), "aim": aim and aim.group(0), "reload": reload and reload.group(1),
@@ -998,15 +1001,16 @@ def input_checks(repo, client_source=None, weapon_source=None, verbose=True):
     for what, key in PAD_KEYS.items():
         if not found[what] or key not in found[what]:
             fail(problems, f"I1 the gunner's {what} is not on the pad's {key}")
-    for what in ("fire", "aim"):
-        if found[what] and ", true," not in found[what]:
+    for what, touch in (("fire", "fireTouch"), ("aim", "{ title")):
+        if found[what] and touch not in found[what]:
             fail(problems, f"I1 the gunner's {what} has no touch button")
-    if mc.count("BindActionAtPriority(GUNNER_BUTTONS.") != 2 or mc.count(", true, Enum.ContextActionPriority") < 2:
+    if mc.count("Settings.BindSeat(reload.action") != 1 or mc.count("Settings.BindSeat(leave.action") != 1 \
+            or "end, reload, Enum.ContextActionPriority" not in mc or "end, leave, Enum.ContextActionPriority" not in mc:
         fail(problems, "I1 RELOAD / LEAVE are not both bound with a touch button")
     # Touch buttons: FIRE and AIM (VehicleWeaponClient), RELOAD and LEAVE (MountedGunClient).
     buttons = {}
-    for name, src, pat in (("FIRE", vc, r'SetPosition\("BRR_VehicleFire", [^\n]*?(UDim2\.new\([^)]*\))'),
-                           ("AIM", vc, r'SetPosition\("BRR_GunnerAim", (UDim2\.new\([^)]*\))'),
+    for name, src, pat in (("FIRE", vc, r'fireTouch = \{[^\n]*?want == "turret" and (UDim2\.new\([^)]*\))'),
+                           ("AIM", vc, r'"BRR_GunnerAim", onAimSight, \{ title = "AIM", position = (UDim2\.new\([^)]*\))'),
                            ("RELOAD", mc, r'reload = \{[^\n]*position = (UDim2\.new\([^)]*\))'),
                            ("LEAVE", mc, r'leave = \{[^\n]*position = (UDim2\.new\([^)]*\))')):
         m = re.search(pat, src)

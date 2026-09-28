@@ -116,11 +116,18 @@ local function drivingOnPhone()
 	return home.phone and ((seat ~= nil and seat:IsA("VehicleSeat")) or player:GetAttribute("VehicleGunActive") == true)
 end
 
+-- And with no living body on a touch screen (spectating, or between death and the next life): nothing
+-- is buffed then, and a spectator's NEXT and LEAVE buttons come up across this corner of a small phone.
+local function bodilessOnPhone()
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	return home.phone and not (humanoid and humanoid.Health > 0)
+end
+
 local function render()
 	local text = player:GetAttribute("CompanionBoons")
 	local name = player:GetAttribute("CompanionBoonName")
 	fit()
-	if type(text) ~= "string" or text == "" or drivingOnPhone() then
+	if type(text) ~= "string" or text == "" or drivingOnPhone() or bodilessOnPhone() then
 		panel.Visible = false
 		shownKey = nil
 		return
@@ -173,9 +180,14 @@ local function watchSeat(character)
 	local humanoid = character:WaitForChild("Humanoid", 10)
 	if humanoid then
 		humanoid:GetPropertyChangedSignal("SeatPart"):Connect(render)
+		humanoid.Died:Connect(render)
 	end
+	render()
 end
 player.CharacterAdded:Connect(watchSeat)
+player.CharacterRemoving:Connect(function()
+	task.defer(render)
+end)
 if player.Character then
 	task.spawn(watchSeat, player.Character)
 end

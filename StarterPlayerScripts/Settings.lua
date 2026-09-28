@@ -263,17 +263,65 @@ local function touchControlsOn()
 	return touchControls and touchControls.Enabled == true
 end
 
+-- Where the player is, from the same remotes CombatClient's inCombat() reads, so a button goes exactly
+-- when pressing it would do nothing. Until the first MatchChanged arrives the state counts as a match.
+local touchWatch = { wired = false, known = false, matchState = nil, hasLoadout = false, range = false,
+	spectating = false, leaveBound = false, retry = false, waited = 0 }
+local wireTouch
+
+-- PhoneLayout, for the touch buttons' squares and for which of them the player's state has room for
+-- (PhoneLayout.TouchSet: the on-foot set drops out of a vehicle's seat, the lobby and spectating, so the
+-- seat's own buttons fit under ContextActionService's cap of seven). Looked up only on a touch screen;
+-- anywhere else, and if it fails to load, every touch button behaves exactly as it always has.
+local phoneLayout = nil
+local function touchLayout()
+	if phoneLayout == nil then
+		phoneLayout = false
+		local UserInputService = game:GetService("UserInputService")
+		-- A touch screen with a keyboard is a laptop, which PhoneLayout.Mode gives the desktop HUD (Studio's
+		-- device emulator excepted, as there): its buttons stay as they always were.
+		local handheld = not UserInputService.KeyboardEnabled or game:GetService("RunService"):IsStudio()
+		if UserInputService.TouchEnabled and handheld then
+			local ok, module = pcall(function()
+				return require(script.Parent:WaitForChild("PhoneLayout", 5))
+			end)
+			phoneLayout = ok and type(module) == "table" and type(module.TouchWanted) == "function" and module or false
+		end
+	end
+	return phoneLayout or nil
+end
+
 local function applyBinding(binding)
 	ContextActionService:UnbindAction(binding.name)
 	local forward = binding.touch ~= nil and touchControlsOn()
-	ContextActionService:BindAction(binding.name, binding.handler, binding.touch ~= nil and not forward, Settings.Key(binding.actionId),
-		table.unpack(binding.extras))
+	local layout = binding.touch ~= nil and not forward and touchLayout()
+	if layout then
+		wireTouch()
+	end
+	-- The button only while the player's state has a square for it (an on-foot action); the key and the
+	-- pad stay bound either way.
+	local button = binding.touch ~= nil and not forward
+	if layout and layout.OnFoot[binding.name] then
+		button = layout.TouchWanted(binding.name) == true
+	end
+	binding.buttonShown = button
+	if binding.fixed then
+		-- Settings.BindFixed: no rebindable key, only the fixed inputs.
+		ContextActionService:BindAction(binding.name, binding.handler, button, table.unpack(binding.extras))
+	else
+		ContextActionService:BindAction(binding.name, binding.handler, button, Settings.Key(binding.actionId),
+			table.unpack(binding.extras))
+	end
 	if forward then
 		-- The slot comes from the action's name inside TouchControls; `touch.slot` overrides it.
 		touchControls.Bind(binding.name, { slot = binding.touch.slot, label = binding.touch.title, handler = binding.handler })
-	elseif binding.touch then
+	elseif button then
 		ContextActionService:SetTitle(binding.name, binding.touch.title)
-		ContextActionService:SetPosition(binding.name, binding.touch.position)
+		if layout then
+			layout.PlaceTouchButton(binding.name)
+		else
+			ContextActionService:SetPosition(binding.name, binding.touch.position)
+		end
 	end
 end
 
@@ -284,6 +332,222 @@ function Settings.Bind(name, actionId, handler, touch, ...)
 	local binding = { name = name, actionId = actionId, handler = handler, touch = touch, extras = { ... } }
 	bindings[name] = binding
 	applyBinding(binding)
+end
+
+-- The same for an action with no rebindable key (FIRE on the left mouse and RT, AIM on the right mouse
+-- and LT): bound to `...` only, but its touch button follows the player's state like the rest.
+function Settings.BindFixed(name, handler, touch, ...)
+	local binding = { name = name, handler = handler, touch = touch, extras = { ... }, fixed = true }
+	bindings[name] = binding
+	applyBinding(binding)
+end
+
+--------------------------------------------------------------------------------
+-- Touch buttons by state (PhoneLayout.TouchSet decides; this applies it)
+--------------------------------------------------------------------------------
+
+local function touchContext()
+	if touchWatch.spectating then
+		return "spectate"
+	elseif touchWatch.range then
+		return "range"
+	elseif not touchWatch.known or (touchWatch.matchState == "InProgress" and touchWatch.hasLoadout) then
+		return "match"
+	end
+	return "lobby"
+end
+
+-- Whether a seat's own button (one bound by VehicleClient, VehicleWeaponClient, MountedGunClient or
+-- ProjectileClient) that the state no longer has is still up. The on-foot buttons wait for it to go:
+-- binding them first would ask ContextActionService for more than its seven, and the one past the cap is
+-- drawn blank, or not at all, and stays that way.
+local function staleSeatButton(layout)
+	local wanted = {}
+	local state = layout.TouchState
+	for _, entry in ipairs(layout.TouchSet(state.context, state.seat, state.flags)) do
+		wanted[entry.action] = true
+	end
+	for action in pairs(layout.TouchLabels) do
+		if not layout.OnFoot[action] and not wanted[action] and action ~= "BRR_SeatLeave" then
+			local ok, info = pcall(ContextActionService.GetBoundActionInfo, ContextActionService, action)
+			if ok and type(info) == "table" and next(info) ~= nil and info.createTouchButton ~= false then
+				return action
+			end
+		end
+	end
+	return nil
+end
+
+local function seatLeave(_, inputState)
+	if inputState == Enum.UserInputState.Begin then
+		local Players = game:GetService("Players")
+		local character = Players.LocalPlayer and Players.LocalPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.SeatPart then
+			humanoid.Jump = true
+		end
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+-- Works the state out again and gives each on-foot binding its button, or takes it away, to match:
+-- every button that goes, first; then the ones that come (only once nothing a seat bound is left over).
+-- The seats' scripts call this just BEFORE they bind their buttons and just AFTER they unbind them, so the
+-- count never goes over seven in between; it also runs on its own when the seat or the match changes.
+function Settings.RefreshTouch()
+	local layout = touchLayout()
+	if not layout then
+		return
+	end
+	wireTouch()
+	local Players = game:GetService("Players")
+	local character = Players.LocalPlayer and Players.LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local state = layout.TouchState
+	state.context = touchContext()
+	state.seat = layout.SeatOf(humanoid)
+	local forward = touchControlsOn()
+	local gaining = {}
+	for name, binding in pairs(bindings) do
+		if binding.touch and layout.OnFoot[name] and not forward then
+			local want = layout.TouchWanted(name) == true
+			if binding.buttonShown and not want then
+				applyBinding(binding)
+			elseif want and not binding.buttonShown then
+				table.insert(gaining, binding)
+			end
+		end
+	end
+	local wantLeave = layout.TouchWanted("BRR_SeatLeave") == true
+	if touchWatch.leaveBound and not wantLeave then
+		touchWatch.leaveBound = false
+		ContextActionService:UnbindAction("BRR_SeatLeave")
+	end
+	local stale = (#gaining > 0 or (wantLeave and not touchWatch.leaveBound)) and staleSeatButton(layout)
+	-- Waited on for two seconds at most: a player on foot is never left without FIRE because a seat's
+	-- script failed to let go of its button.
+	if stale and touchWatch.waited < 8 then
+		-- Its owner unbinds it in a moment and calls this again; this looks again in case it does not.
+		if not touchWatch.retry then
+			touchWatch.waited += 1
+			touchWatch.retry = true
+			task.delay(0.25, function()
+				touchWatch.retry = false
+				Settings.RefreshTouch()
+			end)
+		end
+		return
+	end
+	if stale then
+		warn(string.format("[Settings] %s still has a touch button after its seat; the on-foot buttons come back anyway", stale))
+	end
+	touchWatch.waited = 0
+	for _, binding in ipairs(gaining) do
+		applyBinding(binding)
+	end
+	if wantLeave and not touchWatch.leaveBound then
+		touchWatch.leaveBound = true
+		-- Touch only: bound to a key nobody presses, so only the drawn button fires it (ProjectileClient's
+		-- COOK does the same). A keyboard or a pad leaves the way it always has, with jump.
+		ContextActionService:BindActionAtPriority("BRR_SeatLeave", seatLeave, true, Enum.ContextActionPriority.High.Value,
+			Enum.KeyCode.World94)
+		ContextActionService:SetTitle("BRR_SeatLeave", layout.TouchLabels.BRR_SeatLeave)
+		layout.PlaceTouchButton("BRR_SeatLeave")
+	end
+end
+
+-- A seat's own action (VehicleClient's BRAKE, VehicleWeaponClient's FIRE and AIM, MountedGunClient's
+-- RELOAD and LEAVE, ProjectileClient's COOK): the on-foot buttons it has no room beside go first, then
+-- it is bound with a touch button only if the state has a square for it, on that square. `touch` is
+-- { title, position }; the position is only used if PhoneLayout is missing. `priority` nil binds at
+-- ContextActionService's default, as BindAction does. The inputs follow.
+function Settings.BindSeat(name, handler, touch, priority, ...)
+	Settings.RefreshTouch()
+	local layout = touchLayout()
+	local button = touch ~= nil
+	if layout then
+		button = button and layout.TouchWanted(name) == true
+	end
+	if priority then
+		ContextActionService:BindActionAtPriority(name, handler, button, priority, ...)
+	else
+		ContextActionService:BindAction(name, handler, button, ...)
+	end
+	if button then
+		ContextActionService:SetTitle(name, touch.title)
+		if layout then
+			layout.PlaceTouchButton(name)
+		else
+			pcall(ContextActionService.SetPosition, ContextActionService, name, touch.position)
+		end
+	end
+end
+
+-- Unbinds a seat's action and gives the on-foot buttons back if the state has room for them again.
+function Settings.UnbindSeat(name)
+	ContextActionService:UnbindAction(name)
+	Settings.RefreshTouch()
+end
+
+-- A flag the state carries besides the seat and the match: "cook" while a cookable throwable is in hand
+-- (ProjectileClient; COOK takes RELOAD's square). Set BEFORE binding the button it makes room for.
+function Settings.SetTouchFlag(flag, on)
+	local layout = touchLayout()
+	if not layout then
+		return
+	end
+	layout.TouchState.flags[flag] = on == true or nil
+	Settings.RefreshTouch()
+end
+
+-- Listens for the match and the seat, once, on a touch screen only.
+function wireTouch()
+	if touchWatch.wired then
+		return
+	end
+	touchWatch.wired = true
+	local Players = game:GetService("Players")
+	local player = Players.LocalPlayer
+	local function watchCharacter(character)
+		task.spawn(function()
+			local humanoid = character:WaitForChild("Humanoid", 10)
+			if humanoid then
+				humanoid:GetPropertyChangedSignal("SeatPart"):Connect(Settings.RefreshTouch)
+			end
+			Settings.RefreshTouch()
+		end)
+	end
+	if player then
+		player.CharacterAdded:Connect(watchCharacter)
+		if player.Character then
+			watchCharacter(player.Character)
+		end
+	end
+	-- In the background: Remotes waits for each remote to replicate, and this runs inside the first bind.
+	task.spawn(function()
+		local ok, err = pcall(function()
+			Remotes.Event("MatchChanged").OnClientEvent:Connect(function(match)
+				touchWatch.known = true
+				touchWatch.matchState = type(match) == "table" and match.state or nil
+				Settings.RefreshTouch()
+			end)
+			Remotes.Event("LoadoutChanged").OnClientEvent:Connect(function(loadout)
+				touchWatch.hasLoadout = loadout ~= nil
+				Settings.RefreshTouch()
+			end)
+			Remotes.Event("RangeState").OnClientEvent:Connect(function(on)
+				touchWatch.range = on == true
+				Settings.RefreshTouch()
+			end)
+			Remotes.Event("Spectate").OnClientEvent:Connect(function(on)
+				touchWatch.spectating = on == true
+				Settings.RefreshTouch()
+			end)
+		end)
+		if not ok then
+			warn("[Settings] couldn't listen for the match state; the match's touch buttons stay up: " .. tostring(err))
+		end
+	end)
 end
 
 -- Gamepad face names, for a legend on a console. Declared HERE and not beside KeyLabel: `bindings`
