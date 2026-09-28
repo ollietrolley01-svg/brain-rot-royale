@@ -3740,8 +3740,9 @@ BotService.IsUnderArmed = isUnderArmed
 -- 4, per driving bot per think); the throttle and steer are turned every frame by the servo below,
 -- which is arithmetic only (BotNav.DriveControl, no queries), for the handful of bots at a wheel.
 -- An armed vehicle with nobody on its gun is not driven anywhere (Oliver: "wait till it's manned"):
--- the bot holds it, works the gun itself only once attacked, and gives it up after BotGunnerWait.
--- With a gunner, the bot at the wheel circles the target at the gun's range and the gunner fires.
+-- the bot holds it, works the gun itself only once attacked, and gives it up after BotGunnerWait,
+-- or at once when nobody could come to the gun (Vehicles.gunnerMayCome). With a gunner, the bot at
+-- the wheel circles the target at the gun's range and the gunner fires.
 -- WHERE and HOW it drives near enemies is BotDriveTactics (Oliver 09-24: "the bots need to be more
 -- strategic about where and how they drive too, especially when driving near enemies"): round a known
 -- enemy's reach or a manned gun's field of fire, behind cover where there is some; turn away and
@@ -4349,7 +4350,8 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 	ride.trigger = false
 
 	-- An armed vehicle is not driven anywhere with nobody on its gun: held where it is, the driver's own
-	-- gun fired only once something shoots at it, given up after BotGunnerWait.
+	-- gun fired only once something shoots at it, given up after BotGunnerWait, or at once when nobody
+	-- could come to the gun.
 	if gunnerSeat and not gunnerSeat.Occupant then
 		if not ride.waitSince then
 			ride.waitSince = now
@@ -4358,7 +4360,8 @@ function Vehicles.driverThink(bot, root, head, ride, now)
 		drive.hold = true
 		local attacked = bot.threat ~= nil and now - bot.threat.at < FLEE_WINDOW
 		ride.trigger = attacked and candidate ~= nil
-		if now - ride.waitSince > (MatchConfig.BotGunnerWait or 25) and not attacked then
+		if not attacked and (now - ride.waitSince > (MatchConfig.BotGunnerWait or 25)
+			or not Vehicles.gunnerMayCome(bot, ride)) then
 			Vehicles.leaveRide(bot, "no gunner")
 		elseif candidate and not attacked and candidate.distance < 100
 			and now - ride.waitSince > lazy("BotDriveTactics").PARK_EXPOSED + 1 then
@@ -4617,6 +4620,29 @@ function Vehicles.mountedGunSeat(bot, root, fighting, now)
 		home = teams and teams.BaseOf and teams.BaseOf(team) or nil,
 		away = teams and teams.BaseOf and teams.BaseOf(team == 1 and 2 or 1) or nil,
 	})
+end
+
+-- Whether anyone could still come and man the gun of `ride`'s vehicle, for a bot waiting at its wheel
+-- (driverThink). In a team mode bots take vehicle guns (Vehicles.botGunners), so a teammate may always
+-- come. In the battle royale only a player can, so the bot waits only while one could: alive, not a
+-- player it is fighting (hostileRider would put it out again), and on foot within VEHICLE.RIDE_REACH of
+-- the car, or already riding in it. Asked each think; call refreshFoes first.
+function Vehicles.gunnerMayCome(bot, ride)
+	if Vehicles.botGunners() then
+		return true
+	end
+	local at = ride.drive.chassis.Position
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		local seat = humanoid and humanoid.SeatPart
+		if root and humanoid.Health > 0 and not (bot.vehicleFoes and bot.vehicleFoes[player])
+			and (seat == nil or seat.Parent == ride.model) and (root.Position - at).Magnitude <= VEHICLE.RIDE_REACH then
+			return true
+		end
+	end
+	return false
 end
 
 -- Who a bot shares a vehicle with: a teammate, or in the battle royale another bot on a ride.
