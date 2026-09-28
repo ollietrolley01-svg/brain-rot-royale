@@ -28,8 +28,8 @@ Invariants, each aimed at something the models must refuse forever:
        - every piece is present (BuildStatic keeps it too),
        - it is straight: every round piece coaxial with BatKnob->BatEnd within 1 degree, and it runs
          along the van in plan (heading within 3 degrees of Z; the rake is fine),
-       - it is one object: consecutive pieces meet end to end (gap <= 0.02), the knob sits on the
-         handle's end and the end cap on the barrel's,
+       - it is one object: consecutive pieces (handle, BatTaper1..N, barrel) meet end to end
+         (gap <= 0.02), the knob sits on the handle's end and the end cap on the barrel's,
        - it rests on the rack: handle and barrel each sit on a rack bar (underside 0..0.05 above
          the bar's top), and the straps touch both bat and bar,
        - nothing else overlaps it except the straps and the bars it rests on.
@@ -37,6 +37,10 @@ Invariants, each aimed at something the models must refuse forever:
      pitch limits from VehicleWeaponData, 5 degree steps): no part of the turret comes within 0.05 of
      a visible part that is not the turret's own, and the same for the driver's gun (DriverGun*,
      VehicleModels.DriverMounts, VehicleWeaponData.DriverByModel).
+  7. No seam on a tapered tube, in any vehicle: along every run of three or more same-colour coaxial
+     cylinders meeting end to end and widening one way (the bat's handle into its barrel), no joint
+     steps the radius by more than 0.02 or opens a gap. A 0.06-0.08 step showed as a ring at every
+     joint that read as see-through. A band wrapped over a joint ends the run there.
 
 Planted faults travel the same pipeline as the real input: the module SOURCE is edited and rebuilt.
     python3 tools/vehicle_models_axis_check.py [repo]        -> exit 0 when clean
@@ -217,7 +221,7 @@ function dumpModel(model)
 			end
 			table.insert(out, { p.Name, p.ClassName, tostring(p.Shape), s.X, s.Y, s.Z,
 				c.p.X, c.p.Y, c.p.Z, c.r.X, c.r.Y, c.r.Z, c.u.X, c.u.Y, c.u.Z, c.b.X, c.b.Y, c.b.Z,
-				p.Transparency or 0, anchor })
+				p.Transparency or 0, anchor, tostring(p.Material) .. " " .. table.concat(p.Color or {}, ",") })
 		end
 	end
 	return out
@@ -234,8 +238,17 @@ BARE, BARE_RATIO = 0.4, 2.0
 # The mount itself (ring, yoke, cheeks, cradle, trunnion) is squat; only the weapon's own barrel or
 # tubes may be long. The Ranger's pod stood on a 3.9-stud post, which read as a pole in the bed.
 MOUNT_POST = 2.5
-BAT_CHAIN = ("BatHandle", "BatFlare", "BatTaper", "BatThroat", "BatShoulder", "BatBarrel")
-BAT_PIECES = ("BatKnob",) + BAT_CHAIN + ("BatEnd", "BatStrap1", "BatStrap2")
+# The bat's round pieces, handle to barrel: its taper is BatTaper1..N (Builder:taper), however many.
+BAT_TAPER = re.compile(r"^BatTaper(\d+)$")
+BAT_ENDS = ("BatKnob", "BatHandle", "BatBarrel", "BatEnd", "BatStrap1", "BatStrap2")
+# Seams (invariant 7). Cylinders are joined when they are the same colour and material, coaxial
+# (within SEAM_AXIS degrees, axes within SEAM_OFFSET) and their ends meet within SEAM_JOIN either way.
+# A run of three or more joined pieces whose radius changes one way is a tapered tube, and reads as
+# one object, so no joint along it may show: radius step at most SEAM_STEP (Builder:taper steps by
+# TAPER_STEP = 0.015) and no gap past SEAM_GAP. Two pieces alone are a collar or a shoulder, meant to
+# be seen (a steering column into its boss); a collar in another colour (SilencerCap) is a band.
+SEAM_AXIS, SEAM_OFFSET, SEAM_JOIN = 2.0, 0.03, 0.1
+SEAM_STEP, SEAM_GAP = 0.02, 0.005
 TURRET = re.compile(r"^(Turret|Gun|Pod|Mortar|DriverGun)")
 # The weapon itself (not its mount), which is allowed to be long: barrels, tubes.
 WEAPON = re.compile(r"^(Gun|Pod|Mortar|DriverGun(Jacket|Barrel|Flash))")
@@ -295,10 +308,10 @@ class Runtime:
         parts = []
         for i in range(1, len(rows) + 1):
             r = rows[i]
-            v = [r[j] for j in range(1, 21)]
+            v = [r[j] for j in range(1, 22)]
             parts.append({
                 "name": v[0], "cls": v[1], "shape": v[2].split(".")[-1], "size": list(v[3:6]), "pos": list(v[6:9]),
-                "cols": (list(v[9:12]), list(v[12:15]), list(v[15:18])), "transparency": v[18], "anchor": v[19],
+                "cols": (list(v[9:12]), list(v[12:15]), list(v[15:18])), "transparency": v[18], "anchor": v[19], "look": v[20],
             })
         return parts
 
@@ -577,15 +590,18 @@ def audit_zfight(fixed, raw, label, verbose):
 def audit_bat(parts, label, verbose):
     faults = []
     bat = {p["name"]: p for p in parts if p["name"].startswith("Bat")}
-    missing = [n for n in BAT_PIECES if n not in bat or bat[n]["transparency"] >= 1]
-    if missing:
-        return [f"{label}/bat: pieces missing {missing}"]
+    tapers = sorted(int(m.group(1)) for m in map(BAT_TAPER.match, bat) if m)
+    count = max(tapers, default=0)
+    chain = ("BatHandle",) + tuple(f"BatTaper{i}" for i in range(1, count + 1)) + ("BatBarrel",)
+    missing = [n for n in BAT_ENDS + chain if n not in bat or bat[n]["transparency"] >= 1]
+    if missing or not count:
+        return [f"{label}/bat: pieces missing {missing or ['BatTaper1']}"]
     knob, end = bat["BatKnob"], bat["BatEnd"]
     line = norm(sub(end["pos"], knob["pos"]))
     along = angle((line[0], 0, line[2]), (0, 0, 1))
     if along > BAT_ALONG_TOL:
         faults.append(f"{label}/bat: runs {along:.1f} deg off the van's length (across the roof = sideways)")
-    for name in BAT_CHAIN + ("BatEnd",):
+    for name in chain + ("BatEnd",):
         off = angle(bat[name]["cols"][0], line)
         if off > BAT_COAXIAL_TOL:
             faults.append(f"{label}/{name}: bat part {off:.2f} deg off the bat's own line (kinked or sideways)")
@@ -594,7 +610,7 @@ def audit_bat(parts, label, verbose):
         a, b = add(p["pos"], mul(p["cols"][0], p["size"][0] / 2)), sub(p["pos"], mul(p["cols"][0], p["size"][0] / 2))
         return (a, b) if dot(sub(b, a), line) > 0 else (b, a)
     joins = []
-    for n1, n2 in zip(BAT_CHAIN, BAT_CHAIN[1:]):
+    for n1, n2 in zip(chain, chain[1:]):
         g = length(sub(span(bat[n1])[1], span(bat[n2])[0]))
         joins.append(g)
         if g > 0.02:
@@ -629,7 +645,7 @@ def audit_bat(parts, label, verbose):
             faults.append(f"{label}/{name}: not resting on a rack bar (underside {best if best is None else round(best, 3)} above its top)")
     for s in ("BatStrap1", "BatStrap2"):
         strap = bat[s]
-        if not any(overlaps(strap, bat[n], 0.0) for n in BAT_CHAIN):
+        if not any(overlaps(strap, bat[n], 0.0) for n in chain):
             faults.append(f"{label}/{s}: strap does not touch the bat")
         if not any(overlaps(strap, bar, 0.0) for bar in bars):
             faults.append(f"{label}/{s}: strap does not reach a rack bar")
@@ -637,12 +653,97 @@ def audit_bat(parts, label, verbose):
     for p in visible(parts):
         if p["name"].startswith("Bat") or p["name"].startswith("RackBar") or p["name"].startswith("Hull_") or p["name"] == "Chassis":
             continue
-        for n in BAT_CHAIN + ("BatKnob", "BatEnd"):
+        for n in chain + ("BatKnob", "BatEnd"):
             if overlaps(p, bat[n], 0.0):
                 faults.append(f"{label}/{n}: {p['name']} runs into the bat")
     if verbose:
-        print(f"  bat: {along:.1f} deg off the van's length in plan, pieces coaxial, joins {', '.join(f'{g:.3f}' for g in joins)}, "
+        print(f"  bat: {along:.1f} deg off the van's length in plan, {len(chain)} pieces coaxial, {len(joins)} joins, widest {max(joins):.3f}, "
               f"handle / barrel rest {rests[0]:+.3f} / {rests[1]:+.3f} above their bars")
+    return faults
+
+
+def banded(p, q, cyls, parts):
+    """Whether another part wraps the joint between coaxial p and q all the way round (a bearing race
+    or a band over it), which hides whatever step or gap is there and makes them two pieces."""
+    ax = p["cols"][0]
+    s = dot(sub(q["pos"], p["pos"]), ax)
+    k = 1 if s > 0 else -1
+    # The middle of the joint: halfway between p's end and q's facing end, on p's axis.
+    mid = add(p["pos"], mul(ax, k * (p["size"][0] / 2 + (abs(s) - q["size"][0] / 2 - p["size"][0] / 2) / 2)))
+    r = max(p["size"][1], q["size"][1]) / 2
+    ring = [add(mid, mul(v, r * sign)) for v in p["cols"][1:] for sign in (1, -1)]
+    others = [o for o in visible(parts) if o is not p and o is not q]
+    return all(any(point_distance(o, x) <= 1e-3 for o in others) for x in ring)
+
+
+def tapers(parts):
+    """Invariant 7's candidates. Joins every pair of same-look cylinders that are coaxial and meet end
+    to end, follows the joins into runs, and keeps the runs that are tapered tubes: three or more
+    pieces, the radius changing one way along the run and not constant, and the run at least as long
+    as it is wide (a wheel's stacked discs are wider than they are long). A band over a joint ends a
+    run there (banded). Returns the runs, each a
+    list of pieces in order along its axis, and how many visible cylinders were examined."""
+    cyls = [p for p in visible(parts) if p["shape"] == "Cylinder"]
+    links = {id(p): [] for p in cyls}
+    for i, p in enumerate(cyls):
+        ax = p["cols"][0]
+        for q in cyls[i + 1:]:
+            if q["look"] != p["look"] or angle(ax, q["cols"][0]) > SEAM_AXIS:
+                continue
+            d = sub(q["pos"], p["pos"])
+            if length(sub(d, mul(ax, dot(d, ax)))) > SEAM_OFFSET:
+                continue
+            if abs(abs(dot(d, ax)) - p["size"][0] / 2 - q["size"][0] / 2) <= SEAM_JOIN and not banded(p, q, cyls, parts):
+                links[id(p)].append(q)
+                links[id(q)].append(p)
+    runs, seen = [], set()
+    for p in cyls:
+        if id(p) in seen or not links[id(p)]:
+            continue
+        run, todo = [], [p]
+        while todo:
+            q = todo.pop()
+            if id(q) not in seen:
+                seen.add(id(q))
+                run.append(q)
+                todo += links[id(q)]
+        ax = p["cols"][0]
+        run.sort(key=lambda q: dot(q["pos"], ax))
+        # Cut the run where the radius turns (the bat's barrel down into its end cap), the turning
+        # piece in both halves, and judge each one-way stretch on its own.
+        start, sign = 0, 0
+        for k in range(1, len(run) + 1):
+            step = run[k]["size"][1] - run[k - 1]["size"][1] if k < len(run) else 0
+            turn = k == len(run) or (sign and step and (step > 0) != (sign > 0))
+            if turn:
+                piece = run[start:k]
+                span = abs(dot(sub(piece[-1]["pos"], piece[0]["pos"]), ax)) + (piece[0]["size"][0] + piece[-1]["size"][0]) / 2
+                if len(piece) >= 3 and sign and span >= max(q["size"][1] for q in piece):
+                    runs.append(piece)
+                start, sign = k - 1, step
+            elif step:
+                sign = step
+    return runs, len(cyls)
+
+
+def audit_seams(parts, label, verbose):
+    """Invariant 7: no joint along a tapered tube shows a ring or a gap."""
+    faults, steps = [], []
+    runs, examined = tapers(parts)
+    for run in runs:
+        ax = run[0]["cols"][0]
+        for p, q in zip(run, run[1:]):
+            step = abs(p["size"][1] - q["size"][1]) / 2
+            gap = abs(dot(sub(q["pos"], p["pos"]), ax)) - p["size"][0] / 2 - q["size"][0] / 2
+            steps.append(step)
+            if step > SEAM_STEP:
+                faults.append(f"{label}/{p['name']}+{q['name']}: ring at the joint, radius steps {step:.3f} (max {SEAM_STEP})")
+            if gap > SEAM_GAP:
+                faults.append(f"{label}/{p['name']}+{q['name']}: gap at the joint, {gap:.3f} studs (see-through)")
+    if verbose:
+        names = ", ".join(f"{r[0]['name']}..{r[-1]['name']}" for r in runs) or "-"
+        print(f"  seams: {examined} cylinders examined, {len(runs)} tapered runs ({names}), {len(steps)} joints, "
+              f"{sum(x > SEAM_STEP for x in steps)} stepped over {SEAM_STEP}, widest step {max(steps, default=0):.3f}")
     return faults
 
 
@@ -712,6 +813,7 @@ def audit_model(rt, rt_raw, arcs, model_id, verbose=True, driver_arcs=None):
             parts = rt.build(model_id, how, scheme)
             faults += audit_rods(parts, label, talk)
             faults += audit_zfight(parts, rt_raw.build(model_id, how, scheme), label, talk)
+            faults += audit_seams(parts, label, talk)
             if model_id == "SahurVan":
                 faults += audit_bat(parts, label, talk)
             if how == "drive" and model_id in rt.mounts and scheme == 1:
@@ -751,16 +853,16 @@ def main(repo="."):
          "local bat = CF(V(batX, batY, batZ)) * A(",
          "local bat = CF(V(batX, batY, batZ)) * A(0, 25, 0) * A(", "bat: runs"),
         ("kinked bat (a lift on one piece)", "SahurVan", VM,
-         'b:tube("BatBarrel", batAt(1.6), batAt(4.0)',
-         'b:tube("BatBarrel", batAt(1.6), batAt(4.0, 0.2)', "BatBarrel: bat part"),
+         'b:tube("BatBarrel", batAt(taperTo), batAt(4.0)',
+         'b:tube("BatBarrel", batAt(taperTo), batAt(4.0, 0.2)', "BatBarrel: bat part"),
         ("bat in two pieces (gap before the barrel)", "SahurVan", VM,
-         'b:tube("BatBarrel", batAt(1.6)', 'b:tube("BatBarrel", batAt(1.75)', "BatShoulder->BatBarrel"),
+         'b:tube("BatBarrel", batAt(taperTo)', 'b:tube("BatBarrel", batAt(taperTo + 0.15)', "->BatBarrel: bat pieces"),
         ("knob floating off the handle", "SahurVan", VM,
          'b:ball("BatKnob", 0.46, batAt(-3.8)', 'b:ball("BatKnob", 0.46, batAt(-4.2)', "BatKnob: knob"),
         ("bat floating above the rack", "SahurVan", VM,
          "local bat = CF(V(batX, batY, batZ))", "local bat = CF(V(batX, batY + 0.3, batZ))", "not resting on a rack bar"),
         ("parked van loses its bat", "SahurVan", VM,
-         'local STATIC_DROP = { ', 'local STATIC_DROP = { "^BatThroat", ', "pieces missing"),
+         'local STATIC_DROP = { ', 'local STATIC_DROP = { "^BatTaper5$", ', "pieces missing"),
         ("straps back in the bat's own frame (hanging off the bars)", "SahurVan", VM,
          "local z = (barZ - batZ) / math.cos(math.rad(rake))", "local z = barZ", "strap does not reach a rack bar"),
         ("mortar back on its old 0.4 plinth (swings through the bat)", "SahurVan", VM,
@@ -783,6 +885,14 @@ def main(repo="."):
         ("leaning pole with a free end (inside the envelope)", "CrocodiloRanger", VM,
          'b:box("BumperStep"',
          'b:tube("PlantPole", V(0, 4.5, 3), V(1.2, 6.2, 3.8), 0.2, "trim")\n\t\tb:box("BumperStep"', "PlantPole: rod end"),
+        ("taper in coarse steps (a ring at every joint)", "SahurVan", VM,
+         "local TAPER_STEP = 0.015", "local TAPER_STEP = 0.07", "ring at the joint"),
+        ("taper pieces cut short (a gap at every joint)", "SahurVan", VM,
+         "a:Lerp(b, index / count), d0", "a:Lerp(b, (index - 0.2) / count), d0", "gap at the joint"),
+        ("a stepped tube on another vehicle (not the bat)", "CrocodiloRanger", VM,
+         'b:box("BumperStep"',
+         'b:tube("PlantSeamA", V(0, 4, 0), V(0, 4, 1), 0.3, "trim")\n\t\tb:tube("PlantSeamB", V(0, 4, 1), V(0, 4, 2), 0.4, "trim")\n'
+         '\t\tb:tube("PlantSeamC", V(0, 4, 2), V(0, 4, 3), 0.5, "trim")\n\t\tb:box("BumperStep"', "PlantSeamA+PlantSeamB: ring at the joint"),
     ]
     for label, model_id, module, old, new, tag, *more in plants:
         src = sources[module]
@@ -793,7 +903,7 @@ def main(repo="."):
         if module == ZF:
             # The pass itself misbehaving: after it runs, one bat piece is pushed 0.3 off its line.
             planted[ZF] = planted[ZF].replace("\treturn stats\nend\n\n-- The pairs",
-                "\tif ZFight.PlantBat then for _, r in pairs(roots) do for _, p in ipairs(r:GetChildren()) do if p.Name == \"BatThroat\" then p.CFrame = p.CFrame + Vector3.new(0.3, 0, 0) end end end end\n\treturn stats\nend\n\n-- The pairs", 1)
+                "\tif ZFight.PlantBat then for _, r in pairs(roots) do for _, p in ipairs(r:GetChildren()) do if p.Name == \"BatTaper10\" then p.CFrame = p.CFrame + Vector3.new(0.3, 0, 0) end end end end\n\treturn stats\nend\n\n-- The pairs", 1)
             assert "PlantBat then" in planted[ZF]
         faults = run(planted, only=model_id, verbose=False)
         caught = [f for f in faults if tag in f]

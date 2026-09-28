@@ -257,6 +257,28 @@ function Builder:tube(name, a, b, diameter, role, anchor)
 	return self:cyl(name, length, diameter, CFrame.fromMatrix(middle, direction, trueUp, -right), role, anchor)
 end
 
+-- The most a tapered tube's radius may step at a joint. Roblox has no cone, so a taper is a stack
+-- of cylinders, and each joint shows a ring the width of its step: at 0.06-0.08 (the bat before
+-- this) that ring reads as a see-through seam; at 0.015 it is under a pixel from a close camera.
+-- tools/vehicle_models_axis_check.py holds every joint to it.
+local TAPER_STEP = 0.015
+
+-- A round bar from `a` to `b` that widens from `d0` across to `d1`, for a run that carries on from
+-- a tube `d0` across ending at `a` into one `d1` across starting at `b` (a bat's handle into its
+-- barrel). Every joint, the two ends included, steps by the same amount, at most TAPER_STEP on
+-- the radius. Returns diameterAt(t), the diameter at a fraction t of the way from `a` to `b`, for
+-- anything that has to sit on its surface.
+function Builder:taper(name, a, b, d0, d1, role, anchor)
+	local count = math.max(1, math.ceil(math.abs(d1 - d0) / 2 / TAPER_STEP - 1e-9) - 1)
+	local step = (d1 - d0) / (count + 1)
+	for index = 1, count do
+		self:tube(name .. index, a:Lerp(b, (index - 1) / count), a:Lerp(b, index / count), d0 + step * index, role, anchor)
+	end
+	return function(t)
+		return d0 + step * math.clamp(math.floor(t * count) + 1, 1, count)
+	end
+end
+
 -- A square-section bar from `a` to `b`: `width` across, `height` in the plane with world up.
 function Builder:beam(name, a, b, width, height, role, anchor)
 	if (b - a).Magnitude < 0.01 then
@@ -1769,18 +1791,14 @@ VehicleModels.Models.SahurVan = {
 		-- steps, which reads as separate pieces stuck end to end; (3) the roof mortar's tube swung
 		-- straight through the barrel (see Mounts). Now: six pieces stepping 0.12-0.16 at a time,
 		-- the straps on the bars themselves, and the mortar high enough to pass over.
+		-- Seams (handoff 09-25): those six pieces still showed a ring at every joint (radius steps of
+		-- 0.06-0.08), which read as see-through. The handle now widens into the barrel through
+		-- Builder:taper, one straight taper in steps under TAPER_STEP.
 		b:ball("BatKnob", 0.46, batAt(-3.8), "wood")
 		b:tube("BatHandle", batAt(-3.6), batAt(-1.6), handleR * 2, "wood")
-		local profile = { -- name, from, to, diameter (the barrel's end is 4.0)
-			{ "BatFlare", -1.6, -0.8, 0.42 },
-			{ "BatTaper", -0.8, 0.1, 0.54 },
-			{ "BatThroat", 0.1, 0.9, 0.68 },
-			{ "BatShoulder", 0.9, 1.6, 0.84 },
-		}
-		for _, piece in ipairs(profile) do
-			b:tube(piece[1], batAt(piece[2]), batAt(piece[3]), piece[4], "wood")
-		end
-		b:tube("BatBarrel", batAt(1.6), batAt(4.0), barrelR * 2, "wood")
+		local taperFrom, taperTo = -1.6, 1.6 -- the barrel's end is 4.0
+		local taperDiameter = b:taper("BatTaper", batAt(taperFrom), batAt(taperTo), handleR * 2, barrelR * 2, "wood")
+		b:tube("BatBarrel", batAt(taperTo), batAt(4.0), barrelR * 2, "wood")
 		b:cyl("BatEnd", 0.16, 0.9, CF(batAt(4.06)) * (bat - bat.Position) * A(0, 90, 0), "wood")
 		for index, barZ in ipairs({ -1.0, barrelBar }) do
 			-- Each strap lies across the bar it is named for, just under the bat: its top 0.04 into the
@@ -1788,10 +1806,8 @@ VehicleModels.Models.SahurVan = {
 			-- at both, see the rake above).
 			local z = (barZ - batZ) / math.cos(math.rad(rake))
 			local radius = barrelR
-			for _, piece in ipairs(profile) do
-				if z >= piece[2] and z < piece[3] then
-					radius = piece[4] / 2
-				end
+			if z >= taperFrom and z < taperTo then
+				radius = taperDiameter((z - taperFrom) / (taperTo - taperFrom)) / 2
 			end
 			b:box("BatStrap" .. index, V(0.9, 0.12, 0.2), CF(batAt(z, -radius - 0.02)) * (bat - bat.Position), "accent")
 		end
