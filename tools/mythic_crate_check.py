@@ -36,7 +36,7 @@ RS = "ServerScriptService/Modules/RewardService.lua"
 HUD = "StarterPlayerScripts/HudClient.client.lua"
 N = 100000
 SEED = 24
-# 5 standard deviations of a 1% rate over 100,000 rolls is 0.16 points; a wrong rate (2x, or 0) is far past it.
+# 5 standard deviations of a 10% rate over 100,000 rolls is 0.47 points; a wrong rate (2x, or 0) is far past it.
 SIGMAS = 5
 
 
@@ -260,12 +260,12 @@ def plant(path, old, new, base=None):
 
 
 def plants():
-    typed_twice = plant(RS, 'label = string.format("Mythic %s chance", odds),', 'label = "Mythic 1% chance",')
+    typed_twice = plant(RS, 'label = string.format("Mythic %s chance", odds),', 'label = "Mythic 10% chance",')
     typed_twice = plant(RS, 'or string.format("MYTHIC CRATE %s CHANCE: NOT THIS TIME", odds),',
-                        'or "MYTHIC CRATE 1% CHANCE: NOT THIS TIME",', typed_twice)
-    typed_twice = plant(RS, 'string.format("+1 MYTHIC CRATE (%s CHANCE)", odds)', '"+1 MYTHIC CRATE (1% CHANCE)"', typed_twice)
-    typed_twice = plant(MC, "\tmythicChance = 0.01,\n", "\tmythicChance = 0.02,\n", typed_twice)
-    typed_twice = plant(MC, "xp = 900, mythicChance = 0.01 }", "xp = 900, mythicChance = 0.02 }", typed_twice)
+                        'or "MYTHIC CRATE 10% CHANCE: NOT THIS TIME",', typed_twice)
+    typed_twice = plant(RS, 'string.format("+1 MYTHIC CRATE (%s CHANCE)", odds)', '"+1 MYTHIC CRATE (10% CHANCE)"', typed_twice)
+    typed_twice = plant(MC, "\tmythicChance = 0.10,\n", "\tmythicChance = 0.20,\n", typed_twice)
+    typed_twice = plant(MC, "xp = 900, mythicChance = 0.10 }", "xp = 900, mythicChance = 0.20 }", typed_twice)
     loss_rolls = plant(RS, 'if outcome == "win" and rules.mythicChance then', "if rules.mythicChance then")
     loss_rolls = plant(RS, "\tif summary.afk then\n\t\trecord.streak = 0",
                        "\tsummary.mythic = RewardService.Roll() < rules.mythicChance\n\tif summary.afk then\n\t\trecord.streak = 0",
@@ -276,7 +276,7 @@ def plants():
         ("the team roll uses another number than the card shows",
          plant(RS, "summary.mythic = rules.mythicChance ~= nil and RewardService.Roll() < rules.mythicChance",
                "summary.mythic = rules.mythicChance ~= nil and RewardService.Roll() < 0.05")),
-        ("the shown chance typed twice (hard-coded 1%, field moved to 2%)", typed_twice),
+        ("the shown chance typed twice (hard-coded 10%, field moved to 20%)", typed_twice),
         ("the game's formatter drops the number", plant(MC, 'return string.format("%g%%", (tonumber(chance) or 0) * 100)', 'return "a small"')),
         ("a rank 2-5 finish rolls too", plant(MC, '{ maxRank = 5,  crate = "Epic",      coins = 1200, xp = 550 }',
                                               '{ maxRank = 5,  crate = "Epic",      coins = 1200, xp = 550, mythicChance = 0.01 }')),

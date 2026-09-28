@@ -93,7 +93,7 @@ MatchConfig.VoteCandidates = 3
 -- second roll, on top of the bracket's crate, for a Mythic Crate (250,000 coins). RewardService.AwardPlacement
 -- rolls it, and the results card shows this same number (RewardService.MythicLine), so it is never typed twice.
 MatchConfig.PlacementBrackets = {
-	{ maxRank = 1,  crate = "Legendary", coins = 2500, xp = 900, mythicChance = 0.01 },
+	{ maxRank = 1,  crate = "Legendary", coins = 2500, xp = 900, mythicChance = 0.10 },
 	{ maxRank = 5,  crate = "Epic",      coins = 1200, xp = 550 },
 	{ maxRank = 10, crate = "Rare",      coins = 600,  xp = 340 },
 	{ maxRank = 20, crate = "Uncommon",  coins = 260,  xp = 190 },
@@ -158,7 +158,7 @@ MatchConfig.TeamModeRewards = {
 
 	-- A win's chance of a Mythic Crate on top of the win's crate, as the battle royale's rank 1
 	-- (PlacementBrackets `mythicChance`). Rolled in AwardTeamResult; the card's line reads this number.
-	mythicChance = 0.01,
+	mythicChance = 0.10,
 
 	-- MatchService's live kill path. Kills are paid on the results card, so the live payment is 0; the live
 	-- call still counts the kill for Stats.kills, the kills quest and gun mastery, up to maxPaidKills.
