@@ -6,12 +6,15 @@ every gun in WeaponData and its add-on packs with weapon_stats.py's brace-matche
 specs out of Ballistics.lua (lupa again, with a Vector3 stub), and MatchConfig.CombatDamageScale, then
 works out what each vehicle faces and holds the bands VehicleArmor's header sets:
 
-  EVERY TIME-TO-KILL BAND BELOW IS x1.25 of the 09-24 one (Oliver, 2026-09-25: "increase ttk of players and
-  vehicles 25%", done as MatchConfig.CombatDamageScale 0.92 -> 0.736; hit counts rounded outward)
-  CAR     one Rare rifle (Bananini Burst) at mid range, every shot landing, reloads counted, kills
-          it in 10-15 s; a rocket (the Cappuccina's, a direct hit) kills it in 3-4
-  BIKE    dies quicker than any car to the same rifle (under 7.5 s), and to 1-3 rockets
-  ARMOUR  2-2.5x the average car's health; 40-50% off bullets; nothing off explosives; 6-8 rockets;
+  The damage scale is MatchConfig.CombatDamageScale 0.736 (Oliver, 2026-09-25: "increase ttk of players and
+  vehicles 25%"). The CAR, BIKE and ARMOUR bands were set again for task 11's health (2026-09-26); the
+  GUNS and CRASH bands are unchanged
+  CAR     700-800 health (task 11, 2026-09-26: Oliver asked for cars that are "destroyable", Jacob set
+          700-800), so one Rare rifle (Bananini Burst) at mid range, every shot landing, reloads
+          counted, kills it in 5.5-7.5 s, and a rocket (the Cappuccina's, a direct hit) in exactly 2
+  BIKE    0.35-0.5x the average car's health (its 09-24 ratio); dies quicker than any car to the same
+          rifle, and to 1-2 rockets
+  ARMOUR  2-2.5x the average car's health; 40-50% off bullets; nothing off explosives; 4-5 rockets;
           its cabin protects the driver and passengers, never the gunner
   GUNS    very powerful (Oliver, 2026-09-25: "make sure the mounted guns on the ground and the cars are
           very powerful"): every turret kills a car inside 10 s of its own fire, a driver's gun inside 15 s
@@ -125,19 +128,23 @@ def measure(repo, armour_src=None, verbose=True):
     # CAR
     for model, h, seconds, mags, n in rows:
         if model in CARS:
-            if not 10 <= seconds <= 15:
-                problems.append(f"CAR {model}: {seconds:.1f} s of the Rare rifle, not 10-15")
-            if not 3 <= n <= 4:
-                problems.append(f"CAR {model}: {n} rockets, not 3-4")
+            if not 700 <= h <= 800:
+                problems.append(f"CAR {model}: {h:.0f} health, not 700-800")
+            if not 5.5 <= seconds <= 7.5:
+                problems.append(f"CAR {model}: {seconds:.1f} s of the Rare rifle, not 5.5-7.5")
+            if n != 2:
+                problems.append(f"CAR {model}: {n} rockets, not 2")
             if armour.Protects(model, "DriverSeat"):
                 problems.append(f"CAR {model}: its driver is behind armour (a car's glass lets shots through)")
     fastest_car = min(r[2] for r in rows if r[0] in CARS)
     for model, h, seconds, mags, n in rows:
         if model in BIKES:
-            if not (seconds < fastest_car and seconds < 7.5):
-                problems.append(f"BIKE {model}: {seconds:.1f} s of the rifle (a bike must go quicker than any car, and inside 7.5)")
-            if not 1 <= n <= 3:
-                problems.append(f"BIKE {model}: {n} rockets, not 1-3")
+            if not 0.35 <= h / car_mean <= 0.5:
+                problems.append(f"BIKE {model}: {h / car_mean:.2f}x the average car's health, not 0.35-0.5")
+            if not seconds < fastest_car:
+                problems.append(f"BIKE {model}: {seconds:.1f} s of the rifle (a bike must go quicker than any car)")
+            if not 1 <= n <= 2:
+                problems.append(f"BIKE {model}: {n} rockets, not 1-2")
     for model, h, seconds, mags, n in rows:
         if model in ARMOURED:
             ratio = h / car_mean
@@ -148,8 +155,8 @@ def measure(repo, armour_src=None, verbose=True):
                 problems.append(f"ARMOUR {model}: {resist:.0%} off bullets, not 40-50%")
             if abs(armour.Scale(model, "explosive") - armour.Classes.explosive) > 1e-9:
                 problems.append(f"ARMOUR {model}: armour takes something off explosives (they are the counter)")
-            if not 6 <= n <= 8:
-                problems.append(f"ARMOUR {model}: {n} rockets, not 6-8")
+            if not 4 <= n <= 5:
+                problems.append(f"ARMOUR {model}: {n} rockets, not 4-5")
             if not armour.Protects(model, "DriverSeat") or not armour.Protects(model, "PassengerSeat1"):
                 problems.append(f"ARMOUR {model}: its cabin does not protect the driver and passengers")
             if armour.Protects(model, "GunnerSeat"):
@@ -206,13 +213,18 @@ def measure(repo, armour_src=None, verbose=True):
 
 
 PLANTS = [
-    ("cars made juggernauts (health doubled)", "Rotster = { health = 1500 },", "Rotster = { health = 3000 },", "CAR Rotster"),
-    ("cars made glass cannons", "SahurVan = { health = 1650 },", "SahurVan = { health = 500 },", "CAR SahurVan"),
+    ("cars made juggernauts (health doubled)", "Rotster = { health = 740 },", "Rotster = { health = 1480 },", "CAR Rotster"),
+    ("cars made glass cannons", "SahurVan = { health = 800 },", "SahurVan = { health = 250 },", "CAR SahurVan"),
+    ("a car just over 800", "SahurVan = { health = 800 },", "SahurVan = { health = 820 },", "CAR SahurVan"),
+    ("a car just under 700", "TralalaGT = { health = 700 },", "TralalaGT = { health = 680 },", "CAR TralalaGT"),
+    ("a car back at its 09-24 health", "CrocodiloRanger = { health = 780 },", "CrocodiloRanger = { health = 1600 },", "CAR CrocodiloRanger"),
     ("explosives no longer the counter", "explosive = 6.5,", "explosive = 1,", "rockets"),
     ("armour shrugs off rockets too", 'resist = { bullet = 0.45, heavy = 0.25 }', 'resist = { bullet = 0.45, heavy = 0.25, explosive = 0.5 }', "ARMOUR TartarugaScout"),
     ("armour no better than a car against bullets", 'resist = { bullet = 0.5, heavy = 0.3 }', 'resist = { heavy = 0.3 }', "off bullets"),
     ("the gunner hidden behind armour", 'seatName ~= "GunnerSeat"', "true", "gunner is behind armour"),
-    ("a bike tougher than a car", "BrrStreetfighter = { health = 600 },", "BrrStreetfighter = { health = 1500 },", "BIKE BrrStreetfighter"),
+    ("a bike tougher than a car", "BrrStreetfighter = { health = 295 },", "BrrStreetfighter = { health = 1500 },", "BIKE BrrStreetfighter"),
+    ("a bike left at its 09-24 health", "PatapimScrambler = { health = 325 },", "PatapimScrambler = { health = 660 },", "BIKE PatapimScrambler"),
+    ("armour left at its 09-24 health", "CameloCarrier = { health = 1635,", "CameloCarrier = { health = 3330,", "ARMOUR CameloCarrier"),
 ]
 
 

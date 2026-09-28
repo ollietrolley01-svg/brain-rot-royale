@@ -29,10 +29,16 @@
 -- (tools/vehicle_ttk_check.py prints the whole table, every class and tier, and what each vehicle
 -- weapon does to a car.)
 --
+-- 2026-09-26 (task 11): the four cars are at 700-800 health (Oliver, playtest 09-25: "the cars need to be
+-- destroyable"; Jacob set the number at 700-800). That is 0.491 of the 09-24 cars' average, and the bikes
+-- and the armoured pair are cut by the same 0.491, so each keeps its ratio to an average car. At
+-- CombatDamageScale 0.736 a car now takes about 6-6.5 s of the Rare rifle and 2 rockets, a bike 1
+-- rocket, an armoured car 4. The 09-24 working below explains the ratios; its health figures are history.
+--
 -- 2026-09-25: every time-to-kill here is x1.25 (Oliver: "increase ttk of players and vehicles 25%"), done
 -- by MatchConfig.CombatDamageScale 0.92 -> 0.736, not by health: a car now takes 10-15 s of the rifle
 -- and 3-4 rockets, an armoured car 6-8, and the figures below are the 09-24 ones before that scale.
--- The asks: a car dies to 8-12 s of one Rare rifle at mid range and to 2-3 rockets; a bike to less;
+-- The 09-24 asks: a car dies to 8-12 s of one Rare rifle at mid range and to 2-3 rockets; a bike to less;
 -- an armoured car has 2-2.5x a car's health, resists small arms by 40-50%, and takes explosives in
 -- full, 5-6 rockets. Two of those can't both hold with a bullet's own damage: a car worth 10 s of a
 -- rifle (about 1,500) is eighteen rockets. So a blast hits a vehicle 6.5 times as hard as it hits a
@@ -46,7 +52,7 @@
 -- kill lands part way through a magazine), and every 27th shot adds a 2-second reload, so the health
 -- sits where the kill lands inside the band, not on a reload's edge.
 --
--- Results (Rare rifle seconds, magazines / rockets to kill):
+-- 09-24 results, at 0.92 (Rare rifle seconds, magazines / rockets to kill):
 --   Tralala GT 1400 -> 8.5 s, 1.85 / 3     Rotster 1500 -> 8.9 s, 1.96 / 3
 --   Crocodilo Ranger 1600 -> 11.5 s, 2.1 / 3     Sahur Van 1650 -> 11.6 s, 2.15 / 3
 --   bikes 600-660 -> 2.8-3.1 s / 2
@@ -77,19 +83,19 @@ VehicleArmor.Classes = {
 -- health: full health. resist: the share of a class the armour takes off. cabin "armored": the
 -- driver and passengers are inside armour (Protects). impact: what crash damage is multiplied by.
 VehicleArmor.Models = {
-	TralalaGT = { health = 1400 },
-	Rotster = { health = 1500 },
-	CrocodiloRanger = { health = 1600 },
-	SahurVan = { health = 1650 },
-	BrrStreetfighter = { health = 600 },
-	BananiniScoot = { health = 620 },
-	PatapimScrambler = { health = 660 },
-	TartarugaScout = { health = 3100, resist = { bullet = 0.45, heavy = 0.25 }, cabin = "armored", impact = 0.5 },
-	CameloCarrier = { health = 3330, resist = { bullet = 0.5, heavy = 0.3 }, cabin = "armored", impact = 0.4 },
+	TralalaGT = { health = 700 },
+	Rotster = { health = 740 },
+	CrocodiloRanger = { health = 780 },
+	SahurVan = { health = 800 },
+	BrrStreetfighter = { health = 295 },
+	BananiniScoot = { health = 305 },
+	PatapimScrambler = { health = 325 },
+	TartarugaScout = { health = 1520, resist = { bullet = 0.45, heavy = 0.25 }, cabin = "armored", impact = 0.5 },
+	CameloCarrier = { health = 1635, resist = { bullet = 0.5, heavy = 0.3 }, cabin = "armored", impact = 0.4 },
 }
 
 -- A model this table doesn't know (another tab's registered kind).
-VehicleArmor.DefaultHealth = { car = 1400, bike = 640 }
+VehicleArmor.DefaultHealth = { car = 700, bike = 310 }
 
 -- The share of a blast that reaches a rider inside an armoured cabin.
 VehicleArmor.CabinBlast = 0.25
