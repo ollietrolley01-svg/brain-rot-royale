@@ -1789,7 +1789,7 @@ Remotes.Event("CompanionDown").OnClientEvent:Connect(function(info)
 	end
 end)
 
--- Lobby playground: ball kicks, goals and Cloud Climb clears.
+-- Lobby playground: ball kicks, goals, Cloud Climb clears, and the climb's creaks, snaps and checkpoints.
 Remotes.Event("PlaygroundFx").OnClientEvent:Connect(function(info)
 	if type(info) ~= "table" or typeof(info.position) ~= "Vector3" then
 		return
@@ -1802,6 +1802,17 @@ Remotes.Event("PlaygroundFx").OnClientEvent:Connect(function(info)
 	local color = typeof(info.color) == "Color3" and info.color or rgb(255, 214, 110)
 	if info.kind == "kick" then
 		Sfx.PlayAt("BallKick", position, 0.25)
+		return
+	end
+	-- The obby's sounds, sound only (the server draws the rest).
+	if info.kind == "creak" then
+		Sfx.PlayAt("ObbyCreak", position)
+		return
+	elseif info.kind == "snap" then
+		Sfx.PlayAt("ObbySnap", position)
+		return
+	elseif info.kind == "checkpoint" then
+		Sfx.PlayAt("ObbyCheckpoint", position)
 		return
 	end
 	local ctx = { key = "playground", pal = palette({ color = color }), detail = true }
