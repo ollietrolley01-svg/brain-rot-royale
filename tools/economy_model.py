@@ -56,7 +56,9 @@ PROFILES = {
                    note="wins 1 in 5, otherwise always in the top 40%"),
 }
 # The team modes, the same three players (s.2b). A solo player on a side of bots, one match's worth
-# each, over the mode's full time limit. Team Deathmatch: first to 100 team kills among 15 a side is
+# each, over the mode's full time limit. The counts are written for a PROFILE_SECONDS match and scaled by
+# timeLimit / PROFILE_SECONDS (a longer match, more kills and more time on the objective). The win rate,
+# draw rate, MVP rate and active share are not counts and are not scaled. Team Deathmatch: first to 100 team kills among 15 a side is
 # ~6.7 kills a head for the winning side, so a middling player makes ~7, a weak one 2 and a strong
 # one 20 (respawns every 5 s). Objective Capture scores the hill, not kills: about 60% of the kills,
 # plus captures, seconds stood on an objective the team owns, and kills made defending one.
@@ -64,6 +66,8 @@ PROFILES = {
 # body is never movement) and a player dies a few times a match. `mvp` is how often they top their team.
 # `streak` is multi-kill coins a match (a double is 50).
 TEAM_MODES = ("TeamDeathmatch", "KingOfTheHill")
+PROFILE_SECONDS = 480
+TEAM_PER_MATCH = ("kills", "assists", "revenges", "streak", "captures", "hold", "defends")
 TEAM_QUEST_STATS = ("teamMatches", "teamWins", "assists", "captures", "mvp")
 TEAM_PROFILES = {
     "TeamDeathmatch": {
@@ -649,6 +653,7 @@ class TeamIncome(Income):
         self.data, self.profile, self.mode = data, profile, mode
         t = data.team
         limit = data.team_modes[mode]["timeLimit"]
+        profile = {k: v * limit / PROFILE_SECONDS if k in TEAM_PER_MATCH else v for k, v in profile.items()}
         seconds = limit + data.team_overhead + LOAD_SECONDS
         self.mph, self.minutes = 3600 / seconds, seconds / 60
         shares = {"win": profile["win"], "draw": profile["draw"], "loss": 1 - profile["win"] - profile["draw"]}
@@ -704,6 +709,15 @@ class TeamIncome(Income):
         self.xp_per_hour = self.match_xp * self.mph + self.quest_xp / HOURS_PER_DAY
 
 
+def pay_unsized(data, mode):
+    """Why a team mode's clock and the match length TeamModeRewards is sized for disagree, or None. The
+    result pay and every per-match cap are sized to `matchSeconds`; a clock moved alone changes pay an hour."""
+    limit, sized = data.team_modes[mode]["timeLimit"], data.team.get("matchSeconds")
+    if sized != limit:
+        return f"{mode} timeLimit {limit} s, TeamModeRewards.matchSeconds {sized}"
+    return None
+
+
 def team_comparison(data, incomes):
     """Every team mode and profile against the same profile's battle royale hour: (mode, profile,
     team income, coins ratio, XP ratio, in band)."""
@@ -713,7 +727,7 @@ def team_comparison(data, incomes):
             team, br = TeamIncome(data, mode, profile), incomes[name]
             coins = (team.match_cash + team.jackpot_per_match) * team.mph / ((br.match_cash + br.jackpot_per_match) * br.mph)
             xp = team.match_xp * team.mph / (br.match_xp * br.mph)
-            ok = TEAM_BAND[0] <= coins <= TEAM_BAND[1] and TEAM_BAND[0] <= xp <= TEAM_BAND[1]
+            ok = TEAM_BAND[0] <= coins <= TEAM_BAND[1] and TEAM_BAND[0] <= xp <= TEAM_BAND[1] and not pay_unsized(data, mode)
             rows.append((mode, name, team, coins, xp, ok))
     return rows
 
@@ -983,6 +997,9 @@ def report(data, n):
               f"{fmt(br.match_xp * br.mph):>7} {xp:6.2f} {fmt(team.cash):>8} {fmt(team.sold):>9}"
               + ("" if ok else "   <- OUT OF BAND"))
     for mode in TEAM_MODES:
+        if pay_unsized(data, mode):
+            print(f"  PAY NOT SIZED TO THE CLOCK: {pay_unsized(data, mode)}. Scale the result pay and the caps with it.")
+    for mode in TEAM_MODES:
         mid = next(r[2] for r in rows if r[0] == mode and r[1] == "wins sometimes")
         print(f"    {mode}, wins sometimes, one match: " + ", ".join(
             f"{k} {c:.0f}c/{x:.0f}xp" for k, (c, x) in mid.lines.items() if c or x))
@@ -1213,6 +1230,17 @@ def plant(root, n):
         out = [f"{m} {n} coins x{c:.2f} XP x{x:.2f}" for m, n, _, c, x, ok in
                team_comparison(planted, {k: Income(planted, p, base_n) for k, p in PROFILES.items()}) if not ok]
         check(label, bool(out) and not clean, f"{len(out)} of 6 out of band ({'; '.join(out[:2])}); unplanted {len(clean)} out")
+
+    # 7. The pay is sized to the team clock (TeamModeRewards.matchSeconds). A clock moved alone must go red.
+    limit = base.team_modes["TeamDeathmatch"]["timeLimit"]
+    tmp = _copy(root)
+    target = base.team_modes["TeamDeathmatch"]["scoreTarget"]
+    _edit(tmp, SHARED + "GameModes.lua", f"scoreTarget = {target},\n\t\ttimeLimit = {limit},",
+          f"scoreTarget = {target},\n\t\ttimeLimit = {limit * 2},")
+    planted = Data(tmp)
+    unsized = [pay_unsized(planted, m) for m in TEAM_MODES if pay_unsized(planted, m)]
+    check("a team clock moved without its pay", bool(unsized) and not any(pay_unsized(base, m) for m in TEAM_MODES),
+          "; ".join(unsized) or "nothing flagged")
 
     print(f"economy_model plant: {sum(results)} of {len(results)} planted faults fired")
     return all(results)

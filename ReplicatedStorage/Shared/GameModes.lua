@@ -247,8 +247,11 @@ GameModes.Modes = {
 		respawnDelay = 5,
 		-- Oliver 09-25: "get rid of spawn prot". 0 grants none (ModeTeams.grantProtection).
 		spawnProtection = 0,
-		scoreTarget = 100,  -- Oliver, 2026-09-18: first to 100 team kills (was 50)
-		timeLimit = 480,
+		-- Oliver, 2026-09-18: first to 100 team kills (was 50). Task 18 (2026-09-25 playtest, "team matches
+		-- end too soon"): 150 kills in 12 minutes, the same 12.5 kills a minute of target per minute of clock.
+		-- MatchConfig.TeamModeRewards is sized to this clock (its matchSeconds); change both together.
+		scoreTarget = 150,
+		timeLimit = 720,
 		scoreLabel = "eliminations",
 		events = RESPAWN_EVENTS,
 	},
@@ -272,8 +275,10 @@ GameModes.Modes = {
 		-- losing a duel in the open costs.
 		respawnDelay = 6,
 		spawnProtection = 0, -- none (Oliver 09-25, as TDM)
-		scoreTarget = 250,
-		timeLimit = 480,
+		-- Task 18: 400 (was 250). Each objective a team owns scores 1 a second, so one team holding both
+		-- ends the match after 200 s at the earliest (was 125); holding one takes the full 400.
+		scoreTarget = 400,
+		timeLimit = 720,
 		scoreLabel = "seconds held",
 		events = RESPAWN_EVENTS,
 

@@ -338,9 +338,9 @@ titles unlocked and collection value.
 
 Every few matches the rotation (`Shared/GameModes.lua`, `GameModes.FromRotation`) runs a respawn
 mode instead of the battle royale (`Modules/GameMode.lua`, `Modules/ModeTeams.lua`,
-`Modules/ModeKingOfTheHill.lua`). **Team Deathmatch** is first to **100 team kills** or 8 minutes;
+`Modules/ModeKingOfTheHill.lua`). **Team Deathmatch** is first to **150 team kills** or 12 minutes;
 a death to the world (falling, the arena edge) pays the other side, so nobody stalls by dying to
-it. **King of the Hill** scores a point a second for the side holding the hill, to 250. Nobody is
+it. **King of the Hill** scores a point a second for the side holding the hill, to 400, or 12 minutes. Nobody is
 eliminated: a player who dies is back on one of their side's pads with a fresh green kit and
 **3 seconds** of spawn protection — **5 seconds** later in Team Deathmatch, **6** in King of the
 Hill, a second longer since losing the hill should cost more than losing a duel in the open; a

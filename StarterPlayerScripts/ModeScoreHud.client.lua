@@ -1,11 +1,11 @@
 -- The team-mode scoreline at the top of the screen (Oliver's list #10 and #54).
 --
---   Team Deathmatch   each team's progress to 100 eliminations
+--   Team Deathmatch   each team's progress to its scoreTarget in eliminations (GameModes)
 --   King of the Hill  match time, who has held the hill longest, and by how much
 --
 -- One readout for both, because they are the same question — who is ahead and by how much — and
 -- because two separate HUDs would be two things to keep out of each other's way at the top of the
--- screen. In KOTH the score IS seconds held (GameModes calls it "seconds held", target 250), so
+-- screen. In KOTH the score IS seconds held (GameModes calls it "seconds held", target in GameModes), so
 -- "held longest and by how much" is the leading score and the gap, with no extra plumbing.
 --
 -- It needs no new remote: GameMode already pushes ModeChanged with scores, target, secondsLeft,

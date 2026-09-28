@@ -187,7 +187,7 @@ nobody has measured. A probe timing real goals would settle whether it can be re
 
 Team Deathmatch and Objective Capture used to pay nothing. They now pay an itemised card
 (`MatchConfig.TeamModeRewards`, `RewardService.TeamBreakdown`): a crate and coins for the result (a loss
-included), kills at the battle royale's rate up to 30 a match, assists, multi-kills, revenge, the
+included), kills at the battle royale's rate up to 45 a match, assists, multi-kills, revenge, the
 objective lines in Objective Capture, and pay per minute of active play. On top of that there is a
 TEAM BONUS the battle royale has no equivalent for: the team MVP (2,000 coins), the first team win of the
 day (an Epic Crate and 1,500 coins), a win streak across consecutive team matches, and four team-only
@@ -200,15 +200,21 @@ XP, for every profile. `tools/economy_model.py` s.2b checks all twelve numbers a
 
 | profile | Team Deathmatch | Objective Capture |
 |---|---|---|
-| loses only | 1.35 / 1.43 | 1.45 / 1.42 |
-| wins sometimes | 1.41 / 1.31 | 1.50 / 1.30 |
-| strong | 1.38 / 1.50 | 1.43 / 1.45 |
+| loses only | 1.41 / 1.50 | 1.51 / 1.49 |
+| wins sometimes | 1.37 / 1.35 | 1.47 / 1.34 |
+| strong | 1.27 / 1.51 | 1.32 / 1.46 |
+
+Task 18 (2026-09-25) took both team clocks from 8 to 12 minutes. The result pay and every per-match cap in
+`TeamModeRewards` were scaled by 720/480 with them (`matchSeconds = 720` says which clock they are sized
+for), and the model scales its per-match profile counts the same way. With the clocks moved and the pay
+left alone, all six rows fell to 0.98-1.11 (0 of 6 in band). The model now fails if a team mode's
+`timeLimit` and `matchSeconds` disagree.
 
 The profiles for the team modes are assumptions stated in the model (kills, win rate, MVP rate, time
 active), not measurements. Two things the ratio leaves out. The milestone cosmetics have no coin value.
-And crates: a team hour holds about 6.5 of them against the battle royale's 10 to 19, so a player who sells
-every pull earns about the same as in the battle royale when losing (12.7k against 12.4k an hour) and less
-when winning (28k against 35k, 43k against 70k). The lead is in coins and XP, not in crate volume.
+And crates: a team hour holds about 4.5 of them against the battle royale's 10 to 19, so a player who sells
+every pull earns a little less than in the battle royale when losing (11.7k against 12.4k an hour) and less
+when winning (25k against 35k, 39k against 70k). The lead is in coins and XP, not in crate volume.
 
 The new team quests (play, win, assists, captures, MVP) share the daily pool, so a player who only plays
 the battle royale draws a quest they will not finish a little more often: the losing player's cash an hour

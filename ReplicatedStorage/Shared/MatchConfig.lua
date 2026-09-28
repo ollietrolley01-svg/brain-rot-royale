@@ -119,7 +119,7 @@ MatchConfig.CoinsPerKill = 75
 -- battle royale hour, in coins AND Pass XP, for every profile -- the player who always loses included, so
 -- a loss is still worth playing. The model checks all three profiles ("loses only", "wins sometimes",
 -- "strong") in Team Deathmatch and Objective Capture, and fails if any of the twelve ratios leaves 1.25-1.6.
--- Why more and not level: a team match asks for 8 minutes where a battle royale loss can be over in one,
+-- Why more and not level: a team match asks for 12 minutes where a battle royale loss can be over in one,
 -- and the battle royale keeps its own draw -- the 2,500-coin Legendary win -- which nothing here matches.
 --
 -- WHAT A MATCH PAYS, all of it at the end, on one itemised results card (RewardService.TeamBreakdown):
@@ -138,40 +138,45 @@ MatchConfig.CoinsPerKill = 75
 -- AFK: a player active in fewer than `participation.minActiveShare` of the checks gets the `afk` line
 -- and nothing else -- no crate, no win pay, no MVP, no TEAM BONUS -- and their win streak ends.
 MatchConfig.TeamModeRewards = {
-	-- THE RESULT. A team match is ~9.3 minutes with the lobby (8 of play), so ~6.5 an hour against the
+	-- The team match length every per-match number below is sized for: both team modes' timeLimit
+	-- (GameModes.lua). Task 18 (2026-09-25) took the clocks from 480 to 720 s and scaled the result pay and
+	-- every per-match cap by 720/480, so an hour of team play pays what it did. tools/economy_model.py and
+	-- tools/team_match_length_check.py fail if a mode's timeLimit and this disagree.
+	matchSeconds = 720,
+	-- THE RESULT. A team match is ~13.3 minutes with the lobby (12 of play), so ~4.5 an hour against the
 	-- battle royale's 10-19. A loss pays a crate and several times a bottom-half battle royale finish
 	-- (90-260). The win is not the battle royale's 2,500: it is shared by the whole side, so much of the gap
 	-- between players is made in the performance lines, which only that player earns.
-	win = { crate = "Rare", coins = 1300, xp = 345 },
-	draw = { crate = "Rare", coins = 600, xp = 270 },
-	loss = { crate = "Uncommon", coins = 250, xp = 230 },
+	win = { crate = "Rare", coins = 1950, xp = 518 },
+	draw = { crate = "Rare", coins = 900, xp = 405 },
+	loss = { crate = "Uncommon", coins = 375, xp = 345 },
 	-- Idle for most of the match: this and nothing else.
 	afk = { coins = 25, xp = 20 },
 
 	-- MatchService's live kill path. Kills are paid on the results card, so the live payment is 0; the live
 	-- call still counts the kill for Stats.kills, the kills quest and gun mastery, up to maxPaidKills.
 	killScale = 0,
-	maxPaidKills = 40,
+	maxPaidKills = 60,
 
 	-- Kills pay the battle royale's own rate (CoinsPerKill / XpPerKill, the bot rates for a bot) for the
-	-- first `cap` of a match. 30 is past what a strong player makes against bots in 8 minutes (~20), so a
+	-- first `cap` of a match. 45 is past what a strong player makes against bots in 12 minutes (~30), so a
 	-- good player is never capped early; the cap is only there for a farmed bot lobby.
-	kill = { cap = 30 },
+	kill = { cap = 45 },
 	-- Damage on someone a team-mate then finished: at least `minDamage` in the last `windowSeconds`.
-	assist = { coins = 35, xp = 15, cap = 20, minDamage = 25, windowSeconds = 10 },
+	assist = { coins = 35, xp = 15, cap = 30, minDamage = 25, windowSeconds = 10 },
 	-- Killing whoever last killed you.
-	revenge = { coins = 50, xp = 15, cap = 5 },
+	revenge = { coins = 50, xp = 15, cap = 8 },
 	-- Multi-kills, the battle royale's streak (MatchService STREAK_WINDOW, 50 a step: 50 for a double up to
 	-- 200 for a rampage). tools/team_rewards_check.py fails if these drift from MatchService's. Coins only,
 	-- as in the battle royale.
-	streak = { windowSeconds = 8, coinsPerStep = 50, max = 5, cap = 600 },
+	streak = { windowSeconds = 8, coinsPerStep = 50, max = 5, cap = 900 },
 	-- Objective Capture only, standing in for the kills that mode does not score. A capture pays everyone of
 	-- the capturing team standing on it; time pays per second on an objective your team owns (contested
 	-- counts: that is defending it); a defend is a kill of an enemy standing on an objective your team owns,
 	-- paid on top of the kill. Sized so Objective Capture lands within a few % of Team Deathmatch.
-	capture = { coins = 70, xp = 30, cap = 8 },
-	hold = { coinsPerSecond = 1.25, xpPerSecond = 0.4, capSeconds = 240 },
-	defend = { coins = 40, xp = 15, cap = 10 },
+	capture = { coins = 70, xp = 30, cap = 12 },
+	hold = { coinsPerSecond = 1.25, xpPerSecond = 0.4, capSeconds = 360 },
+	defend = { coins = 40, xp = 15, cap = 15 },
 	-- TEAM BONUS. The best on each team by performance value (uncapped), if it is at least `minCoins`. A bot
 	-- can be MVP; then nobody on that team gets the bonus. Never an AFK player. The team modes' answer to
 	-- the battle royale's win, paid for carrying rather than for being carried.
