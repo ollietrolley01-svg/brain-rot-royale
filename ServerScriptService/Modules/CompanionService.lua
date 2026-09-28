@@ -1233,6 +1233,8 @@ local function blastFor(player, entry, position)
 		-- structures, vehicles and companions.
 		damage = withinUse(useReport(entry), "blast", entry.stats.damage * BrainrotData.BlastPower),
 		weaponId = "Companion:" .. entry.def.name,
+		-- Like every other companion hit, it never lands on anyone still under a canopy.
+		spare = underCanopy,
 	})
 	return true
 end
