@@ -7,6 +7,9 @@
 -- Views per armed model:
 --   <Model>_rest     front-left quarter, the mount at its rest pitch
 --   <Model>_swung    the same model with the mount turned 60 degrees left and at its top pitch
+--   <Model>_low      the mount turned 90 degrees left and at its floor there (its lowest pitch), close
+--                    and side-on from in front, so the barrel's angle reads: clear of the roof and rails
+--   <Model>_high     the same at its top pitch: the breech and grips clear of the roof and hatch
 --   <Model>_mount    close on the mount's foot: what it stands on and how (plate, bolts, column, ring,
 --                    yoke), from low at the back-left quarter
 --   <Model>_driver   the driver's gun (VehicleModels.DriverMounts), turned to the edge of its arc
@@ -235,6 +238,26 @@ for modelId in pairs(VehicleModels.Mounts) do
 			checkVisible(camera, model, modelId .. "_swung", folder)
 		end,
 	})
+	-- Side-on to a barrel turned 90 degrees left (it points along -X), from in front and a little above.
+	for _, limit in ipairs({ "low", "high" }) do
+		table.insert(views, {
+			name = modelId .. "_" .. limit,
+			settle = 1,
+			setup = function(folder, camera)
+				stage(folder)
+				local model = place(folder, modelId)
+				local yaw = spec and math.min(90, spec.yawLimit) or 60
+				local pitch = 0
+				if spec then
+					pitch = limit == "low" and math.deg(VehicleWeaponData.PitchFloor(spec, math.rad(yaw))) or spec.pitchMax
+				end
+				pose(model, yaw, pitch)
+				local target = model:FindFirstChild("TurretPitch").Position - ORIGIN
+				look(camera, target + Vector3.new(-2.5, 2, -13), target + Vector3.new(-1.5, -0.8, 0), 40)
+				checkVisible(camera, model, modelId .. "_" .. limit, folder)
+			end,
+		})
+	end
 	table.insert(views, {
 		name = modelId .. "_sweep",
 		settle = 0.5,

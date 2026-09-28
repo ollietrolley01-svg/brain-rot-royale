@@ -448,8 +448,8 @@ local bd = last("shot")
 local vanMuzzle = Vector3.new(200, 0, 0) + frame(Vector3.new(), math.rad(90)):VectorToWorldSpace(MOUNTS.SahurVan.dmuzzle)
 R.bot_driver_fires_driver_gun = okb == true and count("round") == 0 and bd ~= nil and (bd.origin - vanMuzzle).Magnitude < 0.05
 
--- The rocket launcher's front-arc floor (4 deg inside 40 of ahead): aimed low straight ahead, it
--- leaves at 4 up; turned 90 degrees to the side it may go down to its -8.
+-- The rocket launcher's front-arc floor (4 deg inside its frontGuard arc of ahead): aimed low straight
+-- ahead, it leaves at 4 up; turned 90 degrees to the side it may go below level (its pitchMin).
 local ranger, rseat, _, rgseat = makeVehicle("CrocodiloRanger", 0, Vector3.new(-200, 0, 0))
 local rg, rgh = makeCharacter(false, "RangerGunner", Vector3.new(-200, 8, 5))
 rgseat:Sit(rgh)

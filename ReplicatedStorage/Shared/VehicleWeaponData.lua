@@ -61,10 +61,13 @@ VehicleWeaponData.Weapons = {
 		rechargeDelay = 1.2,
 		overheat = 0.5,
 		yawLimit = 180,
-		pitchMin = -12,
-		-- 25, not 40: on its pintle out in front of the gunner, the spade grips at 40 came down through
-		-- the hatch ring (tools/vehicle_models_axis_check.py sweeps the arc).
-		pitchMax = 25,
+		-- Widened for more range of motion (Jacob's playtest, 09-25; it was -12..25). Up: the spade grips
+		-- first meet the roof panels at 39 (turned 20 or 70 degrees; tools/vehicle_models_axis_check.py's
+		-- arc sweep), so 36. Down: the jacket meets the roof and spoiler at 22 (turned 50 or 130), but
+		-- the sight posts come into the gunner's hip crosshair below 17 (tools/gunner_hip_view_check.py,
+		-- PR #70's raised eye), so 17.
+		pitchMin = -17,
+		pitchMax = 36,
 		restPitch = 0,
 		slew = 320,
 		rarity = "Uncommon",
@@ -84,13 +87,18 @@ VehicleWeaponData.Weapons = {
 		rechargeDelay = 1.5,
 		-- All the way round now it stands in the middle of the bed on its pedestal.
 		yawLimit = 180,
-		pitchMin = -8,
-		pitchMax = 30,
+		-- Widened for more range of motion (09-25; it was -8..30): nothing on the truck stops the pod
+		-- going up, and to the sides and back the rails and tailgate stop the shot at 28-43 down. The
+		-- floor is the hip view's: below 12 down the launcher's bands and fuze box come into the gunner's
+		-- hip crosshair (tools/gunner_hip_view_check.py, PR #70's raised eye).
+		pitchMin = -12,
+		pitchMax = 60,
 		-- Over the cab the launcher's lowest tubes (7.45 up) must clear the cab roof and its light bar
 		-- (top 7.35, 2.95 studs ahead of the tubes): 4 degrees up does it (VehicleModels, the Ranger).
-		-- The roof's corners reach out to 52 degrees either side at the pod's lowest pitch (the gallery
-		-- sweep, 09-24: 45 degrees and -8 went through the roof panel), so the guard runs to 54.
-		frontGuard = { arc = 54, pitchMin = 4 },
+		-- The roof's corners and the roll bar reach further out the lower the pod points: at -12 the shot
+		-- meets the roll bar out to 55 degrees either side (the axis check's shot line), so the guard runs
+		-- to 58, where the shot clears to 17 down.
+		frontGuard = { arc = 58, pitchMin = 4 },
 		restPitch = 4,
 		slew = 200,
 		rarity = "Epic",
@@ -110,7 +118,8 @@ VehicleWeaponData.Weapons = {
 		rechargeDelay = 1.5,
 		yawLimit = 180,
 		pitchMin = 10,
-		pitchMax = 60,
+		-- 80, not 60 (09-25): the steep end lobs onto targets close to the van. Nothing is above the tube.
+		pitchMax = 80,
 		restPitch = 30,
 		slew = 160,
 		rarity = "Rare",
@@ -132,8 +141,10 @@ VehicleWeaponData.Weapons = {
 		rechargeDelay = 1.4,
 		overheat = 0.5,
 		yawLimit = 180,
-		pitchMin = -8,
-		pitchMax = 25,
+		-- Widened (09-25; it was -8..25): the grips meet the cabin roof and shell at 38 up, and the barrel
+		-- and shield meet them at 16 down (turned 30 degrees).
+		pitchMin = -12,
+		pitchMax = 34,
 		restPitch = 0,
 		slew = 260,
 		rarity = "Epic",
@@ -154,11 +165,15 @@ VehicleWeaponData.Weapons = {
 		recharge = 1.4,
 		rechargeDelay = 1.6,
 		yawLimit = 180,
-		pitchMin = -8,
-		pitchMax = 30,
-		-- Turned right round, the lowest pitches go into the carrier's own rear hump (the gallery sweep:
-		-- 170-180 degrees at -7 and -8); 6 degrees down clears it.
-		rearGuard = { arc = 15, pitchMin = -6 },
+		-- Widened (09-25; it was -8..30). Up: the grips meet the armour roof at 62, so 55. Down: the barrel
+		-- meets the roof at 23 to the sides, but the sight comes into the gunner's hip crosshair below 10
+		-- (tools/gunner_hip_view_check.py, PR #70's raised eye), so 10.
+		pitchMin = -10,
+		pitchMax = 55,
+		-- Turned toward the back, the low shot goes into the carrier's own roof and rear hump: the floor
+		-- clears 14 down at 150 degrees round, 12 at 155-163 and 6 at 180 (the axis check's shot line), so
+		-- behind 150 the barrel stops 5 down.
+		rearGuard = { arc = 30, pitchMin = -5 },
 		restPitch = 2,
 		slew = 180,
 		rarity = "Epic",
