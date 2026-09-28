@@ -4739,17 +4739,22 @@ end
 -- player it is fighting (hostileRider would put it out again), and on foot within VEHICLE.RIDE_REACH of
 -- the car, or already riding in it. Asked each think; call refreshFoes first.
 function Vehicles.gunnerMayCome(bot, ride)
+	return Vehicles.gunnerMayComeTo(bot, ride.model, ride.drive.chassis.Position)
+end
+
+-- The same question for a vehicle `model` standing at `at`, before any bot is at its wheel: the trip
+-- picker asks it so a battle royale bot doesn't walk to an armed car only to leave it at once.
+function Vehicles.gunnerMayComeTo(bot, model, at)
 	if Vehicles.botGunners() then
 		return true
 	end
-	local at = ride.drive.chassis.Position
 	for _, player in ipairs(Players:GetPlayers()) do
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		local seat = humanoid and humanoid.SeatPart
-		if root and humanoid.Health > 0 and not (bot.vehicleFoes and bot.vehicleFoes[player])
-			and (seat == nil or seat.Parent == ride.model) and (root.Position - at).Magnitude <= VEHICLE.RIDE_REACH then
+		if root and humanoid and humanoid.Health > 0 and not (bot.vehicleFoes and bot.vehicleFoes[player])
+			and (seat == nil or seat.Parent == model) and (root.Position - at).Magnitude <= VEHICLE.RIDE_REACH then
 			return true
 		end
 	end
@@ -4874,7 +4879,8 @@ function Vehicles.pickSeat(bot, root, now)
 	end
 
 	-- A trip: somewhere far, a free wheel close by and not back the way it came. One with an unmanned
-	-- gun last, since that gun needs a gunner before it goes anywhere.
+	-- gun last, since that gun needs a gunner before it goes anywhere, and never one nobody could come
+	-- to man (driverThink would put the bot straight out again: board, leave, cooldown, repeat).
 	local goal = Vehicles.travelGoal(bot, root, now)
 	if not goal or flatDistance(goal, root.Position) < (MatchConfig.BotDriveMinTrip or 220) or not Vehicles.driverRoom(bot) then
 		return nil
@@ -4885,7 +4891,9 @@ function Vehicles.pickSeat(bot, root, now)
 		if seats and not seats.driver.Occupant and found.distance <= (MatchConfig.BotBoardReach or 60)
 			and not Vehicles.strangerAboard(team, seats) then
 			local position = found.model:GetPivot().Position
-			if flatDistance(position, goal) < flatDistance(root.Position, goal) + 20 then
+			local unmanned = seats.gunner and not seats.gunner.Occupant
+			if flatDistance(position, goal) < flatDistance(root.Position, goal) + 20
+				and not (unmanned and not Vehicles.gunnerMayComeTo(bot, found.model, position)) then
 				local score = found.distance + ((seats.gunner and not seats.gunner.Occupant) and 50 or 0)
 				if score < bestScore then
 					best, bestScore = seats.driver, score
