@@ -446,9 +446,13 @@ local SCORCH_WIDEST = 7 -- studs across at most: the old 14-stud rocket mark rea
 local SCORCH_RING = 8
 local SCORCH_SHADE = 0.12
 local SCORCH_RELAY = { 0.3, 1, 2.5, 5 }
--- How far below the mark's plane a patch may land: on the ground, a crater's depth (DestructibleService
--- digs at most 4.5); on a part, a bevel or a step, never the storey below.
-local SCORCH_SINK, SCORCH_LIP = 5, 0.6
+-- How far below the mark's plane a patch may land. On the ground, the floor of the crater this blast
+-- digs: one blast's worth, since the plane is the ground as it was (DestructibleService: CRATER_MAX x
+-- DEEPEN = 5.6 at the apex, up to half a voxel row more where the rings leave it, Basalt's 0.8 of
+-- roughness, and more on a hillside), 11 at most on ground up to 45 degrees (tools/scorch_sink_check.py).
+-- No deeper: anything further down is not this crater (a gorge floor, a road in a notch). On a part,
+-- a bevel or a step (a kerb is 0.5), never the storey below.
+local SCORCH_SINK, SCORCH_LIP = 11.5, 0.6
 ExplosiveFx.ScorchWidest = SCORCH_WIDEST
 
 local function layPatch(patch, centre, normal, flat)

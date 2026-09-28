@@ -180,7 +180,9 @@ def luau_to_lua(source):
     return re.sub(r"^(\s*)([\w\.\[\]\"]+)\s*([+\-*/])=\s*(.+)$", r"\1\2 = \2 \3 (\4)", source, flags=re.M)
 
 
-def run(fx_src):
+def load_fx(fx_src):
+    """The real ExplosiveFx on tools/destruct_mocks.lua, drawing realistic blasts: (lua, mock), mock.fx set.
+    tools/scorch_sink_check.py builds its own world on this."""
     lua = LuaRuntime(unpack_returned_tuples=True)
     mock = lua.execute((ROOT / "tools" / "destruct_mocks.lua").read_text(encoding="utf-8"))
     lua.execute(r"""
@@ -207,6 +209,11 @@ def run(fx_src):
         for _, n in ipairs({ "Ballistics", "SoundConfig" }) do Instance.new("ModuleScript", shared).Name = n end
     """)
     mock.fx = lua.execute(luau_to_lua(fx_src))
+    return lua, mock
+
+
+def run(fx_src):
+    lua, mock = load_fx(fx_src)
     text, fails = lua.execute(WORLD)(mock)()
     return text, list(fails.values())
 
