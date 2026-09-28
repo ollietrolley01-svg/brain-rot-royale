@@ -1634,7 +1634,7 @@ local function renderWeapon()
 		local seat = humanoid and humanoid.SeatPart
 		local lastInput = UserInputService:GetLastInputType()
 		local how = "click to use"
-		if seat ~= nil and seat:IsA("VehicleSeat") then
+		if seat ~= nil and seat:IsA("VehicleSeat") and not (seat.Parent ~= nil and seat.Parent:GetAttribute("VehicleKind") == "bike") then
 			how = "hands on the wheel"
 		elseif string.find(lastInput.Name, "Gamepad", 1, true) then
 			how = "RT to use"

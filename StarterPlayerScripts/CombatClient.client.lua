@@ -742,10 +742,12 @@ end
 
 -- The driver has both hands on the wheel, and a gamepad's triggers are the throttle and brake: while
 -- driving, the fire and aim bindings neither shoot, click nor aim (they still pass the input on to the
--- vehicle). Passengers can do both.
+-- vehicle). Passengers can do both, and so can everyone on a bike, rider included. The server's rule
+-- is CombatService.SeatBarsWeapons; this mirrors it.
 local function drivingVehicle()
 	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-	return humanoid ~= nil and humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat")
+	local seat = humanoid and humanoid.SeatPart
+	return seat ~= nil and seat:IsA("VehicleSeat") and not (seat.Parent ~= nil and seat.Parent:GetAttribute("VehicleKind") == "bike")
 end
 
 local function tryFire()
