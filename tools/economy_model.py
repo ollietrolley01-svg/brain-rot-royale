@@ -583,6 +583,8 @@ class Income:
             cash += share * math.floor(b["coins"] * data.placement_factor)
             xp += share * b["xp"]
             crates[b["crate"]] = crates.get(b["crate"], 0) + share
+            # A win's second roll for a Mythic Crate (the bracket's `mythicChance`), on top of its crate.
+            crates["Mythic"] = crates.get("Mythic", 0) + share * b.get("mythicChance", 0)
             top10 += share if rank <= 10 else 0
         kills = profile["kills"]
         self.match_cash = cash + kills * data.bot_kill_coins
@@ -665,6 +667,8 @@ class TeamIncome(Income):
             xp += share * r["xp"]
             if r.get("crate"):
                 crates[r["crate"]] = crates.get(r["crate"], 0) + share
+        # A win's Mythic Crate roll (TeamModeRewards.mythicChance), as the battle royale's rank 1.
+        crates["Mythic"] = crates.get("Mythic", 0) + shares["win"] * t.get("mythicChance", 0)
         self.lines = {"result": (cash, xp)}
 
         def line(name, coins, x):

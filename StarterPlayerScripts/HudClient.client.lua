@@ -935,9 +935,15 @@ local NEW_PLAYER_TIPS = {
 	"Loot guns, heals, shields and items — eight slots, keys {Slot1} to {Slot8} ({NextSlot} cycles)",
 	"Equip a brainrot as your companion and press {Companion} to use its move in a fight",
 	"Try the Cloud Climb up the tree, kick a ball into the goal, spin the daily wheel",
-	"Stay inside the zone — the purple storm wall hurts. Last one standing wins a Legendary Crate",
 	"Press {ToggleCamera} to switch to a third-person camera; every key is rebindable in Settings",
 }
+do
+	-- What a win pays, read from MatchConfig, so the Mythic Crate chance shown is the one RewardService rolls.
+	local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+	local win = MatchConfig.GetBracket(1)
+	local mythic = win.mythicChance and string.format(", with a %s chance of a Mythic Crate too", MatchConfig.ChanceText(win.mythicChance)) or ""
+	table.insert(NEW_PLAYER_TIPS, 6, string.format("Stay inside the zone — the purple storm wall hurts. Last one standing wins a %s Crate%s", win.crate, mythic))
+end
 -- When the companion's move is ready again, from the cooldown in its last attack broadcast.
 local abilityReadyAt = 0
 

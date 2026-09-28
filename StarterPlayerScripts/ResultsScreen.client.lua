@@ -671,6 +671,9 @@ local function render(result)
 				paid = string.format("+%s XP", formatNumber(xp))
 			elseif line.id == "unlock" then
 				paid = "NEW COSMETIC"
+			elseif line.note then
+				-- A line that pays no coins says what it gave instead (the win's Mythic Crate roll).
+				paid = tostring(line.note)
 			else
 				paid = "+" .. formatNumber(coins)
 			end
@@ -704,7 +707,7 @@ local function render(result)
 				Size = UDim2.new(0, BREAKDOWN_PAID, 1, 0),
 				Font = Enum.Font.GothamBold,
 				TextSize = 12,
-				TextColor3 = GOLD,
+				TextColor3 = type(line.crate) == "string" and Rarity.Color(line.crate) or GOLD,
 				TextXAlignment = Enum.TextXAlignment.Right,
 				Text = paid,
 				Parent = cell,
@@ -723,6 +726,11 @@ local function render(result)
 		end
 		if type(reward.bonusCrate) == "string" then
 			chip(rewardRow, "+1 " .. string.upper(reward.bonusCrate) .. " CRATE", Rarity.Color(reward.bonusCrate), 1)
+			any = true
+		end
+		-- The battle royale win's Mythic Crate roll (RewardService.MythicLine): its odds, and whether it dropped.
+		if type(reward.mythic) == "table" then
+			chip(rewardRow, tostring(reward.mythic.chip), reward.mythic.crate and Rarity.Color(reward.mythic.crate) or R.TextMuted, 1)
 			any = true
 		end
 		if (reward.coins or 0) > 0 then
