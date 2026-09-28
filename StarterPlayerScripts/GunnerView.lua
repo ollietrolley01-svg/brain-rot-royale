@@ -59,6 +59,11 @@ Pure.Kick = {
 	grenade = { pitch = 2.6, back = 0.14, shake = 0.8 },
 	lob = { pitch = 3.5, back = 0.18, shake = 1.0 },
 }
+-- The share of that kick left fully aimed down the sight (Oliver 09-28: the sight was lost behind the
+-- gun's recoil). A full kick threw the view up off the target, so the target dropped behind the rear
+-- sight's block for the first frames after every shot, and on the mortar it swung the hand into view.
+-- Braced on the sight the gun barely moves; at the hip it kicks as before.
+Pure.AimedKick = 0.25
 -- Degrees the view turns per pixel of mouse at 1x sensitivity, and per second at full stick.
 Pure.MouseDegrees = 0.22
 Pure.StickDegrees = 150
@@ -545,9 +550,10 @@ function GunnerView:AimPoint()
 end
 
 function GunnerView:Fired()
-	self.kickPitchV += self.kick.pitch * 60
-	self.kickBackV += self.kick.back * 60
-	self.shake = math.min(1.5, self.shake + self.kick.shake)
+	local scale = 1 - (1 - Pure.AimedKick) * Pure.smooth(self.aim)
+	self.kickPitchV += self.kick.pitch * 60 * scale
+	self.kickBackV += self.kick.back * 60 * scale
+	self.shake = math.min(1.5, self.shake + self.kick.shake * scale)
 end
 
 -- One frame. `state` = { ready = bool } from VehicleWeaponClient (the mount's ammo and heat).
