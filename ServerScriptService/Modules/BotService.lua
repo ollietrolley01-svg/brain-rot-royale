@@ -3068,8 +3068,9 @@ end
 
 -- Team modes: the loot stocked round the bot's own base (Oliver, 2026-09-23: "make the bots go for
 -- it"). A bot at or near home takes any gun that beats the one it carries, any chest, and loose heals
--- while it is carrying fewer than three. Returns the nearest such pickup, or nil. A field rather than
--- a local, for the file's local budget.
+-- while it is carrying fewer than three. A bot that spawned with a kit (task 26) takes only heals, once
+-- it's below the kit's count. Returns the nearest such pickup, or nil. A field rather than a local, for
+-- the file's local budget.
 function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now, chestsFirst)
 	local teams = lazy("ModeTeams")
 	local base = teams and teams.BaseOf and teams.BaseOf(modeState.team)
@@ -3086,10 +3087,16 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 	-- How much to carry is the archetype's call (BotService.Loot.DIALS healStockTarget / shieldStockTarget).
 	local wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < BotService.Loot.dial(bot, "healStockTarget")
 	local wantShields = (bot.shields.MiniShield + bot.shields.ShieldPotion) < BotService.Loot.dial(bot, "shieldStockTarget")
+	-- A kitted bot (task 26) takes only heals from home, and only once it has used some of the kit's.
+	local kitted = bot.kitHeals ~= nil
+	if kitted then
+		wantHeals = (bot.heals.Bandage + bot.heals.MedKit) < bot.kitHeals
+		wantShields = false
+	end
 	-- While gearing up after a spawn, an unopened chest at the base beats everything else (Oliver,
 	-- 2026-09-23 14:38: "make the bots go after the chests when they spawn"). The base has 14; a squad
 	-- spawning on one pad used to walk at the same nearest one, so the pick spreads them (BotService.Loot.baseChest).
-	if chestsFirst then
+	if chestsFirst and not kitted then
 		local chest = BotService.Loot.baseChest(bot, here, flatBase, baseRadius, center, circleRadius, now)
 		if chest then
 			return chest
@@ -3107,8 +3114,8 @@ function BotService.FindBaseLoot(bot, root, modeState, center, circleRadius, now
 					wanted = (wantHeals and item:GetAttribute("HealId") ~= nil)
 						or (wantShields and entry.itemId ~= nil and WeaponService.Shields[entry.itemId] ~= nil)
 				elseif item.Name == "Chest" then
-					wanted = true
-				else
+					wanted = not kitted
+				elseif not kitted then
 					local id = item:GetAttribute("WeaponId")
 					local def = id and WeaponData.Get(id)
 					-- And one takeGun would keep (bestGear's rule): a higher tier of a class it doesn't want, with
@@ -5576,6 +5583,11 @@ end
 -- Nearest heal, shield or throwable pickup within `radius` the bot is short of.
 function BotService.Loot.bestConsumable(bot, position, radius, center, circleRadius, now)
 	local best, bestDistance = nil, radius
+	-- A kitted bot (task 26) leaves its own base's stock alone; FindBaseLoot's lull restock is its way home.
+	local teams = bot.kitHeals and lazy("ModeTeams")
+	local modeState = teams and teams.BaseOf and BotService.ModeState(bot)
+	local home = modeState and teams.BaseOf(modeState.team)
+	local homeRadius = (LootService.BaseRadius or 85) + 10
 	-- Heals and shields are "heal" rows, throwables "item" rows: two cell reads, one after the other
 	-- (the scratch list is reused by the second, so the first is finished before it starts).
 	for _, kind in ipairs(BotService.Loot.CONSUMABLE_KINDS) do
@@ -5585,6 +5597,7 @@ function BotService.Loot.bestConsumable(bot, position, radius, center, circleRad
 			local distance = (entry.position - position).Magnitude
 			local item = entry.item
 			if distance < bestDistance and item.Parent and not item:GetAttribute("Claimed") and BotService.Loot.wantsConsumable(bot, entry)
+				and not (home and flatDistance(entry.position, home) <= homeRadius)
 				and lootAllowed(bot, item, distance, center, circleRadius, now) then
 				best, bestDistance = item, distance
 			end
@@ -6320,7 +6333,8 @@ local function updateBot(bot)
 	if gearState and bot.gearCharacter ~= bot.character then
 		bot.gearCharacter = bot.character
 		bot.gearStart = now
-		bot.gearUntil = now + (MatchConfig.BotBaseGearSeconds or 30)
+		-- A bot that spawned with the mode's kit skips it and heads out (task 26).
+		bot.gearUntil = not bot.kitHeals and now + (MatchConfig.BotBaseGearSeconds or 30) or nil
 	end
 	if gearState and bot.gearUntil and now < bot.gearUntil and not bot.lootTarget and now - bot.lootCheckedAt > 0.6 then
 		bot.lootCheckedAt = now
@@ -6688,12 +6702,19 @@ function BotService.Spawn(count, cframeFor, onSpawned, options)
 					giveBotGun(character, def)
 				end
 				if okLoadout and type(items) == "table" then
+					-- A bot that spawned with a kit doesn't loot its base (task 26): no gear-up phase, no base
+					-- chests or guns, and a trip home for heals only once it's below the kit's heal count.
+					-- `kitHeals` is that count, and nil for a bot with no kit (the BR). The kit replaces the
+					-- BR's random starting Bandage, so a kitted bot carries exactly the kit's heals.
+					bot.kitHeals = 0
+					bot.heals.Bandage, bot.heals.MedKit = 0, 0
 					for _, entry in ipairs(items) do
 						local id = type(entry) == "table" and entry.id or entry
 						local count = (type(entry) == "table" and tonumber(entry.count)) or 1
 						if type(id) == "string" and count > 0 then
 							if WeaponService.Heals[id] then
 								giveBotHeal(bot, id, count)
+								bot.kitHeals = BotService.Loot.healCount(bot)
 							elseif WeaponService.Shields[id] then
 								giveBotShield(bot, id, count)
 							elseif id == "RotBarricade" or id == "PopupBunker" or id == "BrainrotFortress" then
