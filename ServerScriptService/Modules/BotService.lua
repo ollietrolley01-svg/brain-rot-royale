@@ -1055,6 +1055,19 @@ local function hasLineOfSight(fromPart, toCharacter, botCharacter)
 	if node and node ~= workspace then
 		table.insert(filter, node)
 	end
+	-- Nor is the TARGET's vehicle a wall between the bot and its rider, where it doesn't enclose them:
+	-- a player's shot at the doors or a bed wall carries on to the rider behind, who takes the share
+	-- VehicleCover gives (CombatService riderBehind), and a bot's shot rolls that same cover (shootAt).
+	-- A seat that is all bodywork from the bot's side (an armoured cabin, whose glass is armour; a
+	-- car's roof from steeply above) shows nothing of the rider, so there the vehicle stays cover.
+	local coverModel, coverSeat, coverId = VehicleCover.SeatOf(toCharacter)
+	if coverModel and coverModel ~= node then
+		local _, exposure = VehicleCover.Profile(coverId, coverSeat.Name)
+		local side = exposure[VehicleCover.Direction(coverModel, fromPart.Position, toPart.Position)] or exposure.side
+		if side.body < 1 then
+			table.insert(filter, coverModel)
+		end
+	end
 	params.FilterDescendantsInstances = filter
 
 	-- Window glass is see-through, and a shot breaks it on the way (CombatService), so a pane

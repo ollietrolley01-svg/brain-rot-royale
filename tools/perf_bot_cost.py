@@ -168,6 +168,8 @@ BotService.RaycastBudget = {
     LosParams = {}, LosFilter = {}, CoverParams = {}, CoverFilter = {}, ExposedParams = {}, ExposedFilter = {},
 }
 castRay = function(origin, direction, params, priority) return workspace:Raycast(origin, direction, params), true end
+-- Nobody here rides a vehicle (hasLineOfSight asks whose car a target sits in).
+VehicleCover = { SeatOf = function() return nil end }
 """
 
 # --------------------------------------------------------------------------------------------
