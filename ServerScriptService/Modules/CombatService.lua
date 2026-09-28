@@ -878,6 +878,62 @@ local function bodyBetween(vehicle, from, to, params)
 	return workspace:Raycast(from, to - from, only) ~= nil
 end
 
+-- The victims a flying round's ruling ray (RuleBullet) dealt while it runs, so RuleBullet can tell whether
+-- that ray met the body the round's sweep touched. nil at every other time.
+local ruledVictims = nil
+
+-- A bullet into a living body: the headshot, the rider's cover, the damage and the gun's ability. `hit` is
+-- where it struck: { Instance, Position } and, from LagCompensation, Rewound and Carry; `origin` is where
+-- this stretch of the shot started, which is the line the rider's cover is read along. firePellet's, and a
+-- flying round's whose ruling ray missed the body its sweep touched (RuleBullet), so both go the same way.
+local function strikeBody(shooterToken, def, through, victimToken, victimCharacter, hit, origin, params)
+	local damage = def.damage * through
+	local headshot = hit.Instance.Name == "Head"
+	if headshot then
+		damage *= (def.headshotMultiplier or 1) * CombatService.HeadshotScale
+	end
+
+	-- Someone riding a vehicle, hit without its body in the way: through its glass (which takes its
+	-- share, to the vehicle), or in the open (a bike, a truck bed, a gunner's chest), which takes none.
+	local coverModel, coverSeat, coverId = VehicleCover.SeatOf(victimCharacter)
+	if coverModel and CombatService.DamageVehicle then
+		-- A REWOUND rider was struck where they sat a ping ago, but the car around them is tested where
+		-- it is now: at 62-106 studs/s that is most of a car length away, so every such hit used to
+		-- read as "open" and the rider took full damage (#97 F2). A seated rider moves rigidly with
+		-- the car, so the rewind's own carry, inverted, takes the shot into the car's PRESENT frame,
+		-- where its glass and body really are.
+		local from, to = origin, hit.Position
+		if hit.Rewound and hit.Carry then
+			local back = hit.Carry:Inverse()
+			from, to = back * from, back * to
+		end
+		-- Body before glass on a rewound shot: that is what the world ray meets in present time (glass is
+		-- CanQuery=false, and Hull_Upper encloses the ArmorGlass/ArmorSlit on the TartarugaScout and
+		-- CameloCarrier). Glass first read a shot through a sealed screen as "glass" (20%) rewound but
+		-- "body" (8%) in present time: 2.5x the damage from lag compensation alone.
+		local via
+		if hit.Rewound and hit.Carry and bodyBetween(coverModel, from, to, params) then
+			-- The world ray never met this car's body (it was somewhere else by now), so it's asked here.
+			via = "body"
+		elseif VehicleCover.CrossesGlass(coverModel, from, to) then
+			via = "glass"
+		else
+			via = "open"
+		end
+		local share = VehicleCover.Share(coverId, coverSeat.Name, via)
+		if share < 1 then
+			CombatService.DamageVehicle(shooterToken, coverModel, def.damage * through * (1 - share), "bullet", def.id, hit.Position)
+			damage *= share
+		end
+	end
+
+	CombatService.DealDamage(shooterToken, victimToken, damage, def.id, headshot)
+	fireAbility(shooterToken, def, victimToken, hit.Position, def.damage * through)
+	if ruledVictims then
+		ruledVictims[victimToken] = true
+	end
+end
+
 local function firePellet(shooterToken, character, origin, direction, def, rewindTo, segments, bounced)
 	segments = segments or shotSegments
 	local params = buildRaycastParams(character, shooterToken)
@@ -986,6 +1042,9 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 				local riderDamage = amount * share * (headshot and (def.headshotMultiplier or 1) * CombatService.HeadshotScale or 1)
 				CombatService.DamageVehicle(shooterToken, vehicle, amount * (1 - share), "bullet", def.id, result.Position)
 				CombatService.DealDamage(shooterToken, riderToken, riderDamage, def.id, headshot)
+				if ruledVictims then
+					ruledVictims[riderToken] = true
+				end
 			else
 				CombatService.DamageVehicle(shooterToken, vehicle, amount, "bullet", def.id, result.Position)
 			end
@@ -1027,48 +1086,7 @@ local function firePellet(shooterToken, character, origin, direction, def, rewin
 			continue
 		end
 
-		local damage = def.damage * through
-		local headshot = result.Instance.Name == "Head"
-		if headshot then
-			damage *= (def.headshotMultiplier or 1) * CombatService.HeadshotScale
-		end
-
-		-- Someone riding a vehicle, hit without its body in the way: through its glass (which takes its
-		-- share, to the vehicle), or in the open (a bike, a truck bed, a gunner's chest), which takes none.
-		local coverModel, coverSeat, coverId = VehicleCover.SeatOf(victimCharacter)
-		if coverModel and CombatService.DamageVehicle then
-			-- A REWOUND rider was struck where they sat a ping ago, but the car around them is tested where
-			-- it is now: at 62-106 studs/s that is most of a car length away, so every such hit used to
-			-- read as "open" and the rider took full damage (#97 F2). A seated rider moves rigidly with
-			-- the car, so the rewind's own carry, inverted, takes the shot into the car's PRESENT frame,
-			-- where its glass and body really are.
-			local from, to = currentOrigin, result.Position
-			if result.Rewound and result.Carry then
-				local back = result.Carry:Inverse()
-				from, to = back * from, back * to
-			end
-			-- Body before glass on a rewound shot: that is what the world ray meets in present time (glass is
-			-- CanQuery=false, and Hull_Upper encloses the ArmorGlass/ArmorSlit on the TartarugaScout and
-			-- CameloCarrier). Glass first read a shot through a sealed screen as "glass" (20%) rewound but
-			-- "body" (8%) in present time: 2.5x the damage from lag compensation alone.
-			local via
-			if result.Rewound and result.Carry and bodyBetween(coverModel, from, to, params) then
-				-- The world ray never met this car's body (it was somewhere else by now), so it's asked here.
-				via = "body"
-			elseif VehicleCover.CrossesGlass(coverModel, from, to) then
-				via = "glass"
-			else
-				via = "open"
-			end
-			local share = VehicleCover.Share(coverId, coverSeat.Name, via)
-			if share < 1 then
-				CombatService.DamageVehicle(shooterToken, coverModel, def.damage * through * (1 - share), "bullet", def.id, result.Position)
-				damage *= share
-			end
-		end
-
-		CombatService.DealDamage(shooterToken, victimToken, damage, def.id, headshot)
-		fireAbility(shooterToken, def, victimToken, result.Position, def.damage * through)
+		strikeBody(shooterToken, def, through, victimToken, victimCharacter, result, currentOrigin, params)
 
 		remaining -= 1
 		if remaining > 0 then
@@ -1114,20 +1132,36 @@ end
 -- headshot, fireAbility (lifesteal, streaks) and explosive ammo all go exactly as a hitscan shot's do.
 -- Ruled on the present: a round is not rewound (it was fired at where the target was, and flew).
 -- Pierce and ricochet belong to the round (it flies on through a body, or banks off as a new round), so
--- the stretch has neither. Returns what `struck` (the part the round's sweep met) is: "body" (a living
--- combatant), "map" (a wall, the ground, a prop: what a ricochet banks off) or "cover" (anything else).
-function CombatService.RuleBullet(shooterToken, def, from, direction, reach, struck)
+-- the stretch has neither. Returns what `struck` (the part the round's sweep met, at `at`) is: "body" (a
+-- living combatant), "map" (a wall, the ground, a prop: what a ricochet banks off) or "cover" (anything
+-- else). A body the sweep met is always hit, even when the ruling ray went by it (see below).
+function CombatService.RuleBullet(shooterToken, def, from, direction, reach, struck, at)
 	local leg = setmetatable({
 		range = reach,
 		ability = def.ability ~= "pierce" and def.ability or false,
 		ricochet = false,
 	}, { __index = def })
-	firePellet(shooterToken, Combatants.GetCharacter(shooterToken), from, direction, leg, nil, nil)
+	local model = struck and struck:FindFirstAncestorOfClass("Model")
+	local token = model and Combatants.FromCharacter(model) or nil
+	local alive = token ~= nil and Combatants.IsAlive(token)
+	local character = Combatants.GetCharacter(shooterToken)
+	ruledVictims = {}
+	local ok, err = pcall(firePellet, shooterToken, character, from, direction, leg, nil, nil)
+	local dealt = ruledVictims
+	ruledVictims = nil
+	if not ok then
+		error(err, 0)
+	end
+	-- The sweep touched a living body but the ruling ray went by it (a sweep 0.1 studs wide grazing the
+	-- edge of a limb, which a ray down the middle of the round's line misses): the round still hit them,
+	-- so the hit is dealt on the part it touched, the way firePellet deals one (headshot, rider's cover).
+	if alive and not dealt[token] and not (CombatService.DamageVeto and CombatService.DamageVeto(shooterToken, token, def.id)) then
+		local point = typeof(at) == "Vector3" and at or struck.Position
+		strikeBody(shooterToken, leg, 1, token, model, { Instance = struck, Position = point }, from, buildRaycastParams(character, shooterToken))
+	end
 	if not struck then
 		return "cover"
 	end
-	local model = struck:FindFirstAncestorOfClass("Model")
-	local token = model and Combatants.FromCharacter(model) or nil
 	if token then
 		return Combatants.IsAlive(token) and "body" or "cover"
 	elseif CombatService.CompanionFromPart and CombatService.CompanionFromPart(struck)

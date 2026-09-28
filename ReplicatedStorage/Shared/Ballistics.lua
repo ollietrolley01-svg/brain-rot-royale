@@ -698,6 +698,9 @@ Ballistics.RegisterRound("bananerang", {
 --   ricochet  a round that stops on the map banks off it as a new round, with the reach it has left, at
 --             the ricochet's `scale` of its damage
 --   reach     past the gun's `range` it does nothing, as a hitscan shot did nothing there
+--   panes     ProjectileService's sweep breaks every window pane along its flight and flies on through,
+--             on every leg (past a pierced body, off a bank), a bot's round as a player's: a hitscan shot
+--             broke each pane on its line and was not stopped by any (tools/sniper_round_check.py, G)
 -- `back`: how far behind the contact the ruling ray starts, so a rider's cover (glass is not in the
 -- round's sweep) lies on it. `pierceClear`: past a pierced body, before a ruling ray may start again.
 Ballistics.SniperRound = { back = 16, minBack = 0.25, past = 0.5, pierce = 2, pierceClear = 3 }
@@ -709,6 +712,8 @@ Ballistics.RegisterRound("sniperRound", {
 	radius = 0.1,
 	-- The longest sniper reach (Nanna Nanna Puff, 1350) and a little more.
 	maxTime = 1.6,
+	-- Gone at the gun's `range` (ProjectileService.stepRound): a pane past a hitscan shot's reach never broke.
+	stopAtRange = true,
 	explosive = false,
 	impactBonus = 0,
 	look = { shape = "cylinder", size = 1.4, color = Color3.fromRGB(255, 226, 150), spin = "none" },
@@ -732,7 +737,7 @@ Ballistics.RegisterRound("sniperRound", {
 		local from = at - unit * back
 		-- Aimed just inside the surface the round touched, so the ruling ray meets it too.
 		local line = (at - normal * 0.05) - from
-		local struck = api.RuleBullet(owner, def, from, line.Unit, line.Magnitude + rules.past, instance)
+		local struck = api.RuleBullet(owner, def, from, line.Unit, line.Magnitude + rules.past, instance, at)
 		if struck == "body" then
 			entry.pierced = (type(entry.pierced) == "number" and entry.pierced or 0) + 1
 			if def.ability == "pierce" and entry.pierced < rules.pierce then

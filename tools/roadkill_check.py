@@ -12,7 +12,10 @@ What it proves: a car over the speed floor damages whoever it touches through th
 kill is credited to whoever is in the driving seat, player OR bot (the credit is what the kill feed,
 rewards and streaks read, via CombatService.GetLastAttacker -> HandleDeath -> OnElimination); a bot
 driver's team is respected in a team mode; nothing under the floor, never the car's own riders, once
-per victim per debounce window. And the momentum rule's server half (RoadkillPass, Oliver 09-24): a
+per victim per debounce window. A pass (task 30) deals at most ROADKILL_PASS_MAX, one hit at any speed
+too; its window runs from its first contact, so a body pinned at the nose (on the hood, or against a
+wall with the car still pushing) is a new pass every window and a full player dies within seconds; a
+spent pass never calls DealDamage. And the momentum rule's server half (RoadkillPass, Oliver 09-24): a
 survivor is thrown along the direction of travel, a body carries the same throw into its ragdoll, the
 hit opens the crash grace (the speed change is never collision damage), the server lets the body
 through too, and a driver's client's report of a hit is believed only from the driver whose client
@@ -47,7 +50,8 @@ def sources(root):
     vs = open(os.path.join(root, "ServerScriptService", "Modules", "VehicleService.lua"), encoding="utf-8").read()
     cs = open(os.path.join(root, "ServerScriptService", "Modules", "CombatService.lua"), encoding="utf-8").read()
     mt = open(os.path.join(root, "ServerScriptService", "Modules", "ModeTeams.lua"), encoding="utf-8").read()
-    consts = "\n".join(re.findall(r"^local ROADKILL_\w+ = [\d.]+", vs, flags=re.M))
+    # (SPEED_SLACK: onRoadkillReport holds a driver's report to the car's top speed times it.)
+    consts = "\n".join(re.findall(r"^local (?:ROADKILL_\w+|SPEED_SLACK) = [\d.]+", vs, flags=re.M))
     roadkill = between(vs, "-- Roadkill (#57)", "\n-- Weapons against vehicles", include_end=False)
     roadkill = roadkill[:roadkill.rindex("\n----")]
     deal = between(cs, "function CombatService.DealDamage(", "\n\treturn dealt\nend\n")
@@ -104,7 +108,10 @@ task = { delay = function() end }
 VehicleService = { ShieldingVehicle = function() return nil end }
 local playerOf = {}
 Players = { GetPlayerFromCharacter = function(_, c) return playerOf[c] end }
-Enum = { HumanoidStateType = { FallingDown = "FallingDown" } }
+Enum = { HumanoidStateType = { FallingDown = "FallingDown" }, RaycastFilterType = { Exclude = "Exclude" } }
+-- reportPlausible's line of sight from the hull to the body: an open field here, nothing in the way.
+RaycastParams = { new = function() return {} end }
+workspace = { Raycast = function() return nil end }
 SafeValue = { Number = function(v, limit) return type(v) == "number" and v == v and math.abs(v) <= (limit or math.huge) end }
 byModel = {}
 local function signal() return { Connect = function() return { Disconnect = function() end } end } end
@@ -160,7 +167,8 @@ local lastAttacker, recent, stats = {}, {}, {}
 local function statsFor(t) stats[t] = stats[t] or { hits = 0, headshots = 0, damageTaken = 0 } return stats[t] end
 local remote = { FireClient = function() end }
 local env = setmetatable({ lastAttacker = lastAttacker, recent = recent, statsFor = statsFor,
-    damageDealt = remote, damageTaken = remote, RECAP_HITS = 8, ATTACKER_MEMORY = 10 }, { __index = _G })
+    damageDealt = remote, damageTaken = remote, RECAP_HITS = 8, ATTACKER_MEMORY = 10,
+    enabled = true }, { __index = _G })
 load(deal, "DealDamage", "t", env)()
 load(last, "GetLastAttacker", "t", env)()
 
@@ -175,7 +183,8 @@ local function vehicle(speed, driverCharacter, driverPlayer, passengers)
     for i, h in ipairs(passengers or {}) do occupants[i] = h end
     return {
         seat = seat, occupants = occupants, driverPlayer = driverPlayer, roadkillCooldown = {}, roadkillPasses = {},
-        rig = { chassis = { AssemblyLinearVelocity = Vector3.new(speed, 0, 0), Position = Vector3.new(0, 0, 0) } },
+        rig = { chassis = { AssemblyLinearVelocity = Vector3.new(speed, 0, 0), Position = Vector3.new(0, 0, 0) },
+            handling = { topSpeed = 1000 } },
         roadkillPass = { Pass = function(_, character) table.insert(passes, character) return true end },
     }
 end
@@ -351,6 +360,62 @@ local capped = (40 * 1.15 + 4 - ROADKILL_FLOOR_V) * ROADKILL_PER_V
 check("a report's speed is held to what the server saw", math.abs((1000 - quinHum.Health) - capped) < 1e-6,
     "dealt " .. (1000 - quinHum.Health) .. ", want " .. capped)
 
+-- 11. a pass (task 30, the review of PR #81): a body pinned at the nose of a car at speed -- carried on
+-- the hood, or held against a wall by a car still pushing -- touched every frame. The first pass deals at
+-- most the cap; its window runs from the pass's FIRST contact and is never stretched, so the contacts
+-- after it are a new pass and a full player (200: 100 health + 100 shield, one pool here) dies within a
+-- few seconds. And a pass with nothing left to deal never calls DealDamage (no 0 hit markers).
+local realDeal = CombatService.DealDamage
+local calls = {}
+CombatService.DealDamage = function(a, v, amount, ...)
+    table.insert(calls, amount)
+    return realDeal(a, v, amount, ...)
+end
+local PASS_MAX, PASS_WINDOW = ROADKILL_PASS_MAX_V, ROADKILL_PASS_WINDOW_V
+for _, speed in ipairs({ 110, 40 }) do
+    local pinned = newPlayer("pinned" .. speed)
+    local pinnedChar, pinnedHum = newCharacter(pinned)
+    pinnedHum.Health = 200
+    for k in pairs(calls) do calls[k] = nil end
+    local ram = vehicle(speed, aliceChar, alice)
+    local start, diedAt, firstPass, spentCalls = now, nil, nil, 0
+    while now - start < 6 and not diedAt do
+        local before = 200 - pinnedHum.Health
+        local count = #calls
+        touch(ram, pinnedChar)
+        -- A contact of the first pass once its cap was spent: nothing more, not even a call.
+        if now - start < PASS_WINDOW and before >= PASS_MAX - 1e-6 and #calls > count then
+            spentCalls = spentCalls + 1
+        end
+        now = now + 1 / 60
+        if not firstPass and now - start >= PASS_WINDOW - 0.05 then
+            firstPass = 200 - pinnedHum.Health
+        end
+        if pinnedHum.Health <= 0 then
+            diedAt = now - start
+        end
+    end
+    local zero = 0
+    for _, amount in ipairs(calls) do
+        if amount <= 1e-3 then zero = zero + 1 end
+    end
+    check(string.format("pinned at %d studs/s: the first pass deals at most the cap (%s)", speed, PASS_MAX),
+        firstPass ~= nil and math.abs(firstPass - PASS_MAX) < 1e-6,
+        "first pass dealt " .. tostring(firstPass))
+    check(string.format("pinned at %d studs/s: the window is not stretched, so a full player (200) dies within 4 s", speed),
+        diedAt ~= nil and diedAt <= 4, diedAt and string.format("died after %.2f s", diedAt) or ("alive at 6 s, took " .. (200 - pinnedHum.Health)))
+    check(string.format("pinned at %d studs/s: a spent pass never calls DealDamage (no 0 hit markers)", speed),
+        zero == 0 and spentCalls == 0, zero .. " calls of 0, " .. spentCalls .. " calls after the cap was spent")
+    now = now + 10
+end
+-- ...and one hit at any speed is still held to the cap.
+local dash = newPlayer("dash")
+local dashChar, dashHum = newCharacter(dash)
+dashHum.Health = 1000
+touch(vehicle(400, aliceChar, alice), dashChar)
+check("one hit at 400 studs/s deals the cap, no more", math.abs((1000 - dashHum.Health) - PASS_MAX) < 1e-6, "dealt " .. (1000 - dashHum.Health))
+CombatService.DealDamage = realDeal
+
 return results
 """
 
@@ -364,6 +429,8 @@ def run(root, mutate=None):
     lua = LuaRuntime(unpack_returned_tuples=True)
     lua.globals().ROADKILL_FLOOR_V = floor
     lua.globals().ROADKILL_PER_V = per
+    lua.globals().ROADKILL_PASS_MAX_V = float(re.search(r"ROADKILL_PASS_MAX = ([\d.]+)", consts).group(1))
+    lua.globals().ROADKILL_PASS_WINDOW_V = float(re.search(r"ROADKILL_PASS_WINDOW = ([\d.]+)", consts).group(1))
     results = lua.execute(HARNESS, *(luau_to_lua(x) for x in (consts, roadkill, deal, last, veto, rp, va)))
     return [(r[1], bool(r[2]), r[3]) for r in results.values()]
 
@@ -385,12 +452,18 @@ PLANTS = [
     ("no crash grace after a hit", sub("entry.roadkillGraceUntil = now + ROADKILL_GRACE", "local _ = ROADKILL_GRACE")),
     ("a report from any player believed", sub("if not entry or entry.wrecked or entry.owner ~= player then",
                                               "if not entry or entry.wrecked then")),
-    ("a report's reach not checked", sub("if hullDistance(entry, root.Position) > ROADKILL_REACH + seen * ROADKILL_LAG then",
-                                         "if false then")),
+    # (Both of the report's reach tests: onRoadkillReport's own and reportPlausible's, each enough alone.)
+    ("a report's reach not checked", lambda text: sub("if hullDistance(entry, point) > ROADKILL_REACH then", "if false then")(
+        sub("if hullDistance(entry, root.Position) > ROADKILL_REACH + seen * ROADKILL_LAG then", "if false then")(text))),
     ("a report's speed taken on trust", sub("math.min(speed, seen * 1.15 + 4)", "speed")),
     ("riders not excluded", sub("if occupant == humanoid then", "if false then")),
     ("no debounce", sub("if last and now - last < ROADKILL_DEBOUNCE then", "if false then")),
     ("damage flat, not scaled by speed", sub("(flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER", "30")),
+    ("a pass's window stretched by every contact in it (PR #81: a pinned player never dies)",
+     sub("\t\tentry.roadkillPasses[humanoid] = pass\n\tend\n", "\t\tentry.roadkillPasses[humanoid] = pass\n\tend\n\tpass.started = now\n")),
+    ("a pass never ends", sub("if not pass or now - pass.started >= ROADKILL_PASS_WINDOW then", "if not pass then")),
+    ("a spent pass still calls DealDamage (0 hit markers)", sub("if amount > 1e-3 then", "if true then")),
+    ("no pass cap", sub("ROADKILL_PASS_MAX - pass.dealt)", "math.huge)")),
 ]
 
 

@@ -79,6 +79,7 @@ def pellet_source(src):
         cut(src, "local function bulletBlast("),
         cut(src, "local COVER_REACH"),  # COVER_REACH and riderBehind
         cut(src, "local function bodyBetween("),
+        cut(src, "local function strikeBody("),
         cut(src, "local function firePellet("),
     ]
     block = V.luau_to_lua("\n".join(parts))

@@ -35,6 +35,26 @@ ws.Raycast = function(self, origin, vector, params)
 	return r
 end
 
+-- A graze (H.grazed = a character model): the round's sweep, 0.1 studs wide, touches that body, but a ray
+-- down the middle of its line goes by the limb's edge. The sweep sees the body; every ray (the ruling
+-- ray's) passes through it.
+local sweepRay = ws.Raycast
+ws.Spherecast = function(self, origin, _radius, vector, params)
+	return sweepRay(self, origin, vector, params)
+end
+ws.Raycast = function(self, origin, vector, params)
+	local model = H.grazed
+	if model and params and params.FilterType ~= "Include" then
+		local filter = {}
+		for _, v in ipairs(params.FilterDescendantsInstances or {}) do
+			table.insert(filter, v)
+		end
+		table.insert(filter, model)
+		params = { FilterType = params.FilterType, FilterDescendantsInstances = filter, CollisionGroup = params.CollisionGroup }
+	end
+	return sweepRay(self, origin, vector, params)
+end
+
 function H.reset()
 	for k in pairs(M.walls) do M.walls[k] = nil end
 	local kids = rawget(M.workspace, "_children")
@@ -43,10 +63,11 @@ function H.reset()
 	for k in pairs(W.humanoids) do W.humanoids[k] = nil end
 	for k in pairs(w.recorders.fired) do w.recorders.fired[k] = nil end
 	H.dealt, H.wallHits, H.vehicleHits = {}, {}, {}
+	H.grazed = nil
 	PS.Clear()
 	CS.DestructibleFromPart = function(p) return p.destructible and p or nil end
 	CS.DestructiblePassesThrough = function(p) return p.glass == true end
-	CS.DamageDestructible = function(_, p, amount) table.insert(H.wallHits, { name = p.Name, amount = amount }) end
+	CS.DamageDestructible = function(_, p, amount) table.insert(H.wallHits, { name = p.Name, amount = amount, part = p }) end
 	CS.VehicleFromPart = function(p) return p.vehicleModel end
 	CS.DamageVehicle = function(_, _, amount) table.insert(H.vehicleHits, amount) end
 	CS.DamageVeto = function(a, v) return a ~= nil and a ~= v and a.team ~= nil and a.team == v.team end

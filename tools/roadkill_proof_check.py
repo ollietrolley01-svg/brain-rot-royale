@@ -29,8 +29,9 @@ Oliver's rules of 2026-09-25 (report findings 2-4, each with a planted fault too
 Task 30 (roadkill one-shot a full player; a planted fault aimed at each part):
   I11 a full player (100 health, 100 shield) survives any one pass of one car and loses at most 150 in
       it: every model at 1x, 1.5x and 2x its top speed by the bot sweep, the player report and Touched;
-      a body carried at the nose through a second contact; a body thrown into a wall and pinned. After
-      the pass window the same car hurts that body again (a new pass).
+      a body carried at the nose inside the window; a body thrown into a wall and pinned. The window runs
+      from the pass's first contact and is never stretched: a body carried on past it is a new pass, and
+      a full player dies within 4 s (the review of PR #81).
 Things it finds but does not fail on are printed as FINDING lines (the report says what they mean).
 
     python tools/roadkill_proof_check.py [root]            the checks
@@ -942,8 +943,9 @@ end
 -- I11 (task 30): a full player, 100 health and 100 shield, survives any one pass, whatever the speed
 --------------------------------------------------------------------------------
 -- A pass is one car's first contact with a body and every contact after it that comes less than
--- pins.window seconds after the one before (a body carried along, pinned, or hit again on the way
--- through). Nothing in a pass deals more than pins.passMax in total.
+-- pins.window seconds after that FIRST contact (hit again on the way through). Nothing in a pass deals
+-- more than pins.passMax in total. The window is never stretched by the contacts in it: a body carried
+-- on at the nose past it is a new pass, and keeps being hurt (the review of PR #81).
 local passes, passBad, passWorst, passModels = 0, {}, 0, {}
 local function fullPlayer(name, at)
     local p, model, hum = player(name, at)
@@ -1017,7 +1019,9 @@ end
 
 -- A body carried through a second contact: the fastest bike at its top speed (one hit alone leaves a
 -- full player 65; the question is only what the contacts after it add), then the body held at
--- its nose for 2 s, touching it every frame, and its driver's client reporting it every frame too.
+-- its nose, touching it every frame, and its driver's client reporting it every frame too. Inside the
+-- pass's window (pins.window - 0.1 s from the start) it is one pass: the full player lives and loses at
+-- most the cap. Carried on past it (4 s more), new passes keep hurting: the full player dies.
 local carriedOk, carriedDetail = true, {}
 for _, path in ipairs({ "bot", "player" }) do
     local entry = vehicle("BrrStreetfighter", nextPlace())
@@ -1034,7 +1038,7 @@ for _, path in ipairs({ "bot", "player" }) do
     local victim, victimModel, hum = fullPlayer("carry_victim_" .. path, ahead(entry, 20))
     local remote = w.replicatedStorage.Remotes:FindFirstChild("VehicleRoadkill")
     drive(entry, 114)
-    run(2, function()
+    local function carried()
         -- Carried on the bonnet: kept at the nose whatever the throw said, touching every frame.
         if taken(victim, hum) > 0 then
             placeAt(victimModel, ahead(entry, entry.rig.chassis.Size.Z / 2 + 0.5))
@@ -1044,22 +1048,21 @@ for _, path in ipairs({ "bot", "player" }) do
             end
         end
         return hum.Health <= 0
-    end)
-    judgePass("carried 2 s on a " .. path .. "'s Streetfighter at 114", victim, hum)
+    end
+    run(pins.window - 0.1, carried)
+    judgePass("carried " .. f(pins.window - 0.1) .. " s on a " .. path .. "'s Streetfighter at 114", victim, hum)
     table.insert(carriedDetail, path .. " " .. f(taken(victim, hum)))
     carriedOk = carriedOk and hum.Health > 0 and taken(victim, hum) <= pins.passMax + 1e-6
 
-    -- And a second pass is a second hit: the same car back into them after the window has gone.
-    now.t = now.t + pins.window + 1
-    local before = taken(victim, hum)
-    placeAt(victimModel, ahead(entry, entry.rig.chassis.Size.Z / 2 + 0.5))
-    entry.rig.chassis.Touched:Fire(victimModel.Torso)
-    local again = taken(victim, hum) - before
-    table.insert(carriedDetail, "then a new pass " .. f(again))
-    carriedOk = carriedOk and (again > 0 or hum.Health <= 0)
+    -- Carried on past the window: each window a new pass, so the full player dies in a few seconds.
+    local t0 = now.t
+    run(4, carried)
+    table.insert(carriedDetail, hum.Health <= 0 and string.format("then dead %.2f s later", now.t - t0)
+        or ("then alive after 4 s more, took " .. f(taken(victim, hum))))
+    carriedOk = carriedOk and hum.Health <= 0
     clear()
 end
-check("I11 a body carried through a second contact (Touched and the driver's report every frame for 2 s) is one pass: a full player lives and loses at most the cap; after the window a new pass hits again",
+check("I11 a body carried at the nose (Touched and the driver's report every frame) is one pass inside the window -- a full player lives and loses at most the cap -- and carried on past it, new passes kill them within 4 s",
     carriedOk, table.concat(carriedDetail, ", "))
 
 -- Thrown into a wall: the fastest bike at its top speed into a full player a stud from a wall; the body flown
@@ -1185,7 +1188,10 @@ PLANTS = [
      sub("VehicleService", "\tpass.dealt += amount\n", "\n")),
     ("I11: the cap raised to a full player's 200", sub("VehicleService", "local ROADKILL_PASS_MAX = 150", "local ROADKILL_PASS_MAX = 200")),
     ("I11: a pass never ends (the same car can never hurt that body again)",
-     sub("VehicleService", "if not pass or now - pass.last >= ROADKILL_PASS_WINDOW then", "if not pass then")),
+     sub("VehicleService", "if not pass or now - pass.started >= ROADKILL_PASS_WINDOW then", "if not pass then")),
+    ("I11: a pass's window stretched by every contact in it (PR #81: a body carried on is never killed)",
+     sub("VehicleService", "\t\tentry.roadkillPasses[humanoid] = pass\n\tend\n",
+         "\t\tentry.roadkillPasses[humanoid] = pass\n\tend\n\tpass.started = now\n")),
     ("I10: a mode grants spawn protection again", sub("GameModes", "spawnProtection = 0, -- none", "spawnProtection = 3, -- none")),
 ]
 

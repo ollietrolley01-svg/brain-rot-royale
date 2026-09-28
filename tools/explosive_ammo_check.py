@@ -197,6 +197,7 @@ def pellet_source(root, src=None):
         # BulletBlast with the pellet-blast constants above it.
         cut(src, "local PELLET_BLAST_RADIUS_SCALE"),
         cut(src, "local function bulletBlast("),
+        cut(src, "local function strikeBody("),
         cut(src, "local function firePellet("),
     ]
     block = luau_to_lua("\n".join(parts))

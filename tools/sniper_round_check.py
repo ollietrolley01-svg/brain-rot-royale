@@ -30,6 +30,13 @@ and the two outcomes are compared.
      its flight at the bot's damage scale, the same damage its hitscan roll dealt; a miss roll lands
      nothing; a target running steadily is still hit (the bot leads), and one that turns back at the shot
      dodges it.
+  G. Panes. Every window pane on a round's flight breaks and the round flies on, as the hitscan shot's did
+     (firePellet broke each pane on its line and never stopped on one): panes 100-250 studs before the body
+     (far past the ruling ray's 16 studs back), past a pierced body, on a bank's leg, none past the gun's
+     reach; a bot's round, hit roll and miss, breaks those it crosses. The same panes break round and hitscan.
+  H. Grazes. The round's sweep touches a body but the ruling ray (down the middle of its line) goes by it
+     (H.grazed: every ray passes through that body): the hit still lands, with the same damage, headshot,
+     rider cover, lifesteal and pierce as a clean hit, for a player's round and a bot's.
 
     python tools/sniper_round_check.py .            the checks
     python tools/sniper_round_check.py . --plant    the planted faults; every one must be caught
@@ -291,7 +298,7 @@ def bots(lua, w, S, H, R, tree):
     gid = "LarilaSniper"
     R.check(bool(usable(S.WD.Get(gid))), "bots may still hold a sniper (BotService.Loot.usable)")
 
-    def scene(roll, hitscan, move=None):
+    def scene(roll, hitscan, move=None, setup=None):
         H.reset()
         model, root = w.M.character("Bot", w.M.CFrame.new(0, 3, 0))
         bot = lua.table_from({"name": "Bot", "Character": model, "team": "A", "nextShotAt": 0, "burstLeft": 3, "acquiredAt": 0, "isBot": True})
@@ -299,6 +306,8 @@ def bots(lua, w, S, H, R, tree):
         w.W.tokens[model] = bot
         w.W.humanoids[bot] = w.M.instance("Humanoid", "Humanoid", model, lua.table_from({"Health": 100, "MaxHealth": 100}))
         target, tmodel, troot = H.person("Target", 0, -300, "B", 5000)
+        if setup:
+            setup(tmodel)
         each = None
         if move:
             vx, turn = move
@@ -334,6 +343,141 @@ def bots(lua, w, S, H, R, tree):
           "miss roll %d hits; steady runner %d hit; runner turning back %d hits" % (
               MC.BotDamageScale, hs[0], rd[0], rd[3] or -1, miss[1], run[1], dodge[1]))
 
+    # G. A bot's round breaks the panes on its flight, hit roll or miss (its hitscan shot did, through
+    # BreakGlassAlong; the round's own sweep does it now), and still reaches the target through them.
+    def glazed(_model):
+        for z in (-60, -150):
+            pane(lua, H, V3, 0, z, "Pane%d" % -z, 200)
+    got = {}
+    for label, roll in (("hit", 0.01), ("miss", 0.99)):
+        amount = scene(roll, False, None, glazed)[0]
+        got[label] = (broken(H), amount)
+    R.check(got["hit"][0] == ["Pane150", "Pane60"] and close(got["hit"][1], rd[0]),
+            "a bot's hit-roll round breaks both panes and still hits (%s)" % (got["hit"],))
+    R.check(got["miss"][0] == ["Pane150", "Pane60"], "a bot's miss-roll round breaks the panes it crosses (%s)" % (got["miss"],))
+    R.say("G. panes, bots: hit roll breaks %s and deals %.1f; miss roll breaks %s" % (got["hit"][0], got["hit"][1], got["miss"][0]))
+
+    # H. A graze on a bot's hit roll still lands (the ruling ray going by the body the sweep touched).
+    grazed = scene(0.01, False, None, lambda model: setattr(H, "grazed", model))
+    R.check(grazed[1] == 1 and close(grazed[0], rd[0]), "a bot's grazing round still deals its hit (%s, want %s)" % (grazed[:2], rd[0]))
+    R.say("H. graze, bots: hit roll grazing the body deals %.1f in %d hit (clean %.1f)" % (grazed[0], grazed[1], rd[0]))
+
+
+def pane(lua, H, V3, x, z, name, width=20):
+    return H.box(name, V3(x, 4, z), V3(width, 60, 0.2), lua.table_from({"destructible": True, "glass": True}))
+
+
+def broken(H):
+    """The panes broken (each once, by name), sorted."""
+    return sorted(set(h.name for h in H.wallHits.values() if h.part is not None and h.part.glass))
+
+
+def panes(lua, w, S, H, R):
+    """G. Every window pane on a round's flight breaks and lets it on, as the hitscan shot's did (firePellet
+    breaks a pane and flies on; it never stopped on one), on every leg, and none past the gun's reach."""
+    V3 = w.M.Vector3.new
+
+    def compare(label, gid, aim, setup, want):
+        got = []
+        for hitscan in (True, False):
+            H.reset()
+            shooter = H.person("Shooter", 0, 0, "A")[0]
+            shooter.isPlayer = True
+            people = setup()
+            H.fire(shooter, gid, aim, hitscan)
+            H.run(1 / 60, 3)
+            got.append((broken(H), tuple(H.took(p)[1] for p in people)))
+        R.check(got[0][0] == want and got[1] == got[0], "panes, %s: hitscan %s, round %s (want %s broken)" % (label, got[0], got[1], want))
+        return "%s %s hits %s" % (label, got[1][0], got[1][1])
+
+    out = []
+
+    def far():
+        for z in (-50, -100, -200):
+            pane(lua, H, V3, 0, z, "Pane%d" % -z)
+        return [H.person("Enemy", 0, -300, "B", 5000)[0]]
+    # 100-250 studs before the body, far past the ruling ray's 16 studs back: only the flight breaks them.
+    out.append(compare("far (body at 300)", "LarilaSniper", V3(0, 3.4, -600), far, ["Pane100", "Pane200", "Pane50"]))
+
+    def pierced():
+        for z in (-20, -50, -60, -90, -130):
+            pane(lua, H, V3, 0, z, "Pane%d" % -z)
+        return [H.person("E%d" % i, 0, -30 - 40 * i, "B", 5000)[0] for i in range(3)]
+    # Larila pierces E0 (-30) and stops in E1 (-70): the panes before E1 break, the two past it do not.
+    out.append(compare("past a pierce", "LarilaSniper", V3(0, 3.4, -400), pierced, ["Pane20", "Pane50", "Pane60"]))
+
+    def banked():
+        H.box("BankWall", V3(0, 4, -40.5), V3(400, 12, 1))
+        pane(lua, H, V3, 15, -20, "PaneIn", 6)      # on the leg to the wall
+        pane(lua, H, V3, 37.5, -30, "PaneOut", 6)   # on the bank's leg, 10 studs off the wall
+        pane(lua, H, V3, 60, -20, "PaneAside", 6)   # on neither
+        return [H.person("Enemy", 45, -20, "B", 5000)[0]]
+    out.append(compare("on a bank's leg", "SixSevenMarksman", V3(60, 4.8, -80), banked, ["PaneIn", "PaneOut"]))
+
+    def reach():
+        for z in (-300, -450, -500):
+            pane(lua, H, V3, 0, z, "Pane%d" % -z)
+        return [H.person("Enemy", 0, -800, "B", 5000)[0]]
+    # Hose Down reaches 420 studs: the pane at 300 breaks; the two past its reach never did.
+    out.append(compare("past reach (Hose Down 420)", "HoseDownSniper", V3(0, 4.8, -1000), reach, ["Pane300"]))
+    R.say("G. panes, player round == hitscan: " + "; ".join(out))
+
+
+def grazes(lua, w, S, H, R):
+    """H. A round whose sweep touched a living body always deals the hit, even when the ruling ray (down the
+    middle of its line) goes by that body: the same damage, headshot, rider cover and lifesteal as a clean hit."""
+    V3 = w.M.Vector3.new
+    VC = S.module("VehicleCover")
+
+    def shot(gid, aimY, grazed, seated):
+        H.reset()
+        shooter = H.person("Shooter", 0, 0, "A")[0]
+        shooter.isPlayer = True
+        enemy, model, _ = H.person("Enemy", 0, -60, "B", 5000)
+        if seated:
+            H.seat(enemy, H.vehicle("Rotster"), "DriverSeat")
+            lua.execute("return function(VC) VC.CrossesGlass = function(_, from, to) return from.Z > -56 and to.Z < -56 end end")(VC)
+        if grazed:
+            H.grazed = model
+        H.fire(shooter, gid, V3(0, aimY, -120), False)
+        H.run(1 / 60, 3)
+        amount, n, head, _ = H.took(enemy)
+        return round(amount, 3), n, bool(head), round(sum(H.vehicleHits.values()), 3)
+
+    out = []
+    for label, gid, aimY, seated in (("body", "LarilaSniper", 3.4, False), ("head", "LarilaSniper", 4.8, False),
+                                     ("head", "QuietHours", 4.8, False), ("rider behind glass", "LarilaSniper", 3.4, True)):
+        clean, graze = shot(gid, aimY, False, seated), shot(gid, aimY, True, seated)
+        R.check(clean[1] == 1 and graze == clean, "graze, %s %s: grazing %s == clean %s (amount, hits, headshot, vehicle)" % (gid, label, graze, clean))
+        out.append("%s %s %s" % (gid, label, graze))
+    # Lifesteal goes with it (fireAbility on the fallback hit too).
+    heal = []
+    for grazed in (False, True):
+        H.reset()
+        shooter = H.person("Shooter", 0, 0, "A")[0]
+        shooter.isPlayer = True
+        hum = w.W.humanoids[shooter]
+        hum.Health = 40
+        model = H.person("Enemy", 0, -30, "B", 5000)[1]
+        if grazed:
+            H.grazed = model
+        H.fire(shooter, "QuietHours", V3(0, 3.4, -60), False)
+        H.run(1 / 60, 3)
+        heal.append(hum.Health - 40)
+    R.check(heal[0] > 0 and close(heal[0], heal[1]), "graze: lifesteal clean %.2f, grazing %.2f" % tuple(heal))
+    # Pierce: grazing the first of three still pierces it and stops in the second.
+    H.reset()
+    shooter = H.person("Shooter", 0, 0, "A")[0]
+    shooter.isPlayer = True
+    es = [H.person("E%d" % i, 0, -30 - 10 * i, "B", 5000) for i in range(3)]
+    H.grazed = es[0][1]
+    H.fire(shooter, "LarilaSniper", V3(0, 3.4, -200), False)
+    H.run(1 / 60, 3)
+    line = tuple(H.took(e[0])[1] for e in es)
+    R.check(line == (1, 1, 0), "graze: pierce through a grazed first body (%s, want 1,1,0)" % (line,))
+    R.say("H. graze (sweep touches, ruling ray goes by) == clean hit: " + ", ".join(out) +
+          "; lifesteal %.2f == %.2f; pierce %s" % (heal[0], heal[1], line))
+
 
 def sources(tree, R):
     cs = tree.text("CombatService")
@@ -350,7 +494,7 @@ def run(root, swaps=None):
     lua, w, S, H = load(tree)
     R = Result()
     sources(tree, R)
-    for part in (flight, damage, tunnelling, abilities, riders):
+    for part in (flight, damage, tunnelling, abilities, riders, panes, grazes):
         part(lua, w, S, H, R)
     bots(lua, w, S, H, R, tree)
     return R
@@ -379,6 +523,22 @@ PLANTS = [
     ("a bot's round skips BotDamageScale", {"BotService": [(
         "local scaled = setmetatable({ damage = def.damage * MatchConfig.BotDamageScale }, { __index = def })",
         "local scaled = def")]}),
+    ("the round's sweep flies past panes without breaking them", {"ProjectileService": [(
+        "CombatService.DamageDestructible(creditable(entry.owner), instance, 1, entry.lastFrom or origin)",
+        "local _ = nil")]}),
+    ("a pane stops the round (it breaks, and the round goes no further)", {"ProjectileService": [(
+        "if CombatService.DestructiblePassesThrough and CombatService.DestructiblePassesThrough(instance) then\n\t\t\tif CombatService.DamageDestructible then",
+        "if false then\n\t\t\tif CombatService.DamageDestructible then")]}),
+    ("the round flies on past its gun's reach (breaking panes a hitscan shot never reached)", {"Ballistics": [(
+        "\tstopAtRange = true,", "\tstopAtRange = false,")]}),
+    ("a grazing round deals nothing (no fallback for a ruling ray that missed the body)", {"CombatService": [(
+        "if alive and not dealt[token] and", "if false and alive and not dealt[token] and")]}),
+    ("the graze fallback always fires (a clean hit dealt twice)", {"CombatService": [(
+        "if alive and not dealt[token] and", "if alive and")]}),
+    ("the graze fallback loses the headshot", {"CombatService": [(
+        "{ Instance = struck, Position = point }", "{ Instance = model, Position = point }")]}),
+    ("the graze fallback skips the rider's cover", {"CombatService": [(
+        "{ Instance = struck, Position = point }, from,", "{ Instance = struck, Position = point }, point,")]}),
     ("a bot fires at where the target is, not where it will be", {"BotService": [(
         "aimAt = projectiles.LeadAim(def.id, head.Position, aimAt, targetRoot.AssemblyLinearVelocity)",
         "aimAt = aimAt")]}),

@@ -306,7 +306,12 @@ def budget(root, source=None):
     # A rewound rider's cover: body before glass, as the present-time world ray meets them (glass is
     # CanQuery=false; Hull_Upper encloses the TartarugaScout/CameloCarrier ArmorGlass). Source order only:
     # the geometry case (a shot through the Scout's ArmorGlass) needs Studio.
-    cover = pellet[pellet.index("VehicleCover.SeatOf(victimCharacter)"):]
+    # (The body hit, the rider's cover with it, is firePellet's strikeBody, which a flying round's graze shares.)
+    strike = src[src.index("local function strikeBody("):]
+    strike = strike[: strike.index("\nend\n")]
+    lines.append(("strikeBody(shooterToken, def, through, victimToken, victimCharacter, result, currentOrigin, params)" in pellet,
+                  "firePellet deals a body hit through strikeBody, with its LagCompensation result (Rewound, Carry)"))
+    cover = strike[strike.index("VehicleCover.SeatOf(victimCharacter)"):]
     body_at, glass_at = cover.find("bodyBetween(coverModel"), cover.find("VehicleCover.CrossesGlass(coverModel")
     lines.append((0 <= body_at < glass_at, "a rewound rider's cover tests the car's body before its glass (sealed screens read body, not glass)"))
     lines.extend(accessories(root, src))

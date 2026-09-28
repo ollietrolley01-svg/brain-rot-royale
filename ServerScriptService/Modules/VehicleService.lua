@@ -136,9 +136,11 @@ local ROADKILL_DEBOUNCE = 0.5     -- seconds, per victim
 -- Task 30 (Oliver: roadkill one-shot a full player): one pass of one vehicle through a body deals at
 -- most ROADKILL_PASS_MAX in all, after CombatDamageScale, whatever the speed -- under the 200 of a full
 -- player (StartHealth + MaxShield). A contact less than ROADKILL_PASS_WINDOW seconds after this
--- vehicle's last one on the same body is the same pass (a body carried along, or hit again on the
--- way through). Speed alone could pass the formula's 200 at ~163 studs/s: downhill, off a ramp, after a
--- blast, or a driver's report, which is believed up to 1.15x what the server saw.
+-- vehicle's FIRST contact of the pass on the same body is the same pass (hit again on the way through);
+-- the window is not stretched by the contacts in it, so a body carried on the hood or pinned against a
+-- wall at speed starts a new pass every window and keeps being hurt (the review of PR #81: a stretched
+-- window let a pinned player take 150 and never die). Speed alone could pass the formula's 200 at ~163
+-- studs/s: downhill, off a ramp, after a blast, or a driver's report, believed up to 1.15x what the server saw.
 local ROADKILL_PASS_MAX = 150
 local ROADKILL_PASS_WINDOW = 1.5
 -- Momentum through a roadkill (RoadkillPass): after a hit the vehicle's change of speed is the
@@ -1078,11 +1080,10 @@ local function roadkill(entry, character, speed, velocity)
 	end
 	entry.roadkillCooldown[humanoid] = now
 	local pass = entry.roadkillPasses[humanoid]
-	if not pass or now - pass.last >= ROADKILL_PASS_WINDOW then
-		pass = { dealt = 0 }
+	if not pass or now - pass.started >= ROADKILL_PASS_WINDOW then
+		pass = { dealt = 0, started = now }
 		entry.roadkillPasses[humanoid] = pass
 	end
-	pass.last = now
 	local victimToken = Combatants.FromCharacter(character)
 	if not victimToken then
 		return
@@ -1113,7 +1114,9 @@ local function roadkill(entry, character, speed, velocity)
 		character:SetAttribute("RoadkillThrow", throw)
 	end
 	-- The hit as it lands, after the time-to-kill scale, held to what is left of this pass's cap (0 once
-	-- it's spent: DealDamage then deals nothing and the throw below is dropped; the car still goes through).
+	-- it's spent: then DealDamage isn't called at all, not even with the float crumbs a spent cap can
+	-- leave, which would still show the driver a hit marker; the throw below is dropped and the car
+	-- still goes through).
 	local scale = MatchConfig.CombatDamageScale or 1
 	local amount = math.min((flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER * scale, ROADKILL_PASS_MAX - pass.dealt)
 	pass.dealt += amount
@@ -1123,7 +1126,10 @@ local function roadkill(entry, character, speed, velocity)
 	if driverToken ~= nil then
 		amount /= scale
 	end
-	local dealt = CombatService.DealDamage(driverToken, victimToken, amount, "Roadkill", false)
+	local dealt = 0
+	if amount > 1e-3 then
+		dealt = CombatService.DealDamage(driverToken, victimToken, amount, "Roadkill", false)
+	end
 	-- Oliver 09-25: a hit the mode refused (a team-mate: DealDamage's veto answers 0) does nothing to the
 	-- body -- no throw, no knock-down, no ragdoll push -- as ProjectileService's vetoed frag shoves no one.
 	-- The car still goes through them (the pass below).

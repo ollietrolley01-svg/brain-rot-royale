@@ -754,6 +754,14 @@ local function stepRound(entry, dt)
 	else
 		position, velocity = Ballistics.RoundState(spec, entry.origin, entry.direction, entry.gravity, entry.age)
 	end
+	-- A round that ends at its gun's reach (`stopAtRange`: a sniper's bullet, as the hitscan shot it was)
+	-- flies no further, so nothing past there is touched, not even a pane the sweep would break.
+	local reach = spec.stopAtRange and entry.origin and entry.def and entry.def.range
+	local spent = false
+	if reach and (position - entry.origin).Magnitude >= reach then
+		position = entry.origin + (position - entry.origin).Unit * reach
+		spent = true
+	end
 
 	-- A "pass" verdict sweeps the same step again without the thing it flew through.
 	for _ = 1, 4 do
@@ -774,7 +782,7 @@ local function stepRound(entry, dt)
 	if entry.motion == "free" and spec.syncEvery and entry.age - entry.lastReportAt >= spec.syncEvery then
 		report(entry, nil)
 	end
-	if entry.age >= spec.maxTime then
+	if spent or entry.age >= spec.maxTime then
 		burst(entry, position, nil, nil)
 	end
 end
