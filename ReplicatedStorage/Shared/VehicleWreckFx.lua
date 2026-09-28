@@ -6,6 +6,7 @@
 --   VehicleWreckFx.LampShare(role, wrecked, driven, braking) -> 0..1   pure, no Instances, unit-testable
 --   VehicleWreckFx.LampBaseColor(part) -> Color3                       the part's TRUE original colour
 --   VehicleWreckFx.SetSmoke(model, wrecked) -> ParticleEmitter or nil  creates once, toggles after
+--   VehicleWreckFx.Watch(model)                                        OnWreck the moment it's wrecked
 --
 -- Reasons wrecked matters twice over: the driver's own HUD warning (VehicleClient's panel) is
 -- rarely SEEN, because the same server frame that zeroes health also ejects them (VehicleService's
@@ -61,24 +62,39 @@ end
 -- leaked Instance per drop. Dropped explicitly on AncestryChanged, same shape as `lamps` above.
 local smoke = {}
 
--- Called once with the model when a vehicle this client has already seen whole becomes wrecked (its
--- blast: ProjectileClient sets it). A wreck that was already a wreck when first seen stays silent.
+-- Called with the model when a vehicle this client is watching becomes wrecked (its blast:
+-- ProjectileClient sets it). A wreck that was already a wreck when first seen stays silent.
 VehicleWreckFx.OnWreck = nil
--- Strong keys, dropped when the model leaves the world (the same shape as `smoke` below).
-local seenWrecked = {}
+-- model -> its Wrecked connection. Strong keys, dropped when the model leaves the world.
+local watched = {}
+
+-- Watch one vehicle for the moment it's wrecked. VehicleClient's track() calls this for every
+-- vehicle it finds, near or far, so the blast goes off when Wrecked turns true wherever the vehicle
+-- is. It used to fire from SetSmoke, which only runs within VehicleClient's ANIMATE_DISTANCE (320):
+-- a car wrecked further off blew up late, when you walked up to it. A vehicle that arrives already
+-- wrecked (streamed in, joined late) never sees Wrecked change, so it stays silent. The server never
+-- un-wrecks a vehicle and a respawn is a new model, so this fires once per wreck. Calling it again
+-- for a model already watched does nothing.
+function VehicleWreckFx.Watch(model)
+	if watched[model] then
+		return
+	end
+	watched[model] = model:GetAttributeChangedSignal("Wrecked"):Connect(function()
+		if model:GetAttribute("Wrecked") == true and VehicleWreckFx.OnWreck then
+			VehicleWreckFx.OnWreck(model)
+		end
+	end)
+	local leave
+	leave = model.AncestryChanged:Connect(function()
+		if not model:IsDescendantOf(workspace) and watched[model] then
+			watched[model]:Disconnect()
+			watched[model] = nil
+			leave:Disconnect()
+		end
+	end)
+end
 
 function VehicleWreckFx.SetSmoke(model, wrecked)
-	local seen = seenWrecked[model]
-	if seen == nil then
-		model.AncestryChanged:Connect(function()
-			if not model:IsDescendantOf(workspace) then
-				seenWrecked[model] = nil
-			end
-		end)
-	elseif wrecked and seen == false and VehicleWreckFx.OnWreck then
-		VehicleWreckFx.OnWreck(model)
-	end
-	seenWrecked[model] = wrecked == true
 	local emitter = smoke[model]
 	if not emitter then
 		if not wrecked then
