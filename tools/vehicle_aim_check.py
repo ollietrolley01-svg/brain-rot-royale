@@ -11,6 +11,16 @@ Two halves, both on the real source:
   B. The whole script in tools/hud_mock_world.lua (the HUD check's mock client), in an armed car:
      the camera ray goes through the cursor with a mouse and through the middle with a pad, and the
      aim mark is drawn where the ray goes, at every size.
+  C. The mouse lock across a ride (task 08: "aiming for the vehicle guns dont work in 3rd person
+     sometimes and locks your cursor in the middle"). CombatClient's real setThirdPerson and
+     updateCameraMode, cut from its source, run in the same mock world as the real
+     VehicleWeaponClient and GunnerView, sharing one UserInputService. The walk, in third and in first
+     person: combat on foot, board the driver's seat, drive (updateCameraMode called again, as a
+     loadout, aim or match change does), leave, board the gunner's seat, move gunner -> driver and
+     driver -> gunner, leave. Invariants: in a vehicle with no GunnerView running the mouse is never
+     LockCenter and the driver's gun ray goes through the cursor in all four corners; while
+     GunnerView runs the mouse stays LockCenter, even straight after updateCameraMode; on foot in
+     combat it is LockCenter again.
 
     python3 tools/vehicle_aim_check.py .            the checks
     python3 tools/vehicle_aim_check.py . --plant    the planted faults; every one must be caught
@@ -26,6 +36,7 @@ from lupa import LuaRuntime  # noqa: E402
 import hud_layout_check as hud  # noqa: E402
 
 SCRIPT = "VehicleWeaponClient.client.lua"
+COMBAT = "CombatClient.client.lua"
 SIZES = [(1920, 1080), (1366, 768), (1024, 768), (768, 1024), (844, 390), (390, 844), (375, 667)]
 
 
@@ -141,12 +152,179 @@ def check_wired(root, sources):
     return problems, examined
 
 
+# CombatClient's camera-mode code, cut from the real source: setThirdPerson, updateCameraMode and the
+# InVehicle listener that calls it. updateThirdPersonCamera is bound per frame while third person is on;
+# only its mouse lock is taken (the rest is the camera's placement, which needs a real world).
+CAMERA_BLOCK = re.compile(r"(local function setThirdPerson\(.*?\nplayer:GetAttributeChangedSignal\(\"InVehicle\"\)"
+                          r":Connect\(function\(\)\n\tupdateCameraMode\(\)\nend\)\n)", re.S)
+THIRD_PERSON_LOCK = re.compile(r"local function updateThirdPersonCamera\(delta\).*?\n(\tif not player:GetAttribute"
+                               r"\(\"MenuOpen\"\) then\n\t\tUserInputService\.MouseBehavior = [^\n]*\n\tend\n)", re.S)
+CORNERS = [(0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95)]
+
+
+def camera_harness(combat_src):
+    block, lock = CAMERA_BLOCK.search(combat_src), THIRD_PERSON_LOCK.search(combat_src)
+    if not block or not lock:
+        raise SystemExit("vehicle_aim_check: CombatClient's setThirdPerson/updateCameraMode block not found")
+    return hud.luau_to_lua("""
+local W = ...
+local player, UserInputService = W.player, W.UserInputService
+local S = { combat = true, third = true }
+local camera = W.camera  -- workspace.CurrentCamera, shared with GunnerView as in the game
+local bound = {}
+local RunService = {}
+function RunService:BindToRenderStep(name, _, fn) bound[name] = fn end
+function RunService:UnbindFromRenderStep(name) bound[name] = nil end
+-- Roblox's camera module, the part of it that touches the mouse, in the logic of PlayerModule's
+-- CameraUtils.setMouseBehaviorOverride / restoreMouseBehavior and BaseCamera:UpdateMouseBehavior. A
+-- controller runs only while the camera isn't Scriptable (disabling one runs Cleanup -> restore). A running
+-- one locks the mouse in first person and restores it otherwise, and a restore writes only while the mouse
+-- still holds its own override. On main that restore is what re-locks a first-person rider: the value it
+-- saved before its first override was combat's own LockCenter. First person here is LockFirstPerson:
+-- VehicleClient's 6-stud zoom floor keeps the car's camera out of it.
+local saved, lastOverride, controllerOn = Enum.MouseBehavior.Default, nil, false
+local function setOverride(value)
+    if UserInputService.MouseBehavior ~= lastOverride then saved = UserInputService.MouseBehavior end
+    UserInputService.MouseBehavior = value
+    lastOverride = value
+end
+local function restore()
+    if UserInputService.MouseBehavior == lastOverride then UserInputService.MouseBehavior = saved end
+    lastOverride = nil
+end
+W.RenderStepped:Connect(function(dt)
+    for _, fn in pairs(bound) do fn(dt) end
+    local on = camera.CameraType ~= Enum.CameraType.Scriptable
+    if controllerOn and not on then restore() end
+    controllerOn = on
+    if on then
+        if player.CameraMode == Enum.CameraMode.LockFirstPerson then
+            setOverride(Enum.MouseBehavior.LockCenter)
+        else
+            restore()
+        end
+    end
+end)
+local thirdPersonActive, aiming = false, false
+local lookYaw, lookPitch, shoulderDistance = 0, 0, 0
+local zoomDistance, THIRD_PERSON_AIM_DISTANCE, PITCH_LIMIT = 12, 6, math.rad(80)
+local touchDelta, gamepadLook = Vector2.zero, Vector2.zero
+local function inCombat() return S.combat end
+local function wantsThirdPerson() return S.third end
+local function updateThirdPersonCamera(delta)
+""" + lock.group(1) + "end\n" + block.group(1) + """
+return { S = S, updateCameraMode = updateCameraMode }
+""")
+
+
+def check_camera_mode(root, sources):
+    problems, examined = [], 0
+    world = hud.World(root, ("1920x1080", 1920, 1080, False), sources)
+    world.play("BattleRoyale", "gunner")  # the Rotster with both seats; the walk seats the player itself
+    cam = world.lua.execute(camera_harness(sources[COMBAT]), world.W)
+    world.run("""
+        local car = W.special(W.character.Humanoid).SeatPart.Parent
+        W.seats = { driver = car:FindFirstChild('DriverSeat'), gunner = car:FindFirstChild('GunnerSeat') }
+        W.special(W.character.Humanoid).SeatPart = nil
+        W.lastInput = 'MouseMovement'
+        W.frame(3)
+    """)
+    errors_before = len(world.W.errors)
+
+    def seat(which, in_vehicle):
+        world.run("""
+            local which, inVehicle = select(2, ...)
+            W.special(W.character.Humanoid).SeatPart = which and W.seats[which] or nil
+            W.player:SetAttribute('InVehicle', inVehicle or nil)
+        """, which, in_vehicle)
+
+    def state():
+        return world.run("""
+            local b = W.UserInputService.MouseBehavior
+            return b and b.Name or 'nil', W.player:GetAttribute('GunnerView') == true,
+                W.player:GetAttribute('InVehicle') == true
+        """)
+
+    def ray_at(fx, fy):
+        return world.run("""
+            local x, y = select(2, ...)
+            W.mouse = W.Vector2.new(x, y)
+            W.lastRay = nil
+            W.frame(1)
+            return W.lastRay and W.lastRay.x, W.lastRay and W.lastRay.y
+        """, fx * 1920, fy * 1080)
+
+    def expect(tag, want):
+        # want: "free" (driver's gun on the cursor), "gunner" (GunnerView's lock) or "combat" (on foot, locked).
+        nonlocal examined
+        examined += 1
+        behaviour, gunner, in_vehicle = state()
+        if want == "combat":
+            if in_vehicle or behaviour != "LockCenter":
+                problems.append(f"{tag}: on foot in combat the mouse is {behaviour}, want LockCenter")
+            return
+        if want == "gunner":
+            if not gunner or behaviour != "LockCenter":
+                problems.append(f"{tag}: gunner (GunnerView={gunner}) has the mouse {behaviour}, want LockCenter")
+            return
+        if in_vehicle and not gunner and behaviour == "LockCenter":
+            problems.append(f"{tag}: in the driver's seat with no GunnerView the mouse is LockCenter")
+        for fx, fy in CORNERS:
+            examined += 1
+            rx, ry = ray_at(fx, fy)
+            if rx is None or abs(rx - fx * 1920) > 0.01 or abs(ry - fy * 1080) > 0.01:
+                problems.append(f"{tag}: cursor at ({fx * 1920:.0f},{fy * 1080:.0f}) but the driver's gun "
+                                f"aims through ({rx}, {ry})")
+                break
+
+    for view in ("third", "first"):
+        cam.S.third = view == "third"
+        cam.S.combat = True
+        seat(None, False)
+        cam.updateCameraMode()
+        world.W.frame(3)
+        expect(f"{view}: combat on foot", "combat")
+        seat("driver", True)
+        world.W.frame(3)
+        expect(f"{view}: boarded the driver's seat in combat", "free")
+        for _ in range(3):
+            cam.updateCameraMode()  # a loadout, aim or match change while driving
+            world.W.frame(2)
+        expect(f"{view}: driving, updateCameraMode called again", "free")
+        seat(None, False)
+        world.W.frame(3)
+        expect(f"{view}: left the car", "combat")
+        seat("gunner", True)
+        world.W.frame(3)
+        expect(f"{view}: boarded the gunner's seat in combat", "gunner")
+        cam.updateCameraMode()  # straight after: CombatClient must not free the gunner's mouse
+        expect(f"{view}: gunner, straight after updateCameraMode", "gunner")
+        world.W.frame(2)
+        seat("driver", True)
+        world.W.frame(3)
+        expect(f"{view}: moved gunner -> driver", "free")
+        seat("gunner", True)
+        world.W.frame(3)
+        expect(f"{view}: moved driver -> gunner", "gunner")
+        seat(None, False)
+        world.W.frame(3)
+        expect(f"{view}: left the car from the gunner's seat", "combat")
+    # GunnerView's barrel maths needs CFrame methods the mock doesn't have; it fails after look() has
+    # already set the lock, as it does in the HUD check's gunner scene. Any other error is a failure.
+    errors = list(world.W.errors.values())
+    for err in errors[errors_before:]:
+        if not re.search(r"GunnerView:\d+: attempt to index a number value \(local 'rest'\)", err):
+            problems.append(f"mock world error during the walk: {err}")
+    return problems, examined
+
+
 def check(root, sources, weapons_src, quiet=False):
     a, na = check_pure(sources[SCRIPT], weapons_src)
     b, nb = check_wired(root, sources)
+    c, nc = check_camera_mode(root, sources)
     if not quiet:
-        print(f"vehicle_aim_check: {na} pure cases, {nb} wired cases examined")
-    return a + b
+        print(f"vehicle_aim_check: {na} pure cases, {nb} wired cases, {nc} mouse-lock cases examined")
+    return a + b + c
 
 
 PLANTS = [
@@ -157,6 +335,16 @@ PLANTS = [
      "local ray = camera:ViewportPointToRay(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)"),
     ("an aim outside the arc not reported as pinned", SCRIPT,
      "return math.abs(wantYaw - yaw) > 1e-4 or math.abs(wantPitch - pitch) > 1e-4", "return false"),
+    # Aimed at the invariant (in a vehicle with no GunnerView the mouse is never LockCenter), both ways
+    # it can break: the vehicle branch leaving the lock alone, or taking it.
+    ("the vehicle branch leaving combat's mouse lock in place", COMBAT,
+     "\t\tif not player:GetAttribute(\"GunnerView\") then\n\t\t\tUserInputService.MouseBehavior = Enum.MouseBehavior.Default\n\t\tend\n", ""),
+    ("the vehicle branch locking the mouse", COMBAT,
+     "\t\tplayer.CameraMode = Enum.CameraMode.Classic\n\t\t-- The mouse is freed too",
+     "\t\tplayer.CameraMode = Enum.CameraMode.Classic\n\t\tUserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter\n\t\tdo return end\n\t\t-- The mouse is freed too"),
+    # And the gunner's side: CombatClient must never free the mouse GunnerView locked.
+    ("CombatClient freeing a gunner's locked mouse", COMBAT,
+     "\t\tif not player:GetAttribute(\"GunnerView\") then\n\t\t\tUserInputService", "\t\tif true then\n\t\t\tUserInputService"),
 ]
 
 
@@ -165,6 +353,7 @@ def main():
     sources = {n: hud.read(root, n) for n in hud.SCRIPTS}
     for m in hud.MODULES:
         sources[m + ".lua"] = hud.read(root, m + ".lua")
+    sources[COMBAT] = hud.read(root, COMBAT)
     weapons_src = open(os.path.join(root, "ReplicatedStorage", "Shared", "VehicleWeaponData.lua"), encoding="utf-8").read()
     if "--plant" in sys.argv:
         missed = 0
