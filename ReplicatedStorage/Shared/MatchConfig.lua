@@ -284,8 +284,10 @@ MatchConfig.BotThinkInterval = 0.25
 -- Oliver, 2026-09-22 14:39: "un nerf the bots aim". Back to the pre-#118 values.
 -- Oliver, 2026-09-22 21:34: "make the bots aim a little better". Up a notch (0.66/0.19 -> 0.71/0.22);
 -- BotService also lets aim settle on a target and makes fast-moving targets harder to hit.
-MatchConfig.BotAccuracyNear = 0.71
-MatchConfig.BotAccuracyFar = 0.22
+-- Oliver, 2026-09-28: "reduce the bots aim slightly. like 20%". Both ends x0.8 (0.71/0.22 -> 0.57/0.18);
+-- vehicle gunners read the same curve (Vehicles.vehicleHitChance).
+MatchConfig.BotAccuracyNear = 0.57
+MatchConfig.BotAccuracyFar = 0.18
 MatchConfig.BotAccuracyFalloff = 120
 -- #75/#81 (Oliver: "increase bots reaction speed and their aggressiveness"). Was 0.28, which a
 -- bot could only honour in whole thinks (one every ~0.267 s), so it was really two thinks. 0.12 is a

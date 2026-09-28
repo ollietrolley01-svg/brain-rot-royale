@@ -316,9 +316,16 @@ DIRECTION = {
 
 # --------------------------------------------------------------------------------------------
 
+# Accuracy the owner set on purpose after the reference commit: the "before" is ruled with these, so an
+# aggression change still may not move aim, but the owner's own dial is not read as one.
+# Oliver, 2026-09-28: "reduce the bots aim slightly. like 20%" (0.71/0.22 -> 0.57/0.18).
+SANCTIONED_ACCURACY = {"BotAccuracyNear": 0.57, "BotAccuracyFar": 0.18}
+
+
 def run(tree, before, verbose=True):
     fails = []
     cfg_a, cfg_b = config(tree[MATCHCONFIG]), config(before[MATCHCONFIG])
+    cfg_b = dict(cfg_b, **SANCTIONED_ACCURACY)
     period_a, period_b = think_period(tree[BOTSERVICE], cfg_a), think_period(before[BOTSERVICE], cfg_b)
     ra, quick_a, f = reaction(tree[BOTSERVICE], cfg_a, period_a)
     fails += f
@@ -372,7 +379,7 @@ def run(tree, before, verbose=True):
 PLANTS = [
     (BOTSERVICE, "- AIM_SETTLE_DELAY) / 1.5", "- MatchConfig.BotReactionTime) / 1.5",
      "aim: settle reads the (faster) reaction time again"),
-    (MATCHCONFIG, "MatchConfig.BotAccuracyNear = 0.71", "MatchConfig.BotAccuracyNear = 0.75",
+    (MATCHCONFIG, "MatchConfig.BotAccuracyNear = 0.57", "MatchConfig.BotAccuracyNear = 0.75",
      "aim: near accuracy nudged up"),
     (MATCHCONFIG, "MatchConfig.BotDamageScale = 0.8", "MatchConfig.BotDamageScale = 0.9",
      "lethality: damage scale nudged up"),
