@@ -12,9 +12,11 @@
 -- looks along the barrel: it rides the turret round and tips with it (a lobbing mortar's view instead
 -- follows where its bomb will come down, so the ground it is ranging on stays on the screen). The
 -- mouse (or the right stick, or a drag on a touch screen) turns the TURRET, at most `slew` degrees a
--- second, and the view goes with it. Aiming down the sight (right mouse, L2, the AIM button) moves the
--- eye to the gun's own sight (GunnerSight: iron sights on the machine guns, the launcher's side sight,
--- the mortar's) and narrows the view.
+-- second, and the view goes with it. The aim is held in the world, not on the chassis: when the vehicle
+-- turns or tips, the turret turns back against it and keeps pointing where it was, held to its arc, and
+-- goes back to that aim when the arc allows it again (Update, Pure.worldOf). Aiming down the sight
+-- (right mouse, L2, the AIM button) moves the eye to the gun's own sight (GunnerSight: iron sights on
+-- the machine guns, the launcher's side sight, the mortar's) and narrows the view.
 --
 -- THE ARMS are the player's own (Viewmodel.Arms: the avatar's arms, colours and shirt), their palms on
 -- the gun's handles (GripR, GripL), posed by the viewmodel's own two-bone reach every frame, so when the
@@ -108,6 +110,19 @@ function Pure.clampLook(spec, yaw, pitch)
 	end
 	local floor = math.deg(VehicleWeaponData.PitchFloor(spec, math.rad(yaw)))
 	return yaw, math.clamp(pitch, floor, spec.pitchMax)
+end
+
+-- The world direction of a (yaw, pitch) look in degrees from `rest` (a yaw pivot's rest frame), and back.
+-- Update keeps the gunner's aim as a world direction, so it holds while the car turns under it (Jacob
+-- 09-25: "make the gunner aim not turn with the car").
+function Pure.worldOf(rest, yaw, pitch)
+	local y, p = math.rad(yaw), math.rad(pitch)
+	return rest:VectorToWorldSpace(Vector3.new(-math.sin(y) * math.cos(p), math.sin(p), -math.cos(y) * math.cos(p)))
+end
+
+function Pure.anglesIn(rest, world)
+	local d = rest:VectorToObjectSpace(world)
+	return math.deg(math.atan2(-d.X, -d.Z)), math.deg(math.asin(math.clamp(d.Y / d.Magnitude, -1, 1)))
 end
 
 -- The turret's angle moved toward the wanted one by at most `step` degrees, the short way round.
@@ -541,7 +556,26 @@ function GunnerView:Update(dt, state)
 		return
 	end
 	dt = math.min(dt, 0.1)
+	-- The aim is held in the world while the chassis turns and tips under it: `aimWorld` is the direction
+	-- last asked for (the mouse, the stick, a drag, or a want set by hand), and the want is that direction
+	-- from the chassis now, held to the arc -- so past the arc's edge, or under a pitch floor on a bump, the
+	-- gun waits at the limit and comes back to the aim, rather than the aim being dragged. The turret is
+	-- carried across the chassis's turn since the last frame, so it doesn't lag the turn by its slew.
+	local restNow = self.yawJoint.Part0.CFrame * self.yawJoint.C0
+	if self.lastRest then
+		self.yaw, self.pitch = Pure.clampLook(self.spec, Pure.anglesIn(restNow, Pure.worldOf(self.lastRest, self.yaw, self.pitch)))
+	end
+	local handSet = self.aimWorld == nil or self.wantYaw ~= self.leftYaw or self.wantPitch ~= self.leftPitch
+	if not handSet then
+		self.wantYaw, self.wantPitch = Pure.clampLook(self.spec, Pure.anglesIn(restNow, self.aimWorld))
+	end
+	local heldYaw, heldPitch = self.wantYaw, self.wantPitch
 	self:look(dt)
+	if handSet or self.wantYaw ~= heldYaw or self.wantPitch ~= heldPitch then
+		self.aimWorld = Pure.worldOf(restNow, self.wantYaw, self.wantPitch)
+	end
+	self.leftYaw, self.leftPitch = self.wantYaw, self.wantPitch
+	self.lastRest = restNow
 	-- Damped, speed- and acceleration-limited (Pure.follow); `slewAccel` defaults to six times the slew.
 	local speed = self.spec.slew or 240
 	local accel = self.spec.slewAccel or speed * 6
