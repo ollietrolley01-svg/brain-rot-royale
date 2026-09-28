@@ -3954,7 +3954,7 @@ function Vehicles.leaveRide(bot, reason, cooldown, dismount)
 		humanoid.Sit = false
 		local root = bot.character and bot.character:FindFirstChild("HumanoidRootPart")
 		if dismount and root and ride and ride.drive then
-			local params = ride.drive.params
+			local params = ride.sightParams or ride.drive.params
 			local chassisY = ride.drive.chassis.Position.Y
 			task.delay(0.1, function()
 				if not root.Parent or humanoid.SeatPart or humanoid.Health <= 0 then
@@ -4252,6 +4252,9 @@ function Vehicles.riderFilter(ride, extra)
 	end
 	ride.drive.params.FilterDescendantsInstances = list
 	ride.drive.probeParams.FilterDescendantsInstances = list
+	if ride.sightParams then
+		ride.sightParams.FilterDescendantsInstances = list
+	end
 end
 
 function Vehicles.noteFight(bot, ride, candidate, now)
@@ -4338,7 +4341,7 @@ function Vehicles.tacticsContext(bot, root, ride, candidate, health, gunnerSeat,
 	local goal, arrive = Vehicles.travelGoal(bot, root, now)
 	local threat = bot.threat
 	local recent = threat ~= nil and now - threat.at < FLEE_WINDOW
-	local params = drive.params
+	local params = ride.sightParams or drive.params
 	local model = ride.model
 	return {
 		now = now, pos = flat(chassis.Position), look = look, speed = chassis.AssemblyLinearVelocity.Magnitude,
@@ -4653,6 +4656,13 @@ function Vehicles.startRide(bot, role, seat, purpose, now)
 		probe.FilterType = Enum.RaycastFilterType.Exclude
 		probe.FilterDescendantsInstances = { model }
 		probe.IgnoreWater = false
+		-- The dismount ground ray and BotDriveTactics' sight ray keep params of their own: BotNav.NewDrive
+		-- sets RespectCanCollide on the sweeps' params, and foliage must still count as cover here.
+		local sight = RaycastParams.new()
+		sight.FilterType = Enum.RaycastFilterType.Exclude
+		sight.FilterDescendantsInstances = { model }
+		sight.IgnoreWater = true
+		ride.sightParams = sight
 		local chassis = rig.chassis
 		-- Ride height, once at boarding; refused by the budget, the usual 2.5 stands.
 		local below = castRay(chassis.Position, Vector3.new(0, -20, 0), params, "navigation")

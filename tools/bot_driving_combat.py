@@ -357,9 +357,10 @@ def run(vw_src, data_src, bot_src, cfg_src):
             ("mortar", "SahurVan", "grenade", 220, 0, 13), ("mortar far", "SahurVan", "grenade", 300, 0, 13)]:
         hitsNear = hitsTotal = missClear = missTotal = 0
         for seed in range(3):
-            # The pod's rockets off to the side (60 degrees): straight ahead over the cab it holds a 4-degree
-            # floor, which a body 70 studs out on level ground is under.
-            o = G.engage(model, distance, 60 if model == "CrocodiloRanger" else 0, strafe, 20, 31 + seed)
+            # The pod's rockets off to the side (70 degrees): straight ahead over the cab it holds a 4-degree
+            # floor, which a body 70 studs out on level ground is under. The floor's arc is 58 since PR #71
+            # (it was 54, and 60 sat on its edge), so 70 is clear of it.
+            o = G.engage(model, distance, 70 if model == "CrocodiloRanger" else 0, strafe, 20, 31 + seed)
             for r in o.rounds.values():
                 best, landed = G.flyRound(kind, r, 0)
                 if kind == "grenade":

@@ -118,8 +118,9 @@ VehicleWeaponData.Weapons = {
 		rechargeDelay = 1.5,
 		yawLimit = 180,
 		pitchMin = 10,
-		-- 80, not 60 (09-25): the steep end lobs onto targets close to the van. Nothing is above the tube.
-		pitchMax = 80,
+		-- 75, not 60 (09-25): the steep end lobs onto targets close to the van. Nothing is above the tube.
+		-- Not 80: a round bursts at Ballistics maxTime (5 s), and above ~76 on flat ground it is still up.
+		pitchMax = 75,
 		restPitch = 30,
 		slew = 160,
 		rarity = "Rare",
