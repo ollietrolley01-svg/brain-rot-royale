@@ -174,7 +174,7 @@ local function vehicle(speed, driverCharacter, driverPlayer, passengers)
     local occupants = { [seat] = seat.Occupant }
     for i, h in ipairs(passengers or {}) do occupants[i] = h end
     return {
-        seat = seat, occupants = occupants, driverPlayer = driverPlayer, roadkillCooldown = {},
+        seat = seat, occupants = occupants, driverPlayer = driverPlayer, roadkillCooldown = {}, roadkillPasses = {},
         rig = { chassis = { AssemblyLinearVelocity = Vector3.new(speed, 0, 0), Position = Vector3.new(0, 0, 0) } },
         roadkillPass = { Pass = function(_, character) table.insert(passes, character) return true end },
     }

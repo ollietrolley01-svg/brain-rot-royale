@@ -361,3 +361,46 @@ checks. That is the gap `roadkill_proof_check.py` fills.
 - `tools/roadkill_proof_check.py`: the check (`--plant` for the planted faults).
 - `tools/roadkill_proof_world.lua`: its world (read as Luau by the static checks, run as Lua by lupa).
 - `README-task-prove-roadkill.md`: what the branch adds.
+
+## Task 30: roadkill one-shot a full player (branch `task/roadkill`, on `pc/lag-bug-sweep` cf35aa3)
+
+Oliver reported roadkill killing a player at full health and full shield (100 + 100) in one hit. By the
+formula alone it can't at top speed: the worst is the Streetfighter at 114, 135.13. I looked at the
+brief's three causes. Two are real in the code.
+
+1. **The speed isn't capped. Real.** Every path judges the car's actual flat speed. `VehicleDynamics`'s
+   governor holds a driven car near 1.06x top on the ground, but `checkHonest` lets any car keep up to
+   `top * 1.35 + 10` (and anything while it falls faster than 60), and a driver's report is believed up
+   to `seen * 1.15 + 4`. At 0.736 a hit reaches 200 at 162.97 studs/s. The Streetfighter's allowance is
+   163.9 on the server paths and 192.5 on the report path.
+2. **Two hits in one pass. Real in the code.** The debounce is 0.5 s. A body still at the nose after it
+   (carried, pinned) is hit again by `chassis.Touched` or the driver's report: 135.13 + 135.13 at top
+   speed. Whether Roblox fires `Touched` for a body RoadkillPass has let through is not measured.
+3. **Crash and throw damage on top. Not real.** Nothing in the game hurts a body that lands or strikes a
+   wall: no fall damage (BotNav says so, and a grep agrees), and crash damage goes to the vehicle only
+   (`checkCollisionDamage` -> `damageVehicle`). The harness throws a body into a wall and pins it
+   there: it takes the one hit and nothing else.
+
+**The fix** (`VehicleService.roadkill`, two new constants). One pass of one vehicle through a body deals at
+most `ROADKILL_PASS_MAX` 150 in all, after `CombatDamageScale`, at any speed. A contact less than
+`ROADKILL_PASS_WINDOW` 1.5 s after that vehicle's last one on the same body is the same pass. Once a pass
+is spent, a later contact in it deals 0, with no throw, and the car still goes through. A hit under the
+cap is unchanged (the table above is the same). A contact after the window is a new pass.
+
+**Proof** (`tools/roadkill_proof_check.py`, I11): 66 passes over all 9 models. Each model runs at 1x,
+1.5x and 2x its top speed by three paths: the bot's server sweep, the player's report and the server's
+`Touched` (Touched at 2x only). There's also a body carried at the nose for 2 s, with `Touched` and the
+report firing every frame, on a bot's and a player's Streetfighter, and a throw into a wall. Before the
+fix, 14 of the 66 passes killed the full player and 32 dealt more than 150. After it: 0 and 0, worst
+150.00. Plants: 22/22 caught, four of them aimed at I11 (cap removed, hits in a pass not added up, cap
+raised to 200, a pass that never ends).
+
+**Studio, real physics** (`tools/roadkill_oneshot_probe.lua`, Run mode, Linux harness): a bot's car hits a
+bot with 100 + 100, 7 rows. Its speed is written every frame through the hit and for 1.5 s after it.
+Before (`cf35aa3`): 5 of 7 targets died, and 6 rows lost more than 150 (TralalaGT at 1.5x left 5.3
+health). After: every row but the 1x Streetfighter (135.1) lost exactly 150 and kept 50 health. Every
+row took one hit. Physics never brought a body back for a second contact.
+
+**Not proven:** whether a real car reaches 1.5x or 2x its top speed in Roblox. The code allows it, but
+nothing here measures a ramp or a blast. Whether a carried body really touches the chassis again is also
+unmeasured. A "ratio'd" victim (`StatusEffects`) takes its scale times the cap, by design.

@@ -133,6 +133,14 @@ local COLLISION_DAMAGE_PER = 1.5  -- damage per stud/s of speed lost past the fl
 local ROADKILL_FLOOR = 12         -- studs/s; at or under this, no damage is even considered
 local ROADKILL_DAMAGE_PER = 1.8   -- damage per stud/s of speed over the floor
 local ROADKILL_DEBOUNCE = 0.5     -- seconds, per victim
+-- Task 30 (Oliver: roadkill one-shot a full player): one pass of one vehicle through a body deals at
+-- most ROADKILL_PASS_MAX in all, after CombatDamageScale, whatever the speed -- under the 200 of a full
+-- player (StartHealth + MaxShield). A contact less than ROADKILL_PASS_WINDOW seconds after this
+-- vehicle's last one on the same body is the same pass (a body carried along, or hit again on the
+-- way through). Speed alone could pass the formula's 200 at ~163 studs/s: downhill, off a ramp, after a
+-- blast, or a driver's report, which is believed up to 1.15x what the server saw.
+local ROADKILL_PASS_MAX = 150
+local ROADKILL_PASS_WINDOW = 1.5
 -- Momentum through a roadkill (RoadkillPass): after a hit the vehicle's change of speed is the
 -- momentum rule's toll, never a crash, for this long; and a driver's report of a hit is believed
 -- only for a body the server has within this reach of the hull, plus this many seconds of travel
@@ -1065,9 +1073,16 @@ local function roadkill(entry, character, speed, velocity)
 		-- this table from growing forever (matches DestructibleService's part.Destroying pattern).
 		humanoid.Destroying:Connect(function()
 			entry.roadkillCooldown[humanoid] = nil
+			entry.roadkillPasses[humanoid] = nil
 		end)
 	end
 	entry.roadkillCooldown[humanoid] = now
+	local pass = entry.roadkillPasses[humanoid]
+	if not pass or now - pass.last >= ROADKILL_PASS_WINDOW then
+		pass = { dealt = 0 }
+		entry.roadkillPasses[humanoid] = pass
+	end
+	pass.last = now
 	local victimToken = Combatants.FromCharacter(character)
 	if not victimToken then
 		return
@@ -1097,12 +1112,16 @@ local function roadkill(entry, character, speed, velocity)
 		throw = RoadkillPass.Throw(velocity, root and (root.Position - entry.rig.chassis.Position) or nil)
 		character:SetAttribute("RoadkillThrow", throw)
 	end
-	local amount = (flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER
-	-- DealDamage scales only a hit with an attacker (the storm, hazards and falls stay whole), so a car
-	-- nobody drives would hit harder than a driven one. Oliver 09-25: it takes the same time-to-kill
-	-- scale here, and is still credited to no one.
-	if driverToken == nil then
-		amount *= MatchConfig.CombatDamageScale or 1
+	-- The hit as it lands, after the time-to-kill scale, held to what is left of this pass's cap (0 once
+	-- it's spent: DealDamage then deals nothing and the throw below is dropped; the car still goes through).
+	local scale = MatchConfig.CombatDamageScale or 1
+	local amount = math.min((flat - ROADKILL_FLOOR) * ROADKILL_DAMAGE_PER * scale, ROADKILL_PASS_MAX - pass.dealt)
+	pass.dealt += amount
+	-- DealDamage scales only a hit with an attacker (the storm, hazards and falls stay whole), so a driven
+	-- hit goes in unscaled. Oliver 09-25: a car nobody drives takes the same scale here, and is still
+	-- credited to no one.
+	if driverToken ~= nil then
+		amount /= scale
 	end
 	local dealt = CombatService.DealDamage(driverToken, victimToken, amount, "Roadkill", false)
 	-- Oliver 09-25: a hit the mode refused (a team-mate: DealDamage's veto answers 0) does nothing to the
@@ -1516,6 +1535,8 @@ function VehicleService.Create(parent, position, yaw, kind, options)
 		wrecked = false,
 		lastFlatSpeed = nil,
 		roadkillCooldown = {},
+		-- roadkill(): per body, the pass this vehicle is in ({ dealt, last }), dropped with the cooldown.
+		roadkillPasses = {},
 	}
 	entry.groundParams = RaycastParams.new()
 	entry.groundParams.FilterType = Enum.RaycastFilterType.Exclude
