@@ -118,7 +118,11 @@ LobbyService.SpawnHalfWidth = 12
 local LEADERBOARD_ROWS = 10
 local LEADERBOARD_REFRESH = 8
 local GLOBAL_BOARD_REFRESH = 60
-local PAD_COOLDOWN = 1.5
+-- The ready pad (11 across): a visit lasts while the character's root is within PAD_REACH of its
+-- centre or it touched the pad in the last PAD_LINGER seconds, looked at every PAD_POLL seconds.
+local PAD_REACH = 7
+local PAD_LINGER = 1
+local PAD_POLL = 0.25
 
 local PLAZA_RADIUS = 100
 local RIM_RADIUS = 132
@@ -608,17 +612,45 @@ local function buildReadyPad(lobby, center)
 	-- The ready key can be rebound, so it's filled in per player (it said F whatever you'd bound).
 	keyHint(billboard(pad, "(or use your ready key anywhere)", WHITE, Vector3.new(0, 4.3, 0), 9, 1), "(or press [{Ready}] anywhere)")
 
+	-- Stepping onto the pad readies you; standing on it does not. Touched fires again and again while
+	-- a character's feet move on a part, and it used to ready you on every touch 1.5 s apart, so a
+	-- player on the pad who pressed un-ready was ready again a moment later ("i cant unready up",
+	-- Oliver's playtest, 2026-09-25). Now only the touch that starts a visit readies you. A visit
+	-- lasts while the root is over the pad (horizontally, so a jump on the spot is not a new visit) or
+	-- a touch came in within PAD_LINGER (walking off, a foot is still on the rim after the root has
+	-- left). Walking back on readies you again.
+	local padCenter = pad.Position
+	local function visitOver(player)
+		local last = readyPadLastTouch[player]
+		if not last then
+			return true
+		end
+		local root = player.Parent and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if root then
+			local offset = root.Position - padCenter
+			if offset.X * offset.X + offset.Z * offset.Z <= PAD_REACH * PAD_REACH then
+				return false
+			end
+		end
+		return wallNow() - last >= PAD_LINGER
+	end
 	pad.Touched:Connect(function(hit)
 		local player = Players:GetPlayerFromCharacter(hit.Parent)
 		if not player then
 			return
 		end
-		local now = wallNow()
-		if readyPadLastTouch[player] and now - readyPadLastTouch[player] < PAD_COOLDOWN then
+		local visiting = readyPadLastTouch[player] ~= nil
+		readyPadLastTouch[player] = wallNow()
+		if visiting then
 			return
 		end
-		readyPadLastTouch[player] = now
 		LobbyService.OnReadyPad(player)
+		task.spawn(function()
+			repeat
+				task.wait(PAD_POLL)
+			until visitOver(player)
+			readyPadLastTouch[player] = nil
+		end)
 	end)
 	return ring
 end
