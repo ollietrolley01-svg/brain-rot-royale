@@ -314,7 +314,7 @@ local function wallLamp(parent, face, normal, range, color)
 	local up = Vector3.new(0, 1, 0)
 	put(parent, "LampBracket", Vector3.new(0.9, 0.5, 0.9), CFrame.new(face + normal * 0.2), STEEL_DARK, MAT.Metal, TRIM)
 	local bulb = ball(parent, "LampBulb", face + normal * 0.75 - up * 0.1, 0.7, color or WARM, MAT.Neon, TRIM)
-	rod(parent, "LampCage", face + normal * 0.35 + up * 0.35, face + normal * 1.12 + up * 0.35, 0.12, STEEL_DARK, MAT.Metal, TRIM)
+	-- (No cage bar over the bulb since task 27: a bracket and a bulb read as a lamp from the floor.)
 	light(bulb, color or WARM, range, 1.3)
 	return bulb
 end
@@ -400,6 +400,7 @@ end
 -- number it always did, so every wall, stone and bag that stays is exactly where it was (the sightline
 -- and cover proofs stand), but half the loose rubble, the rebar and soot on the ruin walls and the
 -- crates' bands are no longer built, and a line of sandbags is one block a course, not a bag at a time.
+-- Task 27 (09-28, less clutter again) takes the rubble to one stone in four, on the same draws.
 local function rubble(parent, cx, cz, radius, count, floor, colors)
 	colors = colors or { CONCRETE, CONCRETE_DARK, STONE_DARK }
 	for stone = 1, count do
@@ -421,7 +422,7 @@ local function rubble(parent, cx, cz, radius, count, floor, colors)
 				table.insert(B.stones, { x, z, r })
 				local at = CFrame.new(x, floor + size.Y * 0.2, z) * CFrame.Angles(0, nextTurn(), 0) * CFrame.Angles(tipped(), 0, tipped())
 				local color = colors[B.rng:NextInteger(1, #colors)]
-				if stone % 2 == 1 then
+				if stone % 4 == 1 then
 					put(parent, "Rubble", size, at, color, MAT.Concrete)
 				end
 				break
@@ -519,11 +520,11 @@ local function lampPost(parent, x, z, floor, heading)
 	local dx, dz = math.cos(heading), math.sin(heading)
 	local tip = Vector3.new(x + dx * 2, floor + 10.4, z + dz * 2)
 	rod(parent, "LampArm", Vector3.new(x, floor + 10.4, z), tip, 0.2, STEEL_DARK, MAT.Metal, trimWith({ tag = opts.tag }))
-	box(parent, "LampHead", tip.X - 0.5, tip.X + 0.5, floor + 9.85, floor + 10.35, tip.Z - 0.5, tip.Z + 0.5, STEEL_DARK, MAT.Metal,
+	-- The head is the lamp: one warm block under the arm's end (task 27: a steel head with a pane of
+	-- glass under it was two parts where one reads the same at any distance a player sees it from).
+	local head = box(parent, "LampHead", tip.X - 0.5, tip.X + 0.5, floor + 9.75, floor + 10.35, tip.Z - 0.5, tip.Z + 0.5, WARM, MAT.Neon,
 		trimWith({ tag = opts.tag }))
-	local glass = box(parent, "LampGlass", tip.X - 0.4, tip.X + 0.4, floor + 9.75, floor + 9.85, tip.Z - 0.4, tip.Z + 0.4, WARM, MAT.Neon,
-		trimWith({ tag = opts.tag }))
-	light(glass, WARM, 30, 1.2)
+	light(head, WARM, 30, 1.2)
 end
 
 --------------------------------------------------------------------------------
@@ -556,14 +557,18 @@ local function panel(parent, ax, az, bx, bz, thick, top, style)
 	end
 	local inset = 0.5
 	if not style.plain and length > 3.2 then
-		if B.rng:NextNumber() < 0.6 then
-			-- A broken lump on the top, tipped along the wall.
+		local roll = B.rng:NextNumber()
+		if roll < 0.6 then
+			-- A broken lump on the top, tipped along the wall; built on half the panels that drew one
+			-- (task 27), the draws the same either way.
 			local lump = math.min(length - 1.6, rnd(1.4, 3.0))
 			local tilt = rnd(-0.14, 0.14)
 			local spare = (length - 2 * inset - lump * math.cos(tilt) - 1.2 * math.abs(math.sin(tilt))) / 2
 			local u = spare > 0 and rnd(-spare, spare) or 0
 			local h = rnd(0.7, 1.2)
-			put(parent, "BrokenTop", Vector3.new(lump, h, thick * 0.85), at(u, top + h * 0.3, 0) * CFrame.Angles(0, 0, tilt), color, material, TRIM)
+			if roll < 0.3 then
+				put(parent, "BrokenTop", Vector3.new(lump, h, thick * 0.85), at(u, top + h * 0.3, 0) * CFrame.Angles(0, 0, tilt), color, material, TRIM)
+			end
 		end
 		local bars = style.low and 3 or B.rng:NextInteger(0, style.light and 1 or 2)
 		local from, share = -length / 2 + inset + 0.3, (length - 2 * inset - 0.6) / math.max(bars, 1)
@@ -761,15 +766,13 @@ local function buildKeep(root)
 	merlons(keep, "x", -21, 13, 16, 2, SILL, MERLON - SILL)
 	merlons(keep, "z", -21, -20, -4.6, 2, SILL, MERLON - SILL)
 	merlons(keep, "z", 21, -12, -4.6, 2, SILL, MERLON - SILL)
-	-- The corner's broken top, and a dark string course round the outside at the gallery's floor.
+	-- The corner's broken top. (The dark string course round the outside at the gallery's floor went in
+	-- task 27: four more plates on a face the plinth, buttresses and slits already break up.)
 	put(keep, "BrokenTop", Vector3.new(4.2, 1.1, 1.7), CFrame.new(18.6, 19.3, -21) * CFrame.Angles(0, 0, 0.12), STONE_DARK, MAT.Limestone, TRIM)
 	put(keep, "BrokenTop", Vector3.new(1.7, 0.9, 5.2), CFrame.new(21, 19.25, -15.8) * CFrame.Angles(0.1, 0, 0), STONE_DARK, MAT.Limestone, TRIM)
-	facePlate(keep, "StringCourse", "z", -22, 0.14, -21.8, -15.2, 10.2, 10.8, BASALT, MAT.Basalt)
-	facePlate(keep, "StringCourse", "z", -22, 0.14, -8.8, 5.8, 10.2, 10.8, BASALT, MAT.Basalt)
-	facePlate(keep, "StringCourse", "z", -22, 0.14, 13.2, 21.8, 10.2, 10.8, BASALT, MAT.Basalt)
-	facePlate(keep, "StringCourse", "x", -22, 0.14, -19.8, -4.2, 10.2, 10.8, BASALT, MAT.Basalt)
-	-- The breach: rebar out of both broken ends, soot up the panels beside it, the fall outside.
-	for index = 0, 1 do
+	-- The breach: rebar out of both broken ends, soot up the panels beside it, the fall outside. (One
+	-- bar an end since task 27.)
+	for index = 0, 0 do
 		local y = 3.2 + index * 4.4
 		rod(keep, "Rebar", Vector3.new(5.4, y, -21 + (index % 2) * 0.5 - 0.25), Vector3.new(6.9, y + 0.3, -21.2 + (index % 2) * 0.4),
 			0.16, RUST, MAT.CorrodedMetal, TRIM)
@@ -848,9 +851,8 @@ local function buildKeep(root)
 	for _, x in ipairs({ -8, 8 }) do
 		local z = -15
 		rod(keep, "LanternChain", Vector3.new(x, GAL - 1, z), Vector3.new(x, 8.35, z), 0.12, STEEL_DARK, MAT.Metal, TRIM)
-		box(keep, "LanternCap", x - 0.45, x + 0.45, 8.15, 8.4, z - 0.45, z + 0.45, STEEL_DARK, MAT.Metal, TRIM)
-		local glow = box(keep, "LanternGlow", x - 0.3, x + 0.3, 7.25, 8.15, z - 0.3, z + 0.3, WARM, MAT.Neon, TRIM)
-		box(keep, "LanternBase", x - 0.4, x + 0.4, 7.1, 7.25, z - 0.4, z + 0.4, STEEL_DARK, MAT.Metal, TRIM)
+		-- (A glow on its chain; its cap and base went in task 27.)
+		local glow = box(keep, "LanternGlow", x - 0.3, x + 0.3, 7.25, 8.4, z - 0.3, z + 0.3, WARM, MAT.Neon, TRIM)
 		light(glow, WARM, 22, 1.1)
 	end
 	-- Banners in the arena's purple, hanging from under the gallery against the south wall.
@@ -1065,8 +1067,6 @@ local function gunNest(parent, frame, sides)
 		for _, side in ipairs({ -1, 1 }) do
 			put(parent, "NestMantlet", Vector3.new(0.6, NEST_HIGH + 0.5, 4.8), frame * CFrame.new(side * NEST_HALF, (NEST_HIGH - 0.5) / 2, 0.25),
 				mix(STEEL, RUST, 0.35), MAT.CorrodedMetal, opts)
-			put(parent, "NestStripe", Vector3.new(0.12, 0.5, 4.2), frame * CFrame.new(side * (NEST_HALF + 0.36), NEST_HIGH - 0.7, 0.25), HAZARD,
-				MAT.SmoothPlastic, dressing)
 		end
 		put(parent, "NestAwning", Vector3.new(2 * NEST_HALF + 0.8, 0.2, 5.2), frame * CFrame.new(0, NEST_HIGH + 0.08, 0.25) * CFrame.Angles(0.05, 0, 0),
 			CANVAS, MAT.Fabric, dressing)
@@ -1161,7 +1161,6 @@ local function wreck(parent, x, z, yaw)
 	end
 	-- The corner with no wheel has settled onto its sill.
 	part("WreckSill", Vector3.new(0.8, 1.0, 1.8), CFrame.new(-2.9, 0.45, 4.6), mix(RUST, SOOT, 0.5), MAT.CorrodedMetal)
-	part("WreckSoot", Vector3.new(5.0, 1.2, 0.12), CFrame.new(0, 3.8, -2.47), SOOT, MAT.Slate, trimWith({ tag = opts.tag }))
 	-- Behind it on either long side.
 	local nose, tail = frame * Vector3.new(0, 0, -6), frame * Vector3.new(0, 0, 6)
 	coverLine(nose.X, nose.Z, tail.X, tail.Z, 0, 4.9)
@@ -1343,16 +1342,16 @@ local function stall(parent, cx, cz, backedOnto)
 	box(model, "StallCounter", x0 + 0.4, x1 - 0.4, TILE, 3.2, z0 + 0.4, z0 + 1.5, WOOD, MAT.WoodPlanks)
 	box(model, "StallBack", x0 + 0.4, x1 - 0.4, TILE, 6.6, z1 - 0.35, z1 - 0.05, WOOD_DARK, MAT.WoodPlanks)
 	-- The canopy overhangs the posts, so no strip's edge lies in a post's face.
-	local strips = 3
+	-- Two strips, purple and white (task 27: three).
+	local strips = 2
 	local w = (x1 - x0 + 0.6) / strips
 	for index = 1, strips do
 		local x = x0 - 0.3 + (index - 0.5) * w
 		plateBetween(model, "StallCanopy", Vector3.new(x, 6.66, z1 - 0.2), Vector3.new(x, 5.9, z0 - 0.5), w, 0.12,
 			index % 2 == 0 and WHITE_PAINT or PURPLE, MAT.Fabric, TRIM)
 	end
-	for index = 1, 2 do
-		ball(model, "RotMelon", Vector3.new(x0 + 1.4 + index * 1.9, 3.75, z0 + 0.95), 1.1, MELON, MAT.SmoothPlastic, TRIM)
-	end
+	-- One melon on the counter (task 27: two).
+	ball(model, "RotMelon", Vector3.new(cx, 3.75, z0 + 0.95), 1.1, MELON, MAT.SmoothPlastic, TRIM)
 	coverAt(cx, z0 - 1.2, TILE)
 	if not backedOnto then
 		coverAt(cx - 1.8, z1 + 1.4, TILE)
@@ -1377,11 +1376,12 @@ local function buildMarket(root)
 		local mid = (a + b) / 2 - Vector3.new(0, 1, 0)
 		rod(owner, "FestoonCable", a, mid, 0.08, SOOT, MAT.Plastic, TRIM)
 		rod(owner, "FestoonCable", mid, b, 0.08, SOOT, MAT.Plastic, TRIM)
-		for k = 1, 5 do
-			local t = k / 6
+		-- Three bulbs a string (task 27: five), the middle one lit.
+		for k = 1, 3 do
+			local t = k / 4
 			local p = t < 0.5 and a + (mid - a) * (t * 2) or mid + (b - mid) * (t * 2 - 1)
 			local bulb = ball(owner, "FestoonBulb", p - Vector3.new(0, 0.14, 0), 0.34, k % 2 == 0 and WARM or mix(WARM, ROT_GREEN, 0.35), MAT.Neon, TRIM)
-			if k == 3 then
+			if k == 2 then
 				light(bulb, WARM, 20, 0.9)
 			end
 		end
@@ -1437,7 +1437,8 @@ local function buildMarket(root)
 	for _, y in ipairs({ 0.8, 5.4 }) do
 		rod(drum, "DrumHoop", dc + Vector3.new(0, y - 0.3, 0), dc + Vector3.new(0, y + 0.3, 0), 10.5, BRONZE, MAT.Metal, TRIM)
 	end
-	for index = 0, 5 do
+	-- Three cords round it (task 27: six).
+	for index = 0, 5, 2 do
 		local angle = index * math.pi / 3 + 0.26
 		local out = Vector3.new(math.cos(angle), 0, math.sin(angle)) * 5.05
 		plateBetween(drum, "DrumCord", dc + out + Vector3.new(0, 1.1, 0), dc + out * 0.99 + Vector3.new(math.sin(angle) * 1.2, 5.1, -math.cos(angle) * 1.2),
@@ -1584,8 +1585,8 @@ local LANE = {
 TeamBattleground.LaneHalfWidth = 8
 TeamBattleground.LaneClearance = 8
 
--- A shipping container, 7 high: ribbed sides, doors at one end, one tough pool (every piece carries
--- its tag, so the ribs and doors go with the box).
+-- A shipping container, 7 high: doors at one end, one tough pool (every piece carries its tag, so
+-- the doors go with the box).
 local function container(parent, x0, x1, z0, z1, color, doorsAtLow, sealedEnd)
 	local opts = pool("Container")
 	opts.health = 900
@@ -1594,14 +1595,8 @@ local function container(parent, x0, x1, z0, z1, color, doorsAtLow, sealedEnd)
 	local alongX = (x1 - x0) >= (z1 - z0)
 	local u0, u1 = alongX and x0 or z0, alongX and x1 or z1
 	local c0, c1 = alongX and z0 or x0, alongX and z1 or x1
-	local ribs = math.floor((u1 - u0) / 4.5)
-	for index = 1, ribs - 1 do
-		local u = u0 + (u1 - u0) * index / ribs
-		for _, face in ipairs({ c0, c1 }) do
-			facePlate(parent, "ContainerRib", alongX and "z" or "x", face, 0.12, u - 0.22, u + 0.22, 0.25, 6.75, mix(color, SOOT, 0.25),
-				MAT.Metal, dressing)
-		end
-	end
+	-- (Task 27: the ribs down both long sides went -- 40 parts over six boxes -- and so did the rail
+	-- along the top; these now read like the yards' freight boxes, plain sides and one stencil.)
 	local door = doorsAtLow and u0 or u1
 	local mid = (c0 + c1) / 2
 	for _, side in ipairs({ -1, 1 }) do
@@ -1613,17 +1608,13 @@ local function container(parent, x0, x1, z0, z1, color, doorsAtLow, sealedEnd)
 		local p0 = alongX and Vector3.new(door + out, 0.6, bar) or Vector3.new(bar, 0.6, door + out)
 		rod(parent, "ContainerBar", p0, p0 + Vector3.new(0, 5.8, 0), 0.16, STEEL_DARK, MAT.Metal, dressing)
 	end
-	-- The shipping line stencilled on both long sides (on an unseen plate standing off the face, so only
-	-- the letters show over the ribs), and a steel rail along the top of each long side, stopping short
-	-- of the ends so its end never lies in an end face's plane.
+	-- The shipping line stencilled on the long side toward the middle (on an unseen plate standing off
+	-- the face, so only the letters show).
 	if alongX then
-		for _, face in ipairs({ z0, z1 }) do
-			local stencil = facePlate(parent, "ContainerStencil", "z", face, 0.06, x0 + 2.4, math.min(x1 - 2.4, x0 + 14), 4.1, 5.9, color, MAT.Metal,
-				trimWith({ tag = opts.tag, transparency = 1 }))
-			signText(stencil, "ROT FREIGHT CO.", mix(WHITE_PAINT, color, 0.25))
-			box(parent, "ContainerRail", x0 + 0.1, x1 - 0.1, 6.75, 7.15, math.min(face, face + (face == z0 and 0.3 or -0.3)) - (face == z0 and 0.1 or 0),
-				math.max(face, face + (face == z0 and 0.3 or -0.3)) + (face == z1 and 0.1 or 0), mix(color, SOOT, 0.35), MAT.Metal, dressing)
-		end
+		local face = math.abs(z0) < math.abs(z1) and z0 or z1
+		local stencil = facePlate(parent, "ContainerStencil", "z", face, 0.06, x0 + 2.4, math.min(x1 - 2.4, x0 + 14), 4.1, 5.9, color, MAT.Metal,
+			trimWith({ tag = opts.tag, transparency = 1 }))
+		signText(stencil, "ROT FREIGHT CO.", mix(WHITE_PAINT, color, 0.25))
 	end
 	-- Along both long sides, and at each end that is not up against something.
 	if alongX then
@@ -1640,8 +1631,6 @@ local function barrier(parent, x, z0, length)
 	local opts = pool("Prop")
 	box(parent, "Barrier", x - 0.8, x + 0.8, -0.2, 1.0, z0, z0 + length, CONCRETE, MAT.Concrete, opts)
 	box(parent, "Barrier", x - 0.45, x + 0.45, 1.0, 2.9, z0 + 0.1, z0 + length - 0.1, CONCRETE, MAT.Concrete, opts)
-	facePlate(parent, "BarrierPaint", "x", x - 0.45, 0.08, z0 + 0.8, z0 + length - 0.8, 2.0, 2.5, HAZARD, MAT.SmoothPlastic,
-		trimWith({ tag = opts.tag }))
 	coverLine(x, z0, x, z0 + length, 0, 1.6)
 end
 
@@ -1651,7 +1640,6 @@ local function tyres(parent, x, z, count)
 		local y = (index - 1) * 0.9
 		rod(parent, "Tyre", Vector3.new(x, y, z), Vector3.new(x, y + 0.9, z), 2.4, RUBBER, MAT.Plastic, opts)
 	end
-	disc(parent, "TyreHole", Vector3.new(x, count * 0.9, z), Vector3.new(0, 1, 0), 0.06, 1.2, SOOT, MAT.Slate, trimWith({ tag = opts.tag }))
 end
 
 local function drums(parent, spots)
@@ -1782,14 +1770,10 @@ local function buildBridge(root)
 	local truss = { 62, 71, 80, 89, 98 }
 	local y0, y1 = GAL + 1.1, GAL + 4.4
 	rod(bridge, "TrussChord", Vector3.new(62, y1, -3.85), Vector3.new(98, y1, -3.85), 0.35, STEEL, MAT.Metal, TRIM)
-	for index, x in ipairs(truss) do
+	for _, x in ipairs(truss) do
 		rod(bridge, "TrussPost", Vector3.new(x, y0, -3.85), Vector3.new(x, y1, -3.85), 0.3, STEEL, MAT.Metal, TRIM)
-		local nextX = truss[index + 1]
-		if nextX then
-			local up = index % 2 == 1
-			rod(bridge, "TrussBar", Vector3.new(x, up and y0 or y1, -3.85), Vector3.new(nextX, up and y1 or y0, -3.85), 0.26, STEEL, MAT.Metal, TRIM)
-		end
 	end
+	-- (Its diagonals went in task 27: the posts under the chord read as the truss.)
 	return bridge
 end
 
@@ -1805,7 +1789,7 @@ end
 --   containers across the flank with the gaps staggered, so the flank route zig-zags and no line
 --   runs down it, and the yard's deck on stilts over the cut.
 
--- A freight box: a body and two stencilled plates, one pool. `ends` puts the plates on its end
+-- A freight box: a body and a stencilled plate, one pool. `ends` puts the plates on its end
 -- faces (for the ones standing across the mirror, which must be their own reflections).
 local function boxcar(parent, x0, x1, z0, z1, color, label, base, height, ends)
 	base = base or 0
@@ -1819,7 +1803,9 @@ local function boxcar(parent, x0, x1, z0, z1, color, label, base, height, ends)
 	local faces = faceAxis == "z" and { z0, z1 } or { x0, x1 }
 	local u0, u1 = faceAxis == "z" and x0 or z0, faceAxis == "z" and x1 or z1
 	local inset = math.min(2.2, (u1 - u0) / 4)
-	for _, face in ipairs(faces) do
+	-- One stencilled plate, on the face toward the middle (task 27: both faces was 54 more parts, and
+	-- nobody sees both sides of a box at once).
+	for _, face in ipairs({ math.abs(faces[1]) < math.abs(faces[2]) and faces[1] or faces[2] }) do
 		local plate = facePlate(parent, "ContainerStencil", faceAxis, face, 0.06, u0 + inset, u1 - inset, base + height * 0.52, base + height * 0.86,
 			mix(color, SOOT, 0.3), MAT.Metal, dressing)
 		if label then

@@ -5,7 +5,7 @@ the real ReplicatedStorage/Shared/ZFight.lua, the real DestructibleService and t
 (FindCover and CanStep, against a raycaster over the built parts) under the lupa mock of
 tools/team_base_ruins_check.py, then measures what was built:
 
-  budget      900..1400 parts (said, with the count per section)
+  budget      900..2400 parts (said, with the count per section)
   mirror      team 2's half is team 1's reflected in z = 0, part for part (a wedge's slope the right way
               round); every piece on the mirror is its own reflection; no pool tag is shared
   zfight      ZFight.Scan finds nothing at source and nothing after ZFight.Fix
@@ -62,7 +62,10 @@ from car_placement_luau import luau_to_lua as luau_to_lua_continue  # noqa: E402
 
 from lupa import LuaRuntime  # noqa: E402
 
-BUDGET = (900, 3000)
+# The ceiling was 3,000 (the arena at 2,222 after the 09-25 declutter). Task 27 (2026-09-28) took it to
+# about 1,970, all of it dressing, so the ceiling comes down to 2,400: the arena cannot quietly grow
+# back past where it was, and the planted "over budget" fault (+800 parts) still lands outside it.
+BUDGET = (900, 2400)
 RADIUS = 172.0
 EXTENT = 178.0
 GRID = 0.5

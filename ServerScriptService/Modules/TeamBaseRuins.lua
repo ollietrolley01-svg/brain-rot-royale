@@ -299,7 +299,8 @@ local function light(parent, color, range, brightness)
 	return lamp
 end
 
--- A caged wall lamp on a face, with a warm light. `normal` points out of the face.
+-- A wall lamp on a face, with a warm light. `normal` points out of the face. (Task 27: its cage
+-- bar is no longer built; a bracket and a bulb read as a lamp from anywhere a player stands.)
 local function wallLamp(parent, face, normal, range)
 	local up = Vector3.new(0, 1, 0)
 	local base = put(parent, "LampBracket", Vector3.new(0.9, 0.5, 0.9),
@@ -307,7 +308,6 @@ local function wallLamp(parent, face, normal, range)
 	local _ = base
 	local bulb = put(parent, "LampBulb", Vector3.new(0.7, 0.7, 0.7), CFrame.new(face + normal * 0.75 - up * 0.1),
 		WARM, MAT.Neon, trimWith({ shape = Enum.PartType.Ball }))
-	rod(parent, "LampCage", face + normal * 0.35 + up * 0.35, face + normal * 1.12 + up * 0.35, 0.12, STEEL_DARK, MAT.Metal, TRIM)
 	light(bulb, WARM, range, 1.3)
 	return bulb
 end
@@ -377,8 +377,10 @@ local function rebar(parent, base, length, lean, heading)
 end
 
 -- A line of sandbags from (x0, z0) to (x1, z1) along X or Z, `courses` high on ground at `floor`.
--- Bags in a course stand 0.06 apart and every other course is offset half a bag, so no two bags'
--- faces share a plane where they overlap; one pool per line (`tag`).
+-- Every other course is offset half a bag, so no two courses' ends share a plane; one pool per line
+-- (`tag`). LESS CLUTTER (task 27, as the battleground did on 09-25): a course is one block, not a
+-- part a bag. Each bag still draws its wobble, turn and colour, so everything built after a line of
+-- bags is where it was; the course takes its first bag's colour.
 local BAG_LONG, BAG_HIGH, BAG_DEEP, BAG_GAP = 2.3, 0.78, 1.15, 0.06
 local function sandbags(parent, tag, x0, z0, x1, z1, courses, floor)
 	local alongX = math.abs(x1 - x0) >= math.abs(z1 - z0)
@@ -391,14 +393,16 @@ local function sandbags(parent, tag, x0, z0, x1, z1, courses, floor)
 		local count = math.max(1, math.floor((length + BAG_GAP) / (BAG_LONG + BAG_GAP) + 0.5))
 		local bag = (length - (count - 1) * BAG_GAP) / count
 		local y = floor + (course - 0.5) * BAG_HIGH
-		for index = 1, count do
-			local u = from + inset + (index - 0.5) * bag + (index - 1) * BAG_GAP
-			local wobble = rnd(-0.07, 0.07)
-			local yaw = rnd(-0.025, 0.025)
-			local size = alongX and Vector3.new(bag, BAG_HIGH, BAG_DEEP) or Vector3.new(BAG_DEEP, BAG_HIGH, bag)
-			local at = alongX and CFrame.new(u, y, across + wobble) or CFrame.new(across + wobble, y, u)
-			put(parent, "Sandbag", size, at * CFrame.Angles(0, yaw, 0), SAND[B.rng:NextInteger(1, #SAND)], MAT.Fabric, opts)
+		local color
+		for _ = 1, count do
+			local _ = { rnd(-0.07, 0.07), rnd(-0.025, 0.025) }
+			local pick = SAND[B.rng:NextInteger(1, #SAND)]
+			color = color or pick
 		end
+		local run = count * bag + (count - 1) * BAG_GAP
+		local u = from + inset + run / 2
+		local size = alongX and Vector3.new(run, BAG_HIGH, BAG_DEEP) or Vector3.new(BAG_DEEP, BAG_HIGH, run)
+		put(parent, "Sandbag", size, alongX and CFrame.new(u, y, across) or CFrame.new(across, y, u), color, MAT.Fabric, opts)
 	end
 end
 
@@ -437,16 +441,16 @@ local function insignia(parent, centre, normal, width, field, opts)
 	local inner = w - w * 0.16
 	plate(teamName, inner / math.sqrt(2), inner / math.sqrt(2), 0, 0.02 * w, math.pi / 4, field)
 	plate(teamName, inner, w / 2 - w * 0.08, 0, w / 4 + 0.04 * w, 0, field)
-	-- Two chevrons pointing up, and a bar over them.
+	-- One chevron pointing up. (Task 27: it had two and a bar over them, three more parts on each of
+	-- the base's marks that did not read at any distance.)
 	local length, bar = w * 0.36, w * 0.1
 	local tilt = math.rad(34)
-	for _, apex in ipairs({ 0.08 * w, -0.14 * w }) do
+	for _, apex in ipairs({ 0.06 * w }) do
 		local du, dv = math.cos(tilt) * length / 2, math.sin(tilt) * length / 2
 		-- The marks all lie on the field: each chevron's two arms a step apart (they cross at the apex).
 		plate("InsigniaChevron", length, bar, -du + bar * 0.3, apex - dv, tilt, WHITE_PAINT, 5)
 		plate("InsigniaChevron", length, bar, du - bar * 0.3, apex - dv, -tilt, WHITE_PAINT, 6)
 	end
-	plate("InsigniaBar", w * 0.42, bar, 0, 0.3 * w, 0, WHITE_PAINT, 5)
 end
 
 -- A lit sign: a steel board on a face with the team's colour round a dark panel, the insignia in the
@@ -466,9 +470,9 @@ local function litSign(parent, axis, at, side, u0, u1, y0, y1, range)
 	local normal = axis == "x" and Vector3.new(0, 0, side) or Vector3.new(side, 0, 0)
 	local centre = axis == "x" and Vector3.new(mid, cy + 0.15, at + side * 0.38) or Vector3.new(at + side * 0.38, cy + 0.15, mid)
 	insignia(parent, centre, normal, math.min(y1 - y0 - 0.9, (u1 - u0) * 0.4), B.team)
-	-- Stencilled bars either side of the mark, like lettering seen from a distance.
+	-- A stencilled bar either side of the mark, like lettering seen from a distance (one row: task 27).
 	for _, s in ipairs({ -1, 1 }) do
-		for row = 0, 1 do
+		for row = 0, 0 do
 			local a = mid + s * (y1 - y0) * 0.55
 			local b = a + s * (u1 - u0) * 0.22
 			local lo, hi = math.min(a, b), math.max(a, b)
@@ -521,7 +525,9 @@ local function wallPanel(parent, axis, u0, u1, c, thick, top, style)
 		for _, u in ipairs({ a, b }) do
 			put(parent, "WirePost", Vector3.new(0.14, 1.4, 0.14), CFrame.new(along(u, top + 0.6, 0)), STEEL_DARK, MAT.Metal, TRIM)
 		end
-		for _, h in ipairs({ 0.75, 1.15 }) do
+		-- One strand between the posts (task 27: two doubled the parts along every wall for nothing a
+		-- player could tell apart from the ground).
+		for _, h in ipairs({ 0.95 }) do
 			rod(parent, "BarbedWire", along(a, top + h, 0), along(b, top + h, 0), 0.07, STEEL, MAT.Metal, TRIM)
 		end
 	elseif not style.plain and not style.low and length > 3.2 then
@@ -552,13 +558,18 @@ local function wallPanel(parent, axis, u0, u1, c, thick, top, style)
 	end
 
 	-- Rebar out of the break.
+	-- LESS CLUTTER (task 27): only the odd bars are built, but every bar still draws its numbers, so
+	-- the rest of the wear (and every panel after this one) lands exactly where it did.
 	if not style.plain then
 		local bars = style.low and 3 or B.rng:NextInteger(0, 2)
 		-- Each bar in its own share of the break, so no two stand together.
 		local from, share = u0 + inset + 0.3, (length - 2 * inset - 0.6) / math.max(bars, 1)
 		for bar = 1, bars do
 			local u = from + (bar - 0.5) * share + rnd(-0.2, 0.2) * math.min(1, share)
-			rebar(parent, along(u, top, rnd(-half * 0.5, half * 0.5)), rnd(1.0, 2.3), rnd(0.05, 0.4), rnd(0, math.pi * 2))
+			local base, reach, lean, heading = along(u, top, rnd(-half * 0.5, half * 0.5)), rnd(1.0, 2.3), rnd(0.05, 0.4), rnd(0, math.pi * 2)
+			if bar % 2 == 1 then
+				rebar(parent, base, reach, lean, heading)
+			end
 		end
 	end
 
@@ -584,14 +595,20 @@ local function wallPanel(parent, axis, u0, u1, c, thick, top, style)
 		-- .0, .1 and .3/.4 of it), so no two plates' edges ever share a plane by chance.
 		local y0 = math.floor(rnd(0.9, math.max(1.0, top - 3.0)) * 2) / 2 + 0.2
 		local y1 = math.floor(math.min(top - 0.6, y0 + rnd(1.4, 2.6)) * 2) / 2 + 0.2
+		-- Every other patch is left rendered over (task 27); its draws, colour too, still happen.
+		B.bricks = (B.bricks or 0) + 1
 		if y1 > y0 + 0.6 then
-			facePlate(parent, "BrickCourse", faceAxis, c + side * half, side, PROUD_BRICK, u - w / 2, u + w / 2, y0, y1,
-				B.rng:NextNumber() < 0.5 and BRICK or BRICK_DARK, MAT.Brick)
+			local shade = B.rng:NextNumber() < 0.5 and BRICK or BRICK_DARK
+			if B.bricks % 2 == 1 then
+				facePlate(parent, "BrickCourse", faceAxis, c + side * half, side, PROUD_BRICK, u - w / 2, u + w / 2, y0, y1, shade, MAT.Brick)
+			end
 		end
 	end
 
 	-- Soot from a blast: always beside a gap, now and then elsewhere (never where style.soot is false).
-	if style.soot ~= false and (style.low or style.slopeUp or B.rng:NextNumber() < 0.25) and length > 2.4 then
+	-- (Task 27: the now-and-then soot is no longer built; its draws still happen.)
+	local gapSoot = style.low or style.slopeUp
+	if style.soot ~= false and (gapSoot or B.rng:NextNumber() < 0.25) and length > 2.4 then
 		local side = B.rng:NextNumber() < 0.5 and 1 or -1
 		if style.bareInside and style.out then
 			side = style.out
@@ -599,7 +616,7 @@ local function wallPanel(parent, axis, u0, u1, c, thick, top, style)
 		local a, b = span(-0.05, rnd(2.2, 3.8))
 		local w, u = b - a, (a + b) / 2
 		local y1 = math.floor(math.min(top - 0.3, rnd(3.6, 5.0)) * 2) / 2
-		if y1 > 1.2 then
+		if y1 > 1.2 and gapSoot then
 			facePlate(parent, "Scorch", faceAxis, c + side * half, side, PROUD_SOOT, u - w / 2, u + w / 2, 0.4, y1, SOOT, MAT.Slate)
 		end
 	end
@@ -618,8 +635,10 @@ local function wallPanel(parent, axis, u0, u1, c, thick, top, style)
 		if style.stripe and style.out then
 			stripe(style.out)
 		end
+		-- The inner face is left bare (task 27: the stripe inside as well as out painted most of the
+		-- compound's walls twice); its roll is still drawn, so the wear after it is unmoved.
 		if style.inStripe and style.out then
-			stripe(-style.out)
+			B.rng:NextNumber()
 		end
 	end
 	return wall
@@ -631,7 +650,8 @@ end
 -- team's banner on its outer face; `keep` (optional, {from, to}) keeps those panels tall too (the
 -- lean-to's roof rests on them).
 -- `bare` (optional, {from, to}): panels there keep their inner face plain, because something leans on it.
-local function perimeterRun(parent, axis, c, u0, u1, out, lowStart, lowEnd, hold, keep, bare)
+-- `noBanner` (optional): the `hold` panel still stands tall, but carries no banner.
+local function perimeterRun(parent, axis, c, u0, u1, out, lowStart, lowEnd, hold, keep, bare, noBanner)
 	local count = math.max(1, math.floor((u1 - u0) / 6.5 + 0.5))
 	local length = (u1 - u0) / count
 	local tops = {}
@@ -658,7 +678,7 @@ local function perimeterRun(parent, axis, c, u0, u1, out, lowStart, lowEnd, hold
 			style.slopeToward = (lowStart and index == 1) and -1 or 1
 		end
 		wallPanel(parent, axis, a, b, c, 1.6, top, style)
-		if hold and hold >= a and hold <= b then
+		if hold and hold >= a and hold <= b and not noBanner then
 			-- The banner: a rod along the top of the outer face, the cloth hanging from it, the insignia on it.
 			local m = (a + b) / 2
 			local face = c + out * 0.8
@@ -748,11 +768,14 @@ local function buildGround(model)
 	gateRamp(ground, "x", WX + 0.8, EAST_Z0, EAST_Z1, 3)
 	-- A kerb line of yellow paint where the parade ground meets the motor pool.
 	groundMark(ground, "KerbPaint", 2.1, -14, 0.2, 76, 0, YELLOW_PAINT, MAT.SmoothPlastic, 1)
-	-- Cracks and blast marks, at least 6 apart so no two cross.
-	for _, at in ipairs({ { -56, -40 }, { -27, -30 }, { -6, -44 }, { -4, -18 }, { -38, 8 }, { -58, -4 }, { -22, 16 },
+	-- Cracks and blast marks, at least 6 apart so no two cross. (Task 27: every other crack is built;
+	-- each still draws its numbers.)
+	for index, at in ipairs({ { -56, -40 }, { -27, -30 }, { -6, -44 }, { -4, -18 }, { -38, 8 }, { -58, -4 }, { -22, 16 },
 		{ 14, -4 }, { 44, -2 }, { 30, -48 }, { 52, 30 } }) do
-		groundMark(ground, "Crack", at[1], at[2], rnd(2.5, 5.2), 0.22,
-			B.rng:NextInteger(0, 1) * math.pi / 2 + rnd(0.15, math.pi / 2 - 0.15), SOOT, MAT.Slate, 1)
+		local length, yaw = rnd(2.5, 5.2), B.rng:NextInteger(0, 1) * math.pi / 2 + rnd(0.15, math.pi / 2 - 0.15)
+		if index % 2 == 1 then
+			groundMark(ground, "Crack", at[1], at[2], length, 0.22, yaw, SOOT, MAT.Slate, 1)
+		end
 	end
 	for _, blast in ipairs({ { -17, -8, 4.6 }, { -46, -44, 3.4 }, { 28, -8, 3.8 } }) do
 		groundDisc(ground, "BlastMark", blast[1], blast[2], blast[3], mix(SOOT, CONCRETE_DARK, 0.35), MAT.Slate, 0)
@@ -771,10 +794,11 @@ local function buildPerimeter(model)
 
 	-- Front (z = -WZ, outside -Z): the corner to the foot gate, the foot gate to the gatehouse.
 	perimeterRun(walls, "x", -WZ, -WX - 0.8, -40, -1, false, false, -50)
-	perimeterRun(walls, "x", -WZ, -26, LANE_X0 - 8.2, -1, false, false, -15)
+	-- (One banner a side, task 27: the second on the front and the west only repeated the first.)
+	perimeterRun(walls, "x", -WZ, -26, LANE_X0 - 8.2, -1, false, false, -15, nil, nil, true)
 	-- West (x = -WX): the corner to the breach at z -14..-6, the breach to the spawn hall.
 	perimeterRun(walls, "z", -WX, -WZ + 0.8, -14, -1, false, true, -34)
-	perimeterRun(walls, "z", -WX, -6, 24, -1, true, false, 18, { -0.5, 14.5 }, { -0.5, 14.5 })
+	perimeterRun(walls, "z", -WX, -6, 24, -1, true, false, 18, { -0.5, 14.5 }, { -0.5, 14.5 }, true)
 	-- East (x = +WX): from the gatehouse's east tower to the east gate's south post.
 	perimeterRun(walls, "z", WX, -WZ + 6.4, EAST_Z0 - 3.9, 1, false, false, -24)
 	-- Back (z = +WZ): the alley's end, and behind the east row of bays.
@@ -894,13 +918,12 @@ local function buildGates(model)
 		facePlate(gate, "TeamGatePaint", "x", WX + 1.6, 1, PROUD_PAINT, z - 1, z + 1, 8.6, 10.6, B.team, MAT.SmoothPlastic)
 	end
 
-	-- THE FOOT GATE into the parade ground: two pylons and a lintel, the insignia on each pylon, a
-	-- sandbagged step on the lintel.
+	-- THE FOOT GATE into the parade ground: two pylons and a lintel, a sandbagged step on the lintel.
+	-- (Task 27: the insignia on each pylon went; the gatehouse's banners beside it already carry it.)
 	for _, x in ipairs({ -40, -29 }) do
 		box(gate, "GatePylon", x - 0.3, x + 3.3, -0.9, 12.4, -WZ - 1.6, -WZ + 1.4, CONCRETE, MAT.Concrete)
 		box(gate, "PylonCap", x - 0.55, x + 3.55, 12.4, 12.9, -WZ - 1.85, -WZ + 1.65, CONCRETE_DARK, MAT.Concrete)
 		box(gate, "PylonPlinth", x - 0.55, x + 3.55, -0.95, 1.6, -WZ - 1.85, -WZ + 1.65, CONCRETE_DARK, MAT.Concrete)
-		insignia(gate, Vector3.new(x + 1.5, 6.4, -WZ - 1.6), Vector3.new(0, 0, -1), 2.2, B.team)
 	end
 	box(gate, "Lintel", -37, -29, 9.6, 11.4, -WZ - 1.2, -WZ + 1.0, CONCRETE_DARK, MAT.Concrete)
 	facePlate(gate, "TeamLintelPaint", "z", -WZ - 1.2, -1, PROUD_PAINT, -36.4, -29.6, 10.1, 10.9, B.team, MAT.SmoothPlastic)
@@ -982,7 +1005,8 @@ local function buildHall(model)
 		facePlate(hall, "TeamHoodEdge", "z", z0 - 2.6, -1, 0.1, a - 0.7, b + 0.7, 9.5, 9.85, B.team, MAT.SmoothPlastic)
 		facePlate(hall, "TeamDoorFrame", "z", z0, -1, PROUD_PAINT, a - 0.6, a + 0.08, ROOM_FLOOR, 9.0, B.team, MAT.SmoothPlastic)
 		facePlate(hall, "TeamDoorFrame", "z", z0, -1, PROUD_PAINT, b - 0.08, b + 0.6, ROOM_FLOOR, 9.0, B.team, MAT.SmoothPlastic)
-		for _, s in ipairs({ a - 0.2, b + 0.2 }) do
+		-- One lamp a door, on its west side (task 27: a pair a door was six lights on one face).
+		for _, s in ipairs({ a - 0.2 }) do
 			local lamp = wallLamp(hall, Vector3.new(s + (s < a and -1.6 or 1.6), 7.8, z0), Vector3.new(0, 0, -1), 16)
 			local _ = lamp
 		end
@@ -1036,11 +1060,10 @@ local function buildHall(model)
 		box(hall, "TankCradle", x - 0.3, x + 0.3, ROOF_TOP, ROOF_TOP + 0.9, 45.6, 48.4, STEEL_DARK, MAT.Metal)
 	end
 
-	-- THE PADS.
+	-- THE PADS. (Task 27: the white mark on each was 28 parts that told a player nothing the pad did not.)
 	for _, z in ipairs(PAD_Z) do
 		for _, x in ipairs(PAD_X) do
 			box(hall, "TeamPad", x - 1.6, x + 1.6, ROOM_FLOOR, ROOM_FLOOR + 0.16, z - 1.6, z + 1.6, B.team, MAT.SmoothPlastic, TRIM)
-			box(hall, "PadMark", x - 0.5, x + 0.5, ROOM_FLOOR + 0.1, ROOM_FLOOR + 0.24, z - 1.1, z - 0.2, WHITE_PAINT, MAT.SmoothPlastic, TRIM)
 			table.insert(B.pads, CFrame.new(x, ROOM_FLOOR, z))
 		end
 	end
@@ -1058,10 +1081,13 @@ local function buildHall(model)
 		wallLamp(hall, Vector3.new(x, 8.2, z0 + 2), Vector3.new(0, 0, 1), 20)
 	end
 	rod(hall, "Conduit", Vector3.new(x0 + 2.1, 9.4, back - 0.08), Vector3.new(x1 - 2, 9.4, back - 0.08), 0.3, STEEL_DARK, MAT.Metal, TRIM)
+	-- Each bank of lockers one block (task 27: a part a locker was ten parts for two shapes).
 	for _, span in ipairs({ { 27, 34.6 }, { 45.4, 51.8 } }) do
+		local last = span[1]
 		for z = span[1], span[2] - 1.2, 1.3 do
-			box(hall, "Locker", x1 - 3.3, x1 - 2, ROOM_FLOOR, 7.0, z, z + 1.2, mix(OLIVE, STEEL, 0.4), MAT.Metal)
+			last = z
 		end
+		box(hall, "Locker", x1 - 3.3, x1 - 2, ROOM_FLOOR, 7.0, span[1], last + 1.2, mix(OLIVE, STEEL, 0.4), MAT.Metal)
 	end
 	return hall
 end
@@ -1256,7 +1282,6 @@ local function buildYard(model)
 		box(yard, "MastFoot", x - 0.9, x + 0.9, TILE_TOP, TILE_TOP + 0.6, mastZ - 0.9, mastZ + 0.9, CONCRETE_LIGHT, MAT.Concrete)
 		plateBetween(yard, "CanopyBeam", Vector3.new(x, beamY, mastZ + 0.6), Vector3.new(x, beamY, tipZ), 0.5, 0.7, STEEL_DARK, MAT.Metal, TRIM)
 		rod(yard, "CanopyStay", Vector3.new(x, 16.6, mastZ - 0.2), Vector3.new(x, beamY + 0.3, tipZ + 0.3), 0.14, RUBBER, MAT.Plastic, TRIM)
-		rod(yard, "CanopyStay", Vector3.new(x, 16.2, mastZ - 0.2), Vector3.new(x, beamY + 0.3, (mastZ + tipZ) / 2), 0.14, RUBBER, MAT.Plastic, TRIM)
 	end
 	local netOpts = trimWith({ transparency = 0.12 })
 	for index = 1, #masts - 1 do
@@ -1267,10 +1292,6 @@ local function buildYard(model)
 			color, MAT.Fabric, netOpts)
 		plateBetween(yard, "CamoNet", Vector3.new((a0 + a1) / 2, beamY - 0.5, sag - 0.5), Vector3.new((a0 + a1) / 2, beamY + 0.4, tipZ + 0.4),
 			a1 - a0 - 0.2, 0.1, color, MAT.Fabric, netOpts)
-		for _, t in ipairs({ 0.3, 0.7 }) do
-			local a = a0 + (a1 - a0) * t
-			box(yard, "NetScrim", a - 0.35, a + 0.35, beamY - 1.6, beamY + 0.2, tipZ + 0.2, tipZ + 0.26, OLIVE, MAT.Fabric, TRIM)
-		end
 	end
 	-- Floodlights on the two end masts, looking over the bays.
 	for _, x in ipairs({ masts[1], masts[#masts] }) do

@@ -5,7 +5,7 @@ ReplicatedStorage/Shared/ZFight.lua and the real ServerScriptService/Modules/Des
 under the lupa mock from tools/vehicle_models_axis_check.py (extended here with Random, Color3 maths,
 TrussPart and Roblox's part defaults), then measures what was built:
 
-  budget     760..1450 parts per base (said, with the count per room)
+  budget     760..1100 parts per base (said, with the count per room)
   zfight     ZFight.Scan finds no fighting pair at source (before any fix) and none after ZFight.Fix,
              the pass Build runs; also how many Fix had to move
   floating   every part is connected, through parts it touches (OBBs, 0.12 slack), to the ground (the
@@ -51,7 +51,10 @@ from vehicle_models_axis_check import MOCK, luau_to_lua  # noqa: E402
 from lupa import LuaRuntime  # noqa: E402
 
 # 760 -> 1450 with the compound's area (92 x 84 -> 134 x 110, x1.91), sized for 25 a side.
-BUDGET = (760, 1450)
+# Task 27 (declutter, 2026-09-28) took the base from 1,099 parts to about 840, all of it dressing; the
+# ceiling comes down to 1,100 so the base cannot quietly grow back past where it was, and so the
+# planted "over budget" fault (+364 paving slabs) still lands outside it.
+BUDGET = (760, 1100)
 BODY_RADIUS, BODY_HEIGHT, STEP = 1.0, 5.2, 1.5
 GRID = 0.5
 # The flat pad round the compound (its footprint and margin), and how far past its middle every bay's
