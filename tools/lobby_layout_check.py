@@ -18,10 +18,15 @@ checks, without Studio:
      Wayfinding piece within its own WAYFINDING_BUDGET (players load in here first; #131)
   E  the lobby cannot break: MatchService builds it under a model named "Lobby" and
      DestructibleService's NEVER list keeps that name
+  F  no gate stands in front of a booth (the Trade Board, the Cosmetics stall, every crate key on
+     the Crate Altar, the Daily Spin): from a fan of spots on the plaza in front of each prompt, at
+     knee (swept a player wide, so the walk-up path), chest and eye height, no Wayfinding part above
+     the paving crosses the line to it (task 19: the 09-24 gates stood in front of two of them)
 
 Planted faults (each must fail, run every time): the Cosmetics vendor's prompt gone (A), the Trade
 Board sealed behind four walls (B), a gateway sunk into the Trading Hall (C), a banner hung in the
-air (C), the budget blown (D), "Lobby" dropped from NEVER (E).
+air (C), the budget blown (D), "Lobby" dropped from NEVER (E), a gate stood in front of the Cosmetics
+stall (F), a gate stood in front of the Crate Altar (F).
 
     python tools/lobby_layout_check.py [repo_root]            the checks (exit 1 on any failure)
     python tools/lobby_layout_check.py [repo_root] --map F    also draw a top-down map (PNG) of the
@@ -45,10 +50,11 @@ LOBBY_FILE = MODULES / "LobbyService.lua"
 
 # Budgets, counted on this harness's build (Studio's is ~200 more: the real display guns, the
 # mannequin's accessory, the statue's figure; 3,601 in the v2 gallery). Before v2 the lobby was 3,158
-# parts and 89 lights here; v2's Wayfinding adds 231 parts and 5 lights, and the budget leaves a
-# little room, no more.
-LOBBY_BUDGET = 3600
-WAYFINDING_BUDGET = 260
+# parts and 89 lights here; v2's Wayfinding added 231 parts and 5 lights. Task 19 cut Wayfinding to
+# 149 parts and 4 lights (half the road studs, one banner per gate, a coarser arc, one gate fewer),
+# and the budgets leave a little room, no more.
+LOBBY_BUDGET = 3400
+WAYFINDING_BUDGET = 170
 LIGHT_BUDGET = 110
 
 # The walker: a player is ~2 studs across and 5 tall; Humanoids walk up ~2 studs without jumping and
@@ -510,6 +516,75 @@ def budget_checks(parts, lights, lobby_budget=LOBBY_BUDGET):
     return problems, way
 
 
+# The booths, and the plaza in front of each that no gate may stand in: sight lines from a fan of
+# viewpoints (FAN_ANGLES either side of the line to the plaza centre, FAN_DISTANCES out) at a
+# walker's knee, chest and eye (FAN_HEIGHTS) to every prompt of the booth. The knee line is swept a
+# player's RADIUS wide, so it is the walk-up path as well as a sight line.
+BOOTHS = [
+    ("Trade Board", lambda q: q["object"] == "Trade Board"),
+    ("Cosmetics stall", lambda q: q["object"] == "Cosmetics"),
+    ("Crate Altar", lambda q: q["parent"].startswith("CrateKey_")),
+    ("Daily Spin", lambda q: q["object"] == "Daily Spin"),
+]
+FAN_ANGLES = (-30, -15, 0, 15, 30)
+FAN_DISTANCES = (8, 14, 20, 26, 32)
+FAN_HEIGHTS = ((1.0, RADIUS), (3.0, 0.3), (5.5, 0.3))  # (height, how far each blocker is grown)
+
+
+def segment_hits_box(a, b, p, grow):
+    """Whether segment a-b passes through part p (as a box grown by `grow` each way)."""
+    axes = (p.r, p.u, p.b)
+    t0, t1 = 0.0, 1.0
+    for ax, half in zip(axes, p.size / 2 + grow):
+        s, e = (a - p.pos) @ ax, (b - p.pos) @ ax
+        d = e - s
+        if abs(d) < 1e-9:
+            if abs(s) > half:
+                return False
+            continue
+        lo, hi = sorted(((-half - s) / d, (half - s) / d))
+        t0, t1 = max(t0, lo), min(t1, hi)
+        if t0 > t1:
+            return False
+    return True
+
+
+def top_of(p):
+    return p.pos[1] + abs(p.r[1]) * p.size[0] / 2 + abs(p.u[1]) * p.size[1] / 2 + abs(p.b[1]) * p.size[2] / 2
+
+
+def frontage_checks(parts, prompts, group="Wayfinding"):
+    """F: no part of the group standing above the paving (a gate, not the road) is in any booth's frontage."""
+    problems, lines = [], 0
+    blockers = [p for p in parts if p.group == group and top_of(p) > 1.0]
+    for label, find in BOOTHS:
+        hits = [q for q in prompts if find(q)]
+        if not hits:
+            problems.append(f"F: {label}: no prompt to look at")
+            continue
+        bad = None
+        for q in hits:
+            target = q["pos"]
+            out = -np.array([target[0], 0.0, target[2]])
+            out /= np.linalg.norm(out)
+            for angle in FAN_ANGLES:
+                c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+                way = np.array([out[0] * c - out[2] * s, 0.0, out[0] * s + out[2] * c])
+                for dist in FAN_DISTANCES:
+                    for height, grow in FAN_HEIGHTS:
+                        eye = np.array([target[0], height, target[2]]) + way * dist
+                        lines += 1
+                        for p in blockers:
+                            if segment_hits_box(eye, target, p, grow):
+                                bad = bad or (p, angle, dist, height)
+                                break
+        if bad:
+            p, angle, dist, height = bad
+            problems.append(f"F: {label}: {group}:{p.name} at ({p.pos[0]:.1f}, {p.pos[1]:.1f}, {p.pos[2]:.1f}) stands between "
+                            f"it and the plaza (the line from {dist} studs out at {angle:+d} degrees, {height} up)")
+    return problems, lines, len(blockers)
+
+
 def exemption_checks(destructible, match):
     problems = []
     if not re.search(r'lobby\.Name = "Lobby"', match) or "LobbyService.Build(lobby, base)" not in match:
@@ -536,6 +611,7 @@ def run(source=None, plant=None, destructible=None, match=None, lobby_budget=LOB
         problems += budget_checks(parts, lights, lobby_budget)[0]
         problems += exemption_checks(destructible or SC.read(MODULES / "DestructibleService.lua"),
                                      match or SC.read(MODULES / "MatchService.lua"))
+        problems += frontage_checks(parts, prompts)[0]
         return problems, {}
     world = World(parts)
     sx, sy, sz, half = spawn
@@ -556,9 +632,12 @@ def run(source=None, plant=None, destructible=None, match=None, lobby_budget=LOB
     problems += bp
     problems += exemption_checks(destructible or SC.read(MODULES / "DestructibleService.lua"),
                                  match or SC.read(MODULES / "MatchService.lua"))
+    fp, lines, gates = frontage_checks(parts, prompts)
+    problems += fp
     if draw:
         draw_map(world, reached, prompts, draw)
-    info = dict(parts=len(parts), lights=lights, way=way, reached=len(reached), stats=stats, lumps=lumps)
+    info = dict(parts=len(parts), lights=lights, way=way, reached=len(reached), stats=stats, lumps=lumps,
+                lines=lines, gates=gates)
     return problems, info
 
 
@@ -588,14 +667,21 @@ def plants(source):
     cos = 'tabPrompt(counter, "Browse", "Cosmetics", "Cosmetics")'
     out.append(("the Cosmetics vendor's prompt gone", "A", dict(source=source.replace(cos, "", 1)) if cos in source else None))
     out.append(("the Trade Board sealed behind four walls", "B", dict(source=source, plant="seal")))
-    sink = '{ key = "Market", degrees = 240, radius = 60,'
+    market = '{ key = "Market", x = -42.6, z = -26, heading = 270,'
     out.append(("a gateway sunk into the Trading Hall", "C",
-                dict(source=source.replace(sink, '{ key = "Market", degrees = 225, radius = 80,', 1), walk=False)
-                if sink in source else None))
+                dict(source=source.replace(market, '{ key = "Market", degrees = 225, radius = 80,', 1), walk=False)
+                if market in source else None))
     hang = "local BANNER_DROP = 0\n"
     out.append(("a banner hung in the air", "C",
                 dict(source=source.replace(hang, "local BANNER_DROP = -30\n", 1), walk=False) if hang in source else None))
     out.append(("the part budget blown", "D", dict(source=source, lobby_budget=1000, walk=False)))
+    # A gate on the road in front of a booth, as the 09-24 layout had them (tangent on the r60 arc).
+    out.append(("a gate stood in front of the Cosmetics stall", "F",
+                dict(source=source.replace(market, '{ key = "Market", degrees = 240, radius = 60, tangent = true,', 1),
+                     walk=False) if market in source else None))
+    out.append(("a gate stood in front of the Crate Altar", "F",
+                dict(source=source.replace(market, '{ key = "Market", degrees = 270, radius = 60, tangent = true,', 1),
+                     walk=False) if market in source else None))
     destructible = SC.read(MODULES / "DestructibleService.lua")
     out.append(('"Lobby" dropped from NEVER', "E",
                 dict(source=source, destructible=destructible.replace("Lobby = true,", "", 1), walk=False)))
@@ -610,7 +696,8 @@ def main():
         print("FAIL", p)
     print(f"lobby_layout_check: {info['parts']} parts (budget {LOBBY_BUDGET}), Wayfinding {info['way']} "
           f"(budget {WAYFINDING_BUDGET}) in {info['lumps']} lumps, {info['lights']} lights (budget {LIGHT_BUDGET}); "
-          f"{info['reached']} standing spots walkable from the spawn; "
+          f"{info['reached']} standing spots walkable from the spawn; {info['lines']} booth sight lines checked "
+          f"against {info['gates']} gate parts; "
           + ", ".join(f"{k} {v}" for k, v in info["stats"].items()))
     caught = 0
     cases = plants(source)

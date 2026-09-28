@@ -28,9 +28,9 @@
 --                   plaza, fireflies, and fireworks over the tree every so often
 --   Wayfinding      (lobby v2) the Rot Road, a raised purple-stone road with glowing studs from the
 --                   pier head to the statue and on to every district, and a gate over each
---                   district's way in (FIRING RANGE, PLAY BALL, MARKET ROW, CRATES + SPIN, and ALL
---                   ABOARD at the gangway), each in its colour with a Rotling on top and swinging
---                   banners (tools/lobby_layout_check.py walks it from the spawn)
+--                   district's way in (FIRING RANGE, PLAY BALL, MARKET ROW for the whole row of
+--                   booths, and ALL ABOARD at the gangway), each in its colour with a Rotling on top
+--                   and a swinging banner (tools/lobby_layout_check.py walks it from the spawn)
 --
 -- Layout, relative to the centre (+X east, +Z the pier and spawn side); angles are degrees
 -- with 0 = +X and 90 = +Z: plaza r100, grass rim r132, tree at the centre, statue (0, 30),
@@ -3447,14 +3447,18 @@ end
 -- A new player lands on the pier facing a plaza full of things. The Rot Road takes them round it:
 -- a raised purple-stone road with glowing studs down its middle, from the pier head to the statue,
 -- then forking east to the firing range, west past the pitch and on to Market Row, and along the
--- stalls to the crates and the Daily Spin. Each district has a gate over its way in, in the
--- district's colour, its name on a board both ways, a Rotling (the island's goggle-eyed blob
--- mascot) on top and two banners swinging under the lintel (AmbientSway, on the client). Nothing
+-- stalls to the crates. Each district has a gate over its way in, in the district's colour, its
+-- name on a board both ways, a Rotling (the island's goggle-eyed blob mascot) on top and a banner swinging under the lintel (AmbientSway, on the client). Nothing
 -- here is interactive and nothing moves on the server.
 --
 -- Everything stands clear of the showcase podiums' slots (tools/showcase_layout_check.py) and of
 -- every other set piece, rests on the paving or the pier, and is held to its own part budget
--- (tools/lobby_layout_check.py, which also walks the island from the spawn to every prompt).
+-- (tools/lobby_layout_check.py, which also walks the island from the spawn to every prompt). No gate
+-- stands in the plaza in front of a booth (the Trade Board, the Cosmetics stall, the Crate Altar, the
+-- Daily Spin): the same check looks at each from a fan of spots in front of it (check F). So the one
+-- MARKET ROW gate stands over the road where it turns in from the pitch, before the row, and covers
+-- all four booths; the row itself (r60, 220 to 280 degrees) has no room for a gate that is not in
+-- front of one of them.
 
 -- One local out of this block (the main chunk is near Luau's 200-local limit).
 local buildWayfinding
@@ -3463,17 +3467,18 @@ do
 	local ROAD_KERB = Color3.fromRGB(58, 44, 78)
 	local ROAD_TOP = 0.36
 	local ROAD_WIDTH = 3.4
-	local STUD_SPACING = 8
+	local STUD_SPACING = 16
 
-	-- Road legs as points on the plaza (x, z from the centre). Clear of the podium slots by 10 studs or
-	-- more, of the gold ring round the tree, and of the arena's ramps.
+	-- Road legs as points on the plaza (x, z from the centre), or arcs round it built from `segments`
+	-- straight pieces. Clear of the podium slots by 10 studs or more, of the gold ring round the tree,
+	-- and of the arena's ramps.
 	local ROAD_LEGS = {
 		{ color = GOLD, points = { { 0, 95 }, { 0, 44 } } },
 		{ color = SKY, points = { { 0, 52 }, { 28, 8 } } },
 		{ color = GREEN, points = { { 0, 52 }, { -18, 26 }, { -22, 23 }, { -39.5, 22 }, { -41.5, 16 }, { -42, -29 } } },
 		{ color = PINK, points = { { -42, -29 }, { -47.3, -35 }, { -46.2, -38.6 } } },
-		{ color = PINK, arc = { radius = 60, from = 220, to = 245, step = 5 } },
-		{ color = GOLD, arc = { radius = 60, from = 245, to = 280, step = 5 } },
+		{ color = PINK, arc = { radius = 60, from = 220, to = 245, segments = 2 } },
+		{ color = GOLD, arc = { radius = 60, from = 245, to = 280, segments = 3 } },
 	}
 
 	-- The district gates: where (x, z), the way a player walks through (degrees, 0 = +X), the span
@@ -3483,10 +3488,8 @@ do
 			subtitle = "Take a gun off the podium, shoot the targets" },
 		{ key = "Pitch", x = -47, z = 0, heading = 180, span = 14, height = 8, floor = 0.25, color = GREEN, title = "PLAY BALL",
 			subtitle = "Kick a ball into the goal for coins" },
-		{ key = "Market", degrees = 240, radius = 60, tangent = true, span = 11, height = 11, color = PINK, title = "MARKET ROW",
-			subtitle = "Trading Hall  -  Cosmetics" },
-		{ key = "Crates", degrees = 270, radius = 60, tangent = true, span = 11, height = 11, color = GOLD, title = "CRATES + SPIN",
-			subtitle = "Open crates at the altar, spin the wheel daily" },
+		{ key = "Market", x = -42.6, z = -26, heading = 270, span = 11, height = 11, color = PINK, title = "MARKET ROW",
+			subtitle = "Trading Hall  -  Cosmetics  -  Crates  -  Spin" },
 		{ key = "Ship", x = 0, z = 125.5, heading = 90, span = 12, height = 11, floor = 0.55, color = GREEN, title = "ALL ABOARD",
 			subtitle = "Stand on the pad on deck to ready up" },
 	}
@@ -3520,8 +3523,8 @@ do
 		for _, leg in ipairs(ROAD_LEGS) do
 			if leg.arc then
 				local points = {}
-				for degrees = leg.arc.from, leg.arc.to, leg.arc.step do
-					local angle = math.rad(degrees)
+				for index = 0, leg.arc.segments do
+					local angle = math.rad(leg.arc.from + (leg.arc.to - leg.arc.from) * index / leg.arc.segments)
 					table.insert(points, { math.cos(angle) * leg.arc.radius, math.sin(angle) * leg.arc.radius })
 				end
 				for index = 1, #points - 1 do
@@ -3593,22 +3596,20 @@ do
 		decor(part(lobby, Vector3.new(board.Size.X + 0.4, 0.3, 0.7), board.CFrame * CFrame.new(0, 1.7 + 0.1, 0), gate.color, Enum.Material.Neon))
 		-- The Rotling sits on the board's end, looking down the way in.
 		rotling(lobby, frame * CFrame.new(board.Size.X / 2 - 0.2, top + 2.4 + 3.4 - 0.1, 0), gate.color, 2.6)
-		-- Two banners on sway rods under the lintel, halfway to the pillars.
-		for _, side in ipairs({ -1, 1 }) do
-			local rodAt = frame * CFrame.new(side * half * 0.5, top - 0.1 - BANNER_DROP, 0)
-			local rod = part(lobby, Vector3.new(3.4, 0.3, 0.3), rodAt, WOOD_DARK, Enum.Material.Wood)
-			rod.Name = "BannerRod"
-			rod.CanCollide = false
-			rod:SetAttribute("SwayAxis", "X")
-			rod:SetAttribute("SwayAngle", 7)
-			rod:SetAttribute("SwaySpeed", 1.3)
-			rod:SetAttribute("SwayPhase", side + gate.span)
-			CollectionService:AddTag(rod, "AmbientSway")
-			local cloth = decor(part(rod, Vector3.new(3, 4.6, 0.15), rodAt * CFrame.new(0, -2.4, 0), gate.color:Lerp(DARK, 0.25), Enum.Material.Fabric))
-			cloth.Name = "Banner"
-			decor(part(rod, Vector3.new(3.05, 0.5, 0.2), rodAt * CFrame.new(0, -4.5, 0), gate.color, Enum.Material.Neon))
-			decor(part(rod, Vector3.new(1.2, 1.2, 0.2), rodAt * CFrame.new(0, -2.2, 0) * CFrame.Angles(0, 0, math.rad(45)), WHITE, Enum.Material.Neon))
-		end
+		-- One banner on a sway rod under the middle of the lintel.
+		local rodAt = frame * CFrame.new(0, top - 0.1 - BANNER_DROP, 0)
+		local rod = part(lobby, Vector3.new(3.4, 0.3, 0.3), rodAt, WOOD_DARK, Enum.Material.Wood)
+		rod.Name = "BannerRod"
+		rod.CanCollide = false
+		rod:SetAttribute("SwayAxis", "X")
+		rod:SetAttribute("SwayAngle", 7)
+		rod:SetAttribute("SwaySpeed", 1.3)
+		rod:SetAttribute("SwayPhase", gate.span)
+		CollectionService:AddTag(rod, "AmbientSway")
+		local cloth = decor(part(rod, Vector3.new(3, 4.6, 0.15), rodAt * CFrame.new(0, -2.4, 0), gate.color:Lerp(DARK, 0.25), Enum.Material.Fabric))
+		cloth.Name = "Banner"
+		decor(part(rod, Vector3.new(3.05, 0.5, 0.2), rodAt * CFrame.new(0, -4.5, 0), gate.color, Enum.Material.Neon))
+		decor(part(rod, Vector3.new(1.2, 1.2, 0.2), rodAt * CFrame.new(0, -2.2, 0) * CFrame.Angles(0, 0, math.rad(45)), WHITE, Enum.Material.Neon))
 		return lintel
 	end
 
