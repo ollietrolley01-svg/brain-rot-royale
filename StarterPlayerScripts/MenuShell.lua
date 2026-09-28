@@ -14,6 +14,7 @@
 -- A ModuleScript, so tools/menu_hud_gallery.lua can render it without a running client.
 
 local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
@@ -346,6 +347,13 @@ function MenuShell:SetDestinations(destinations, active)
 		end
 		return
 	end
+	-- Was the pad on one of the cells about to go? Then it goes to the new active cell, below.
+	local padFocused = false
+	pcall(function()
+		local selected = GuiService.SelectedObject
+		padFocused = selected ~= nil and selected:IsDescendantOf(self.nav)
+	end)
+	self.navCells = {}
 	for _, child in ipairs(self.nav:GetChildren()) do
 		if not child:IsA("UIListLayout") then
 			child:Destroy()
@@ -379,7 +387,7 @@ function MenuShell:SetDestinations(destinations, active)
 				}),
 			})
 		end
-		UiParts.navItem({
+		self.navCells[destination.key] = UiParts.navItem({
 			parent = self.phone and row or self.nav,
 			rail = not self.phone,
 			-- The short version's rail is 64 wide: glyph only. Without this the cells drew their
@@ -399,6 +407,27 @@ function MenuShell:SetDestinations(destinations, active)
 			end,
 		})
 	end
+	if padFocused then
+		self:FocusPad()
+	end
+end
+
+-- A gamepad has no pointer, so the menu hands it a starting point: the active destination's cell.
+-- Asked on Open and after every rebuild of the nav, because choosing a destination rebuilds every
+-- cell, and the cell the pad was on is destroyed under it -- which left a pad player with nothing
+-- selected after each tab change. Does nothing unless the pad was the last thing used.
+function MenuShell:FocusPad()
+	-- pcall: a gallery renders this shell from a plugin, where the input services may refuse.
+	pcall(function()
+		if not string.find(UserInputService:GetLastInputType().Name, "Gamepad", 1, true) then
+			return
+		end
+		local first = self.destinations and self.destinations[1]
+		local cell = self.navCells and (self.navCells[self.active] or (first and self.navCells[first.key]))
+		if cell and cell.Parent then
+			GuiService.SelectedObject = cell
+		end
+	end)
 end
 
 -- The header's title: each HUD button's screen names itself (#78), so SHOP reads SHOP rather than the
@@ -475,6 +504,7 @@ function MenuShell:Open()
 	self.scrimFrame.BackgroundTransparency = 1
 	TweenService:Create(self.scrimFrame, TweenInfo.new(UiKit.Motion.Fade), { BackgroundTransparency = 0.45 }):Play()
 	UiParts.openPanel(self.panel, self.scale, self.fitScale)
+	self:FocusPad()
 end
 
 function MenuShell:Close()
@@ -482,6 +512,13 @@ function MenuShell:Close()
 		return
 	end
 	self.closing = true
+	-- Hand the pad back to the game: a selection left on a hidden cell keeps eating A (jump) and the d-pad.
+	pcall(function()
+		local selected = GuiService.SelectedObject
+		if selected and selected:IsDescendantOf(self.layer) then
+			GuiService.SelectedObject = nil
+		end
+	end)
 	TweenService:Create(self.scrimFrame, TweenInfo.new(UiKit.Motion.Press), { BackgroundTransparency = 1 }):Play()
 	UiParts.closePanel(self.panel, self.scale, function()
 		if not self.closing then

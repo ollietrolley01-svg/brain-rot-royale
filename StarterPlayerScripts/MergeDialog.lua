@@ -13,8 +13,10 @@
 --   MergeDialog.Close()
 --   MergeDialog.IsOpen()
 
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local BrainrotData = require(Shared:WaitForChild("BrainrotData"))
@@ -102,8 +104,15 @@ end
 function MergeDialog.Close()
 	token += 1
 	if current then
+		local returnTo = current.padReturn
 		current.overlay:Destroy()
 		current = nil
+		-- The pad goes back to the MERGE button it came from, not to nothing inside an open menu.
+		if returnTo and returnTo.Parent then
+			pcall(function()
+				GuiService.SelectedObject = returnTo
+			end)
+		end
 	end
 end
 
@@ -328,6 +337,15 @@ function MergeDialog.Open(parent, info)
 		end
 	end)
 	confirm.Activated:Connect(MergeDialog.Confirm)
+
+	-- A gamepad has no pointer: its selection starts on CANCEL, so a stray A never spends anything, and
+	-- the button it came from is remembered for Close. Nothing changes for a mouse or a finger.
+	pcall(function()
+		if string.find(UserInputService:GetLastInputType().Name, "Gamepad", 1, true) then
+			mine.padReturn = GuiService.SelectedObject
+			GuiService.SelectedObject = cancel
+		end
+	end)
 
 	if not info.instant then
 		TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = fit }):Play()

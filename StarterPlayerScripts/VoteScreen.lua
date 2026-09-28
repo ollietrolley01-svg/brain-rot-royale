@@ -223,6 +223,9 @@ function Screen:Render(state)
 	-- decided`), so there is nothing to click, and claiming for it would switch combat off.
 	local visible, wantsCursor = VoteCursor.Screen(state.open, state.decided, state.ready)
 	self.root.Visible = visible
+	if not visible then
+		self:dropPadFocus()
+	end
 	if self.modal then
 		self.modal.Visible = wantsCursor
 	end
@@ -312,6 +315,7 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 		ZIndex = self.zIndex + 1,
 		Parent = parent,
 	}, { create("UICorner", { CornerRadius = UDim.new(0, Radius.Card) }) })
+	button:SetAttribute("CandidateId", candidate.id)
 
 	-- EXACTLY ONE UIStroke. Roblox applies one per object, so a card that adds a "highlight" stroke
 	-- next to its resting stroke gets whichever the engine picked — which is how a highlight ends up
@@ -507,6 +511,15 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 		end)
 	end
 	return button
+end
+
+function Screen:dropPadFocus()
+	pcall(function()
+		local selected = GuiService.SelectedObject
+		if selected and selected:IsDescendantOf(self.root) then
+			GuiService.SelectedObject = nil
+		end
+	end)
 end
 
 function Screen:Layout()

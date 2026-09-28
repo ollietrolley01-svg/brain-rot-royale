@@ -2245,6 +2245,9 @@ local function buildArena(lobby, base)
 			-- fired, and which it was turned on where you were looking. #117
 			prompt.MaxActivationDistance = 8
 			prompt.RequiresLineOfSight = false
+			-- B, not Roblox's default X: X is Reload, and it is live on the range, so a pad player
+			-- reloading a range gun beside a podium also took that podium's gun (LootService, #86).
+			prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 			prompt.Parent = pedestal
 			prompt.Triggered:Connect(function(player)
 				local ok, message = RangeService.Give(player, entry.id)

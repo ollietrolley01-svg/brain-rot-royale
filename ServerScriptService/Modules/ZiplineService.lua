@@ -105,6 +105,9 @@ function ZiplineService.Create(parent, from, to, fromTop)
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = 12
 	prompt.RequiresLineOfSight = false
+	-- B, not Roblox's default X: X is Reload in a match, so a pad player reloading within 12 studs of a
+	-- handle also rode the line. The same fix and reason as LootService's makePrompt (#86).
+	prompt.GamepadKeyCode = Enum.KeyCode.ButtonB
 	prompt.Parent = handle
 
 	prompt.Triggered:Connect(function(player)
