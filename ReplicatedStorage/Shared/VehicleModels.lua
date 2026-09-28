@@ -1,7 +1,7 @@
 -- Vehicle models: every drivable vehicle's body, built from parts. Shared by the server (the
 -- vehicles parked on a map), the client (which animates their moving parts) and the galleries.
 --
---   VehicleModels.Pick(kind, rng)             -> modelId          kind "car" or "bike"
+--   VehicleModels.Pick(kind, rng, opts)       -> modelId          kind "car" or "bike"; opts: drivable, armedShare
 --   VehicleModels.Build(modelId, rng, opts)   -> model, info
 --   VehicleModels.Models[modelId]             -> the definition
 --
@@ -3469,23 +3469,36 @@ VehicleModels.Poses = {
 -- opts.drivable also draws from the models a map only ever parks as drivable vehicles (the armoured
 -- cars, `drivableOnly`): VehicleService.Create asks for them, MapDecor's kerbside props never do, so the
 -- streets keep the designs they had and their rolls are untouched.
+-- opts.armedShare (0 to under 1) scales the armed models' weights (a turret in VehicleModels.Mounts) together,
+-- so armed ones make up that share of the pick and keep their order among themselves. Battle royale's
+-- parked vehicles ask for 0.25 (task 29). Without the option the weights stand as written. Still one roll.
 function VehicleModels.Pick(kind, rng, opts)
 	local drivable = type(opts) == "table" and opts.drivable == true
+	local share = type(opts) == "table" and opts.armedShare or nil
 	-- Walk in a fixed order: pairs() order isn't stable, and a pick has to be.
-	local ids, total = {}, 0
+	local ids, armed, unarmed = {}, 0, 0
 	for id, def in pairs(VehicleModels.Models) do
 		if def.kind == kind and (drivable or not def.drivableOnly) then
 			table.insert(ids, id)
-			total += def.weight
+			if VehicleModels.Mounts[id] then
+				armed += def.weight
+			else
+				unarmed += def.weight
+			end
 		end
 	end
+	local scale = 1
+	if type(share) == "number" and share >= 0 and share < 1 and armed > 0 and unarmed > 0 then
+		scale = share * unarmed / ((1 - share) * armed)
+	end
+	local total = armed * scale + unarmed
 	if total <= 0 then
 		return nil
 	end
 	table.sort(ids)
 	local roll = rng:NextNumber() * total
 	for _, id in ipairs(ids) do
-		roll -= VehicleModels.Models[id].weight
+		roll -= VehicleModels.Models[id].weight * (VehicleModels.Mounts[id] and scale or 1)
 		if roll <= 0 then
 			return id
 		end
