@@ -144,12 +144,78 @@ end
 
 -- What to keep clear: Roblox's top bar, and room for thumbs on a touch screen.
 function UiKit.safeArea(viewport, touch)
-	return {
+	local safe = {
 		Top = 52 + UiKit.Space.SM,
 		Bottom = touch and 96 or UiKit.Space.LG,
 		Left = touch and 20 or UiKit.Space.LG,
 		Right = touch and 20 or UiKit.Space.LG,
 	}
+	-- A TV crops its edges (overscan) and Roblox leaves that to the game: on a console, nothing of the
+	-- menu, the vote or the drop map sits in the outer 5% (Jacob's device-compat question 5). Everywhere
+	-- else this table is exactly what it always was.
+	if viewport and UiKit.tenFoot() then
+		safe.Left = math.max(safe.Left, math.floor(viewport.X * UiKit.TvSafe.Side + 0.5))
+		safe.Right = math.max(safe.Right, math.floor(viewport.X * UiKit.TvSafe.Side + 0.5))
+		safe.Top = math.max(safe.Top, math.floor(viewport.Y * UiKit.TvSafe.TopBottom + 0.5))
+		safe.Bottom = math.max(safe.Bottom, math.floor(viewport.Y * UiKit.TvSafe.TopBottom + 0.5))
+	end
+	return safe
+end
+
+--------------------------------------------------------------------------------
+-- THE TV-SAFE AREA (console only)
+--
+-- Roblox's console guidelines leave overscan to the game, and a TV can crop up to ~5% of each edge. On a
+-- console (GuiService:IsTenFootInterface()) the HUD's edge pieces go in a frame inset 5% each side --
+-- 96 px left and right, 54 px top and bottom at 1920x1080 -- and the menus' safe area (above) grows to
+-- the same margin. Desktop, phone and tablet never see any of it: tvSafeRoot hands back the ScreenGui
+-- itself, so their layouts are byte-for-byte what they were (tools/device_compat_check.py measures both).
+--------------------------------------------------------------------------------
+
+UiKit.TvSafe = { Side = 0.05, TopBottom = 0.05, FrameName = "TvSafeArea" }
+
+-- TEST SEAM: true / false forces the answer (galleries and checks); nil asks the engine.
+UiKit.TenFootForTest = nil
+
+function UiKit.tenFoot()
+	if UiKit.TenFootForTest ~= nil then
+		return UiKit.TenFootForTest == true
+	end
+	local ok, tenFoot = pcall(function()
+		return game:GetService("GuiService"):IsTenFootInterface()
+	end)
+	return ok and tenFoot == true
+end
+
+-- The room a layout function has inside that frame: the viewport less the margin on a console, the
+-- viewport itself (the same value) anywhere else.
+function UiKit.tvSafeSize(viewport)
+	if not UiKit.tenFoot() then
+		return viewport
+	end
+	return Vector2.new(viewport.X * (1 - 2 * UiKit.TvSafe.Side), viewport.Y * (1 - 2 * UiKit.TvSafe.TopBottom))
+end
+
+-- Where a ScreenGui's EDGE pieces are parented: on a console, a transparent frame inset by the TV-safe
+-- margin (made once per ScreenGui); anywhere else the ScreenGui itself. Full-screen overlays and the
+-- centred pieces stay on the ScreenGui. Anything that turns an absolute position into an offset for a
+-- piece in here measures from this frame, not the ScreenGui.
+function UiKit.tvSafeRoot(screenGui)
+	if not UiKit.tenFoot() then
+		return screenGui
+	end
+	local existing = screenGui:FindFirstChild(UiKit.TvSafe.FrameName)
+	if existing then
+		return existing
+	end
+	return UiKit.create("Frame", {
+		Name = UiKit.TvSafe.FrameName,
+		Position = UDim2.fromScale(UiKit.TvSafe.Side, UiKit.TvSafe.TopBottom),
+		Size = UDim2.fromScale(1 - 2 * UiKit.TvSafe.Side, 1 - 2 * UiKit.TvSafe.TopBottom),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Parent = screenGui,
+	})
 end
 
 -- A panel that fills a phone inside its safe area, and is a share of a bigger screen without ever

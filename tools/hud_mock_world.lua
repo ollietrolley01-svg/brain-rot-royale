@@ -857,7 +857,8 @@ function W.drawn()
 			r = { x = ext.x, y = ext.y, w = ext.w, h = ext.h, k = r.k }
 		end
 		local fullScreen = r.w >= vp.X * 0.95 and r.h >= vp.Y * 0.95
-		if fullScreen and inst.BackgroundTransparency >= 1 then
+		-- UiKit.tvSafeRoot's frame on a console holds the HUD's edge pieces: measure them, not it.
+		if (fullScreen or inst.Name == "TvSafeArea") and inst.BackgroundTransparency >= 1 then
 			for _, c in ipairs(rawget(inst, "__children")) do
 				consider(c, gui)
 			end
@@ -921,6 +922,8 @@ function W.setup(vx, vy, touch, keyboard)
 	W.UserInputService.MouseEnabled = not touch
 	service("GuiService", {
 		GetGuiInset = function() return Vector2.new(0, W.inset), Vector2.new(0, 0) end,
+		-- A console (W.tenFoot, set before the scripts run): UiKit.tvSafeRoot's inset frame.
+		IsTenFootInterface = function() return W.tenFoot == true end,
 	})
 	service("TweenService", {
 		Create = function(_, inst, _, goals)

@@ -130,7 +130,8 @@ panel.Position = UDim2.new(0.5, 133, 1, -178)
 panel.Size = UDim2.fromOffset(150, 78)
 panel.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 panel.BackgroundTransparency = 0.25
-panel.Parent = gui
+-- Inside the TV-safe margin on a console, beside VehicleClient's panel (UiKit.tvSafeRoot).
+panel.Parent = require(script.Parent:WaitForChild("UiKit")).tvSafeRoot(gui)
 Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
 local panelScale = Instance.new("UIScale")
 panelScale.Parent = panel

@@ -8,6 +8,12 @@
 --   tvsafe_hud           the in-match HUD at 1920x1080 with the 5% TV-safe margin (96 px sides, 54 px
 --                        top and bottom) drawn in; red = crosses the margin
 --   tvsafe_menu          the real MenuShell at 1920x1080 with the same margin
+--   vote_pad             the real VoteScreen at 1920x1080 with the last input a gamepad
+--
+-- Since the 09-28 answers to questions 2-5, tvsafe_hud draws the CONSOLE HUD (hud_layout_check --dump's
+-- "console 1920x1080") and tvsafe_menu lays the menu out as a console does (UiKit.TenFootForTest), and
+-- vote_pad moves the D-pad highlight once; run against a tree without those (UiKit.tvSafeRoot absent)
+-- the same file draws the before pictures.
 --
 -- The plate is a copy of CombatClient's setSpectating (a LocalScript's local can't be required); keep
 -- them in step. The HUD rects are `hud_layout_check --dump` at desktop 1920x1080 (the client scripts
@@ -216,6 +222,31 @@ local HUD_RECTS = {
 	{ "vehicle hint", 825, 802, 270, 14 },
 }
 
+-- The same, on a console (hud_layout_check --dump's "console 1920x1080", every state merged): the edge
+-- pieces in UiKit.tvSafeRoot's frame, the room laid out by UiKit.tvSafeSize (device-compat question 5).
+local HUD_RECTS_CONSOLE = {
+	{ "banner", 740, 64, 440, 56 },
+	{ "mode score (team)", 750, 64, 420, 44 },
+	{ "compass", 740, 124, 440, 24 },
+	{ "crosshair", 947, 527, 26, 26 },
+	{ "health", 112, 930, 280, 80 },
+	{ "companion card", 112, 860, 300, 62 },
+	{ "speed pill", 112, 824, 150, 28 },
+	{ "stamina bar", 690, 951, 331, 45 },
+	{ "hotbar", 1118, 860, 690, 150 },
+	{ "minimap", 1618, 162, 190, 190 },
+	{ "bounty", 1578, 358, 230, 22 },
+	{ "kill feed", 1508, 412, 300, 80 },
+	{ "toast", 730, 816, 460, 36 },
+	{ "ability icon", 868, 900, 244, 110 },
+	{ "boon panel", 112, 495, 190, 90 },
+	{ "vehicle gun panel", 1093, 770, 150, 78 },
+	{ "vehicle panel", 835, 770, 250, 78 },
+	{ "vehicle hint", 825, 748, 270, 14 },
+}
+-- The console inset exists (after the fix): draw the console HUD; before it, the only HUD there was.
+local CONSOLE = UiKit.tvSafeRoot ~= nil
+
 -- How far a rect crosses each edge of the safe area, as "left 80, bottom 38", or nil.
 local function outside(x, y, w, h)
 	local parts = {}
@@ -277,9 +308,12 @@ table.insert(views, {
 	settle = 1.2,
 	setup = function(_, camera)
 		sky(camera)
-		local tv = tvScreen(freshGui(), camera, "In-match HUD (hud_layout_check --dump rects, every state) vs the TV-safe area: red = crosses it")
+		local tv = tvScreen(freshGui(), camera, CONSOLE
+			and "In-match HUD on a CONSOLE (hud_layout_check --dump \"console 1920x1080\", every state) vs the TV-safe area"
+			or "In-match HUD (hud_layout_check --dump rects, every state) vs the TV-safe area: red = crosses it")
 		local count = 0
-		for _, r in ipairs(HUD_RECTS) do
+		local rects = CONSOLE and HUD_RECTS_CONSOLE or HUD_RECTS
+		for _, r in ipairs(rects) do
 			local name, x, y, w, h = r[1], r[2], r[3], r[4], r[5]
 			local off = outside(x, y, w, h)
 			local color = off and Color3.fromRGB(240, 70, 70) or Color3.fromRGB(90, 220, 130)
@@ -311,7 +345,7 @@ table.insert(views, {
 			end
 		end
 		drawMargin(tv)
-		note(string.format("HUD: %d of %d elements cross the 5%% margin", count, #HUD_RECTS))
+		note(string.format("HUD%s: %d of %d elements cross the 5%% margin", CONSOLE and " (console)" or "", count, #rects))
 	end,
 })
 
@@ -320,7 +354,11 @@ table.insert(views, {
 	settle = 1.5,
 	setup = function(_, camera)
 		sky(camera)
-		local tv = tvScreen(freshGui(), camera, "MenuShell (the real module) at 1920x1080, not touch, vs the TV-safe area")
+		local tv = tvScreen(freshGui(), camera, CONSOLE and "MenuShell (the real module) at 1920x1080 on a CONSOLE (UiKit.safeArea's TV margin) vs the TV-safe area"
+			or "MenuShell (the real module) at 1920x1080, not touch, vs the TV-safe area")
+		if CONSOLE then
+			UiKit.TenFootForTest = true
+		end
 		local shell = MenuShell.new({ parent = tv, viewport = Vector2.new(TV.w, TV.h), title = "BRAIN ROT ROYALE" })
 		shell:SetViewport(Vector2.new(TV.w, TV.h), false)
 		shell:SetDestinations({
@@ -334,6 +372,7 @@ table.insert(views, {
 			{ key = "Settings", label = "SETTINGS", glyph = "⚙", sub = "Keys and audio" },
 		}, "Brainrots")
 		shell:Open()
+		UiKit.TenFootForTest = nil
 		drawMargin(tv)
 		task.wait(0.5)
 		-- Measure in design pixels: everything under `tv` shares its UIScale.
@@ -356,6 +395,65 @@ table.insert(views, {
 			end
 		end
 		note(string.format("menu: %d visible pieces inside the panel cross the margin", crossing))
+	end,
+})
+
+--------------------------------------------------------------------------------
+-- The vote on a pad
+--------------------------------------------------------------------------------
+
+-- The real VoteScreen at 1920x1080 with the last input a gamepad, a ready player, three cards. After
+-- the pad fix the D-pad highlight is moved once (to the second card) through the screen's own PadMove,
+-- the path ContextActionService drives; before it there is no such path and nothing is highlighted.
+table.insert(views, {
+	name = "vote_pad",
+	settle = 1.5,
+	setup = function(_, camera)
+		sky(camera)
+		local VoteScreen = require(Scripts:WaitForChild("VoteScreen"))
+		local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
+		local GameModes = require(Shared:WaitForChild("GameModes"))
+		local MapData = require(Shared:WaitForChild("MapData"))
+		local tv = tvScreen(freshGui(), camera, "VoteScreen (the real module) at 1920x1080, last input a gamepad, ready to vote")
+		local candidates = {}
+		for index, modeId in ipairs(GameModes.Order) do
+			local mode = GameModes.Describe(GameModes.Get(modeId))
+			local map = MapData.Get(MapData.Order[index]) or MapData.Get(MapData.Order[1])
+			table.insert(candidates, {
+				id = "c" .. index,
+				mode = mode,
+				map = { id = map.id, name = map.name, radius = map.radius },
+				votes = index == 1 and 2 or 0,
+				mine = false,
+			})
+		end
+		VoteScreen.ViewportForTest = Vector2.new(TV.w, TV.h)
+		local vote = VoteScreen.new({ parent = tv, zIndex = 36, touch = false, inputKind = "gamepad" })
+		vote:Render({ open = true, candidates = candidates, seconds = 12, total = 15, ready = true })
+		if vote.PadMove then
+			vote:PadMove(1)
+		end
+		VoteScreen.ViewportForTest = nil
+		task.wait(0.3)
+		local hint, lit = nil, 0
+		for _, g in ipairs(vote.root:GetDescendants()) do
+			if g:IsA("TextLabel") and string.find(g.Text, "vote", 1, true) and g.Parent and g.Parent.Parent == vote.root then
+				hint = g.Text
+			end
+			if g.Name == "PadHighlight" and g.Visible then
+				lit += 1
+			end
+		end
+		note(string.format("vote on a pad: hint %q; %d card(s) pad-highlighted%s", tostring(hint), lit,
+			vote.padIndex and string.format(" (card %d)", vote.padIndex) or ""))
+		if vote.Destroy then
+			-- Leave nothing bound once the capture is taken (the gallery never plays, but be tidy).
+			task.delay(3, function()
+				pcall(function()
+					vote:Destroy()
+				end)
+			end)
+		end
 	end,
 })
 

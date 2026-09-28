@@ -49,6 +49,23 @@ It reads the source; no lupa or Studio needed. It reuses keybind_check's Setting
 Measured: main `d1e4f73` gives **problems: 5**, the zipline and podium prompts plus menu, merge dialog
 and vote pad entry. This branch gives **problems: 0**, and **9/9** planted faults are caught.
 
+## Answered 2026-09-28 (questions 2-5; "fix them")
+
+- **2, vote:** its own buttons. D-pad left/right moves a highlight, Y votes. It never takes the stick or
+  A, and it's bound only while the vote can be cast. Cards are no longer Selectable. The pad hint
+  "◀ ▶ pick · Y vote" shows only when the last input was a pad (`VoteScreen.lua`).
+- **3, drop spot:** `GamepadService:EnableGamepadCursor` over the map while the picker is up on a pad.
+  `DisableGamepadCursor` runs whenever it closes. A clicks through the map's existing click. If the
+  player never picks, the random drop stays (`DropPicker.lua`).
+- **4, sliders:** the track is Selectable. While it's selected, D-pad or left stick left/right steps
+  it by 5% of its range, repeating at about 8/s, through the drag's own setter (`MenuClient`'s
+  `sliderRow`).
+- **5, TV-safe margin:** console only. `UiKit.tvSafeRoot` puts the HUD's edge pieces in a frame inset
+  5%, and `UiKit.safeArea` grows to the same margin for the menus. Off console both return exactly
+  what they did before.
+- `device_compat_check.py` adds V/D/L/T, with 11 new plants (21/21 caught).
+  `hud_layout_check.py` gains a `console 1920x1080` size.
+
 ## Open, for Oliver
 
 1. **Phone touch buttons past the cap (biggest).** The CoreScript (`ContextActionTouch.lua`) draws at

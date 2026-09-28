@@ -51,7 +51,8 @@ local root = create("Frame", {
 	BackgroundTransparency = 0.25,
 	BorderSizePixel = 0,
 	Visible = false,
-	Parent = gui,
+	-- Inside the TV-safe margin on a console (UiKit.tvSafeRoot); the ScreenGui itself elsewhere.
+	Parent = UiKit.tvSafeRoot(gui),
 }, { UiKit.rounded(Radius.Card) })
 create("UIStroke", { Color = Role.Line, Thickness = 1, Transparency = 0.4, Parent = root })
 local scale = create("UIScale", { Parent = root })

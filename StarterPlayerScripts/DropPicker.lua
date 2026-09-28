@@ -939,6 +939,51 @@ function DropPicker.new(options)
 	return self
 end
 
+-- THE MAP ON A PAD (Jacob's device-compat question 3, answered 09-28): while the window is up and the
+-- hands are on a pad, Roblox's own virtual cursor is switched on over the map, so the left stick steers
+-- a pointer and A clicks with it -- which the map already takes as a click (the cursor sends mouse
+-- input), so there is no second pick path to drift from the first. Switched off when the window closes,
+-- whichever way it closes. A pad player who never picks still gets the random spread-out drop.
+function Picker:padWanted()
+	if self.touch ~= nil then
+		return false
+	end
+	local ok, pad = pcall(function()
+		return string.find(UserInputService:GetLastInputType().Name, "Gamepad", 1, true) ~= nil
+			or (UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled)
+	end)
+	return ok and pad == true
+end
+
+-- GamepadService calls are pcall'd: the service is newer than some clients, and a throw here would take
+-- the window's open or close with it.
+function Picker:setPadCursor(on)
+	on = on == true
+	if on == (self.padCursorOn == true) then
+		return
+	end
+	self.padCursorOn = on
+	if on then
+		local target = self.mapHolder
+		pcall(function()
+			game:GetService("GamepadService"):EnableGamepadCursor(target)
+		end)
+	else
+		pcall(function()
+			game:GetService("GamepadService"):DisableGamepadCursor()
+		end)
+	end
+end
+
+-- The cursor follows the hands while the window is up: a player who picks the pad up mid-window gets
+-- it then (VoteDropClient calls this on LastInputTypeChanged). Never switched off here while the window
+-- is up -- a stray mouse nudge must not take the pointer from under a pad player's thumb.
+function Picker:RefreshPadCursor()
+	if self.visible and self:padWanted() then
+		self:setPadCursor(true)
+	end
+end
+
 function Picker:isTouch()
 	if self.touch ~= nil then
 		return self.touch
@@ -1020,6 +1065,12 @@ function Picker:SetVisible(visible)
 	end
 	self.visible = visible
 	self.root.Visible = visible
+	-- The pad's stick cursor over the map: on with the window (on a pad), and ALWAYS off when it closes.
+	if visible then
+		self:RefreshPadCursor()
+	else
+		self:setPadCursor(false)
+	end
 	if self.modal then
 		-- Half one, the other end of it: the overlay follows the window exactly, so the cursor is
 		-- freed while it is up and handed straight back when the phase ends.
@@ -1072,9 +1123,12 @@ function Picker:Layout()
 	-- spending 96 px of a 390 px landscape phone on clearance would shrink the map for nothing.
 	-- The top inset stays: Roblox's own bar really is there.
 	local bottomInset = touch and Space.LG or safe.Bottom
+	local pad = not touch and self:padWanted()
 	local hint = touch and "Tap anywhere on the map. Tap again to move it."
+		or (pad and "Steer the cursor with the left stick and press A on the map. Again to move it.")
 		or "Click anywhere on the map. Click again to move it."
 	self.emptyReadout = touch and "Tap the map to choose where you land"
+		or (pad and "Stick and A on the map to choose where you land")
 		or "Click the map to choose where you land"
 	local fallbackNote = "Pick nothing and you land on a random spot, spread out from everyone else."
 
@@ -1161,6 +1215,8 @@ function Picker:Layout()
 			ZIndex = self.zIndex + 1,
 			Parent = panel,
 		})
+		-- Where the pad's cursor starts (setPadCursor).
+		self.mapHolder = holder
 		if self.data then
 			local view = DropPicker.DrawMap(holder, self.data, size, {
 				labelSize = labelSize,

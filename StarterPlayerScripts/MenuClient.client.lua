@@ -2697,6 +2697,8 @@ local function sliderRow(order, entry)
 		BackgroundColor3 = C.PanelAlt,
 		BorderSizePixel = 0,
 		AutoButtonColor = false,
+		-- A pad's selection has to be able to land here (see padStep below).
+		Selectable = true,
 		Text = "",
 		Parent = row,
 	}, { rounded(5), create("UISizeConstraint", { MaxSize = Vector2.new(240, 10) }) })
@@ -2722,11 +2724,82 @@ local function sliderRow(order, entry)
 	end
 	show(Settings.Get(entry.id))
 
-	local function setFromX(x)
-		local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
-		Settings.Set(entry.id, entry.min + alpha * (entry.max - entry.min))
+	-- THE ONE SETTER, for the drag and the pad alike: Settings.Set saves and applies it, show draws it.
+	local function setValue(value)
+		Settings.Set(entry.id, value)
 		show(Settings.Get(entry.id))
 	end
+
+	local function setFromX(x)
+		local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
+		setValue(entry.min + alpha * (entry.max - entry.min))
+	end
+
+	-- ON A PAD (Jacob's device-compat question 4, answered 09-28): while this track is the GuiService
+	-- selection, D-pad and left-stick left/right step it by 5% of its range (never less than its own
+	-- step), repeating about 8 times a second while held, through setValue like the drag. Left and right
+	-- selection moves stay on the track (NextSelectionLeft/Right), so the step is the only thing they do;
+	-- up and down still leave for the next row. Bound only while selected, unbound on losing it.
+	track.NextSelectionLeft = track
+	track.NextSelectionRight = track
+	local padAction = "BRR_SliderPad_" .. entry.id
+	local padHeld = { dir = 0, gen = 0 }
+	local function padStep(dir)
+		local stepSize = math.max((entry.max - entry.min) * 0.05, entry.step or 0)
+		setValue(math.clamp(Settings.Get(entry.id) + dir * stepSize, entry.min, entry.max))
+	end
+	local function padHold(dir)
+		if dir == padHeld.dir then
+			return
+		end
+		padHeld.dir = dir
+		padHeld.gen += 1
+		if dir == 0 then
+			return
+		end
+		local gen = padHeld.gen
+		padStep(dir)
+		task.spawn(function()
+			task.wait(0.3)
+			while padHeld.gen == gen and track.Parent do
+				padStep(dir)
+				task.wait(0.125)
+			end
+		end)
+	end
+	local function padInput(_, inputState, input)
+		if input.KeyCode == Enum.KeyCode.Thumbstick1 then
+			-- Only a mostly-sideways push is the slider's; up and down pass on to move the selection.
+			local x, y = input.Position.X, input.Position.Y
+			if inputState == Enum.UserInputState.End or math.abs(x) <= 0.5 or math.abs(x) < math.abs(y) then
+				padHold(0)
+				return Enum.ContextActionResult.Pass
+			end
+			padHold(x > 0 and 1 or -1)
+			return Enum.ContextActionResult.Sink
+		end
+		if inputState == Enum.UserInputState.Begin then
+			padHold(input.KeyCode == Enum.KeyCode.DPadLeft and -1 or 1)
+		elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+			padHold(0)
+		end
+		return Enum.ContextActionResult.Sink
+	end
+	local function padRelease()
+		padHold(0)
+		pcall(function()
+			ContextActionService:UnbindAction(padAction)
+		end)
+	end
+	track.SelectionGained:Connect(function()
+		pcall(function()
+			ContextActionService:BindActionAtPriority(padAction, padInput, false,
+				Enum.ContextActionPriority.High.Value + 100, Enum.KeyCode.DPadLeft, Enum.KeyCode.DPadRight,
+				Enum.KeyCode.Thumbstick1)
+		end)
+	end)
+	track.SelectionLost:Connect(padRelease)
+	track.Destroying:Connect(padRelease)
 
 	-- Drag listeners exist only while the button is held, so re-rendering never leaks them.
 	track.InputBegan:Connect(function(input)

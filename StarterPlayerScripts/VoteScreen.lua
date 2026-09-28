@@ -20,6 +20,7 @@
 -- A ModuleScript so tools/gallery.ps1 can render it, and because HudClient's main chunk is three
 -- locals from Luau's 200-local limit.
 
+local ContextActionService = game:GetService("ContextActionService")
 local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextService = game:GetService("TextService")
@@ -37,6 +38,16 @@ local create = UiKit.create
 local Role, Type, Space, Radius, Stroke = UiKit.Role, UiKit.Type, UiKit.Space, UiKit.Radius, UiKit.Stroke
 
 local VoteScreen = {}
+
+-- THE VOTE ON A PAD (Jacob's device-compat question 2, answered by the coordinator 09-28): the vote has
+-- buttons of its own and takes NEITHER the left stick NOR A, because the lobby is still walkable while it
+-- is up and a player votes on the move. D-pad left / right moves a highlight across the cards, Y votes
+-- for the highlighted one. Bound through ContextActionService above the game's own binds (the D-pad is
+-- Quests / Inventory and Y the companion elsewhere) only while the interactive vote is up, and unbound
+-- the moment it is not. The cards are NOT Selectable: a GuiService selection would take the stick.
+VoteScreen.PadMoveAction = "BRR_VotePadMove"
+VoteScreen.PadCastAction = "BRR_VotePadCast"
+VoteScreen.PadHint = "◀ ▶ pick · Y vote"
 
 -- TEST SEAM. Never set by game code: a gallery frame can choose a width but not a viewport height,
 -- and `short` is decided by height, so without this the short version ships unexercised.
@@ -182,6 +193,7 @@ function Screen:inputKind()
 end
 
 function Screen:Destroy()
+	self:setPadBound(false)
 	-- Release BEFORE the instances go. A screen torn down while holding the cursor leaves its claim
 	-- outstanding with nothing left alive to release it, and the mouse stays free for the session.
 	if self.menuOpenHeld then
@@ -239,6 +251,9 @@ function Screen:Render(state)
 			self.onMenuOpen(wantsCursor)
 		end
 	end
+	-- The pad's own buttons, for exactly as long as a vote can be cast: not for the reveal, and not for a
+	-- player who has not readied (their Y and D-pad stay the game's).
+	self:setPadBound(visible and wantsCursor and state.decided == nil)
 	if not visible then
 		-- Hidden: the next showing draws from scratch rather than trusting what was left behind.
 		self.layoutKey = nil
@@ -311,7 +326,9 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 		ClipsDescendants = true,
 		LayoutOrder = order,
 		Active = enabled and not decided,
-		Selectable = enabled and not decided,
+		-- Never a GuiService selection: that would take the left stick from walking. A pad moves the
+		-- PadHighlight below with the D-pad instead (see VoteScreen.PadMoveAction).
+		Selectable = false,
 		ZIndex = self.zIndex + 1,
 		Parent = parent,
 	}, { create("UICorner", { CornerRadius = UDim.new(0, Radius.Card) }) })
@@ -484,6 +501,22 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 		end
 	end
 
+	-- The pad's highlight: its own frame with its own stroke (the card's one UIStroke says "mine"), inset
+	-- so the card's ClipsDescendants cannot cut it. Shown by refreshPad, never by the layout.
+	local padHighlight = create("Frame", {
+		Name = "PadHighlight",
+		Position = UDim2.fromOffset(3, 3),
+		Size = UDim2.new(1, -6, 1, -6),
+		BackgroundTransparency = 1,
+		Visible = false,
+		ZIndex = self.zIndex + 4,
+		Parent = button,
+	}, {
+		create("UICorner", { CornerRadius = UDim.new(0, math.max(Radius.Card - 3, 0)) }),
+		create("UIStroke", { Color = Role.Text, Thickness = 3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
+	})
+	self.padFrames[order] = padHighlight
+
 	if enabled and not decided then
 		-- Hover and press by hand rather than through UiParts.interactive, for one reason: that
 		-- helper parents a focus UIStroke of its own, and this card has already spent its single
@@ -513,6 +546,78 @@ function Screen:card(parent, candidate, shape, w, h, order, decidedId, enabled)
 	return button
 end
 
+-- Binds (or unbinds) the pad's move and vote buttons. On a change only, like the cursor claim above.
+function Screen:setPadBound(want)
+	want = want == true
+	if want == (self.padBound == true) then
+		return
+	end
+	self.padBound = want
+	if not want then
+		pcall(function()
+			ContextActionService:UnbindAction(VoteScreen.PadMoveAction)
+			ContextActionService:UnbindAction(VoteScreen.PadCastAction)
+		end)
+		self:refreshPad()
+		return
+	end
+	-- Start on the card this player voted for, else the first.
+	self.padIndex = 1
+	for index, candidate in ipairs(self.state.candidates or {}) do
+		if candidate.mine then
+			self.padIndex = index
+		end
+	end
+	-- Every state is sunk, not just the press, so a D-pad release never reaches Quests or Inventory.
+	pcall(function()
+		local priority = Enum.ContextActionPriority.High.Value + 100
+		ContextActionService:BindActionAtPriority("BRR_VotePadMove", function(_, inputState, input)
+			if inputState == Enum.UserInputState.Begin then
+				self:PadMove(input.KeyCode == Enum.KeyCode.DPadLeft and -1 or 1)
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, priority, Enum.KeyCode.DPadLeft, Enum.KeyCode.DPadRight)
+		ContextActionService:BindActionAtPriority("BRR_VotePadCast", function(_, inputState)
+			if inputState == Enum.UserInputState.Begin then
+				self:PadCast()
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, priority, Enum.KeyCode.ButtonY)
+	end)
+	self:refreshPad()
+end
+
+-- One step of the D-pad highlight, held at the ends rather than wrapping (three cards; a wrap reads as a
+-- skip). Public so a gallery can draw the highlight without a controller.
+function Screen:PadMove(step)
+	local count = #(self.state.candidates or {})
+	if count == 0 then
+		return
+	end
+	self.padIndex = math.clamp((self.padIndex or 1) + step, 1, count)
+	self:refreshPad(true)
+end
+
+-- Y: the highlighted card's vote, through the same onVote a click or a number key uses.
+function Screen:PadCast()
+	if not self.padBound then
+		return
+	end
+	local candidate = (self.state.candidates or {})[self.padIndex or 0]
+	if candidate and candidate.id ~= nil and self.onVote then
+		self.onVote(candidate.id)
+	end
+end
+
+-- The highlight is drawn only while the pad's buttons are bound AND the hands are on a pad (`pressed`: a
+-- D-pad press just now, which is a pad whatever the last-input query says).
+function Screen:refreshPad(pressed)
+	local show = self.padBound == true and (pressed == true or self:inputKind() == "gamepad")
+	for index, frame in pairs(self.padFrames or {}) do
+		frame.Visible = show and index == self.padIndex
+	end
+end
+
 function Screen:dropPadFocus()
 	pcall(function()
 		local selected = GuiService.SelectedObject
@@ -523,23 +628,15 @@ function Screen:dropPadFocus()
 end
 
 function Screen:Layout()
-	-- A pad's selection is a card instance, and this rebuild destroys it: remember which candidate it
-	-- was, and hand the selection to that candidate's new card at the end.
-	local selectedId
-	local okSelected, selected = pcall(function()
-		return GuiService.SelectedObject
-	end)
-	if okSelected and selected and self.cards then
-		for id, button in pairs(self.cards) do
-			if button == selected then
-				selectedId = id
-			end
-		end
-	end
+	-- No GuiService selection is carried across a rebuild any more: a selected card would take the left
+	-- stick from walking. Anything left selected in here (it cannot be a card: they are not Selectable)
+	-- is let go before its instance goes. The pad's highlight is an index, so it survives the rebuild.
+	self:dropPadFocus()
 	for _, child in ipairs(self.root:GetChildren()) do
 		child:Destroy()
 	end
 	self.cards = {}
+	self.padFrames = {}
 	self.timerLabel, self.timerBar = nil, nil
 	self.layoutKey = self:layoutKeyFor()
 	local state = self.state
@@ -666,6 +763,9 @@ function Screen:Layout()
 		local kind = self:inputKind()
 		if kind == "touch" then
 			hint = "Tap a card to vote. Most votes wins; a tie is drawn at random."
+		elseif kind == "gamepad" and self.padBound then
+			-- Its own buttons, in their own glyphs: the stick and A stay walking and jumping.
+			hint = VoteScreen.PadHint .. "  —  most votes wins; a tie is drawn at random."
 		elseif kind == "gamepad" then
 			hint = "Pick a card. Most votes wins; a tie is drawn at random."
 		else
@@ -700,13 +800,7 @@ function Screen:Layout()
 	-- and the plaza are what a player looks at next.
 	local top = ceiling + math.max(0, (viewport.Y - ceiling - bottomInset - y)) * 0.45
 	panel.Position = UDim2.new(0.5, 0, 0, math.max(ceiling, math.floor(top)))
-
-	local reselect = selectedId ~= nil and self.cards[selectedId] or nil
-	if reselect and reselect.Selectable then
-		pcall(function()
-			GuiService.SelectedObject = reselect
-		end)
-	end
+	self:refreshPad()
 end
 
 return VoteScreen

@@ -29,7 +29,20 @@ What it checks:
      slot for good, so every touch button bound later needs a free slot. Over-cap buttons already
      known are OPEN (listed, not failing); a new one fails.
   G  Gamepad entry: every modal screen that takes the cursor gives a pad a selected object
-     (`GuiService.SelectedObject = ...`), or is OPEN with its question.
+     (`GuiService.SelectedObject = ...`), or has a pad path of its own (V, D below).
+  V  The vote on a pad (Jacob's question 2, answered 09-28): its own buttons, D-pad left/right and Y,
+     never the left stick or A (the lobby stays walkable); bound above the game's binds and unbound when
+     it closes; the cards are not Selectable and nothing sets a GuiService selection; the "pick / Y vote"
+     hint is the pad's line only; mouse, touch and 1/2/3 are untouched (A above).
+  D  The drop map on a pad (question 3): GamepadService:EnableGamepadCursor when the window opens on a
+     pad, DisableGamepadCursor whenever it closes, both pcall'd; A clicks through the map's own click.
+  L  Settings sliders on a pad (question 4): the track is Selectable; while selected, D-pad and left
+     stick left/right step it (5% of the range, repeating while held) through the SAME setter the drag
+     uses, the one that calls Settings.Set.
+  T  The Xbox TV-safe margin (question 5), measured by running the HUD (tools/hud_layout_check.py's mock,
+     needs lupa): on a console (GuiService:IsTenFootInterface) every drawn HUD piece and the menus' safe
+     area sit 5% in (96 / 54 px at 1920x1080); off a console there is no inset frame, the HUD's pieces sit
+     where they always did and UiKit.safeArea is its old table.
 
 Exit code 1 on any finding.
 """
@@ -111,12 +124,10 @@ ACTIONS = [
      A("ServerScriptService/Modules/LobbyService.lua", "buildReadyPad", "walk onto the airship's ready pad")),
     ("Vote mode & map", A(f"{CLIENT}/VoteDropClient.client.lua", "Enum.KeyCode.One", "1 / 2 / 3"),
      A(f"{CLIENT}/VoteScreen.lua", "button.Activated", "tap a card"),
-     OPEN("a pad votes only by selecting a card, and nothing selects one for it: may the vote take the "
-          "left stick and A from walking while it is up, or should it get its own buttons?")),
+     B("BRR_VotePadCast")),
     ("Pick a drop spot", A(f"{CLIENT}/DropPicker.lua", "self:SetPick(wx, wz)", "click the map"),
      A(f"{CLIENT}/DropPicker.lua", "self:SetPick(wx, wz)", "tap the map"),
-     OPEN("a pad cannot pick a spot (the map takes MouseButton1/Touch only) and drops at random: a stick "
-          "cursor (GamepadService:EnableGamepadCursor), or is random fine on a pad?")),
+     A(f"{CLIENT}/DropPicker.lua", ":EnableGamepadCursor(target)", "stick cursor over the map, A picks")),
     ("Pick a team", A(f"{CLIENT}/TeamPickerClient.client.lua", "Enum.KeyCode.One", "1 / 2 / 3"),
      A(f"{CLIENT}/TeamPickerScreen.lua", "Selectable = true", "tap a team"),
      A(f"{CLIENT}/TeamPickerClient.client.lua", "GuiService.SelectedObject = screen:FocusTarget()",
@@ -138,8 +149,7 @@ ACTIONS = [
     ("Glider / drop-in steer", E("steers by looking"), E("steers by looking"), E("steers by looking")),
     ("Zipline ride / let go", E("prompt / jump"), E("prompt / jump"), E("prompt / jump")),
     ("Settings sliders", A(MENU, "setFromX(input.Position.X)", "drag"), A(MENU, "setFromX(input.Position.X)", "drag"),
-     OPEN("the slider track takes MouseButton1/Touch only, so a pad can reach Settings but not move volume, "
-          "FOV or sensitivity; needs a Studio pad test of d-pad input on a selected track before a fix")),
+     B("BRR_SliderPad_*")),
     ("Rebind keys", A(MENU, "listenConnection = UserInputService.InputBegan", "press a key"),
      W("rebinding keyboard keys"), W("rebinding keyboard keys; pad buttons are fixed")),
 ]
@@ -147,6 +157,7 @@ ACTIONS = [
 # Binding names that are not player actions of their own.
 NOT_ACTIONS = {
     "BrrMenuBack": "MenuClient's name for the menu shell's back binding (same as BrrMenuShellBack)",
+    "BRR_VotePadMove": "the vote's D-pad highlight, half of Vote mode & map's pad path (see V)",
 }
 
 
@@ -211,11 +222,13 @@ PAD_ENTRY = {
     f"{CLIENT}/InventoryPanel.lua": "the inventory",
     f"{CLIENT}/TeamPickerClient.client.lua": "the team picker",
     f"{CLIENT}/MergeDialog.lua": "the merge dialog",
-    f"{CLIENT}/VoteScreen.lua": "the vote (kept across redraws; see Vote mode & map)",
 }
-PAD_ENTRY_OPEN = {
-    f"{CLIENT}/DropPicker.lua": "the drop picker (see Pick a drop spot)",
+# Modal screens whose pad path is their own, not a selection: each is checked by its letter.
+PAD_ENTRY_OWN = {
+    f"{CLIENT}/VoteScreen.lua": "the vote: D-pad highlight and Y (V)",
+    f"{CLIENT}/DropPicker.lua": "the drop picker: the stick cursor (D)",
 }
+PAD_ENTRY_OPEN = {}
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -328,6 +341,9 @@ def read_bindings(sources):
                 name = "BRR_Slot*"
             elif name == "self.backName":
                 name = "BrrMenuShellBack"
+            elif name == "padAction":
+                # MenuClient's sliderRow: "BRR_SliderPad_" .. entry.id, one per slider.
+                name = "BRR_SliderPad_*"
             elif re.fullmatch(r"(reload|leave)\.action", name):
                 # MountedGunClient's GUNNER_BUTTONS, through its locals.
                 name = "GUNNER_BUTTONS." + name
@@ -385,7 +401,156 @@ def load(root):
 # The checks
 # ---------------------------------------------------------------------------------------------------
 
-def check(sources, root, verbose=True, table=False):
+def body_of(text, header):
+    """The text of the function that starts at `header`, up to the next function at the same indent."""
+    start = text.find(header)
+    if start < 0:
+        return ""
+    indent = text[text.rfind("\n", 0, start) + 1:start]
+    stop = re.search(r"\n" + re.escape(indent) + r"(?:local )?function ", text[start + len(header):])
+    return text[start:start + len(header) + stop.start()] if stop else text[start:]
+
+
+def check_pad_paths(sources, bindings):
+    """V, D, L: the pad paths for the vote, the drop map and the settings sliders (questions 2-4)."""
+    problems = []
+    # V: the vote's own buttons.
+    vote = sources.get(f"{CLIENT}/VoteScreen.lua", "")
+    move, cast = bindings.get("BRR_VotePadMove"), bindings.get("BRR_VotePadCast")
+    if not move or sorted(move["pad"]) != ["DPadLeft", "DPadRight"]:
+        problems.append(f"V the vote's highlight must move on D-pad left/right only (bound: {move and move['pad']})")
+    if not cast or cast["pad"] != ["ButtonY"]:
+        problems.append(f"V the vote must be cast with Y only (bound: {cast and cast['pad']})")
+    for name, b in bindings.items():
+        if b["file"].endswith("VoteScreen.lua") and set(b["pad"]) & {"Thumbstick1", "ButtonA"}:
+            problems.append(f"V {name} takes the left stick or A from walking/jumping in the lobby")
+    for b, what in ((move, "move"), (cast, "cast")):
+        if b and (b["permanent"] or b["touch"]):
+            problems.append(f"V the vote's pad {what} binding must be bound only while the vote is up, with no touch button")
+    bound = body_of(vote, "function Screen:setPadBound")
+    for action in ("VoteScreen.PadMoveAction", "VoteScreen.PadCastAction"):
+        if f"ContextActionService:UnbindAction({action})" not in bound:
+            problems.append(f"V {action} is never unbound: the vote's buttons would outlive the vote")
+    if "ContextActionPriority.High.Value +" not in bound:
+        problems.append("V the vote's pad buttons are not bound above the game's own (D-pad = Quests/Inventory, Y = companion)")
+    if "self:setPadBound(false)" not in body_of(vote, "function Screen:Destroy"):
+        problems.append("V Destroy does not unbind the vote's pad buttons")
+    if not re.search(r"self:setPadBound\(visible and wantsCursor and state\.decided == nil\)", body_of(vote, "function Screen:Render")):
+        problems.append("V the vote's pad buttons do not follow the interactive vote (bound while it is up, unbound when not)")
+    if re.search(r"GuiService\.SelectedObject = (?!nil)", vote) or re.search(r"Selectable = (?!false)", body_of(vote, "function Screen:card")):
+        problems.append("V a vote card can take a GuiService selection, which takes the left stick from walking")
+    layout = body_of(vote, "function Screen:Layout")
+    if not re.search(r'kind == "gamepad" and self\.padBound then\s*\n(?:\s*--[^\n]*\n)*\s*hint = VoteScreen\.PadHint', layout):
+        problems.append("V the pad hint (VoteScreen.PadHint) is not the gamepad line of the ready vote")
+    if 'VoteScreen.PadHint = "◀ ▶ pick · Y vote"' not in vote:
+        problems.append('V VoteScreen.PadHint no longer says "◀ ▶ pick · Y vote"')
+    # D: the drop map's stick cursor.
+    drop = sources.get(f"{CLIENT}/DropPicker.lua", "")
+    cursor = body_of(drop, "function Picker:setPadCursor")
+    if not re.search(r'pcall\(function\(\)\s*\n\s*game:GetService\("GamepadService"\):EnableGamepadCursor\(', cursor):
+        problems.append("D the drop map never switches the pad's stick cursor on (pcall'd EnableGamepadCursor)")
+    if not re.search(r'pcall\(function\(\)\s*\n\s*game:GetService\("GamepadService"\):DisableGamepadCursor\(\)', cursor):
+        problems.append("D the drop map never switches the pad's stick cursor off (pcall'd DisableGamepadCursor)")
+    visible = body_of(drop, "function Picker:SetVisible")
+    if not re.search(r"if visible then\s*\n\s*self:RefreshPadCursor\(\)\s*\n\s*else\s*\n\s*self:setPadCursor\(false\)", visible):
+        problems.append("D the picker's close does not switch the stick cursor off (SetVisible(false) -> setPadCursor(false))")
+    if "self:SetVisible(false)" not in body_of(drop, "function Picker:Destroy"):
+        problems.append("D Destroy no longer closes through SetVisible, so the stick cursor can outlive the picker")
+    # L: the settings sliders.
+    menu = sources.get(f"{CLIENT}/MenuClient.client.lua", "")
+    slider = body_of(menu, "local function sliderRow")
+    sl = bindings.get("BRR_SliderPad_*")
+    if not sl or not {"DPadLeft", "DPadRight", "Thumbstick1"} <= set(sl["pad"]):
+        problems.append(f"L the slider's pad step is not bound to D-pad and left stick (bound: {sl and sl['pad']})")
+    if not re.search(r'local track = create\("TextButton", \{[^}]*Selectable = true,', slider):
+        problems.append("L the slider track is not Selectable, so pad navigation never reaches it")
+    setter = re.search(r"local function setValue\(value\)\n(.*?)\n\tend\n", slider, re.S)
+    if not setter or "Settings.Set(entry.id, value)" not in setter.group(1):
+        problems.append("L the slider has no single setter (setValue -> Settings.Set) for the drag and the pad to share")
+    step = re.search(r"local function padStep\(dir\)\n(.*?)\n\tend\n", slider, re.S)
+    drag = re.search(r"local function setFromX\(x\)\n(.*?)\n\tend\n", slider, re.S)
+    if not step or "setValue(" not in step.group(1) or "Settings.Set(" in step.group(1):
+        problems.append("L the pad's slider step bypasses the drag's setter (setValue), so it may not save or apply the same")
+    if not drag or "setValue(" not in drag.group(1) or "Settings.Set(" in drag.group(1):
+        problems.append("L the mouse drag no longer goes through setValue")
+    if "(entry.max - entry.min) * 0.05" not in (step.group(1) if step else ""):
+        problems.append("L the pad's slider step is not 5% of the slider's range")
+    for needle, what in (("track.SelectionGained:Connect", "bound on selection"),
+                         ("track.SelectionLost:Connect(padRelease)", "unbound on losing it"),
+                         ("task.wait(0.125)", "repeating at ~8/s while held")):
+        if needle not in slider:
+            problems.append(f"L the slider's pad step is not {what} (`{needle}`)")
+    return problems
+
+
+def check_tv_safe(sources, root):
+    """T: the console TV-safe inset, measured on the running HUD, and nothing of it off a console."""
+    import hud_layout_check as H
+    problems = []
+    hud = {name: sources[f"{CLIENT}/{name}"] for name in H.SCRIPTS}
+    for m in H.MODULES:
+        hud[m + ".lua"] = sources[f"{CLIENT}/{m}.lua"]
+    names = H.site_names(hud)
+    W, HT = 1920, 1080
+    side, edge = 96, 54
+    scenes = (("battle royale", "BattleRoyale", None), ("team match", "TeamDeathmatch", None),
+              ("driving", "BattleRoyale", "driver"), ("lobby", "BattleRoyale", "lobby"))
+    for scene, mode, driving in scenes:
+        for console in (True, False):
+            world = H.World(root, ("tv", W, HT, False), hud, tenfoot=console)
+            world.play(mode, driving)
+            drawn = world.drawn(names)
+            frames = world.run("local n = 0 ; for _, c in ipairs(W.created) do if c.Name == 'TvSafeArea' then n = n + 1 end end ; return n")
+            tag = f"{'console' if console else 'desktop'} {W}x{HT} {scene}"
+            if not console:
+                if frames:
+                    problems.append(f"T [{tag}] a TV-safe frame exists off a console: the inset must be console-only")
+                # The speed pill is drawn in every scene here (a boost is on), 16 px from the left edge.
+                pill = [e for e in drawn if e["var"] == "speedPill"]
+                if not pill or pill[0]["rect"][:2] != (16.0, 878.0):
+                    problems.append(f"T [{tag}] the speed pill moved off a console "
+                                    f"({pill and pill[0]['rect']}); desktop must be untouched")
+                continue
+            if not frames:
+                problems.append(f"T [{tag}] no TV-safe frame on a console")
+            for e in drawn:
+                x, y, w, h = e["rect"]
+                if e["full"]:
+                    continue
+                past = []
+                if x < side - 0.5:
+                    past.append(f"left {side - x:.0f}")
+                if x + w > W - side + 0.5:
+                    past.append(f"right {x + w - (W - side):.0f}")
+                if y < edge - 0.5:
+                    past.append(f"top {edge - y:.0f}")
+                if y + h > HT - edge + 0.5:
+                    past.append(f"bottom {y + h - (HT - edge):.0f}")
+                if past:
+                    problems.append(f"T [{tag}] {e['var']} ({e['gui']}) {e['rect']} crosses the 5% TV margin: {', '.join(past)}")
+    # The menus' safe area: grown to the margin on a console, its old table everywhere else.
+    world = H.World(root, ("tv", W, HT, False), hud)
+    got = world.run("""
+        local UiKit = require(W.scriptsFolder:WaitForChild('UiKit'))
+        local out = {}
+        for _, tv in ipairs({ false, true }) do
+            UiKit.TenFootForTest = tv
+            local s = UiKit.safeArea(W.Vector2.new(1920, 1080), false)
+            table.insert(out, string.format('%d,%d,%d,%d', s.Top, s.Bottom, s.Left, s.Right))
+        end
+        UiKit.TenFootForTest = nil
+        return table.concat(out, ' ')
+    """)
+    off, on = got.split(" ")
+    if off != "60,16,16,16":
+        problems.append(f"T UiKit.safeArea changed off a console ({off}; was 60,16,16,16)")
+    t, b, l, r = (int(v) for v in on.split(","))
+    if t < edge or b < edge or l < side or r < side:
+        problems.append(f"T UiKit.safeArea on a console ({on}) is inside the 5% TV margin (96/54 at 1920x1080)")
+    return problems
+
+
+def check(sources, root, verbose=True, table=False, tvsafe=True):
     problems, notes = [], []
     bindings = read_bindings(sources)
 
@@ -495,6 +660,11 @@ def check(sources, root, verbose=True, table=False):
     for file, what in PAD_ENTRY_OPEN.items():
         notes.append(f"OPEN G {what}: no gamepad selection")
 
+    # V / D / L / T: the four answers to Jacob's questions 2-5.
+    problems += check_pad_paths(sources, bindings)
+    if tvsafe:
+        problems += check_tv_safe(sources, root)
+
     if verbose:
         if table:
             print(f"{'action':42} | {'keyboard/mouse':28} | {'touch':28} | gamepad")
@@ -504,7 +674,7 @@ def check(sources, root, verbose=True, table=False):
             print(note)
         print(f"device_compat_check: {len(bindings)} bindings, {len(ACTIONS)} actions x 3 devices, "
               f"{len(rows_seen)} Settings rows, {raw_total} raw input sites, {len(prompts)} prompts, "
-              f"{len(PAD_ENTRY) + len(PAD_ENTRY_OPEN)} modal screens; CAS touch: {len(permanent)} permanent "
+              f"{len(PAD_ENTRY) + len(PAD_ENTRY_OWN) + len(PAD_ENTRY_OPEN)} modal screens; CAS touch: {len(permanent)} permanent "
               f"+ {len(dynamic)} later, {sum(1 for n in dynamic if bindings[n].get('seat'))} of them swapped in by "
               f"Settings.BindSeat (cap {CAS_CAP}, TouchControls {'on' if tc_on else 'off'})")
         for p in problems:
@@ -555,6 +725,31 @@ PLANTS = [
      '{ id = "Menu", label = "Open menu", default = "M", group = "General" },',
      '{ id = "Menu", label = "Open menu", default = "M", group = "General" },\n'
      '\t{ id = "Emote", label = "Emote", default = "K", group = "General" },'),
+    # Questions 2-5 (answered 09-28).
+    ("V the vote is cast with A (takes jump)", f"{CLIENT}/VoteScreen.lua",
+     "end, false, priority, Enum.KeyCode.ButtonY)", "end, false, priority, Enum.KeyCode.ButtonA)"),
+    ("V the vote's highlight moves on the left stick", f"{CLIENT}/VoteScreen.lua",
+     "end, false, priority, Enum.KeyCode.DPadLeft, Enum.KeyCode.DPadRight)",
+     "end, false, priority, Enum.KeyCode.Thumbstick1)"),
+    ("V the vote's buttons outlive the vote", f"{CLIENT}/VoteScreen.lua",
+     "ContextActionService:UnbindAction(VoteScreen.PadMoveAction)", "local _ = VoteScreen.PadMoveAction"),
+    ("V a vote card takes a GuiService selection again", f"{CLIENT}/VoteScreen.lua",
+     "(see VoteScreen.PadMoveAction).\n\t\tSelectable = false,\n",
+     "(see VoteScreen.PadMoveAction).\n\t\tSelectable = enabled and not decided,\n"),
+    ("D the stick cursor is never disabled on close", f"{CLIENT}/DropPicker.lua",
+     "\telse\n\t\tself:setPadCursor(false)\n", "\telse\n\t\tlocal _ = self\n"),
+    ("D the stick cursor is never enabled", f"{CLIENT}/DropPicker.lua",
+     'game:GetService("GamepadService"):EnableGamepadCursor(target)', "local _ = target"),
+    ("L the slider's pad step bypasses the setter", MENU,
+     "setValue(math.clamp(Settings.Get(entry.id) + dir * stepSize",
+     "Settings.Set(entry.id, math.clamp(Settings.Get(entry.id) + dir * stepSize"),
+    ("L the slider track is not Selectable", MENU, "\t\tSelectable = true,\n", ""),
+    ("T the inset is applied off a console", f"{CLIENT}/UiKit.lua",
+     "\treturn ok and tenFoot == true\n", "\treturn true\n"),
+    ("T the stamina bar is left out of the console inset", HUD,
+     "local staminaBar = StaminaBar.new(hudRoot)", "local staminaBar = StaminaBar.new(screenGui)"),
+    ("T the menus' safe area ignores the console", f"{CLIENT}/UiKit.lua",
+     "if viewport and UiKit.tenFoot() then", "if false then"),
 ]
 
 

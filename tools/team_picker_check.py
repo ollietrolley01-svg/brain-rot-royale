@@ -430,7 +430,7 @@ def server_checks(overrides=None, fuzz=600):
 # ---------------------------------------------------------------------------------------------------
 
 # Every size the HUD check, the menu check and the results check use, and two console screens.
-SIZES = [(tag, w, h, touch, "touch" if touch else "keyboard") for tag, w, h, touch in H.SIZES] + [
+SIZES = [(tag, w, h, touch, "touch" if touch else "keyboard") for tag, w, h, touch, *console in H.SIZES if not console] + [
     ("phone-small 320x640", 320, 640, True, "touch"),
     ("phone on its side 640x360", 640, 360, True, "touch"),
     ("console 1920x1080", 1920, 1080, False, "gamepad"),

@@ -221,6 +221,13 @@ player:GetAttributeChangedSignal("Ready"):Connect(renderVote)
 -- Set by the menu, the inventory and the merge dialog — and by this script's own picker, which is
 -- why the vote and the picker can never end up on screen together.
 player:GetAttributeChangedSignal("MenuOpen"):Connect(renderVote)
+-- The pad's words and highlight on the vote, and the stick cursor on the drop map, follow the hands:
+-- a player who picks up a pad mid-screen gets them at once, not at the next snapshot. A re-render with
+-- nothing changed only moves the clock (VoteScreen's layout key).
+UserInputService.LastInputTypeChanged:Connect(function()
+	vote:Render()
+	picker:RefreshPadCursor()
+end)
 
 -- 1, 2, 3 vote for the first, second and third card. There is no clash with the hotbar: those keys
 -- only do anything in CombatClient while a match is in progress, and this screen is only up in the

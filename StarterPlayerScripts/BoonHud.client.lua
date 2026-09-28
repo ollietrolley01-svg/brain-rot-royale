@@ -38,7 +38,8 @@ local panel = create("Frame", {
 	BackgroundTransparency = 0.25,
 	BorderSizePixel = 0,
 	Visible = false,
-	Parent = gui,
+	-- Inside the TV-safe margin on a console (UiKit.tvSafeRoot); the ScreenGui itself elsewhere.
+	Parent = UiKit.tvSafeRoot(gui),
 }, {
 	UiKit.rounded(Radius.Card),
 	create("UIPadding", {

@@ -152,7 +152,9 @@ panel.Position = UDim2.new(0.5, 0, 1, -178)
 panel.Size = UDim2.fromOffset(250, 78)
 panel.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 panel.BackgroundTransparency = 0.25
-panel.Parent = gui
+-- Inside the TV-safe margin on a console (UiKit.tvSafeRoot), with the hotbar it stacks above; the
+-- ScreenGui itself everywhere else. The hint and the health warning follow it.
+panel.Parent = require(script.Parent:WaitForChild("UiKit")).tvSafeRoot(gui)
 Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
 
 local nameLabel = Instance.new("TextLabel")
@@ -224,7 +226,7 @@ local function refreshHint()
 end
 refreshHint()
 UserInputService.LastInputTypeChanged:Connect(refreshHint)
-hint.Parent = gui
+hint.Parent = panel.Parent
 
 -- #53: low-health / wrecked warning. Reads VehicleHealth/VehicleMaxHealth/Wrecked straight off the
 -- driven model -- the server's own numbers (VehicleService.lua), never a client-side copy of them.
@@ -238,7 +240,7 @@ healthWarning.TextSize = 15
 healthWarning.TextStrokeTransparency = 0.3
 healthWarning.Text = ""
 healthWarning.Visible = false
-healthWarning.Parent = gui
+healthWarning.Parent = panel.Parent
 
 -- On a touch screen PhoneLayout owns the HUD, and has a block for the driving HUD (`Rects().vehicle`,
 -- `vehicleHint`, `vehicleWarning`; the gun panel beside it is VehicleWeaponClient's). The literals above

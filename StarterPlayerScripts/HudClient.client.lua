@@ -66,6 +66,9 @@ local screenGui = create("ScreenGui", {
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	Parent = playerGui,
 })
+-- Where the HUD's EDGE pieces go: on a console a frame inset by the TV-safe margin, anywhere else this
+-- ScreenGui itself (UiKit.tvSafeRoot). Full-screen and screen-centred pieces stay on screenGui.
+local hudRoot = UiKit.tvSafeRoot(screenGui)
 
 local matchState = { state = "Waiting", countdown = 0, aliveCount = 0, playerCount = 0, minPlayers = 2 }
 local loadout = nil
@@ -81,7 +84,7 @@ local banner = create("Frame", {
 	BackgroundColor3 = C.Background,
 	BackgroundTransparency = 0.15,
 	BorderSizePixel = 0,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(12) })
 
 local bannerTitle = create("TextLabel", {
@@ -122,7 +125,7 @@ local readyButton = create("TextButton", {
 	AutoButtonColor = false,
 	Text = "",
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(14) })
 
 local readyScale = create("UIScale", { Parent = readyButton })
@@ -608,7 +611,7 @@ local dropBanner = create("TextLabel", {
 	TextStrokeTransparency = 0.5,
 	TextTransparency = 1,
 	TextSize = 18,
-	Parent = screenGui,
+	Parent = hudRoot,
 })
 
 -- The town or landmark nearest a point, from the attributes MapGenerator leaves on them, so a
@@ -730,7 +733,7 @@ local townLabel = create("TextLabel", {
 	TextStrokeTransparency = 1,
 	TextTransparency = 1,
 	TextSize = 28,
-	Parent = screenGui,
+	Parent = hudRoot,
 })
 
 local currentTown = nil
@@ -857,7 +860,7 @@ local healthFrame = create("Frame", {
 	BackgroundTransparency = 0.15,
 	BorderSizePixel = 0,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(12), padding(12) })
 
 local healthText = create("TextLabel", {
@@ -954,7 +957,7 @@ local companionFrame = create("Frame", {
 	BackgroundTransparency = 0.15,
 	BorderSizePixel = 0,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(10) })
 
 local companionStroke = create("UIStroke", {
@@ -1039,7 +1042,7 @@ local speedPill = create("TextLabel", {
 	-- Scaled into the box, up to 16: with two effects on at once the line is longer than the pill.
 	TextScaled = true,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(14), create("UITextSizeConstraint", { MaxTextSize = 16 }), padding(4) })
 
 local function updateCompanionWidget()
@@ -1128,12 +1131,13 @@ do
 	local MovementState = require(script.Parent:WaitForChild("MovementState"))
 	local StaminaBar = require(script.Parent:WaitForChild("StaminaBar"))
 
-	local staminaBar = StaminaBar.new(screenGui)
+	local staminaBar = StaminaBar.new(hudRoot)
 
 	-- Bottom centre between the health panel and the hotbar, or above the bottom-left stack on screens
 	-- too narrow for that (StaminaBar.Layout).
 	local function rescale()
-		staminaBar:Place(camera.ViewportSize)
+		-- The room it lays out in: the TV-safe frame's on a console (UiKit.tvSafeSize), the screen elsewhere.
+		staminaBar:Place(UiKit.tvSafeSize(camera.ViewportSize))
 	end
 	rescale()
 	camera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
@@ -1171,7 +1175,7 @@ local weaponFrame = create("Frame", {
 	BackgroundTransparency = 0.15,
 	BorderSizePixel = 0,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(12), padding(12) })
 
 -- Narrow screens: the hotbar shrinks (a UIScale about its bottom-right corner) until it clears the
@@ -1987,7 +1991,7 @@ local stormLabel = create("TextLabel", {
 	Text = "",
 	TextColor3 = C.Storm,
 	TextSize = 15,
-	Parent = screenGui,
+	Parent = hudRoot,
 })
 
 -- `stormState` is declared up in "Screen-edge state", which reads it every frame.
@@ -2043,7 +2047,7 @@ local minimap = create("Frame", {
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, {
 	rounded(math.floor(MAP_PX / 2)),
 	create("UIStroke", { Color = C.Panel, Thickness = 2 }),
@@ -2331,7 +2335,7 @@ local bountyLabel = create("TextLabel", {
 	TextTruncate = Enum.TextTruncate.AtEnd,
 	TextSize = 12,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(8) })
 
 -- Town names, so "rotate toward Aura Farms" means something. Towns carry their centre and name
@@ -2516,7 +2520,7 @@ local compass = create("Frame", {
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
 	Visible = false,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, {
 	rounded(8),
 	-- The notch: where you're looking.
@@ -2684,9 +2688,9 @@ local function updateCompass(root)
 		end
 		local scoreGui = playerGui:FindFirstChild("ModeScoreHud")
 		if scoreGui and scoreGui.Enabled then
-			under(scoreGui:FindFirstChild("Scoreline"))
+			under(scoreGui:FindFirstChild("Scoreline", true))
 		end
-		local y = math.floor((bottom and (bottom - screenGui.AbsolutePosition.Y) or 6) + 4 + 0.5)
+		local y = math.floor((bottom and (bottom - hudRoot.AbsolutePosition.Y) or 6) + 4 + 0.5)
 		if compass.Position.Y.Offset ~= y or compass.Position.Y.Scale ~= 0 then
 			compass.Position = UDim2.new(0.5, 0, 0, y)
 		end
@@ -2797,7 +2801,7 @@ local locationLabel = create("TextLabel", {
 	TextStrokeTransparency = 0.5,
 	TextXAlignment = Enum.TextXAlignment.Right,
 	TextSize = 13,
-	Parent = screenGui,
+	Parent = hudRoot,
 })
 
 local enteringLabel = create("TextLabel", {
@@ -2952,7 +2956,7 @@ local feed = create("Frame", {
 	Position = UDim2.new(1, -16, 0, 108 + MAP_PX + 34 + 20 + 6),
 	Size = UDim2.new(0, 300, 0, 200),
 	BackgroundTransparency = 1,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, {
 	create("UIListLayout", {
 		Padding = UDim.new(0, 4),
@@ -3042,7 +3046,7 @@ local toast = create("TextLabel", {
 	-- A long message wraps onto a second line inside the box rather than running out of it (#86 C3).
 	TextWrapped = true,
 	AutomaticSize = Enum.AutomaticSize.Y,
-	Parent = screenGui,
+	Parent = hudRoot,
 }, { rounded(8) })
 
 -- Toasts come in bunches: a climb record and its coins, a chest's contents and the quest it finished,
@@ -3426,7 +3430,7 @@ do
 			else
 				readyHolder.Visible = false
 				readyButton.Position = saved[readyButton].position
-				readyButton.Parent = screenGui
+				readyButton.Parent = hudRoot
 			end
 		end
 
@@ -3848,7 +3852,7 @@ do
 		BorderSizePixel = 0,
 		Visible = false,
 		ZIndex = 12,
-		Parent = screenGui,
+		Parent = hudRoot,
 	}, { rounded(12), padding(12) })
 
 	-- Scaled down to fit rather than cut off: "DOWNED BY <a long display name> — BACK IN 5" is wider than
@@ -4617,7 +4621,7 @@ renderWeapon()
 
 do
 	local CompanionAbilityIcon = require(script.Parent:WaitForChild("CompanionAbilityIcon"))
-	local abilityIcon = CompanionAbilityIcon.new(screenGui)
+	local abilityIcon = CompanionAbilityIcon.new(hudRoot)
 	local statsFor, statsKey = nil, nil
 
 	-- On a touch screen the tile goes in PhoneLayout's pet-tile slot (`Rects().petIcon`, above the
@@ -4651,7 +4655,7 @@ do
 			else
 				tile.AnchorPoint = home.anchor
 				tile.Position = home.position
-				tile.Parent = screenGui
+				tile.Parent = hudRoot
 			end
 			-- The move-and-stats line above the tile grows leftward from its right edge, which from the
 			-- phone slot at the left edge is off the screen and over the companion strip. The tile hides it

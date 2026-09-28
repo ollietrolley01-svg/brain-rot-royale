@@ -79,6 +79,9 @@ SIZES = [
     ("phone 932x430", 932, 430, True),
     ("phone upright 390x844", 390, 844, True),
     ("small phone upright 375x667", 375, 667, True),
+    # An Xbox (GuiService:IsTenFootInterface()): the HUD's edge pieces sit in UiKit.tvSafeRoot's frame, 5%
+    # in from every edge (Jacob's device-compat question 5). A fifth field, so every other size is as before.
+    ("console 1920x1080", 1920, 1080, False, True),
 ]
 
 # Pieces the upright HUD drops (PhoneLayout.lua's portraitRects: "no compass, no kill feed, no bounty or
@@ -164,13 +167,16 @@ def site_names(sources):
 
 
 class World:
-    def __init__(self, root, size, sources, force=None, shared=None, extra_modules=()):
+    def __init__(self, root, size, sources, force=None, shared=None, extra_modules=(), tenfoot=False):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         mock = open(os.path.join(root, "tools", "hud_mock_world.lua"), encoding="utf-8").read()
         self.W = self.lua.execute(mock)
-        _, w, h, touch = size
+        _, w, h, touch = size[:4]
+        tenfoot = tenfoot or (len(size) > 4 and size[4])
         self.W.install()
         self.W.setup(w, h, touch, not touch)
+        # A console: GuiService:IsTenFootInterface() is true (device_compat_check's TV-safe measure).
+        self.W.tenFoot = bool(tenfoot)
         for name, text in sources.items():
             self.W.sources[name.replace(".lua", "")] = luau_to_lua(text)
         # A stand-in for ReplicatedStorage's BrainrotData, so the companion tile gets real numbers and its
@@ -420,7 +426,7 @@ def check(root, sources, dump=False, quiet=False, gallery=None):
 
     seen_open = set()
     for size, (scene, mode, driving) in [(sz, sc) for sz in SIZES for sc in SCENARIOS]:
-        tag, w, h, touch = size
+        tag, w, h, touch = size[:4]
         world = World(root, size, sources)
         world.play(mode, driving)
         errs, warns = world.errors()
@@ -791,7 +797,7 @@ def check_player_eye(root, sources, quiet=False):
     names = site_names(sources)
     cross_site = next(k for k, v in names.items() if v == "crosshair" and k.startswith("HudClient.client:"))
     for size in SIZES:
-        tag, w, h, touch = size
+        tag, w, h, touch = size[:4]
         world = World(root, size, sources, shared=shared, extra_modules=EYE_MODULES)
         world.play()
         try:
